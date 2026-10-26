@@ -257,15 +257,15 @@
 
 ### 4.2 数据集矩阵（M1 的新数据怎么进来）
 
-| dataset | v8 可见入口 | `selection` | `filter` | 列（`fields` 可选子集） | 来源 |
+| dataset | v8 可见入口 | `selection` | `filter` | 列（`fields` 可选子集；行键另计） | 来源 |
 |---|---|---|---|---|---|
-| `securities.catalog` | research / ops | `catalog`（冻结 scope） | `catalog`（`code`/`name_query`/`industry_code`） | `code, name, industry_code, industry_name` | 既有 |
-| `market.daily` `adjustment=raw` | research / ops | `single`/`batch`/`universe` | `daily`/`cross_section` | `date, open, high, low, close, volume, amount, volume_quantum?` | M1 PR-2 |
-| `market.daily` `adjustment=qfq` | research / ops | 同上 | 同上 | 同上（价格 6dp） | M1 PR-3 |
-| `market.yearly` | research / ops | `single`/`batch` | `yearly` | `year, open, high, low, close, volume, amount` | 既有 |
-| `market.adjustment_events` | research | `single`/`batch`/`universe` | `daily`（生效日区间） | `effective_day, category, c1, c2, c3, c4` | M1 PR-4 |
-| `market.calendar` | research | `market` | `daily`（日期区间） | `trade_day` | M1 PR-6 |
-| `market.index` | research | `single`/`batch`/`universe` | `daily`/`cross_section` | `date, open, high, low, close, volume, amount` + manifest 里的逐指数口径 | M1 PR-5 |
+| `securities.catalog` | research / ops | `catalog`（冻结 scope） | `catalog`（`code`/`name_query`/`industry_code`） | 行键 `code`；列 `name, industry_code, industry_name` | 既有 |
+| `market.daily` `adjustment=raw` | research / ops | `single`/`batch`/`universe` | `daily`/`cross_section` | 行键 `date`；列 `open, high, low, close, volume, amount`（+`volume_quantum` 仅当 schema 22 落库该列，D-34 由实现任务确认） | M1 PR-2 |
+| `market.daily` `adjustment=qfq` | research / ops | 同上 | 同上 | 同上（价格 6dp，`price_scale=6`） | M1 PR-3 |
+| `market.yearly` | research / ops | `single`/`batch` | `yearly` | 行键 `year`；列 `open, high, low, close, volume, amount` | 既有 |
+| `market.adjustment_events` | research | `single`/`batch`/`universe` | `daily`（生效日区间） | 行键 `effective_day`；列 `category, c1, c2, c3, c4`（`known_at` 恒 NULL，不输出） | M1 PR-4 |
+| `market.calendar` | research | `market`（无实体） | `daily`（日期区间） | 行键/唯一列 `trade_day` | M1 PR-6 |
+| `market.index` | research | `single`/`batch`/`universe` | `daily`/`cross_section` | 行键 `date`；列 `open, high, low, close, volume, amount` + `metadata` 里的逐指数口径 | M1 PR-5 |
 
 三条约束：
 
