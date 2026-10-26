@@ -338,8 +338,9 @@ fn unregistered_entities_are_rejected() {
 
 #[test]
 fn missing_unit_evidence_is_rejected() {
-    let dir = tempdir();
-    let (path, repo) = repo(&dir);
+    // Each case gets its own store: a rejected commit leaves its task item
+    // running and holding the scope, so reusing the entity would conflict on
+    // occupancy instead of reaching the unit gate.
     for (label, unit) in [
         (
             "price_unit",
@@ -364,6 +365,8 @@ fn missing_unit_evidence_is_rejected() {
             },
         ),
     ] {
+        let dir = tempdir();
+        let (path, repo) = repo(&dir);
         let mut batch = index_batch("sh.000016", vec![bar(0, 200_000, 7)]);
         batch.batch.unit_currency = unit;
         let (task_id, revision) = running_task(&repo, &format!("req-unit-{label}"), "sh.000016");
@@ -383,13 +386,19 @@ fn missing_unit_evidence_is_rejected() {
             })
             .unwrap_err();
         assert!(error.to_string().contains(label), "{label}: {error}");
+        // The rejected commit wrote no series, no metadata and no event.
+        let c = Connection::open(&path).unwrap();
+        let counts: (i64, i64, i64) = c
+            .query_row(
+                "SELECT (SELECT count(*) FROM market_series),\
+                 (SELECT count(*) FROM index_series_meta),\
+                 (SELECT count(*) FROM market_events)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(counts, (0, 0, 0), "{label}");
     }
-    // Nothing was written by the rejected commits.
-    let c = Connection::open(&path).unwrap();
-    let count: i64 = c
-        .query_row("SELECT count(*) FROM market_series", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(count, 0);
 }
 
 #[test]
