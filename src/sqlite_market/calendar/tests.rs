@@ -498,3 +498,47 @@ fn coverage_counts_raw_security_bars_only() {
         .unwrap();
     assert_eq!(series, 2);
 }
+
+// issue-383 §9.3 (PR-7): the calendar phase runs once per daily run, and its
+// dominant cost is the §5.2 coverage self-check — one GROUP BY over every
+// stored 不复权 bar. This measures the phase on a synthetic fixture and prints
+// the numbers; the assertions stay loose so a slow CI host does not flake, and
+// the full-market figure is a private-stack measurement (the repository never
+// times production).
+#[test]
+fn calendar_phase_cost_on_a_synthetic_fixture() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let days: Vec<NaiveDate> = (0..40)
+        .map(|offset| day(2025, 1, 1) + chrono::Duration::days(offset))
+        .collect();
+    const SERIES: usize = 120;
+    for index in 0..SERIES {
+        commit_raw_series(
+            &repo,
+            &format!("req-{index}"),
+            &format!("sh.{:06}", 600_000 + index),
+            &days,
+        );
+    }
+    let batch = calendar_batch(&days, &days);
+    let calendar = TradingCalendar::union(&batch).unwrap();
+    let started = std::time::Instant::now();
+    let coverage = repo.measure_calendar_coverage(&calendar).unwrap();
+    let measure = started.elapsed();
+    let started = std::time::Instant::now();
+    commit(&repo, &batch, &coverage).unwrap();
+    let write = started.elapsed();
+    assert_eq!(coverage.total_bars, (SERIES * days.len()) as i64);
+    assert_eq!(coverage.outside_bars, 0);
+    eprintln!(
+        "calendar phase: {} series × {} bars = {} bars; coverage scan {measure:?}, calendar write {write:?}",
+        SERIES,
+        days.len(),
+        coverage.total_bars
+    );
+    assert!(
+        measure < std::time::Duration::from_secs(30),
+        "coverage scan took {measure:?}"
+    );
+}

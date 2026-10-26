@@ -85,14 +85,49 @@ struct Snapshot {
     root: std::path::PathBuf,
     manifest: Vec<u8>,
 }
-fn snapshot(day_members: &[(&str, &[u8])]) -> Snapshot {
+/// `include_derived = false` builds a generation that carries only the
+/// caller's members — the fixture for "a source that cannot serve the
+/// derived datasets" (internal item failure semantics, issue-383 §9.2).
+fn snapshot_with(day_members: &[(&str, &[u8])], include_derived: bool) -> Snapshot {
     let dir = tempfile::tempdir().unwrap();
     let gbbq = gbbq_member(&[gbbq_record(1, "600006", 20240101, 1)]);
     write_zip(
         &dir.path().join("base.zip"),
         &[("base.dbf", b"unused-by-daily-source".as_slice())],
     );
-    write_zip(&dir.path().join("hsjday.zip"), day_members);
+    // issue-383 §9.2: the daily plan-run task also maintains the calendar and
+    // the nine benchmark indices, so every fixture generation carries those
+    // `.day` members. The member list comes from the same registrations the
+    // production adapter reads — no test-only index list.
+    let last = day_u32(1);
+    let mut entities: std::collections::BTreeSet<&str> = x_data_mcp::index_registry::INDEX_SERIES
+        .iter()
+        .map(|registration| registration.entity)
+        .collect();
+    entities.extend(
+        x_data_mcp::trading_calendar::INPUTS
+            .iter()
+            .map(|input| input.entity),
+    );
+    let extras: Vec<(String, Vec<u8>)> = if include_derived {
+        entities
+            .iter()
+            .map(|entity| {
+                let (market, code) = entity.split_once('.').unwrap();
+                (
+                    format!("{market}\\lday\\{market}{code}.day"),
+                    day_member(code, last),
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut members: Vec<(&str, &[u8])> = day_members.to_vec();
+    for (name, bytes) in &extras {
+        members.push((name.as_str(), bytes.as_slice()));
+    }
+    write_zip(&dir.path().join("hsjday.zip"), &members);
     write_zip(&dir.path().join("gbbq.zip"), &[("gbbq", gbbq.as_slice())]);
     let roles = [
         (
@@ -217,6 +252,10 @@ struct Rig {
 /// `run_worker_once` so each collected entity has a real published head and
 /// an execution-start marker.
 fn rig(members: &[(&str, &str, u32)]) -> Rig {
+    rig_with(members, true)
+}
+
+fn rig_with(members: &[(&str, &str, u32)], include_derived: bool) -> Rig {
     let day_members: Vec<(String, Vec<u8>)> = members
         .iter()
         .map(|(ex, code, last)| {
@@ -230,7 +269,7 @@ fn rig(members: &[(&str, &str, u32)]) -> Rig {
         .iter()
         .map(|(n, b)| (n.as_str(), b.as_slice()))
         .collect();
-    let snap = snapshot(&refs);
+    let snap = snapshot_with(&refs, include_derived);
     let source =
         x_data_mcp::official_market::TdxMarketSource::inspect(&snap.root, &snap.manifest, now())
             .unwrap();
@@ -347,7 +386,91 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
         .api
         .call("get_task_progress", json!({"task_id":task_id}))
         .unwrap();
-    assert_eq!(progress["finished"], 2);
+    // issue-383 §9.2: the run appended and executed the 10 server-internal
+    // derived items (9 indices + calendar) after the two entity items. The
+    // acceptance still reports the plan's eligible count, not the live item
+    // count — the internal items are not plan items.
+    let derived = x_data_mcp::index_registry::INDEX_SERIES.len() + 1;
+    assert_eq!(progress["finished"], 2 + derived);
+    assert_eq!(progress["total"], 2 + derived);
+    let task = r
+        .tasks
+        .read_task(task_id.as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    let internal: Vec<_> = task
+        .items
+        .iter()
+        .filter(|i| x_data_mcp::task_control::derived::is_derived(&i.spec.item_id))
+        .collect();
+    assert_eq!(internal.len(), derived);
+    assert!(
+        internal
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "internal items must record their own success: {internal:?}"
+    );
+    // Their progress projection keeps the wire shape: no entity/period.
+    for item in &internal {
+        assert!(item.spec.target.get("dataset").is_some(), "{:?}", item.spec);
+        assert!(item.spec.target.get("symbol").is_none(), "{:?}", item.spec);
+    }
+    // The calendar and every registered index are now stored derived
+    // datasets of this generation.
+    let c = rusqlite::Connection::open(r.tasks.path()).unwrap();
+    let calendar: i64 = c
+        .query_row(
+            "SELECT count(*) FROM derived_dataset_versions WHERE dataset_kind='trading_calendar'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(calendar, 1);
+    let indices: i64 = c
+        .query_row(
+            "SELECT count(*) FROM market_series WHERE instrument_class=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        indices,
+        x_data_mcp::index_registry::INDEX_SERIES.len() as i64
+    );
+    // §9.1 write set of each entity item: both 口径 series, one event per
+    // 口径, and the factor-set registration. The registration exists only for
+    // a non-empty set (§3.7: an empty set deletes the row); the fixture's gbbq
+    // carries one event for sh.600006 and none for sz.000002.
+    for (entity, factors_expected) in [("sh.600006", 1i64), ("sz.000002", 0i64)] {
+        let series: i64 = c
+            .query_row(
+                "SELECT count(*) FROM market_series WHERE entity=?1 AND period=1",
+                [entity],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(series, 2, "{entity} must carry 不复权 + 前复权");
+        let factors: i64 = c
+            .query_row(
+                "SELECT count(*) FROM derived_dataset_versions \
+                 WHERE dataset_kind='adjustment_events' AND dataset_key=?1",
+                [entity],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            factors, factors_expected,
+            "{entity} factor set registration"
+        );
+        let events: i64 = c
+            .query_row(
+                "SELECT count(*) FROM market_events WHERE entity=?1 AND period=1",
+                [entity],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(events >= 2, "{entity} carries one event per 口径: {events}");
+    }
 
     // Request replay returns the original acceptance — staleness does not
     // override the request binding.
@@ -383,6 +506,104 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
             .code,
         "invalid_plan"
     );
+}
+
+/// issue-383 §9.2 failure semantics: an internal derived item that fails
+/// records its own `success=false` and the run ends `partially_failed`; the
+/// already-committed entity items are untouched and nothing is skipped
+/// silently.
+#[test]
+fn internal_derived_item_failure_marks_the_run_partially_failed() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // A generation that carries only the security member: every index item
+    // and the calendar fail at acquisition, while the entity item succeeds.
+    let r = rig_with(&[("sh", "600006", day_u32(1))], false);
+    let p = plan(&r.api, "market.daily");
+    assert_eq!(p["counts"]["eligible"], 1, "{p}");
+    let accepted = run(&r.api, "market.daily", "run-derived-fail", &p);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    r.api.call("run_worker_once", json!({})).unwrap();
+
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::PartiallyFailed,
+        "{:?}",
+        task.task.result
+    );
+    let entity: Vec<_> = task
+        .items
+        .iter()
+        .filter(|i| !x_data_mcp::task_control::derived::is_derived(&i.spec.item_id))
+        .collect();
+    assert_eq!(entity.len(), 1);
+    assert!(
+        entity[0].outcome.as_ref().is_some_and(|o| o.success),
+        "the committed entity item keeps its success"
+    );
+    let internal: Vec<_> = task
+        .items
+        .iter()
+        .filter(|i| x_data_mcp::task_control::derived::is_derived(&i.spec.item_id))
+        .collect();
+    assert_eq!(
+        internal.len(),
+        x_data_mcp::index_registry::INDEX_SERIES.len() + 1
+    );
+    for item in &internal {
+        let outcome = item.outcome.as_ref().expect("internal item has an outcome");
+        assert!(!outcome.success, "{:?}", item.spec.item_id);
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|error| !error.trim().is_empty()),
+            "a failed internal item carries its reason: {:?}",
+            item.spec.item_id
+        );
+    }
+
+    // The progress projection surfaces them as ordinary failed items with no
+    // entity/period, so the Skill can report them without treating them as
+    // catalog entities.
+    let progress = r
+        .api
+        .call("get_task_progress", json!({"task_id":task_id}))
+        .unwrap();
+    assert_eq!(progress["failed"], internal.len());
+    let unfinished = progress["unfinished"].as_array().unwrap();
+    assert_eq!(unfinished.len(), internal.len());
+    // Golden shape: an internal item is projected by the same `ProgressItem`
+    // as a security item (no new field, `reason_code` only on bounded pages).
+    let expected_keys: std::collections::BTreeSet<&str> = [
+        "entity",
+        "error",
+        "item_id",
+        "period",
+        "progress_unit",
+        "stage",
+        "success",
+    ]
+    .into_iter()
+    .collect();
+    let keys: std::collections::BTreeSet<&str> = unfinished[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(keys, expected_keys, "{}", unfinished[0]);
+    for item in unfinished {
+        assert_eq!(item["entity"], Value::Null, "{item}");
+        assert_eq!(item["period"], Value::Null, "{item}");
+        assert_eq!(item["success"], json!(false), "{item}");
+        assert!(
+            item["item_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("derived:")),
+            "{item}"
+        );
+    }
 }
 
 #[test]

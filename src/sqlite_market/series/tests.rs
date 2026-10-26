@@ -1152,6 +1152,101 @@ fn startup_check_1m_events() {
     eprintln!("startup_check 1M events: {:?}", started.elapsed());
 }
 
+// issue-383 §9.3 (PR-7 "cold-start probe count"): the startup closure probes
+// are O(#series) index seeks, not O(#events). Measured as the number of
+// `market_events` reads SQLite's authorizer sees while the probes prepare and
+// run — the same series count with four times the events must cost the same
+// number of probes.
+#[test]
+fn startup_probe_count_does_not_grow_with_events() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static PROBES: AtomicUsize = AtomicUsize::new(0);
+    fn probe(ctx: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
+        if let rusqlite::hooks::AuthAction::Read { table_name, .. } = ctx.action
+            && table_name == "market_events"
+        {
+            PROBES.fetch_add(1, Ordering::Relaxed);
+        }
+        rusqlite::hooks::Authorization::Allow
+    }
+    fn seed(c: &Connection, entities: usize, events_each: usize) {
+        c.pragma_update(None, "foreign_keys", false).unwrap();
+        let (ev, gen_ev) = put_test_evidence(c);
+        let binding = put_test_binding(c, gen_ev);
+        let tx = c.unchecked_transaction().unwrap();
+        for e in 0..entities {
+            let entity = format!("sh.{:06}", 600000 + e);
+            let bars = [bar(day(2025, 1, 2), 1000)];
+            let digest = fold_bars(&entity, Period::Day, SHAPE, &bars).unwrap();
+            for n in 0..events_each {
+                let kind = if n == 0 { "first_publish" } else { "no_change" };
+                let mut ev_row = event(
+                    &entity,
+                    Period::Day,
+                    kind,
+                    if n == 0 { None } else { Some(digest) },
+                    digest,
+                    (ev, binding),
+                    "bulk",
+                );
+                ev_row.task_id = format!("t-{e}-{n}");
+                ev_row.item_id = format!("i-{e}-{n}");
+                ev_row.result_id = format!("r-{e}-{n}");
+                let seq = next_event_seq(&tx).unwrap();
+                insert_event(&tx, seq, &ev_row).unwrap();
+                if n == events_each - 1 {
+                    insert_series(
+                        &tx,
+                        &NewSeries {
+                            entity: entity.clone(),
+                            period: Period::Day,
+                            adjustment: SHAPE.adjustment,
+                            instrument_class: SHAPE.instrument_class,
+                            price_scale: SHAPE.price_scale,
+                            content_digest: digest,
+                            record_count: 1,
+                            first_day: day(2025, 1, 2),
+                            last_day: day(2025, 1, 2),
+                            coverage_status: CoverageStatus::Complete,
+                            source_binding_digest: binding,
+                            evidence_digest: ev,
+                            last_event_seq: seq,
+                            created_at: "x".into(),
+                            updated_at: "x".into(),
+                        },
+                    )
+                    .unwrap();
+                }
+            }
+            insert_bars(
+                &tx,
+                read_series(&tx, &entity, Period::Day)
+                    .unwrap()
+                    .unwrap()
+                    .series_key,
+                &bars,
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    fn probes(events_each: usize) -> usize {
+        let (_dir, _tasks, c) = db();
+        seed(&c, 3, events_each);
+        PROBES.store(0, Ordering::Relaxed);
+        c.authorizer(Some(probe)).unwrap();
+        startup_check(&c).unwrap();
+        PROBES.load(Ordering::Relaxed)
+    }
+    let small = probes(4);
+    let large = probes(16);
+    assert_eq!(
+        small, large,
+        "startup probes must not grow with the event count ({small} vs {large})"
+    );
+    assert!(small > 0, "the fixture must exercise the event probes");
+}
+
 #[test]
 fn deep_check_flags_forged_yearly_lineage() {
     // §3.5: a lineage row that names a base the daily series never had is

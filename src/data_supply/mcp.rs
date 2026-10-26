@@ -481,14 +481,27 @@ impl DataApi {
     /// `run_market_update` acceptance for both fresh admissions and request
     /// replays: plan identity and counts come from the task's shared
     /// evidence, never re-derived after the fact.
+    ///
+    /// `item_count` is the plan's eligible count, not the task's live item
+    /// count: the worker appends the server-internal derived items of
+    /// issue-383 §9.2 to the accepted task, and those are not part of the
+    /// plan the caller holds.
     fn plan_acceptance(
         &self,
         request_id: &str,
         reused: bool,
         f: &crate::task_control::TaskSnapshot,
-        item_count: u64,
     ) -> Result<Value, ApiError> {
         let evidence = f.task.work.shared_evidence.as_ref();
+        let plan_counts = evidence
+            .and_then(|e| serde_json::from_value(e["counts"].clone()).ok())
+            .unwrap_or(PlanCounts {
+                eligible: f.items.len() as u64,
+                already_current: 0,
+                absent: 0,
+                ineligible: 0,
+            });
+        let item_count = plan_counts.eligible;
         let block = self.task_runtime_block(&f.task.key);
         encode(PlanRunAcceptance {
             request_id: request_id.into(),
@@ -505,14 +518,7 @@ impl DataApi {
             )
             .unwrap(),
             item_count,
-            plan_counts: evidence
-                .and_then(|e| serde_json::from_value(e["counts"].clone()).ok())
-                .unwrap_or(PlanCounts {
-                    eligible: item_count,
-                    already_current: 0,
-                    absent: 0,
-                    ineligible: 0,
-                }),
+            plan_counts,
             runtime_readiness: if block.is_some() {
                 Readiness::Blocked
             } else {
@@ -1050,12 +1056,7 @@ impl DataApi {
                             "task binding required",
                         ));
                     };
-                    return self.plan_acceptance(
-                        command.request_id(),
-                        true,
-                        &f,
-                        f.items.len() as u64,
-                    );
+                    return self.plan_acceptance(command.request_id(), true, &f);
                 }
                 let today = crate::calendar::shanghai_today();
                 let resolved = super::plan::resolve_run(
@@ -1132,7 +1133,7 @@ impl DataApi {
                         "task binding required",
                     ));
                 };
-                self.plan_acceptance(command.request_id(), acceptance.reused, &f, counts.eligible)
+                self.plan_acceptance(command.request_id(), acceptance.reused, &f)
             }
             Handler::Query => {
                 let query = decode::<Query>(input)?;

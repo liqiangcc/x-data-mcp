@@ -1,4 +1,5 @@
 //! Stage C application contracts; no network acquisition or implicit initialization.
+pub mod derived;
 pub mod wire;
 use crate::market_storage::Error;
 use std::collections::BTreeSet;

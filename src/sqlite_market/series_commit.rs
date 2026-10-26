@@ -234,6 +234,12 @@ fn require_item_unused(c: &Connection, w: &Commit) -> Result<(), Error> {
 /// The task/item binding gate, unchanged from the v19 results path: the
 /// task must be running under this run, the item running with matching
 /// target and occupancy keys.
+///
+/// Security items carry `{symbol, period}`. The server-created derived items
+/// of the daily run (issue-383 §9.2) name the dataset they maintain instead;
+/// exactly the `derived:index:<entity>` item may use that shape, and only for
+/// the entity in its own id — the series identity stays bound by the id and
+/// by the occupancy key below.
 fn check_binding(c: &Connection, w: &Commit) -> Result<(), Error> {
     let binding = crate::sqlite_tasks::read_item_binding(c, w.task_id, w.item_id)
         .map_err(Error::Task)?
@@ -250,9 +256,14 @@ fn check_binding(c: &Connection, w: &Commit) -> Result<(), Error> {
             Period::Year => "year",
         },
     });
+    let derived_target = task_control::derived::index_entity(w.item_id)
+        .filter(|entity| *entity == w.entity)
+        .map(|_| task_control::derived::target(w.item_id));
+    let target_matches = binding.item.spec.target == expected_target
+        || derived_target.as_ref() == Some(&binding.item.spec.target);
     if binding.item.stage != task_control::Stage::Running
         || binding.item.spec.item_id != w.item_id
-        || binding.item.spec.target != expected_target
+        || !target_matches
         || !binding.item.spec.scope_keys.contains(w.occupancy_key)
         || !binding.scopes_bound
     {
