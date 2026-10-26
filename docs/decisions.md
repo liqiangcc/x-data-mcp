@@ -87,7 +87,7 @@
 | # | 事项 | 需要谁决定 | 备注 |
 |---|---|---|---|
 | P-01 | D-09 完成后是否合并、发布并部署到生产 | owner | 已落地：PR #329 于 2026-10-13 合并，schema 21 随 preview.32 部署（2026-10-13） |
-| P-02 | 下游 x 仓库对 `KlineReader` 的版本 pin 逻辑改为 `latest_per_entity` | owner | 另一个仓库，须另行批准 |
+| P-02 | 下游 x 仓库对 `KlineReader` 的版本 pin 逻辑改为 `latest_per_entity` | owner | **已撤销（2026-10-26）**：只读核对（另一仓库，未改任何文件）确认 x 侧不存在任何版本固定逻辑——`KlineReader` 不 pin、不缓存、不持久化 `version_id`，只在单次读内做分页一致性校验，本条的前提不成立。部署前的兼容性确认改为核对两个上游契约点（`query_data` 的日线读路径仍只解析 `adjustment=1`；清单 `metadata.adjustment.value` 仍是字面 `"qfq"`），见 [M1 部署清单](tasks/issue-383-m1-deploy-checklist.md)；D-32 的「部署前确认下游能处理 6dp」仍然有效 |
 | P-03 | 启动检查的冷缓存代价（随机读，约数秒到十余秒）是否接受，或改为启动后异步校验 | owner | 以 S5 在真实库上的复测为依据 |
 | P-04 | 任务簿记与事件日志的保留策略 | owner | 先观察一周真实日更的增长 |
 | P-05 | GOAL-008 的关闭标准（建议：生产有更新的一天，仅用 Skill 完成同步并验证通过，见 #304） | owner | — |

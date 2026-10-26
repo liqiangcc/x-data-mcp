@@ -15,7 +15,7 @@
   单版本序列：version_id=内容 hex，latest-only）；strict Skill
   会话遇 revision 不匹配即停止。
 
-已部署实例为 fresh compact schema 21；代码（main）为 schema 22（M1 PR-1，未部署），
+已部署实例为 fresh compact schema 21；代码（main）为 schema 22（M1 PR-1…PR-8，未部署），
 显式 init 的新库按代码的 schema 建立；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
 
