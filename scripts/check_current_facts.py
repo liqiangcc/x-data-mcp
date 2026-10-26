@@ -43,7 +43,13 @@ CURRENT_REGIONS: dict[str, tuple[str | None, ...]] = {
         "## 存储模型状态（版本链 vs 单版本）",
         "## 当前能力与目标差距",
     ),
-    "docs/latest-only-storage.md": (None,),
+    "docs/latest-only-storage.md": (
+        None,
+        # §10 states the deployed model directly ("已部署事实不因本文改变"),
+        # §11 is the schema-20 comparison table; both were wrong before P1-1.
+        "## 10. schema 21、部署与回滚",
+        "## 11. 与 schema 20（历史）模型对照",
+    ),
     "docs/sqlite-storage-design.md": (None,),
     "docs/verified-reads.md": (None,),
     "docs/yearly.md": (None,),
@@ -115,7 +121,9 @@ SENTENCE_SPLIT = re.compile(r"[。；;！？]")
 # A timeline transition ("6/6 → 5/6") describes how a value changed, not what it
 # is now; only STATUS uses this marker.
 STATUS_TRANSITION = "→"
-HISTORY_IN_SENTENCE = HISTORICAL_MARKERS + (
+HISTORY_IN_SENTENCE = (
+    "historical",
+    "Historical",
     "已取代",
     "已被",
     "及更早",
@@ -123,6 +131,15 @@ HISTORY_IN_SENTENCE = HISTORICAL_MARKERS + (
     "当时",
     "写作时",
 )
+# 历史 as a marker of "this text is history", not as a data concept: "某个历史版本"
+# (a historical data version) must not exempt the sentence from the rules.
+HISTORY_WORD = re.compile(r"历史(?!版本|记录|数据|时点|区间|窗口|行情|序列)")
+
+
+def is_historical(sentence: str) -> bool:
+    return bool(HISTORY_WORD.search(sentence)) or any(
+        marker in sentence for marker in HISTORY_IN_SENTENCE
+    )
 
 # docs/contracts/ holds historical snapshots; none may call itself current.
 CONTRACTS_DIR = ROOT / "docs" / "contracts"
@@ -286,7 +303,7 @@ def stale_current_region_claims(
     wanted_revision = revision.rsplit("-v", 1)[-1]
     found: list[tuple[int, str, str]] = []
     for sentence, line_map in claim_sentences(region, offset):
-        if any(marker in sentence for marker in HISTORY_IN_SENTENCE):
+        if is_historical(sentence):
             continue
         if CURRENT_ASSERTION.search(sentence):
             for m in SCHEMA_CLAIM.finditer(sentence):
@@ -435,7 +452,7 @@ def status_consistency_errors(
     deployed_preview = deployed.group(1) if deployed else None
 
     for sentence, line_map in claim_sentences(text):
-        if any(marker in sentence for marker in HISTORY_IN_SENTENCE):
+        if is_historical(sentence):
             continue
         if STATUS_TRANSITION in sentence:
             continue

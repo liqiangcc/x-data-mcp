@@ -193,6 +193,16 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual(rules(region_claims("对齐到 preview.31 / 21 tools / v5。\n")), ["tool-count"])
         self.assertEqual(region_claims("双 server 共 23 tools。\n"), [])
 
+    def test_data_history_word_is_not_a_history_marker(self):
+        # verified-reads.md before P1-1 (XDM-1 7d #5): "某个历史版本" is a data
+        # concept, not a marker that the sentence is historical.
+        old = (
+            "下文把「按 `version_id` 读取某个历史版本」作为完整性读取的前提，"
+            "这是版本链模型（已部署的 schema 20 沿用其语义）。\n"
+        )
+        found = region_claims(old)
+        self.assertEqual(rules(found), ["stale-schema"], found)
+
     def test_history_marked_sentence_is_exempt(self):
         text = "历史实测（preview.27/schema20）：5,222 items / 616s。\n"
         self.assertEqual(region_claims(text), [])
