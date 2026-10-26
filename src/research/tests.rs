@@ -668,22 +668,29 @@ fn rows_stream_with_the_requested_range() {
 
 #[test]
 fn decimals_are_scaled_exactly_once() {
-    // 2dp source at the 6dp column.
+    // A 2dp source widened to the 6dp price column: exact, no rounding.
     assert_eq!(
         scaled_units(Decimal::new(12345, 2), 6).unwrap(),
         123_450_000
     );
-    // amount from an f32 expansion (123456.708984375), rounded HALF_UP to 2dp.
+    // The amount column comes from an f32 expansion — f32(123456.71) is
+    // 123456.7109375 — so the export must round to the column's 2dp.
     assert_eq!(
-        scaled_units(Decimal::new(123_456_708_984_375, 10), 2).unwrap(),
+        scaled_units(Decimal::new(1_234_567_109_375, 7), 2).unwrap(),
         12_345_671
     );
-    // a repeating decimal at 18dp.
+    // A midpoint rounds away from zero (123456.715 -> 123456.72), which is the
+    // strategy the column needs: banker's rounding would give ...71.
+    assert_eq!(
+        scaled_units(Decimal::new(1_234_567_150, 3), 2).unwrap(),
+        12_345_672
+    );
+    // A repeating decimal at 18dp: 10/13 rounds up at the 18th digit.
     assert_eq!(
         scaled_units(Decimal::new(10, 0) / Decimal::new(13, 0), 18).unwrap(),
         769_230_769_230_769_231
     );
-    // raw 2dp price units to the DECIMAL(18,6) column.
+    // Raw 2dp/6dp price units to the DECIMAL(18,6) column.
     assert_eq!(price_units(1_000, 2).unwrap(), 10_000_000);
     assert_eq!(price_units(1_000_000, 6).unwrap(), 1_000_000);
 }
