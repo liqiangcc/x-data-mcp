@@ -20,6 +20,11 @@ impl QueryPlan {
     pub fn new(mut args: Query, access: &Access) -> Result<Self, Error> {
         access.require(args.dataset, None)?;
         page_size(args.page_size)?;
+        // v2 shape only (v8 PR-3, #387 §4.3): `fields` projects columns, so a
+        // v1 request carrying it is rejected rather than silently ignored.
+        if args.contract_version == ReadContractVersion::V1 && args.fields.is_some() {
+            return Err(invalid("fields requires contract_version v2"));
+        }
         let entities = entities(args.dataset, &args.selection, access)?;
         match (&args.filter, args.dataset) {
             (
@@ -237,11 +242,49 @@ impl<R: ReadRepository> Queries<R> {
             .resume(token)
             .ok_or_else(|| invalid("invalid/expired cursor"))?;
         if s.key != key || &s.access != access {
-            return Err(invalid("cursor conditions/authorization changed"));
+            return Err(invalid(&cursor_mismatch(&s.key, key)));
         }
         Ok(s)
     }
     pub fn query(&self, args: Query, access: &Access) -> Result<DataPage, Error> {
+        Ok(self.query_page(args, access)?.0)
+    }
+    /// v2 columnar read (v8 PR-3, #387 §5): the same snapshot, page slice and
+    /// version verification as v1; only the projection differs.
+    pub fn query_v2(&self, args: Query, access: &Access) -> Result<serde_json::Value, Error> {
+        let (allowed, default) = super::columnar::query_fields(args.dataset);
+        let fields = super::columnar::select(
+            args.fields.as_deref(),
+            allowed,
+            default,
+            args.dataset.name(),
+        )?;
+        let (page, plan) = self.query_page(args, access)?;
+        let meta = super::columnar::PageMeta {
+            snapshot_id: &page.snapshot_id,
+            snapshot_time: page.query_time,
+            next_cursor: page.next_cursor.as_deref(),
+            page_complete: page.page_complete,
+            limitations: &page.limitations,
+        };
+        Ok(match plan.args.dataset {
+            Dataset::Catalog => super::columnar::catalog_table(
+                &page.version_manifest,
+                &page.records,
+                &fields,
+                &meta,
+            ),
+            dataset => super::columnar::panel(
+                dataset,
+                &page.version_manifest,
+                &plan.entities,
+                &page.records,
+                &fields,
+                &meta,
+            ),
+        })
+    }
+    fn query_page(&self, args: Query, access: &Access) -> Result<(DataPage, QueryPlan), Error> {
         let plan = QueryPlan::new(args, access)?;
         let cursor = plan.args.cursor.clone();
         let mut keyargs = plan.args.clone();
@@ -302,9 +345,37 @@ impl<R: ReadRepository> Queries<R> {
         if more {
             result.next_cursor = Some(self.save(saved));
         }
-        Ok(result)
+        Ok((result, plan))
     }
-    pub fn versions(&self, mut args: VersionsQuery, access: &Access) -> Result<VersionPage, Error> {
+    pub fn versions(&self, args: VersionsQuery, access: &Access) -> Result<VersionPage, Error> {
+        Ok(self.versions_page(args, access)?.0)
+    }
+    /// v2 version table (v8 PR-3, #387 §5.1): one row per version, the list
+    /// appears once and `integrity_sha256` is gone.
+    pub fn versions_v2(
+        &self,
+        args: VersionsQuery,
+        access: &Access,
+    ) -> Result<serde_json::Value, Error> {
+        let (page, args) = self.versions_page(args, access)?;
+        let meta = super::columnar::PageMeta {
+            snapshot_id: &page.snapshot_id,
+            snapshot_time: page.snapshot_time,
+            next_cursor: page.next_cursor.as_deref(),
+            page_complete: page.page_complete,
+            limitations: &[],
+        };
+        Ok(super::columnar::versions_table(
+            args.dataset,
+            &page.items,
+            &meta,
+        ))
+    }
+    fn versions_page(
+        &self,
+        mut args: VersionsQuery,
+        access: &Access,
+    ) -> Result<(VersionPage, VersionsQuery), Error> {
         access.require(args.dataset, None)?;
         page_size(args.page_size)?;
         entities(args.dataset, &args.selection, access)?;
@@ -352,7 +423,7 @@ impl<R: ReadRepository> Queries<R> {
         if more {
             result.next_cursor = Some(self.save(saved));
         }
-        Ok(result)
+        Ok((result, args))
     }
 }
 impl<R: ReadRepository + crate::data_supply::presence::PresenceRepository> Queries<R> {
@@ -366,6 +437,44 @@ impl<R: ReadRepository + crate::data_supply::presence::PresenceRepository> Queri
         crate::data_supply::presence::year_presence(&self.repository, self.id(), args, access)
     }
 }
+/// Names the request fields that differ from the snapshot a cursor was issued
+/// for. `contract_version`/`fields` are part of the key, so a v1 cursor reused
+/// on a v2 request reports `contract_version` instead of a generic mismatch
+/// (v8 PR-3, #387 §5.3).
+pub(crate) fn cursor_mismatch(stored: &str, requested: &str) -> String {
+    let changed = key_diff(stored, requested);
+    if changed.is_empty() {
+        "cursor conditions/authorization changed".into()
+    } else {
+        format!(
+            "cursor conditions changed: {}; start a new query",
+            changed.join(", ")
+        )
+    }
+}
+
+fn key_diff(stored: &str, requested: &str) -> Vec<String> {
+    let (Some((stored_kind, stored_body)), Some((requested_kind, requested_body))) =
+        (stored.split_once(':'), requested.split_once(':'))
+    else {
+        return vec![];
+    };
+    if stored_kind != requested_kind {
+        return vec![stored_kind.to_owned()];
+    }
+    let (Ok(serde_json::Value::Object(stored)), Ok(serde_json::Value::Object(requested))) = (
+        serde_json::from_str(stored_body),
+        serde_json::from_str(requested_body),
+    ) else {
+        return vec![];
+    };
+    let keys: BTreeSet<&String> = stored.keys().chain(requested.keys()).collect();
+    keys.into_iter()
+        .filter(|key| stored.get(*key) != requested.get(*key))
+        .cloned()
+        .collect()
+}
+
 /// Deduplicates verification work without changing query selection semantics.
 pub fn unique_refs(refs: &[VersionRef]) -> Vec<VersionRef> {
     let mut seen = BTreeSet::new();

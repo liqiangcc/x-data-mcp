@@ -1,0 +1,975 @@
+{
+  "expected": {
+    "columns": {
+      "amount": [
+        [
+          "1005000"
+        ],
+        [
+          "1005001"
+        ],
+        [
+          "1005002"
+        ],
+        [
+          "1005003"
+        ],
+        [
+          "1005004"
+        ],
+        [
+          "1005005"
+        ],
+        [
+          "1005006"
+        ],
+        [
+          "1005007"
+        ],
+        [
+          "1005008"
+        ],
+        []
+      ],
+      "close": [
+        [
+          "10.05"
+        ],
+        [
+          "11.05"
+        ],
+        [
+          "12.05"
+        ],
+        [
+          "13.05"
+        ],
+        [
+          "14.05"
+        ],
+        [
+          "15.05"
+        ],
+        [
+          "16.05"
+        ],
+        [
+          "17.05"
+        ],
+        [
+          "18.05"
+        ],
+        []
+      ],
+      "high": [
+        [
+          "10.10"
+        ],
+        [
+          "11.10"
+        ],
+        [
+          "12.10"
+        ],
+        [
+          "13.10"
+        ],
+        [
+          "14.10"
+        ],
+        [
+          "15.10"
+        ],
+        [
+          "16.10"
+        ],
+        [
+          "17.10"
+        ],
+        [
+          "18.10"
+        ],
+        []
+      ],
+      "low": [
+        [
+          "00.90"
+        ],
+        [
+          "01.90"
+        ],
+        [
+          "02.90"
+        ],
+        [
+          "03.90"
+        ],
+        [
+          "04.90"
+        ],
+        [
+          "05.90"
+        ],
+        [
+          "06.90"
+        ],
+        [
+          "07.90"
+        ],
+        [
+          "08.90"
+        ],
+        []
+      ],
+      "open": [
+        [
+          "10.00"
+        ],
+        [
+          "11.00"
+        ],
+        [
+          "12.00"
+        ],
+        [
+          "13.00"
+        ],
+        [
+          "14.00"
+        ],
+        [
+          "15.00"
+        ],
+        [
+          "16.00"
+        ],
+        [
+          "17.00"
+        ],
+        [
+          "18.00"
+        ],
+        []
+      ],
+      "volume": [
+        [
+          "100000"
+        ],
+        [
+          "100001"
+        ],
+        [
+          "100002"
+        ],
+        [
+          "100003"
+        ],
+        [
+          "100004"
+        ],
+        [
+          "100005"
+        ],
+        [
+          "100006"
+        ],
+        [
+          "100007"
+        ],
+        [
+          "100008"
+        ],
+        []
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.daily",
+    "dates": [
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      [
+        "2025-01-02"
+      ],
+      []
+    ],
+    "entities": [
+      "sh.600000",
+      "sh.600001",
+      "sh.600002",
+      "sh.600003",
+      "sh.600004",
+      "sh.600005",
+      "sh.600006",
+      "sh.600007",
+      "sh.600008",
+      "sh.600009"
+    ],
+    "layout": "panel",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "adjustment": {
+        "field": "price_adjustment",
+        "reason": "qfq-exact-v1 fixture",
+        "status": "confirmed",
+        "value": "qfq"
+      },
+      "coverage_reason": "fixture coverage",
+      "coverage_status": "complete",
+      "source": "official_market",
+      "units": [
+        {
+          "field": "price",
+          "reason": "fixture unit evidence",
+          "status": "confirmed",
+          "value": "CNY"
+        }
+      ]
+    },
+    "next_cursor": null,
+    "page_complete": true,
+    "row_count": 9,
+    "selection_complete": true,
+    "snapshot_id": "snap-panel-batch-ten",
+    "snapshot_time": "2026-10-26T09:00:00Z",
+    "versions": [
+      {
+        "entity": "sh.600000",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600001",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600002",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600003",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600004",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600005",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600006",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600007",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600008",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "entity": "sh.600009",
+        "status": "absent"
+      }
+    ]
+  },
+  "input": {
+    "dataset": "market.daily",
+    "entities": [
+      {
+        "code": "600000",
+        "exchange": "sh"
+      },
+      {
+        "code": "600001",
+        "exchange": "sh"
+      },
+      {
+        "code": "600002",
+        "exchange": "sh"
+      },
+      {
+        "code": "600003",
+        "exchange": "sh"
+      },
+      {
+        "code": "600004",
+        "exchange": "sh"
+      },
+      {
+        "code": "600005",
+        "exchange": "sh"
+      },
+      {
+        "code": "600006",
+        "exchange": "sh"
+      },
+      {
+        "code": "600007",
+        "exchange": "sh"
+      },
+      {
+        "code": "600008",
+        "exchange": "sh"
+      },
+      {
+        "code": "600009",
+        "exchange": "sh"
+      }
+    ],
+    "fields": null,
+    "layout": "panel",
+    "manifest": [
+      {
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600001",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600001",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600002",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600002",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600003",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600003",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600004",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600004",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600005",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600005",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600007",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600007",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600008",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600008",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      },
+      {
+        "entity": {
+          "code": "600009",
+          "exchange": "sh"
+        },
+        "metadata": null,
+        "status": "absent",
+        "version_ref": null
+      }
+    ],
+    "meta": {
+      "limitations": [
+        "fixed version selection is not a shared source acquisition time",
+        "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "snap-panel-batch-ten",
+      "snapshot_time": "2026-10-26T09:00:00Z"
+    },
+    "rows": [
+      {
+        "amount": "1005000",
+        "close": "10.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "00.90",
+        "open": "10.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100000",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005001",
+        "close": "11.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600001",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "11.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "01.90",
+        "open": "11.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600001",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100001",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005002",
+        "close": "12.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600002",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "12.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "02.90",
+        "open": "12.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600002",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100002",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005003",
+        "close": "13.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600003",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "13.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "03.90",
+        "open": "13.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600003",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100003",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005004",
+        "close": "14.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600004",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "14.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "04.90",
+        "open": "14.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600004",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100004",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005005",
+        "close": "15.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600005",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "15.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "05.90",
+        "open": "15.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600005",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100005",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005006",
+        "close": "16.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "16.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "06.90",
+        "open": "16.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100006",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005007",
+        "close": "17.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600007",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "17.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "07.90",
+        "open": "17.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600007",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100007",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1005008",
+        "close": "18.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600008",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "18.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "08.90",
+        "open": "18.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600008",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "version_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "volume": "100008",
+        "year_unfinished": null
+      }
+    ]
+  }
+}

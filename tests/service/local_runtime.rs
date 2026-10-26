@@ -119,10 +119,17 @@ impl Session {
         let v = self.request("tools/call", json!({"name":name,"arguments":args}));
         assert_eq!(v["result"]["isError"], error, "{v}");
         let result = &v["result"];
-        assert_eq!(
-            serde_json::from_str::<Value>(result["content"][0]["text"].as_str().unwrap()).unwrap(),
-            result["structuredContent"]
-        );
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+        if parsed.get("detail").and_then(Value::as_str) == Some("see structuredContent") {
+            // ops entry: payloads above the summary threshold carry a bounded
+            // summary in text by design (v8 §5.4); structuredContent stays
+            // complete and is what this helper returns.
+            assert!(text.len() <= 300, "summary is {} B: {text}", text.len());
+            assert!(parsed.get("status").is_some(), "{parsed}");
+        } else {
+            assert_eq!(parsed, result["structuredContent"], "{v}");
+        }
         result["structuredContent"].clone()
     }
 }

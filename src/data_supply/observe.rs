@@ -558,7 +558,7 @@ impl<R: ObservationRepository> Observer<R> {
             .cloned()
             .ok_or_else(|| invalid("invalid/expired cursor"))?;
         if s.key != key || &s.access != access {
-            return Err(invalid("cursor conditions/authorization changed"));
+            return Err(invalid(&super::query::cursor_mismatch(&s.key, key)));
         }
         Ok(s)
     }
@@ -976,11 +976,42 @@ impl<R: ObservationRepository> Observer<R> {
         }
         Ok(result)
     }
-    pub fn availability(
+    pub fn availability(&self, args: Query, access: &Access) -> Result<AvailabilityPage, Error> {
+        Ok(self.availability_page(args, access)?.0)
+    }
+    /// v2 availability table (v8 PR-3, #387 §4.1/§5): one row per entity with
+    /// the related-task objects shared once under `tasks`.
+    pub fn availability_v2(
+        &self,
+        args: Query,
+        access: &Access,
+    ) -> Result<serde_json::Value, Error> {
+        let fields = super::columnar::select(
+            args.fields.as_deref(),
+            super::columnar::AVAILABILITY_FIELDS,
+            super::columnar::AVAILABILITY_FIELDS,
+            "get_data_availability",
+        )?;
+        let (page, plan) = self.availability_page(args, access)?;
+        let meta = super::columnar::PageMeta {
+            snapshot_id: &page.snapshot_id,
+            snapshot_time: page.snapshot_time,
+            next_cursor: page.next_cursor.as_deref(),
+            page_complete: page.page_complete,
+            limitations: &[],
+        };
+        Ok(super::columnar::availability_table(
+            plan.args.dataset,
+            &page.items,
+            &fields,
+            &meta,
+        ))
+    }
+    fn availability_page(
         &self,
         mut args: Query,
         access: &Access,
-    ) -> Result<AvailabilityPage, Error> {
+    ) -> Result<(AvailabilityPage, super::query::QueryPlan), Error> {
         let cursor = args.cursor.take();
         let plan = super::query::QueryPlan::new(args, access)?;
         let key = format!(
@@ -1029,7 +1060,7 @@ impl<R: ObservationRepository> Observer<R> {
         if more {
             p.next_cursor = Some(self.save(s));
         }
-        Ok(p)
+        Ok((p, plan))
     }
 }
 /// The plan summary a bounded progress page carries instead of per-item

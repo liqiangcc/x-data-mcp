@@ -1,0 +1,310 @@
+{
+  "expected": {
+    "columns": {
+      "amount": [
+        [
+          "1005000",
+          null,
+          "1017000",
+          "1028000",
+          "1039000"
+        ]
+      ],
+      "close": [
+        [
+          "10.05",
+          "10.10",
+          "10.15",
+          "10.20",
+          "10.25"
+        ]
+      ],
+      "high": [
+        [
+          "10.10",
+          "10.15",
+          "10.20",
+          "10.25",
+          "10.30"
+        ]
+      ],
+      "low": [
+        [
+          "9.90",
+          "9.95",
+          "10.00",
+          "10.05",
+          "10.10"
+        ]
+      ],
+      "open": [
+        [
+          "10.00",
+          "10.05",
+          "10.10",
+          "10.15",
+          "10.20"
+        ]
+      ],
+      "volume": [
+        [
+          "100000",
+          null,
+          "100200",
+          "100300",
+          "100400"
+        ]
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.daily",
+    "dates": [
+      [
+        "2025-01-02",
+        "2025-01-03",
+        "2025-01-06",
+        "2025-01-07",
+        "2025-01-08"
+      ]
+    ],
+    "entities": [
+      "sh.600006"
+    ],
+    "layout": "panel",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "adjustment": {
+        "field": "price_adjustment",
+        "reason": "qfq-exact-v1 fixture",
+        "status": "confirmed",
+        "value": "qfq"
+      },
+      "coverage_reason": "fixture coverage",
+      "coverage_status": "complete",
+      "source": "official_market",
+      "units": [
+        {
+          "field": "price",
+          "reason": "fixture unit evidence",
+          "status": "confirmed",
+          "value": "CNY"
+        }
+      ]
+    },
+    "next_cursor": null,
+    "page_complete": true,
+    "row_count": 5,
+    "selection_complete": true,
+    "snapshot_id": "snap-panel-five",
+    "snapshot_time": "2026-10-26T09:00:00Z",
+    "versions": [
+      {
+        "entity": "sh.600006",
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ]
+  },
+  "input": {
+    "dataset": "market.daily",
+    "entities": [
+      {
+        "code": "600006",
+        "exchange": "sh"
+      }
+    ],
+    "fields": null,
+    "layout": "panel",
+    "manifest": [
+      {
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "metadata": {
+          "adjustment": {
+            "field": "price_adjustment",
+            "reason": "qfq-exact-v1 fixture",
+            "status": "confirmed",
+            "value": "qfq"
+          },
+          "coverage_reason": "fixture coverage",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": [
+            {
+              "field": "price",
+              "reason": "fixture unit evidence",
+              "status": "confirmed",
+              "value": "CNY"
+            }
+          ]
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    ],
+    "meta": {
+      "limitations": [
+        "fixed version selection is not a shared source acquisition time",
+        "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "snap-panel-five",
+      "snapshot_time": "2026-10-26T09:00:00Z"
+    },
+    "rows": [
+      {
+        "amount": "1005000",
+        "close": "10.05",
+        "date": "2025-01-02",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.10",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "9.90",
+        "open": "10.00",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "volume": "100000",
+        "year_unfinished": null
+      },
+      {
+        "amount": null,
+        "close": "10.10",
+        "date": "2025-01-03",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.15",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "9.95",
+        "open": "10.05",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "volume": null,
+        "year_unfinished": null
+      },
+      {
+        "amount": "1017000",
+        "close": "10.15",
+        "date": "2025-01-06",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.20",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "10.00",
+        "open": "10.10",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "volume": "100200",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1028000",
+        "close": "10.20",
+        "date": "2025-01-07",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.25",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "10.05",
+        "open": "10.15",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "volume": "100300",
+        "year_unfinished": null
+      },
+      {
+        "amount": "1039000",
+        "close": "10.25",
+        "date": "2025-01-08",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "first_trading_date": null,
+        "high": "10.30",
+        "kind": "market",
+        "last_trading_date": null,
+        "low": "10.10",
+        "open": "10.20",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600006",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "volume": "100400",
+        "year_unfinished": null
+      }
+    ]
+  }
+}

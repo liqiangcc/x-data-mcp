@@ -79,6 +79,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Fail-closed startup check: an allowlist naming an unregistered tool is a
     // wiring error, not a silently narrower surface (v8 §3.3 item 4).
     entry.validate()?;
+    // text grading switch (v8 §5.4): an unknown value is a wiring error too.
+    if let Ok(mode) = std::env::var("X_DATA_MCP_TEXT_MODE")
+        && x_data_mcp::mcp::TextMode::parse(&mode).is_none()
+    {
+        return Err("X_DATA_MCP_TEXT_MODE must be full, summary or off".into());
+    }
     // v8 §3.4: only the ops entry runs the background worker; research and
     // maint serve reads/forensics without writing.
     config.run_worker = entry == EntryKind::Ops;

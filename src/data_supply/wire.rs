@@ -23,16 +23,33 @@ impl Dataset {
             Self::Catalog => None,
         }
     }
+    /// Wire spelling; used by v2 error messages (v8 PR-3, #387 §5).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Catalog => "securities.catalog",
+            Self::Daily => "market.daily",
+            Self::Yearly => "market.yearly",
+        }
+    }
 }
+// Write/task surfaces accept `v1` only; the read surface uses
+// `ReadContractVersion`, so a write tool's schema never advertises a version
+// it rejects (v8 PR-3, #387 §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ContractVersion {
     #[serde(rename = "v1")]
     V1,
 }
-/// One security identity. The typed contract stays `{exchange, code}`; the
-/// decode-layer `normalize` step (v8 PR-1, #387 §7) accepts the canonical
-/// text `"sh.600000"` and rewrites it to this form before decoding, so no
-/// response byte and no advertised schema changes.
+
+// `v1` keeps the row shape, `v2` selects the columnar shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ReadContractVersion {
+    #[serde(rename = "v1")]
+    V1,
+    #[serde(rename = "v2")]
+    V2,
+}
+/// Security identity (`{exchange, code}`; `"sh.600000"` is also accepted).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Security {
@@ -133,7 +150,7 @@ pub enum VersionChoice {
 #[serde(deny_unknown_fields)]
 pub struct Query {
     pub dataset: Dataset,
-    pub contract_version: ContractVersion,
+    pub contract_version: ReadContractVersion,
     pub selection: Selection,
     pub filter: Filter,
     pub version: VersionChoice,
@@ -141,6 +158,9 @@ pub struct Query {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
+    /// v2 only: column projection (omitted = the dataset's core fields).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
 }
 pub fn default_page() -> usize {
     100
@@ -236,7 +256,7 @@ pub struct DataPage {
 #[serde(deny_unknown_fields)]
 pub struct VersionsQuery {
     pub dataset: Dataset,
-    pub contract_version: ContractVersion,
+    pub contract_version: ReadContractVersion,
     pub selection: Selection,
     #[serde(default = "default_page")]
     #[schemars(range(min = 1, max = 1000))]

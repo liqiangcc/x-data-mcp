@@ -1,0 +1,162 @@
+{
+  "expected": {
+    "columns": {
+      "industry_code": [
+        "X2603",
+        null,
+        null
+      ],
+      "industry_name": [
+        "银行",
+        null,
+        null
+      ],
+      "industry_reason": [
+        null,
+        "no industry record",
+        "two industry codes"
+      ],
+      "industry_status": [
+        null,
+        "missing",
+        "conflicted"
+      ],
+      "name": [
+        "浦发银行",
+        "缺失行业",
+        "冲突行业"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "securities.catalog",
+    "entities": [
+      "sh.600000",
+      "sh.600001",
+      "sh.600002"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "validated fixture catalog snapshot",
+      "coverage_status": "complete",
+      "source": "official_market"
+    },
+    "next_cursor": null,
+    "page_complete": true,
+    "row_count": 3,
+    "snapshot_id": "snap-catalog-industry",
+    "snapshot_time": "2026-10-26T09:00:00Z",
+    "versions": [
+      {
+        "published_at": "2026-10-26T00:00:00Z",
+        "status": "present",
+        "version_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ]
+  },
+  "input": {
+    "fields": [
+      "name",
+      "industry_code",
+      "industry_name",
+      "industry_status",
+      "industry_reason"
+    ],
+    "layout": "catalog",
+    "manifest": [
+      {
+        "entity": null,
+        "metadata": {
+          "adjustment": null,
+          "coverage_reason": "validated fixture catalog snapshot",
+          "coverage_status": "complete",
+          "lineage": null,
+          "published_at": "2026-10-26T00:00:00Z",
+          "source": "official_market",
+          "units": []
+        },
+        "status": "present",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "securities.catalog",
+          "entity": null,
+          "integrity_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "version_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      }
+    ],
+    "meta": {
+      "limitations": [
+        "fixed version selection is not a shared source acquisition time",
+        "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+      ],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "snap-catalog-industry",
+      "snapshot_time": "2026-10-26T09:00:00Z"
+    },
+    "rows": [
+      {
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "industry": {
+          "code": "X2603",
+          "name": "银行",
+          "status": "assigned"
+        },
+        "kind": "catalog",
+        "name": "浦发银行",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "securities.catalog",
+          "entity": null,
+          "integrity_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "version_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      {
+        "entity": {
+          "code": "600001",
+          "exchange": "sh"
+        },
+        "industry": {
+          "reason": "no industry record",
+          "status": "missing"
+        },
+        "kind": "catalog",
+        "name": "缺失行业",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "securities.catalog",
+          "entity": null,
+          "integrity_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "version_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      },
+      {
+        "entity": {
+          "code": "600002",
+          "exchange": "sh"
+        },
+        "industry": {
+          "reason": "two industry codes",
+          "status": "conflicted"
+        },
+        "kind": "catalog",
+        "name": "冲突行业",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "securities.catalog",
+          "entity": null,
+          "integrity_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "version_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      }
+    ]
+  }
+}
