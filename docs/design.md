@@ -12,10 +12,12 @@
 
 ## 存储模型状态（版本链 vs 单版本）
 
-本文中「版本」「head」「旧版本可按原 ID 读取」「不可原地修订」等表述描述的是**版本链模型**：它是已部署的
-schema 20（v0.2.0-preview.31）的行为，但**不再被视为目标模型**。用户已决定只保留最新数据：待合并的目标模型
-是 schema 21 的单版本存储，每 `(实体, 周期)` 只存当前序列，变更由追加式事件日志记录。两者并列：线上仍是
-schema 20，schema 21 合并并部署之前不能当作已部署事实。详见[单版本（latest-only）行情存储模型](latest-only-storage.md)。下文各处只在受影响的段落加注。
+本文中「版本」「head」「旧版本可按原 ID 读取」「不可原地修订」等表述描述的是**版本链模型**：它是
+schema 20（v0.2.0-preview.31 及更早）的行为，**已被 schema 21 取代**（历史，不再被视为目标模型）。
+当前部署的是 schema 21 的单版本存储：每 `(实体, 周期)` 只存当前序列，变更由追加式事件日志记录。
+schema 21 自 preview.32 起部署（2026-10-13 全新 init，旧 v20 库归档），`generic-data-v7` 自 preview.33
+起运行；部署与运行事实以 [STATUS](STATUS.md) 为准。详见[单版本（latest-only）行情存储模型](latest-only-storage.md)。
+下文各处只在受影响的段落加注。
 
 ## 文档状态与权威入口
 
@@ -49,7 +51,7 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 本人及授权 AI 可以刷新目录、首次采集、手动更新与补采、查询行情与版本、
 查看未完成项、取消、显式重试，以及按证据核实不确定结果或恢复受损版本。
-这些是完整目标，不因当前仅暴露八个工具而缩减。
+这些是完整目标，不因当前工具集与目标存在差距而缩减。
 
 首期当前沪深 A 股、前复权日线与本地自然年派生年线；不自动纳入北交所、ETF、
 退市证券补齐、分钟线、财务、订单执行或管理网页。
@@ -64,15 +66,15 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 | 能力 | 基线事实 | 目标 / 依赖 |
 |---|---|---|
-| MCP | 双 server：data socket 21 data tools、acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC | 稳定契约与真实客户端验收 |
+| MCP | 双 server：data socket 23 data tools、acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC | 稳定契约与真实客户端验收 |
 | 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
-| 行情 | SQLite fresh compact schema 21、逐行行情、原子 head 与结果关联 | 性能 gate 裁决 |
+| 行情 | SQLite fresh compact schema 21、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
 | 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |
 | QFQ / GBBQ | #54 契约实现并经 Final Gate 验收 | 新 generation 重审计 |
 | 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |
-| 目录 | 官方目录全市场 5,227 实体已发布 | — |
+| 目录 | 官方目录全市场 5,228 实体已发布（`catalog-1791873196258239513`） | — |
 | 服务 | 双 systemd 单元 + 本机私有 socket 长期运行 | 外部分发/远程访问授权 |
-| 性能 / 全市场 | class-specific 合同：同代 no-change `update_data` ≤15min / ≤4KiB/item / `data_versions +0`，preview.27/schema20 实测 5,222 items / 616s / +18.5MB / 0 new versions PASS | 跨代 envelope 约 37min 仅 measured baseline；真实 append/rewrite 待独立证据 |
+| 性能 / 全市场 | class-specific 合同（当前门禁见 [SLO](SLO.md) 第 1 行）：同代 no-change `update_data` write-loop <600s；checkpoint 后净增长 ≤4KiB/attempted item；`data_versions +0`。历史：时间项曾为 ≤15min（2026-09-28，2026-10-10 被 write-loop <600s 取代）；历史实测（preview.27/schema20）：5,222 items / 616s / +18.5MB / 0 new versions | 跨代 envelope 约 37min 仅 measured baseline；真实 append/rewrite 待独立证据 |
 | 编排 | 项目 Skill 覆盖 generation 与全市场分批编排 | 独立新会话仅 Skill 验收 |
 
 剩余差距集中在：#262 残余项、#294 admission 协议缺陷（独立问题，不为旧统一门禁

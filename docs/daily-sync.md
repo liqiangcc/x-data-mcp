@@ -266,17 +266,20 @@ SHA 当作 #131 PASS。
 
 只有“实现 + 自动测试 + 对应规模真实证据”三列同时存在才可标 PASS：
 
-| 能力 | 实现/测试 | 真实证据 | 当前裁定 |
+> **历史（preview.29 时期，2026-09 口径）**：下表保留当时的验收记录，不再代表当前部署或当前门禁。
+> 当前性能与容量目标见 [SLO](SLO.md)，当前部署与运行事实见 [STATUS](STATUS.md)。
+
+| 能力 | 实现/测试 | 真实证据 | 当时裁定（历史） |
 |---|---|---|---|
 | immutable generation + verify/activate | 有 | 本机真实 generation 全生命周期 | PASS |
 | generation-bound daily update | 有 | 全市场真实 generation | PASS |
 | generation-bound yearly update | 有 | 全市场真实 generation | PASS |
 | 全市场 collection/update | 有 | 分批 MCP 编排：catalog 5,227、daily 约 340s、no-change update 5,222 items 约 616s | PASS（batched） |
-| 首采 DB ≤2.5GiB、部署 ≤4GiB、首采 ≤20min | 有 | DB 约 831MB、preview.28 部署包、首采约 340s | PASS |
+| 首采 DB ≤2.5GiB、部署 ≤4GiB、首采 ≤20min | 有 | 历史（preview.28 部署包口径）：DB 约 831MB、首采约 340s | 历史 PASS；当前口径待定，见 [SLO](SLO.md)，当前事实见 [STATUS](STATUS.md) |
 | 同代 no-change `update_data`（≤15min、≤4KiB/item、`data_versions +0`） | 有 | preview.27/schema20：5,222 items / 616s / +18.5MB / 0 new versions | PASS |
 | 跨代 envelope / 真实 append·rewrite | 有实测 | cross-gen 约 37min（preview.29 measured baseline，无批准 hard SLO）；#320 后 proven append 可走 typed metadata path，rewrite/unsupported metadata 仍 envelope/fail-closed；typed 全市场生产 timing 待测 | measured / 不外推 |
 | 新 Devin 会话仅 Skill+MCP | Skill 文件存在 | 无独立会话证据 | 未验收 |
-| 双 MCP 可复现部署 | release 双 binary + `deploy_phase_g.sh` | preview.29 双 systemd 服务在运行 | PASS |
+| 双 MCP 可复现部署 | release 双 binary + `deploy_phase_g.sh` | 历史（preview.29 时期）：双 systemd 服务在运行 | 历史 PASS；当前部署见 [STATUS](STATUS.md) |
 | overall production readiness | capability 恒实报告 false | owner-only declared scope 可观测 | owner-only operational；external distribution not authorized |
 
 ## 验收

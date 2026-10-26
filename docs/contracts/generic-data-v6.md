@@ -5,11 +5,12 @@
 `SPEC-LATEST-ONLY` §6（契约变更表）与 `SPEC-RULINGS-LATEST-ONLY`
 （冲突以 RULINGS 为准）；两文件不在仓库内，相关裁决已随文转述。
 
-**状态**：目标契约，未部署。当前部署仍为 `generic-data-v5` / compact
-schema 20（见 [STATUS](../STATUS.md)）。代码面 S1（存储+读路径）、
+**状态**：已部署（历史契约）。`generic-data-v6` 自 preview.32（2026-10-13）起部署，
+compact schema 21；当前部署已是 `generic-data-v7`（自 preview.33 起，见
+[generic-data-v7](generic-data-v7.md) 与 [STATUS](../STATUS.md)）。代码面 S1（存储+读路径）、
 S2/S2b（日线写路径）、S3（年线 stale 出参）与 S4（capability bump、
-wire/description 收尾）已在 `feat/latest-only-storage` 落地：capability
-revision 已为 `generic-data-v6`（`src/data_supply/mcp.rs:343`）。
+wire/description 收尾）已在 `feat/latest-only-storage` 落地（已随 PR #329 合入 main）：capability
+revision 为 `generic-data-v6`（`src/data_supply/mcp.rs:343`，行号为当时基线）。
 凡下文标注「实现已核」的论断附 文件:行号；未标者为契约目标。
 部署日的文档/脚本切换清单见 [v6-switch-checklist](v6-switch-checklist.md)。
 

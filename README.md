@@ -146,7 +146,9 @@ git diff --check
 
 开发迭代（#272）：编辑循环用 `cargo check --all-targets`（本机约 2.7s）而非 `cargo build`（约 4.4s）；
 `cargo test --no-run` 会重链 8 个域测试 target，迭代期用 `cargo test --test <名称>` 按需编译；
-当前 `cargo test --locked` 基线为 722 tests：712 passed、10 ignored（ignored 未执行）。
+当前基线以 main 最近一次 CI 为准：`cargo nextest run --locked --no-fail-fast` 在 run 40118202118
+（`37383ab`，2026-10-24）为 809 tests：809 passed、5 skipped（来源：该 run 的 nextest Summary 行）。
+历史（2026-09-25 本机实测）：`cargo test --locked` 722 tests：712 passed、10 ignored（ignored 未执行）。
 完整 `cargo test --locked` 仍是提交前与 CI 门禁，check 不替代测试。dev profile 使用
 `split-debuginfo = "unpacked"` 将调试信息拆为 .dwo；本机对 mold/lld 链接器无显著收益，未固化。
 计时数字为 2026-09-25 实测；其当时环境标注（本机 WSL2、8 核 / 15GiB、cargo 1.96.0）
