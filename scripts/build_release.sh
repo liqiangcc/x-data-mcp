@@ -20,6 +20,8 @@ cp scripts/tdx_fetch.py "$stage/scripts/tdx_fetch.py"
 # (D-17: one readiness definition), so it ships executable.
 cp scripts/wait_service_ready.py "$stage/scripts/wait_service_ready.py"
 chmod 755 "$stage/scripts/wait_service_ready.py"
+[[ -x "$stage/scripts/wait_service_ready.py" ]] \
+  || { echo "packaged readiness probe is not executable" >&2; exit 1; }
 cp README.md "$stage/README.md"
 cp fixtures/demo/README.md "$stage/DEMO_DATA.md"
 cp scripts/smoke_release.py "$stage/check.py"
@@ -32,6 +34,9 @@ pathlib.Path(stage,"manifest.json").write_text(json.dumps(manifest,indent=2)+"\n
 PY
 "$stage/bin/mcp_data" --version | python3 -c 'import sys; assert sys.argv[1] in sys.stdin.read(), "binary build SHA does not match package"' "$revision"
 (cd "$stage" && sha256sum bin/* migrations/tasks/*.sql scripts/*.py README.md DEMO_DATA.md check.py check_peer.py manifest.json > SHA256SUMS)
+# The package manifest must cover the probe the tunnel executes.
+grep -q " scripts/wait_service_ready.py$" "$stage/SHA256SUMS" \
+  || { echo "SHA256SUMS does not cover scripts/wait_service_ready.py" >&2; exit 1; }
 tar -czf "dist/${name}.tar.gz" -C dist "$name"
 (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
 printf '%s\n' "$stage"

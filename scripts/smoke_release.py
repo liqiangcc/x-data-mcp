@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import os
 import pathlib
 import subprocess
 import tempfile
@@ -148,12 +147,6 @@ def main():
     binaries = args.bin_dir.resolve()
     version = subprocess.check_output([binaries / "mcp_data", "--version"], text=True).strip()
     checks = []
-    # D-17: the tunnel drop-in's ExecStartPre executes the probe from the
-    # release directory, so the package must carry it with the executable bit.
-    probe = binaries.parent / "scripts" / "wait_service_ready.py"
-    assert probe.is_file(), probe
-    assert os.access(probe, os.X_OK), probe
-    checks.append("packaged_readiness_probe_present_and_executable")
     with tempfile.TemporaryDirectory(prefix="x-data-mcp-smoke-") as tmp:
         db = pathlib.Path(tmp) / "fixture.sqlite"
         fixture = json.loads(subprocess.check_output([binaries / "create_demo", db], text=True))
