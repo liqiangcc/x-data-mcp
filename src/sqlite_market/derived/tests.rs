@@ -144,7 +144,7 @@ fn replace_stores_the_parsed_facts_and_registers_one_version() {
     // Read back through the accessor the research read model will use.
     assert_eq!(
         read_version(&c, ADJUSTMENT_EVENTS_KIND, ENTITY).unwrap(),
-        Some(written)
+        Some(written.clone())
     );
 
     // The parsed facts round-trip: bits verbatim, effective day, decode order.

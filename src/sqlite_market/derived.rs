@@ -90,11 +90,14 @@ pub(crate) struct DerivedVersionRow {
     pub algorithm_version: String,
     pub source_binding_digest: Digest,
     pub evidence_digest: Digest,
+    /// The task item whose commit last wrote the set (audit only).
+    pub task_id: String,
+    pub item_id: String,
 }
 
 const VERSION_COLUMNS: &str = "dataset_kind,dataset_key,version_id,content_digest,\
      digest_format,record_count,first_day,last_day,algorithm_version,\
-     source_binding_digest,evidence_digest";
+     source_binding_digest,evidence_digest,task_id,item_id";
 
 type RawVersion = (
     String,
@@ -108,6 +111,8 @@ type RawVersion = (
     String,
     Vec<u8>,
     Vec<u8>,
+    String,
+    String,
 );
 
 fn version_row(raw: RawVersion) -> Result<DerivedVersionRow, Error> {
@@ -141,6 +146,8 @@ fn version_row(raw: RawVersion) -> Result<DerivedVersionRow, Error> {
             .as_slice()
             .try_into()
             .map_err(|_| integrity("evidence_digest column is not 32 bytes"))?,
+        task_id: raw.11,
+        item_id: raw.12,
     })
 }
 
@@ -171,6 +178,8 @@ pub(crate) fn read_version(
                     r.get(8)?,
                     r.get(9)?,
                     r.get(10)?,
+                    r.get(11)?,
+                    r.get(12)?,
                 ))
             },
         )
@@ -372,8 +381,10 @@ pub(crate) fn replace_adjustment_events(
         ],
     )
     .map_err(storage)?;
-    read_version(c, ADJUSTMENT_EVENTS_KIND, &set.entity)?
-        .ok_or_else(|| integrity("factor-set registration vanished after its insert"))
+    Ok(Some(
+        read_version(c, ADJUSTMENT_EVENTS_KIND, &set.entity)?
+            .ok_or_else(|| integrity("factor-set registration vanished after its insert"))?,
+    ))
 }
 
 /// The `derived` evidence bundle of one factor set: how it was interpreted,

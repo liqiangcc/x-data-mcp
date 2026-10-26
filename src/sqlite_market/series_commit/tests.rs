@@ -3762,6 +3762,7 @@ fn raw_bar(record: &crate::day_file::RawDayRecord) -> Bar {
 }
 
 fn six_dp(value: rust_decimal::Decimal) -> i64 {
+    use num_traits::ToPrimitive as _;
     (value * rust_decimal::Decimal::from(1_000_000))
         .to_i64()
         .unwrap()
