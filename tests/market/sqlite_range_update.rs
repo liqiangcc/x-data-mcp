@@ -179,6 +179,7 @@ impl Fixture {
             &self.range,
             &self.evidence,
             self.whole.as_ref(),
+            None,
         )
     }
     fn plan(&self) -> Box<RangePlan> {
@@ -392,7 +393,14 @@ fn range_candidates_compete_on_the_same_real_task_and_head() {
     let Preparation::Ready(second) = (Publisher {
         repository: f.db.clone(),
     })
-    .prepare_range(command, &f.batch, &f.range, &f.evidence, f.whole.as_ref())
+    .prepare_range(
+        command,
+        &f.batch,
+        &f.range,
+        &f.evidence,
+        f.whole.as_ref(),
+        None,
+    )
     .unwrap() else {
         panic!()
     };
@@ -963,6 +971,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for SyntheticRangeProvider
             batch,
             evidence,
             combined,
+            raw: None,
         })
     }
 }
@@ -2758,6 +2767,7 @@ fn two_fifty_day_append_growth_stays_bounded() {
                 &range,
                 &evidence,
                 Some(&whole),
+                None,
             )
             .unwrap();
             let Preparation::Ready(plan) = prepared else {
@@ -2950,7 +2960,7 @@ fn production_shaped_no_change_audit_does_not_persist_history_payload() {
         ("2024-12-31", "2025-12-31"),
     );
     let Preparation::Ready(plan) = publisher
-        .prepare_range(command, &batch, &range, &evidence, None)
+        .prepare_range(command, &batch, &range, &evidence, None, None)
         .unwrap()
     else {
         panic!("full-history no-change candidate was not ready")

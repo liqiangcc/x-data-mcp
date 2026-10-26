@@ -368,6 +368,7 @@ fn publish_daily(
             required_heads: vec![(scope.clone(), base.map(String::from))],
             promote: Some(scope),
             base_digest: None,
+            raw: None,
         })
         .unwrap()
 }
@@ -420,6 +421,7 @@ fn commit_yearly_plan(
             required_heads: vec![],
             promote: None,
             base_digest: None,
+            raw: None,
         },
         base,
         prior: prior.map(|id| checked_of(&stored_year_version(fixture, symbol, &id))),
@@ -1406,4 +1408,150 @@ fn cancel_task_defaults_to_the_current_revision() {
         )
         .unwrap();
     assert_eq!(explicit["status"], "cancel_requested");
+}
+
+// ---------------------------------------------------------------------------
+// M1 PR-2 downstream constraint (x-data-mcp/32 §4.3): the MCP daily read is
+// the forward 口径 only, and the manifest still reports the literal "qfq".
+// ---------------------------------------------------------------------------
+
+/// Seed one daily item that writes both 口径 in one transaction: the forward
+/// series at 10.05 and the raw series at 11.00 for the same day.
+fn seed_daily_pair(fixture: &Fixture) {
+    use crate::compact_market::{EvidenceKind, VersionEvidence};
+    use crate::market_data::{AdjustmentEvidence, CoverageStatus, RawBatch};
+    use crate::sqlite_market::{evidence_store, series_commit};
+
+    let task_id = task(fixture, SYMBOL, 1, "day", "req-pair");
+    let item = "item-1";
+    let revision = start_item(fixture, &task_id, item);
+    let day = day_epoch(2020, 1, 6);
+    let forward_bars = vec![bar(day, 1005)];
+    let raw_bars = vec![bar(day, 1100)];
+    let raw = RawBatch::new(
+        raw_bars,
+        AdjustmentEvidence::confirmed("raw", "raw .day fact"),
+    );
+    let MarketBackend::Compact(repo) = &fixture.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let scope = Scope {
+        symbol: SYMBOL.into(),
+        period: Period::Day,
+    };
+    repo.tx(|c| {
+        let forward_compact = series_commit::to_compact_bars(
+            &forward_bars,
+            Period::Day,
+            crate::compact_market::PRICE_SCALE_CENTS,
+        )?;
+        let version_ev = evidence_store::put_evidence(
+            c,
+            EvidenceKind::Version,
+            &serde_json::to_value(VersionEvidence {
+                source: "official".into(),
+                coverage_reason: "full history verified".into(),
+                unit_currency: units(),
+                adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+            })
+            .unwrap(),
+        )?;
+        let binding = series_commit::put_generation_binding(
+            c,
+            "gen-1",
+            &"0b".repeat(32),
+            &"0c".repeat(32),
+            &"0e".repeat(32),
+            &json!({"snapshot_inputs": []}),
+        )?;
+        let continuity = series_commit::put_continuity_evidence(c, &json!({"mode": "first"}))?;
+        series_commit::commit_item_tx(
+            c,
+            &series_commit::Commit {
+                result_id: "pair-result-1",
+                task_id: &task_id,
+                item_id: item,
+                run_id: RUN,
+                occupancy_key: &scope.occupancy_key(),
+                expected_task_revision: revision,
+                entity: SYMBOL,
+                period: Period::Day,
+                adjustment: Adjustment::Forward,
+                base_version_id: None,
+                change: series_commit::SeriesChange::FirstPublish {
+                    bars: &forward_compact,
+                },
+                range_start_day: day,
+                range_end_day: day,
+                algorithm_version: series_commit::COLLECTION_ALGO,
+                window_digest: None,
+                source_binding_digest: Some(binding),
+                evidence_digest: Some(version_ev),
+                coverage_status: Some(CoverageStatus::Complete),
+                metadata_changed: false,
+                event_evidence_digest: continuity,
+                published_at: Some(chrono::DateTime::from_timestamp(1_760_000_000, 0).unwrap()),
+                staged_version_id: None,
+                defer_task_row: false,
+            },
+            Some(&raw),
+        )
+    })
+    .unwrap();
+}
+
+fn daily_query() -> Value {
+    json!({
+        "dataset":"market.daily",
+        "contract_version":"v1",
+        "selection":{"kind":"single","entity":{"exchange":"sh","code":"600006"}},
+        "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+        "version":{"kind":"latest_per_entity"}
+    })
+}
+
+/// x-data-mcp/32 §4.3 (1): `query_data` reads `adjustment=1` only; the raw
+/// series is invisible on the MCP surface (AC-M1-10).
+#[test]
+fn query_data_daily_reads_only_the_forward_口径() {
+    let fixture = fixture();
+    seed_daily_pair(&fixture);
+    let page = fixture.api.call("query_data", daily_query()).unwrap();
+    assert_eq!(page["records"].as_array().unwrap().len(), 1);
+    assert_eq!(page["records"][0]["close"], "10.05");
+    assert_ne!(page["records"][0]["close"], "11.00");
+    // The manifest version is the forward series row, not the raw one.
+    let MarketBackend::Compact(repo) = &fixture.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let forward = repo
+        .read(|c| {
+            crate::sqlite_market::series::read_series_adjusted(
+                c,
+                SYMBOL,
+                Period::Day,
+                Adjustment::Forward,
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        page["version_manifest"][0]["version_ref"]["version_id"],
+        forward.version_id
+    );
+}
+
+/// x-data-mcp/32 §4.3 (2): the manifest's `metadata.adjustment.value` stays
+/// the literal `"qfq"` — the downstream `KlineReader` depends on it.
+#[test]
+fn query_data_manifest_adjustment_stays_qfq() {
+    let fixture = fixture();
+    seed_daily_pair(&fixture);
+    let page = fixture.api.call("query_data", daily_query()).unwrap();
+    let adjustment = page["version_manifest"][0]["metadata"]["adjustment"]
+        .as_object()
+        .expect("daily manifest carries adjustment evidence");
+    assert_eq!(adjustment["field"], "price_adjustment");
+    assert_eq!(adjustment["status"], "confirmed");
+    assert_eq!(adjustment["value"], "qfq");
 }

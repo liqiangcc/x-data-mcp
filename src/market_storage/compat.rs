@@ -60,7 +60,7 @@ pub fn check(raw: &Value) -> Result<CheckedRecord, Error> {
         || version.adjustment != batch.adjustment
         || version.source != batch.provenance.source
         || batch.provenance.symbol != version.symbol
-        || batch.provenance.source_adjustment != "qfq"
+        || batch.provenance.source_adjustment != batch.adjustment.as_str()
         || batch.provenance.source_period != "day"
         || version.records != bars
         || version.validation != validation

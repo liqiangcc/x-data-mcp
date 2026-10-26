@@ -11,8 +11,10 @@ use sha2::Digest as _;
 
 use super::compact_repo::period_code;
 use super::{evidence_store, integrity, series, storage};
-use crate::compact_market::{self, CompactBar, Digest, EvidenceKind, SourceBinding};
-use crate::market_data::{Bar, CoverageStatus, Period};
+use crate::compact_market::{
+    self, CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence,
+};
+use crate::market_data::{Adjustment, Bar, CoverageStatus, Period};
 use crate::market_storage::{Error, Receipt};
 use crate::task_control;
 
@@ -83,6 +85,10 @@ pub(crate) struct Commit<'a> {
     pub expected_task_revision: u64,
     pub entity: &'a str,
     pub period: Period,
+    /// The 口径 this commit writes (schema 22 identity dimension). Daily
+    /// items commit both 口径 through [`commit_item_tx`]; yearly is always
+    /// `Forward` (issue-383 §3.2/§9.1).
+    pub adjustment: Adjustment,
     /// CAS on the current head's `version_id`: `None` requires the series
     /// row be absent (first publish); `Some(id)` must equal the stored id.
     /// `NoChange` still uses `Some(base)` so a concurrent replacement is
@@ -205,20 +211,22 @@ fn replay_receipt(c: &Connection, w: &Commit) -> Result<Option<Receipt>, Error> 
     }))
 }
 
-/// One task item may produce exactly one market event
-/// (`UNIQUE(task_id,item_id)` is the backstop; this keeps the error text).
-/// Schema 22 widens the key to `(task_id, item_id, adjustment)`; until PR-2
-/// writes a second 口径 per item this probe stays item-wide.
+/// One task item produces at most one market event per 口径
+/// (`UNIQUE(task_id,item_id,adjustment)` is the backstop; this keeps the
+/// error text). A daily item legitimately commits `Raw` and `Forward`
+/// inside one transaction (issue-383 §3.4/§9.1).
 fn require_item_unused(c: &Connection, w: &Commit) -> Result<(), Error> {
     let exists: bool = c
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM market_events WHERE task_id=?1 AND item_id=?2)",
-            params![w.task_id, w.item_id],
+            "SELECT EXISTS(SELECT 1 FROM market_events WHERE task_id=?1 AND item_id=?2 AND adjustment=?3)",
+            params![w.task_id, w.item_id, w.adjustment.code()],
             |r| r.get(0),
         )
         .map_err(storage)?;
     if exists {
-        return Err(Error::Conflict("task item already has a result".into()));
+        return Err(Error::Conflict(
+            "task item already has a result for this 口径".into(),
+        ));
     }
     Ok(())
 }
@@ -333,10 +341,297 @@ fn check_bars(bars: &[CompactBar]) -> Result<(), Error> {
     Ok(())
 }
 
-/// The schema-21 commit: replay → binding/CAS gates → event → series
+/// Item bookkeeping a commit performs at its end. A paired daily item
+/// defers it until both 口径 have been written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemFinish {
+    /// Finish the item row and the task row (per-item paths).
+    ItemAndTask,
+    /// Finish the item row only; the caller persists the task head once per
+    /// chunk (batched paths).
+    ItemRowOnly,
+    /// Leave all task bookkeeping to the caller (the other half of a pair).
+    None,
+}
+
+/// The schema-21/22 commit: replay → binding/CAS gates → event → series
 /// state mutation → bars → task bookkeeping — all inside the caller's
 /// `BEGIN IMMEDIATE` transaction (A4: no autocommit inside).
 pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Error> {
+    let finish = if w.defer_task_row {
+        ItemFinish::ItemRowOnly
+    } else {
+        ItemFinish::ItemAndTask
+    };
+    commit_series_inner(c, w, finish)
+}
+
+/// Daily item write set (issue-383 §9.1): the raw 口径 and the forward 口径
+/// in one transaction, one event each, item bookkeeping once. The forward
+/// commit runs first so the raw side can inherit its resolved source
+/// binding and coverage claim.
+pub(crate) fn commit_item_tx(
+    c: &Connection,
+    forward: &Commit,
+    raw: Option<&crate::market_data::RawBatch>,
+) -> Result<Receipt, Error> {
+    if forward.adjustment != Adjustment::Forward {
+        return Err(integrity("paired daily commit must be the forward 口径"));
+    }
+    // Replay: the pair is atomic, so a committed forward event implies the
+    // raw event. The item is already finished — never finish it again.
+    if let Some(event) = series::event_by_result(c, forward.result_id)? {
+        if event.task_id != forward.task_id || event.item_id != forward.item_id {
+            return Err(Error::Conflict("result identity conflict".into()));
+        }
+        if raw.is_some() && series::event_by_result(c, &raw_result_id(forward.result_id))?.is_none()
+        {
+            return Err(integrity("committed daily item lacks its raw 口径 event"));
+        }
+        consume_staged(c, forward.staged_version_id)?;
+        return Ok(Receipt {
+            publication_id: forward.result_id.into(),
+            version_id: series::version_id(&event.new_content_digest),
+            task_id: forward.task_id.into(),
+            task_revision: event.task_revision as u64,
+        });
+    }
+    let receipt = commit_series_inner(c, forward, ItemFinish::None)?;
+    if let Some(raw) = raw {
+        commit_raw_side(c, forward, raw)?;
+    }
+    let task_revision = forward
+        .expected_task_revision
+        .checked_add(1)
+        .ok_or_else(|| integrity("task revision overflow"))?;
+    let task_revision_i64 =
+        i64::try_from(task_revision).map_err(|_| integrity("task revision out of range"))?;
+    if forward.defer_task_row {
+        finish_item_row(c, forward)?;
+    } else {
+        finish_item_and_task(c, forward, task_revision_i64)?;
+    }
+    Ok(receipt)
+}
+
+/// Deterministic replay anchor of the raw half of a daily item commit. The
+/// forward event keeps the caller's result id; `UNIQUE(result_id)` and
+/// `UNIQUE(task_id,item_id,adjustment)` both stay satisfied.
+pub(crate) fn raw_result_id(forward_result_id: &str) -> String {
+    format!("{forward_result_id}:raw")
+}
+
+/// Write the raw 口径 half of a daily item. The raw series is the source
+/// price fact and must cover exactly the forward series' date range, so the
+/// commit aligns the raw bars to the dates the forward side writes. A raw
+/// rewrite of already-stored content has no revision evidence path in M1 and
+/// fails closed (`RevisionUnverified` semantics, issue-383 §9.1).
+fn commit_raw_side(
+    c: &Connection,
+    forward: &Commit,
+    raw: &crate::market_data::RawBatch,
+) -> Result<(), Error> {
+    let head = series::read_series_adjusted(c, forward.entity, forward.period, Adjustment::Raw)?;
+    let price_scale = head
+        .as_ref()
+        .map_or(compact_market::PRICE_SCALE_CENTS, |row| row.price_scale);
+    let raw_by_date: std::collections::BTreeMap<i64, &crate::market_data::Bar> = raw
+        .bars
+        .iter()
+        .map(|b| (compact_market::epoch_day(b.date), b))
+        .collect();
+    let align = |forward_bars: &[CompactBar]| -> Result<Vec<CompactBar>, Error> {
+        forward_bars
+            .iter()
+            .map(|bar| {
+                let date = compact_market::epoch_date(bar.trade_day).map_err(integrity)?;
+                let raw = raw_by_date
+                    .get(&bar.trade_day)
+                    .ok_or_else(|| integrity(format!("raw batch omits the forward date {date}")))?;
+                CompactBar::from_bar(raw, forward.period, price_scale).map_err(integrity)
+            })
+            .collect()
+    };
+    /// Which raw series mutation the forward change resolves to.
+    enum Resolved {
+        NoChange,
+        Metadata,
+        Append,
+        FirstPublish,
+        Replace,
+    }
+    // The bars a resolved change writes. Declared outside the match so the
+    // `SeriesChange` borrow stays valid until the commit call.
+    let mut append_bars: Option<Vec<CompactBar>> = None;
+    let mut full_bars: Option<Vec<CompactBar>> = None;
+    let (resolved, range_start_day, range_end_day, window_bars) = match &forward.change {
+        SeriesChange::NoChange | SeriesChange::Metadata => {
+            let row = head
+                .as_ref()
+                .ok_or_else(|| integrity("raw no-change commit without a raw series row"))?;
+            let window = series::bars_in_range(
+                c,
+                row.series_key,
+                forward.range_start_day,
+                forward.range_end_day,
+            )?;
+            let resolved = if matches!(forward.change, SeriesChange::Metadata) {
+                Resolved::Metadata
+            } else {
+                Resolved::NoChange
+            };
+            (
+                resolved,
+                forward.range_start_day,
+                forward.range_end_day,
+                window,
+            )
+        }
+        SeriesChange::Append { upserts } => {
+            let row = head
+                .as_ref()
+                .ok_or_else(|| integrity("raw append commit without a raw series row"))?;
+            let aligned = align(upserts)?;
+            if aligned.is_empty() || aligned.iter().any(|b| b.trade_day <= row.last_day) {
+                return Err(Error::Integrity(
+                    "raw append is not a strictly-newer tail".into(),
+                ));
+            }
+            let start = aligned[0].trade_day;
+            let end = aligned[aligned.len() - 1].trade_day;
+            append_bars = Some(aligned.clone());
+            (Resolved::Append, start, end, aligned)
+        }
+        SeriesChange::FirstPublish { bars } | SeriesChange::Replace { bars } => {
+            let aligned = align(bars)?;
+            if aligned.is_empty() {
+                return Err(integrity("raw commit carries no bars"));
+            }
+            match head.as_ref() {
+                None => {
+                    let start = aligned[0].trade_day;
+                    let end = aligned[aligned.len() - 1].trade_day;
+                    full_bars = Some(aligned.clone());
+                    (Resolved::FirstPublish, start, end, aligned)
+                }
+                Some(row) => {
+                    let stored = series::all_bars(c, row.series_key)?;
+                    let digest =
+                        series::fold_bars(forward.entity, forward.period, row.shape(), &aligned)?;
+                    if digest == row.content_digest {
+                        let window = series::bars_in_range(
+                            c,
+                            row.series_key,
+                            forward.range_start_day,
+                            forward.range_end_day,
+                        )?;
+                        (
+                            Resolved::NoChange,
+                            forward.range_start_day,
+                            forward.range_end_day,
+                            window,
+                        )
+                    } else if stored.len() < aligned.len() && stored[..] == aligned[..stored.len()]
+                    {
+                        let tail = aligned[stored.len()..].to_vec();
+                        let start = tail[0].trade_day;
+                        let end = tail[tail.len() - 1].trade_day;
+                        append_bars = Some(tail.clone());
+                        (Resolved::Append, start, end, tail)
+                    } else {
+                        // The forward side already authorized this full
+                        // rewrite (a verified source generation or an
+                        // explicit revision); the raw series is the source
+                        // fact and must follow it, not keep a stale price.
+                        let start = aligned[0].trade_day;
+                        let end = aligned[aligned.len() - 1].trade_day;
+                        full_bars = Some(aligned.clone());
+                        (Resolved::Replace, start, end, aligned)
+                    }
+                }
+            }
+        }
+        SeriesChange::Yearly { .. } => {
+            return Err(integrity("paired daily commit cannot be yearly"));
+        }
+    };
+    let append_bars = append_bars.unwrap_or_default();
+    let full_bars = full_bars.unwrap_or_default();
+    let change = match resolved {
+        Resolved::NoChange => SeriesChange::NoChange,
+        Resolved::Metadata => SeriesChange::Metadata,
+        Resolved::Append => SeriesChange::Append {
+            upserts: &append_bars,
+        },
+        Resolved::FirstPublish => SeriesChange::FirstPublish { bars: &full_bars },
+        Resolved::Replace => SeriesChange::Replace { bars: &full_bars },
+    };
+    // The raw side shares the forward side's source binding and coverage;
+    // its own version evidence only swaps the adjustment 口径.
+    let forward_head =
+        series::read_series_adjusted(c, forward.entity, forward.period, Adjustment::Forward)?
+            .ok_or_else(|| integrity("paired daily commit lost its forward head"))?;
+    let needs_metadata = head.is_none()
+        || forward.metadata_changed
+        || forward.source_binding_digest.is_some()
+        || forward.evidence_digest.is_some()
+        || forward.coverage_status.is_some();
+    let (source_binding_digest, evidence_digest, coverage_status) = if needs_metadata {
+        let (kind, canonical) = evidence_store::read_evidence(c, &forward_head.evidence_digest)?;
+        if kind != EvidenceKind::Version {
+            return Err(integrity("forward version evidence kind mismatch"));
+        }
+        let mut evidence: VersionEvidence = serde_json::from_str(&canonical).map_err(integrity)?;
+        evidence.adjustment_evidence = raw.adjustment_evidence.clone();
+        let evidence_digest = evidence_store::put_evidence(
+            c,
+            EvidenceKind::Version,
+            &serde_json::to_value(&evidence).map_err(integrity)?,
+        )?;
+        (
+            Some(forward_head.source_binding_digest),
+            Some(evidence_digest),
+            Some(forward_head.coverage_status),
+        )
+    } else {
+        (None, None, None)
+    };
+    let base_version_id = head.as_ref().map(|row| row.version_id.clone());
+    let result_id = raw_result_id(forward.result_id);
+    let window_digest = Some(window_fold(&window_bars)?);
+    commit_series_inner(
+        c,
+        &Commit {
+            result_id: &result_id,
+            task_id: forward.task_id,
+            item_id: forward.item_id,
+            run_id: forward.run_id,
+            occupancy_key: forward.occupancy_key,
+            expected_task_revision: forward.expected_task_revision,
+            entity: forward.entity,
+            period: forward.period,
+            adjustment: Adjustment::Raw,
+            base_version_id: base_version_id.as_deref(),
+            change,
+            range_start_day,
+            range_end_day,
+            algorithm_version: forward.algorithm_version,
+            window_digest,
+            source_binding_digest,
+            evidence_digest,
+            coverage_status,
+            metadata_changed: needs_metadata,
+            event_evidence_digest: forward.event_evidence_digest,
+            published_at: forward.published_at,
+            staged_version_id: None,
+            defer_task_row: true,
+        },
+        ItemFinish::None,
+    )?;
+    Ok(())
+}
+
+fn commit_series_inner(c: &Connection, w: &Commit, finish: ItemFinish) -> Result<Receipt, Error> {
     compact_market::epoch_date(w.range_start_day).map_err(integrity)?;
     compact_market::epoch_date(w.range_end_day).map_err(integrity)?;
     if w.range_start_day > w.range_end_day {
@@ -352,7 +647,10 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
     require_item_unused(c, w)?;
     check_binding(c, w)?;
 
-    let head = series::read_series(c, w.entity, w.period)?;
+    // The CAS head is the series of THIS 口径: a paired daily item writes
+    // the forward series first, so reading the forward convenience here
+    // would make the raw half see a foreign head (issue-383 §9.1).
+    let head = series::read_series_adjusted(c, w.entity, w.period, w.adjustment)?;
     match (w.base_version_id, &head) {
         (None, Some(_)) => return Err(Error::Conflict("effective head already exists".into())),
         (None, None) => {}
@@ -394,10 +692,10 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         return Err(integrity("yearly series require SeriesChange::Yearly"));
     }
 
-    // Schema 22 materializes exactly one shape (forward-adjusted stock, 分).
-    // PR-2 adds the raw series and PR-3 the 6dp forward series; each will
-    // pass the item's own shape here instead of this constant.
-    let shape = series::SeriesShape::FORWARD_STOCK_CENTS;
+    // The written 口径 is the item's own identity dimension; the other two
+    // shape fields are still fixed at stock/分 until PR-3 (6dp forward) and
+    // PR-5 (index series). Schema 22 §3.2.
+    let shape = series::SeriesShape::stock(w.adjustment);
 
     // Resolve the kind/effect and the new state fields.
     let (kind, outcome, continuity, prefix_bytes, old_digest, new_digest): (
@@ -699,10 +997,10 @@ pub(crate) fn commit_series_tx(c: &Connection, w: &Commit) -> Result<Receipt, Er
         SeriesChange::Yearly { .. } => unreachable!("yearly dispatched earlier"),
     }
 
-    if w.defer_task_row {
-        finish_item_row(c, w)?;
-    } else {
-        finish_item_and_task(c, w, task_revision_i64)?;
+    match finish {
+        ItemFinish::ItemAndTask => finish_item_and_task(c, w, task_revision_i64)?,
+        ItemFinish::ItemRowOnly => finish_item_row(c, w)?,
+        ItemFinish::None => {}
     }
     Ok(Receipt {
         publication_id: w.result_id.into(),

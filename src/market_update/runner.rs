@@ -29,12 +29,18 @@ pub struct Acquisition {
     pub batch: MarketDataBatch,
     pub evidence: Evidence,
     pub combined: Option<CombinedCandidate>,
+    /// The 不复权 side of the same item (issue-383 §9.1). `None` only for
+    /// providers/paths that do not carry a raw batch (legacy fixtures).
+    pub raw: Option<crate::market_data::RawBatch>,
 }
 /// Typed acquisition result for the ops-first update path (#259 S5G):
 /// the continuity evidence plus exactly the bars the typed commit needs.
 pub struct TypedAcquisition {
     pub decision: TypedDecision,
     pub evidence: Evidence,
+    /// The 不复权 side of the same item; `None` only for synthetic
+    /// providers that do not model the raw series.
+    pub raw: Option<crate::market_data::RawBatch>,
 }
 pub enum TypedDecision {
     /// The member bytes and event set are byte-proven identical to the
@@ -616,12 +622,14 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             period: crate::market_data::Period::Day,
         };
         let continuity = serde_json::to_value(&acquired.evidence).unwrap_or(Value::Null);
+        let raw = acquired.raw;
         let prepared = match acquired.decision {
             TypedDecision::Unchanged => crate::market_update::UpdateBatchPrepared::NoChange {
                 base_version_id: base_id,
                 range_start_day: crate::compact_market::epoch_day(range.start),
                 range_end_day: crate::compact_market::epoch_day(range.end),
                 continuity,
+                raw,
             },
             TypedDecision::Append { upserts, metadata } => {
                 crate::market_update::UpdateBatchPrepared::Append {
@@ -630,6 +638,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                     upserts,
                     metadata,
                     continuity,
+                    raw,
                 }
             }
         };
@@ -878,6 +887,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             range,
             &acquired.evidence,
             acquired.combined.as_ref(),
+            acquired.raw.as_ref(),
         )?;
         match plan {
             Preparation::Ready(plan) => self.repository.commit_range(&plan),
@@ -975,6 +985,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 base_id,
                 range,
                 continuity_evidence.as_ref(),
+                acquired.raw.as_ref(),
             ),
             TypedDecision::Append { upserts, metadata } => {
                 let scope = Scope {
@@ -989,6 +1000,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                     &[],
                     metadata.as_deref(),
                     continuity_evidence.as_ref(),
+                    acquired.raw.as_ref(),
                 )
             }
         }
@@ -1073,6 +1085,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             &upserts,
             &removes,
             &prepared.records,
+            acquired.raw.as_ref(),
         )
     }
 }
