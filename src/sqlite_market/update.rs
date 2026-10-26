@@ -274,7 +274,7 @@ mod tests {
         let Preparation::Ready(plan) = (Publisher {
             repository: db.clone(),
         })
-        .prepare_range(command, &batch, &range, &evidence, whole.as_ref())
+        .prepare_range(command, &batch, &range, &evidence, whole.as_ref(), None)
         .unwrap() else {
             panic!()
         };

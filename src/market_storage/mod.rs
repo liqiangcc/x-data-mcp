@@ -2,7 +2,7 @@
 pub mod compat;
 pub mod query;
 use crate::{
-    market_data::{Bar, Period},
+    market_data::{Adjustment, Bar, Period},
     publish::EffectiveVersion,
     task_control::{
         self, Change, ItemBinding, ItemOutcome, Stage, Status, TaskHead, TaskItem, TaskSnapshot,
@@ -93,6 +93,9 @@ pub struct PublishPlan {
     pub(crate) required_heads: Vec<(Scope, Option<String>)>,
     pub(crate) promote: Option<Scope>,
     pub(crate) base_digest: Option<String>,
+    /// The 不复权 side of a daily item commit (issue-383 §9.1). `None` on
+    /// yearly/legacy plans and on callers that do not carry the raw batch.
+    pub(crate) raw: Option<crate::market_data::RawBatch>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Receipt {
@@ -478,6 +481,7 @@ impl<R: MarketRepository> Publisher<R> {
             required_heads,
             promote,
             base_digest: None,
+            raw: None,
         };
         if let Some(lineage) = &plan.record.version.yearly_derivation {
             // Facts + memoized/windowed validation: the runner's derivation
@@ -607,8 +611,7 @@ pub(crate) fn validate_base_identity(
         || daily.adjustment != v.adjustment
         || daily.source != v.source
         || daily.unit_currency != v.unit_currency
-        || !daily.adjustment_evidence.is_confirmed()
-        || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+        || !Adjustment::Forward.matches_evidence(&daily.adjustment_evidence)
     {
         return Err(Error::Base(
             "fixed base identity/period/adjustment/source mismatch".into(),
@@ -679,8 +682,7 @@ pub(crate) fn validate_base_facts_meta<R: MarketRepository + ?Sized>(
         || daily.adjustment != v.adjustment
         || daily.source != v.source
         || daily.unit_currency != v.unit_currency
-        || !daily.adjustment_evidence.is_confirmed()
-        || daily.adjustment_evidence.value.as_deref() != Some("qfq")
+        || !Adjustment::Forward.matches_evidence(&daily.adjustment_evidence)
     {
         return Err(Error::Base(
             "fixed base identity/period/adjustment/source mismatch".into(),

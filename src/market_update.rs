@@ -151,6 +151,8 @@ pub enum UpdateBatchPrepared {
         range_start_day: i64,
         range_end_day: i64,
         continuity: serde_json::Value,
+        /// The raw 口径 side; `None` when the provider did not carry it.
+        raw: Option<crate::market_data::RawBatch>,
     },
     /// Continuity-proven append: stage `upserts` as a delta on the base
     /// version, then commit. `metadata` carries the cross-generation
@@ -161,6 +163,8 @@ pub enum UpdateBatchPrepared {
         upserts: Vec<crate::market_data::Bar>,
         metadata: Option<Box<TypedVersionMetadata>>,
         continuity: serde_json::Value,
+        /// The raw 口径 side (strictly-newer tail); `None` when absent.
+        raw: Option<crate::market_data::RawBatch>,
     },
 }
 pub fn candidate_digest(batch: &MarketDataBatch) -> Result<String, Error> {
@@ -207,7 +211,7 @@ pub fn prepare(
         || batch.adjustment != old.adjustment
         || batch.provenance.source != old.source
         || batch.provenance.source_period != "day"
-        || batch.provenance.source_adjustment != "qfq"
+        || batch.provenance.source_adjustment != batch.adjustment.as_str()
         || batch.provenance.yearly_derivation.is_some()
     {
         return Err(Error::Invalid(

@@ -661,6 +661,7 @@ fn seed_daily_heads(r: &Rig, symbols: &[String]) {
                         "member_sha256": "cd".repeat(32),
                     }],
                 }),
+                raw: None,
             });
         }
         for res in backend
@@ -1019,6 +1020,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for UnchangedProvider {
                 revision_ref: None,
                 continuity: None,
             },
+            raw: None,
         }))
     }
 }
@@ -1228,6 +1230,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
         removes: &[chrono::NaiveDate],
         metadata: Option<&x_data_mcp::market_update::TypedVersionMetadata>,
         continuity_evidence: Option<&Value>,
+        raw: Option<&x_data_mcp::market_data::RawBatch>,
     ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
     {
         self.inner.commit_range_ops_typed(
@@ -1238,6 +1241,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
             removes,
             metadata,
             continuity_evidence,
+            raw,
         )
     }
     fn commit_range_no_change_typed(
@@ -1246,6 +1250,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
         base_version_id: &str,
         range: &x_data_mcp::market_update::DateRange,
         continuity_evidence: Option<&Value>,
+        raw: Option<&x_data_mcp::market_data::RawBatch>,
     ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
     {
         self.inner.commit_range_no_change_typed(
@@ -1253,6 +1258,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
             base_version_id,
             range,
             continuity_evidence,
+            raw,
         )
     }
     fn commit_update_batch(
@@ -1697,6 +1703,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for AppendProvider {
                 revision_ref: None,
                 continuity: None,
             },
+            raw: None,
         }))
     }
 }

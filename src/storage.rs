@@ -222,9 +222,7 @@ impl JsonFileStore {
             Period::Day => "day",
             Period::Year => "year",
         };
-        let adjustment = match adjustment {
-            Adjustment::Forward => "qfq",
-        };
+        let adjustment = adjustment.as_str();
         self.root
             .join(format!("{symbol}.{period}.{adjustment}.json"))
     }
@@ -238,9 +236,7 @@ impl JsonFileStore {
             Period::Day => "day",
             Period::Year => "year",
         };
-        let adjustment = match adjustment {
-            Adjustment::Forward => "qfq",
-        };
+        let adjustment = adjustment.as_str();
         self.effective_root()
             .join(format!("{symbol}.{period}.{adjustment}.json"))
     }

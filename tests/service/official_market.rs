@@ -275,6 +275,112 @@ fn materializes_qfq_daily_with_snapshot_bound_provenance() {
     );
 }
 
+/// issue-383 §4.1 / AC-M1-1: the raw (不复权) batch is the `.day` price
+/// fact itself — fen integers as 2dp yuan, no corporate-action transform —
+/// while the forward batch from the same read stays QFQ-adjusted. The pair
+/// shares one member read and one event binding.
+#[test]
+fn raw_batch_is_the_day_price_fact_and_shares_the_forward_member_read() {
+    let snap = valid_snapshot();
+    let source = make_source(&snap);
+    let raw = source.raw_batch("sh.600006").unwrap();
+    assert_eq!(raw.symbol, "sh.600006");
+    assert_eq!(raw.period, Period::Day);
+    assert_eq!(raw.adjustment, Adjustment::Raw);
+    assert_eq!(raw.provenance.source_adjustment, "raw");
+    assert_eq!(raw.adjustment_evidence.value.as_deref(), Some("raw"));
+    assert!(raw.adjustment_evidence.is_confirmed());
+    // `.day` values verbatim: 11.28 / 11.30 / 11.25 / 11.29 fen.
+    assert_eq!(raw.bars.len(), 3);
+    for (bar, ohlc) in raw.bars.iter().zip([
+        [1128u32, 1130, 1125, 1129],
+        [1129, 1132, 1128, 1131],
+        [1131, 1135, 1130, 1134],
+    ]) {
+        assert_eq!(bar.open, Decimal::new(i64::from(ohlc[0]), 2));
+        assert_eq!(bar.high, Decimal::new(i64::from(ohlc[1]), 2));
+        assert_eq!(bar.low, Decimal::new(i64::from(ohlc[2]), 2));
+        assert_eq!(bar.close, Decimal::new(i64::from(ohlc[3]), 2));
+        assert_eq!(bar.r7_raw, Some(0));
+    }
+    assert_eq!(raw.bars[0].volume, Some(dec("100")));
+    assert_eq!(raw.bars[1].volume, Some(dec("110")));
+    assert_eq!(raw.bars[2].volume, Some(dec("120")));
+    assert!(raw.bars.iter().all(|b| b.amount == Some(dec("0"))));
+    // One item read produces both 口径 with identical member/event bindings
+    // and the same coverage claim; only prices and adjustment evidence move.
+    let (pair_raw, pair_forward) = source
+        .materialize_session()
+        .materialize_pair("sh.600006")
+        .unwrap();
+    assert_eq!(pair_raw, raw);
+    let forward = source.materialize_daily("sh.600006").unwrap();
+    assert_eq!(pair_forward, forward);
+    assert_eq!(forward.adjustment, Adjustment::Forward);
+    assert_eq!(forward.provenance.source_adjustment, "qfq");
+    assert_eq!(
+        forward.provenance.snapshot_inputs,
+        raw.provenance.snapshot_inputs
+    );
+    assert_eq!(forward.coverage, raw.coverage);
+    assert_eq!(forward.unit_currency, raw.unit_currency);
+    // The 2025-07-16 allotment event rewrites only earlier bars, so the raw
+    // and forward prices must differ there and agree afterwards.
+    assert_ne!(raw.bars[0].close, forward.bars[0].close);
+    assert_eq!(forward.bars[0].close, dec("7.53"));
+    assert_eq!(raw.bars[0].close, dec("11.29"));
+    assert_eq!(raw.bars[2].close, forward.bars[2].close);
+    // Raw carries the same #381-normalized volume as the forward series.
+    assert_eq!(
+        raw.bars.iter().map(|b| b.volume).collect::<Vec<_>>(),
+        forward.bars.iter().map(|b| b.volume).collect::<Vec<_>>()
+    );
+}
+
+/// issue-383 §4.1 / AC-M1-1: the raw series reuses the #381 volume decision
+/// verbatim — all four marker/consistency branches and the u32 boundary
+/// produce exactly the same `volume` on both 口径 (no second judgement).
+#[test]
+fn raw_batch_volume_matches_the_381_forward_decisions() {
+    let ohlc = [1128, 1130, 1125, 1129];
+    let bars: Vec<u8> = [
+        day_record_r7(20250715, ohlc, 112_800_000.0, 100_000, 0xC364_0023),
+        day_record_r7(20250716, ohlc, 11_280_000.0, 1_000, 0xC364_0011),
+        day_record(20250717, ohlc, 1_128_000.0, 1_000),
+        day_record(20250718, ohlc, 11_280_000.0, 1_000_000),
+        day_record(20250721, ohlc, 48_385_679_360.0, 4_289_510_575),
+        day_record_r7(20250722, ohlc, 48_394_260_480.0, 42_902_714, 0xC364_000B),
+    ]
+    .concat();
+    let events = gbbq_member(&[]);
+    let snap = snapshot(
+        &[("sh\\lday\\sh600006.day", bars.as_slice())],
+        &[("gbbq", events.as_slice())],
+        &base_members(),
+    );
+    let source = make_source(&snap);
+    let raw = source.raw_batch("sh.600006").unwrap();
+    let forward = source.materialize_daily("sh.600006").unwrap();
+    let expected = [
+        Some(dec("10000000")),
+        None,
+        None,
+        Some(dec("1000000")),
+        Some(dec("4289510575")),
+        Some(dec("4290271400")),
+    ];
+    assert_eq!(
+        raw.bars.iter().map(|b| b.volume).collect::<Vec<_>>(),
+        expected.to_vec()
+    );
+    assert_eq!(
+        forward.bars.iter().map(|b| b.volume).collect::<Vec<_>>(),
+        expected.to_vec()
+    );
+    // Without events the raw and forward prices are identical here.
+    assert_eq!(raw.bars, forward.bars);
+}
+
 /// #381: `.day` records a day's volume in hands once the share count
 /// approaches the u32 limit, flagged by `0xC36400xx` in r7. The conversion is
 /// fail-closed: the marker and a raw-value consistency check must agree,
