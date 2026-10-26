@@ -2,8 +2,8 @@
 
 - 任务：设计任务（#391 的前置设计），角色 agent。**只出设计**：不改代码、不改 schema、不改 MCP 契约、不推进 #308、不部署。
 - 关联 Issue：[#391](https://github.com/liqiangcc/x-data-mcp/issues/391)（本设计对应）、#1（产品范围）、#54（cat1 冻结与 Final Gate 标准）、#55（来源原则）、#246（收录扩展）、#308（历史 ST 来源准入）、#383（M1 设计）、#387（v8 设计）。
-- 输入报告（仓库外，2026-10-26；正文按章节引用）：调研报告①「研究数据层需求与缺口」（工作看板 `x-data-mcp/16`，§4.4–4.10、§7 的 M2 部分）、调研报告②「gbbq 股本类事件语义取证」（工作看板 `x-data-mcp/22`）。
-- 本任务的小批量抽样核对：工作看板 `x-data-mcp/40` 的 `work/evidence-notes.md` 与 `work/evidence_manifest.json`（每份证据的 URL、获取时间、sha256）。抽样**不是**来源准入证据包。
+- 输入报告（仓库外，2026-10-26；正文按章节引用）：调研报告①「研究数据层需求与缺口」（§4.4–4.10、§7 的 M2 部分）、调研报告②「gbbq 股本类事件语义取证」、调研报告③「全仓库只读分析」。
+- 本任务的小批量抽样核对（仓库外，随任务交付）：`work/evidence-notes.md` 与 `work/evidence_manifest.json`（每份证据的 URL、获取时间、sha256）。抽样**不是**来源准入证据包。
 - 依据：`docs/decisions.md`（D-20 来源原则、D-22 非 cat1 不入生产、D-23 上市日、D-24 退市整理期、D-25 四类官方披露准入、D-30 严谨回测级与两项首期偏差）、[docs/design.md](../design.md)「后续数据扩展要求」、M1 设计 [issue-383](issue-383-m1-research-data.md)（schema 22、解析事实层、导出）、v8 设计 [issue-387](issue-387-v8-ai-tool-surface.md) §4.6（`as_of`/`known_at` 预留）、[docs/data-catalog.md](../data-catalog.md) §3。
 - 基线：main `6d01163`（含 M1 PR-1 的 schema 22 结构）；生产库 schema 21，2026-10-26 只读复核（§2.1）。
 - 本设计经 Claude 审核后，才按 §16 拆实现任务与来源准入任务；审核前不写实现代码。
@@ -83,7 +83,7 @@
 | `hsjday.zip` 成员 | 12,222；A 股代码 5,561；**不在当前目录 335**；目录成员里没有 `.day` 的 1 个（`sz.001381`）；两者并集 5,562 | 成员名解析 + 与 `catalog_members` 求差 |
 | `base.dbf` | 8,933 行 / 40 字段；A 股行 5,577；`SSDATE` 缺失（`'0'`）74 行；**335 个退市代码全部在表内**，其中 62 个 `SSDATE` 缺失 | DBF 头 + 逐记录读 |
 | `infoharbor_spec.cfg` | 5,030 B / 169 行，格式 `market\|code\|0\|start\|end`，首行 2013-02-08；`600001`/`600005` 不在表内，`000004` 在（end=20260714） | `base.zip` 解出副本 + sha256 `83b44fa0…` |
-| `gbbq` 类别 | 207,282 条；cat1 69,283 / cat2 4,866 / cat3 4,929 / cat5 117,183 / cat7 19 / cat8 684 / cat9 7,987 / cat10 304；京市 cat2/3/5/7/8/9/10 共 5,939 | 重算 XDM-22 的 `gbbq_all.tsv` |
+| `gbbq` 类别 | 207,282 条；cat1 69,283 / cat2 4,866 / cat3 4,929 / cat5 117,183 / cat7 19 / cat8 684 / cat9 7,987 / cat10 304；京市 cat2/3/5/7/8/9/10 共 5,939 | 重算调研报告② 的 `gbbq_all.tsv` |
 
 ### 2.2 代码事实（`file:line`）
 
@@ -102,7 +102,7 @@
 
 ### 2.3 外部抽样核对（只用于支撑设计判断，不是准入证据）
 
-完整清单见工作看板 `x-data-mcp/40` 的 `work/evidence-notes.md`（E-1…E-15）与 `work/evidence_manifest.json`。与本设计直接相关的六条：
+完整清单见本任务交付的 `work/evidence-notes.md`（E-1…E-15）与 `work/evidence_manifest.json`（仓库外）。与本设计直接相关的六条：
 
 - **E-1/E-2 交易所上市名单**：深交所 `CATALOGID=1110`（**2,906 行，只有在册**）字段含「A股上市日期 / A股总股本 / A股流通股本」；上交所 `COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L` 的 `STOCK_TYPE=1`（主板 A）返回 **1,845 行**，其中 `STATE_CODE=2`（在册）1,632、`=3`（终止上市）145、`=7` 68 —— **不按状态过滤会把 145 个退市股当在册**；`STOCK_TYPE=2`（B 股）54 行、`STOCK_TYPE=8`（科创板）621 行。**上交所对 A+B 公司返回两行**（`STOCK_TYPE=1` A 股、`=2` B 股），两行 `LIST_DATE` 不同（`600680`：A 1993-10-18 / B 1994-10-20）；不按 `STOCK_TYPE` 过滤会把一只证券数成两只、并造出假的日期冲突。**分页必须用 `pageHelp.beginPage/endPage`**：只传 `pageHelp.pageNo` 会重复返回第一页（实测 `pageNo=2` 仍以 `600000` 开头，加上 `beginPage=2&endPage=2` 才返回 `601568` 起的 845 行）。
 - **E-3/E-4 交易所终止上市名单**：上交所 `COMPANY_STATUS=3&STOCK_TYPE=1` 返回 **145** 个 A 股（另有 13 个 B 股；科创板 `STOCK_TYPE=8` 3 个：`688086`/`688287`/`688555`），最早退市日 2001-04-25，含 `600001`（2009-12-29，吸收合并）与 `600002`（2006-04-24）；深交所 `CATALOGID=1793_ssgs&selectModule=main|nm` 返回 170+41 行（去重 211，其中 B 股 23 → A 股 **188**），最早 1999-07-12，含 `000003`（2002-06-14）。**两者都不需要 2013 年这个 TDX 边界。**
@@ -220,8 +220,8 @@
 只采用 **cat 2/3/9/10** 的 `(effective_day, float_after, total_after)`：
 
 - `float_after` / `total_after` 来自 f32 位模式，单位万股、2 位小数 → **换算成股是精确整数**（0.01 万股 = 100 股），所以库里存 `INTEGER` 股，不存浮点。
-- 前值（`float_before`/`total_before`）**只作审计列**，不参与状态；语义声明写死为「TDX 上一条记录的状态，可能滞后」（XDM-22 §9 第 1 条）。
-- `category` 只作诊断字段，**生产语义不依赖 cat 标签**（cat2 与 cat9 不可区分，XDM-22 §4.6）。
+- 前值（`float_before`/`total_before`）**只作审计列**，不参与状态；语义声明写死为「TDX 上一条记录的状态，可能滞后」（调研报告② §9 第 1 条）。
+- `category` 只作诊断字段，**生产语义不依赖 cat 标签**（cat2 与 cat9 不可区分，调研报告② §4.6）。
 - 不入库：cat5（混合桶，含 002868 群体级反例）、cat7（19 条，5/19 抽样有 5,148 万股级前值错误）、cat8（继承上游 cat5 错误）。它们进证据包的 `excluded` 计数，不进生产表。
 
 实测条数：cat2 4,866 + cat3 4,929 + cat9 7,987 + cat10 304 = **18,086 条**（其中京市 1,479 条按 §13 偏差处理）。
@@ -234,8 +234,8 @@ total_shares(T) = total_after of the same event                            (同�
 ```
 
 - 同一 `effective_day` 多条事件：按 gbbq 解码顺序 `ordinal` 取最后一条，并把「同日多事件」计入诊断。
-- 事件链一致性检查（门禁，不是猜测）：`event[i].float_after != event[i+1].float_before` 时记 `chain_gap` 计数（XDM-22 实测 0.1–2.4% 会触发，已知原因），不阻断，但进证据包。
-- 单事件合理性门禁（XDM-22 §9 第 4 条）：总股本单条变动 > 50%、或流通股减少而总股本不变 → 该事件 `suspicious=1`，默认**不参与状态**（fail-closed），可用 `allow_suspicious` 显式放开。这条能捕获 002868、600810 两类反例。
+- 事件链一致性检查（门禁，不是猜测）：`event[i].float_after != event[i+1].float_before` 时记 `chain_gap` 计数（调研报告②实测 0.1–2.4% 会触发，已知原因），不阻断，但进证据包。
+- 单事件合理性门禁（调研报告② §9 第 4 条）：总股本单条变动 > 50%、或流通股减少而总股本不变 → 该事件 `suspicious=1`，默认**不参与状态**（fail-closed），可用 `allow_suspicious` 显式放开。这条能捕获 002868、600810 两类反例。
 
 ### 5.3 市值与换手率口径
 
@@ -246,11 +246,11 @@ total_shares(T) = total_after of the same event                            (同�
 | 公司总市值 | `close_raw(T) × total_shares(T)` | **A+B+H 全部股份**，把 H 股价折成 A 股价 | 可达，但必须标 `scope='company_total'` |
 | A 股总市值 | `close_raw(T) × a_share_total_shares(T)` | A 股总股本 | **不可达**：只有当前快照（E-5），历史无来源 |
 
-→ 主表与读模型里，市值字段必须带 `share_scope ∈ {float_a, company_total, a_share_total}`；`a_share_total` 在来源准入前返回 `unknown`，**不用 `company_total` 冒充**（A+H 会高估 15–30%，XDM-22 §3.3）。
+→ 主表与读模型里，市值字段必须带 `share_scope ∈ {float_a, company_total, a_share_total}`；`a_share_total` 在来源准入前返回 `unknown`，**不用 `company_total` 冒充**（A+H 会高估 15–30%，调研报告② §3.3）。
 
 ### 5.4 `known_at`
 
-gbbq 没有公告日（XDM-22 §3.4/§7.5）→ `capital_events.known_at` 恒 `NULL`。后果必须写清：**带 `known_at` 的查询会排除全部股本事实**（§12.2），这是「不知道当时是否已知」的正确表达，不是缺陷。想按生效日用，就显式用 `as_of`（不带 `known_at`），并在响应里标 `known_at_coverage='none'`。
+gbbq 没有公告日（调研报告② §3.4/§7.5）→ `capital_events.known_at` 恒 `NULL`。后果必须写清：**带 `known_at` 的查询会排除全部股本事实**（§12.2），这是「不知道当时是否已知」的正确表达，不是缺陷。想按生效日用，就显式用 `as_of`（不带 `known_at`），并在响应里标 `known_at_coverage='none'`。
 
 ---
 
@@ -298,7 +298,7 @@ normal | other_risk_warning | delisting_risk_warning | delisting_arrangement
 
 ### 7.1 为什么「没有 bar」不是证据
 
-实测（E-11）：`sz000631` 在 2006-04-27（0.76 元）与 2009-06-05（10.30 元）之间**没有任何 bar**，价格跳变 +1255%。这既可能是长期停牌，也可能是数据缺口。官方 `.day` 没有停牌占位行（XDM-16 §4.9：17,988,372 根 A 股 bar 里 OHLC 为 0 的为 0）。→ 数据层只能给「缺口」，不能给「停牌」。
+实测（E-11）：`sz000631` 在 2006-04-27（0.76 元）与 2009-06-05（10.30 元）之间**没有任何 bar**，价格跳变 +1255%。这既可能是长期停牌，也可能是数据缺口。官方 `.day` 没有停牌占位行（调研报告① §4.9：17,988,372 根 A 股 bar 里 OHLC 为 0 的为 0）。→ 数据层只能给「缺口」，不能给「停牌」。
 
 ### 7.2 候选来源与准入要求
 
@@ -813,7 +813,7 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 | 退市日 | **可达（99.4%）** | 2/335 覆盖不到（代码迁移、吸收合并）；2013 年前的普通摘牌靠交易所名单（已覆盖） |
 | 退市整理期 | **可达（2013 起）** | TDX 表不含 2013 年前与吸收合并；需 D-24 门禁 |
 | 简称历史 | **部分** | SH/BJ 无 dated 源 → `unbounded`；`known_at` 多数为 NULL |
-| 股本历史 | **可达** | 只有后值 + 事件日；`known_at` 全 NULL；京市 1,479 条无官方对照（XDM-22 §7.2） |
+| 股本历史 | **可达** | 只有后值 + 事件日；`known_at` 全 NULL；京市 1,479 条无官方对照（调研报告② §7.2） |
 | 流通市值/换手率 | **可达** | 依赖 `float_after` 与不复权收盘，两者都在手 |
 | A 股总市值（A+H） | **不可达** | 只有当前快照；历史 `unknown` |
 | 历史 ST | **部分（SZ）/ 硬缺口（SH）** | 见 §6；首期偏差第 2 条（data-catalog §3.3） |
@@ -843,7 +843,7 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 | 6 | 交易规则 ↔ 数据 | `price_limit_rules` + `min_tick_rules`，按生效区间；每行 `basis_ref` | **测试**：同一键在任一日期恰好命中一行；`grep` 派生代码无幅度常量；创业板 2020-08-24 切换只改数据 | 不造规则 DSL；不做表达式求值 |
 | 7 | 编排 ↔ 原子能力 | 原子：`universe`、`member_state`、`tradability`、`price_limits`、一次导出；编排由 AI 显式组合 | **契约**：工具不返回 `next_actions`；不新增「选股+回测」工具 | 不把 Skill 流程塞进工具 |
 
-**顺手消除的循环依赖**：M2 会碰 `market_data`/`publish`/`storage` 三者（主表读模型要读序列、`Adjustment` 的枚举已由 M1 扩展）。改到相关代码时按 XDM-1 §2.3 顺手拆（把 `market_data` 对 `publish::EffectiveVersion` 的依赖改为领域自有类型），**不单独立项**。
+**顺手消除的循环依赖**：M2 会碰 `market_data`/`publish`/`storage` 三者（主表读模型要读序列、`Adjustment` 的枚举已由 M1 扩展）。改到相关代码时按调研报告③ §2.3 顺手拆（把 `market_data` 对 `publish::EffectiveVersion` 的依赖改为领域自有类型），**不单独立项**。
 
 ---
 
@@ -928,7 +928,7 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 
 ### 18.1 本次新增实测（可复现）
 
-全部在工作看板 `x-data-mcp/40` 的 `work/` 下，命令都在 `systemd-run --scope -q -p MemoryMax=150M -p MemorySwapMax=0` 下运行。
+全部在本任务交付的 `work/` 目录（仓库外），命令都在 `systemd-run --scope -q -p MemoryMax=150M -p MemorySwapMax=0` 下运行。
 
 | # | 结论 | 证据 |
 |---|---|---|
@@ -949,7 +949,7 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 | U-2 | 交易所名单的历史版本与修订策略 | 只取了当前快照 | A-1/A-2 |
 | U-3 | 公告索引的历史覆盖（尤其 1998–2001） | 只抽了 2026-10 一周 | A-3 |
 | U-4 | `infoharbor_spec.cfg` 的行是否永久保留 | 只有一代快照 | A-6（逐代落库 + 对照） |
-| U-5 | 京市股本事件的官方对照 | XDM-22 未覆盖 | 全国股转系统 + 北交所公告（M3） |
+| U-5 | 京市股本事件的官方对照 | 调研报告②未覆盖 | 全国股转系统 + 北交所公告（M3） |
 | U-6 | `unresolved_gap` 的全市场行数 | 需要全量扫描 5,561 个成员 | 部署前私有栈实测（估算 10–20 万行） |
 | U-7 | 主表/停牌的首代与稳态耗时 | 未实现 | PR-8 实测 |
 | U-8 | `price_limits.parquet` 的体积 | 未实现 | PR-7 实测 |
@@ -973,5 +973,5 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 8. `src/sqlite_tasks.rs:41` 的 `COMPACT_MIGRATIONS` 是固定长度数组，加迁移要同时改长度与顺序断言；`check_current_facts.py:15` 的常量也要同步，漏一处 CI 红。
 9. M1 的 `derived_dataset_versions.dataset_kind` 若在 PR-4 里写成封闭枚举，M2 的 6 个新数据集会要求再重建一次该表。**建议 M1 的 PR-4 把该 CHECK 写成开放集合或预留取值**——这是两条线的接口要求，不是 M2 能单方面决定的。
 10. `src/data_supply/query.rs:79-99` 不校验目录成员：只要库里有序列就能读到任意合法实体。M2 引入 `security_master` 后，「实体在库但不在主表」会变成一种真实状态，读路径需要一条明确规则（拒绝还是返回 `unknown` 成员），这属于 v8 的范围，M2 只记录。
-11. 调研报告① 的「15 例 `SSDATE` 与首根 bar 差异」与本任务的「`SSDATE` vs 交易所 `LIST_DATE` 零冲突」是两个不同的比较，对外引用时不要混用。
+11. 调研报告①的「15 例 `SSDATE` 与首根 bar 差异」与本任务的「`SSDATE` vs 交易所 `LIST_DATE` 零冲突」是两个不同的比较，对外引用时不要混用。
 12. `docs/data-catalog.md` §3.2 第 6 行的「62 只缺失」是**335 个退市代码子集**的数字；`base.dbf` 全表 A 股缺失是 **74** 只。两个数字都对，但必须写清范围。
