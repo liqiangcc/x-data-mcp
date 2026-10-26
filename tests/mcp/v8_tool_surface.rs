@@ -112,6 +112,7 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
             14_500usize,
         ),
     ];
+    let mut measured = Vec::new();
     for (entry, expected, budget) in budgets {
         let (api, _dir) = api(entry);
         let tools = api.tools();
@@ -127,17 +128,17 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
             );
             assert_eq!(tool["inputSchema"]["type"], json!("object"), "input {name}");
         }
-        let bytes = serde_json::to_vec(&tools).unwrap().len();
-        assert!(
-            bytes <= budget,
-            "{} tools/list is {bytes} B (budget {budget}); tools: {:?}",
+        measured.push((
             entry.name(),
-            listed
-                .iter()
-                .map(|tool| tool["name"].as_str().unwrap())
-                .collect::<Vec<_>>()
-        );
+            serde_json::to_vec(&tools).unwrap().len(),
+            budget,
+        ));
     }
+    let over: Vec<_> = measured
+        .iter()
+        .filter(|(_, bytes, budget)| bytes > budget)
+        .collect();
+    assert!(over.is_empty(), "tools/list over budget: {measured:?}");
 }
 
 #[test]

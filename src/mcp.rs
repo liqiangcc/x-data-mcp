@@ -678,22 +678,210 @@ fn handle_tool_call<H: ToolHandler>(api: &H, id: Value, params: Value) -> Value 
         .cloned()
         .unwrap_or_else(|| json!({}));
     let result = api.call(name, args);
+    let mode = api.text_mode();
     match result {
-        Ok(value) => tool_result(id, value, false),
-        Err(error) => tool_result(id, serde_json::to_value(error).unwrap(), true),
+        Ok(value) => tool_result(id, value, false, name, mode),
+        Err(error) => tool_result(id, serde_json::to_value(error).unwrap(), true, name, mode),
     }
 }
 
-fn tool_result(id: Value, value: Value, is_error: bool) -> Value {
+/// How the model-visible `content[0].text` is built (v8 §5.4, AC-V8-12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextMode {
+    /// `text` is the same compact JSON as `structuredContent` (research, and
+    /// the stdio/dev surface).
+    Full,
+    /// Payloads above `SUMMARY_FULL_LIMIT` get a bounded summary; small
+    /// payloads keep the full JSON.
+    Summary,
+    /// No `content` text at all; local throughput scripts only.
+    Off,
+}
+
+impl TextMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "full" => Some(Self::Full),
+            "summary" => Some(Self::Summary),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+/// Entry default plus the `X_DATA_MCP_TEXT_MODE` override. Research is the
+/// only entry whose clients may see text alone (ChatGPT/Claude), so it keeps
+/// the full JSON; ops/maint are local/Agent surfaces and get the summary.
+pub fn resolve_text_mode(entry: Option<&str>, env: Option<&str>) -> TextMode {
+    if let Some(mode) = env.and_then(TextMode::parse) {
+        return mode;
+    }
+    match entry {
+        Some("ops") | Some("maint") => TextMode::Summary,
+        _ => TextMode::Full,
+    }
+}
+
+/// Payloads at or below this size are cheaper to send whole than to describe.
+const SUMMARY_FULL_LIMIT: usize = 2048;
+/// Upper bound for one summary line. The summary is a pointer, never a
+/// second copy of the payload.
+const SUMMARY_LIMIT: usize = 300;
+
+fn tool_result(id: Value, value: Value, is_error: bool, name: &str, mode: TextMode) -> Value {
+    let content = match mode {
+        TextMode::Full => {
+            json!([{"type": "text", "text": serde_json::to_string(&value).unwrap()}])
+        }
+        TextMode::Summary => {
+            let full = serde_json::to_string(&value).unwrap();
+            if !is_error && full.len() <= SUMMARY_FULL_LIMIT {
+                json!([{"type": "text", "text": full}])
+            } else {
+                json!([{
+                    "type": "text",
+                    "text": serde_json::to_string(&bounded_summary(name, &value, is_error)).unwrap()
+                }])
+            }
+        }
+        TextMode::Off => json!([]),
+    };
     json!({
         "jsonrpc": "2.0",
         "id": id,
         "result": {
-            "content": [{"type": "text", "text": serde_json::to_string(&value).unwrap()}],
+            "content": content,
             "structuredContent": value,
             "isError": is_error
         }
     })
+}
+
+/// Bounded summary carrying the fields a poller/Skill already depends on:
+/// `status`, counters and `next_cursor`, plus the request/task references.
+fn bounded_summary(name: &str, value: &Value, is_error: bool) -> Value {
+    let mut out = serde_json::Map::new();
+    out.insert("ok".into(), json!(!is_error));
+    out.insert("tool".into(), json!(name));
+    if is_error {
+        out.insert("status".into(), json!("error"));
+        if let Some(code) = value.get("code").and_then(Value::as_str) {
+            out.insert("error".into(), json!(code));
+        }
+    } else {
+        let status = value
+            .get("status")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                value
+                    .get("task")
+                    .and_then(|task| task.get("status"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("ok");
+        out.insert("status".into(), json!(status));
+    }
+    let mut counts = serde_json::Map::new();
+    for key in [
+        "total",
+        "finished",
+        "succeeded",
+        "failed",
+        "pending",
+        "running",
+        "item_count",
+        "row_count",
+        "record_count",
+    ] {
+        if let Some(number) = value.get(key).and_then(Value::as_u64) {
+            counts.insert(key.into(), json!(number));
+        }
+    }
+    if let Some(map) = value.get("counts").and_then(Value::as_object) {
+        for (key, number) in map {
+            if let Some(number) = number.as_u64() {
+                counts.insert(key.clone(), json!(number));
+            }
+        }
+    }
+    for key in ["items", "records", "unfinished"] {
+        if let Some(items) = value.get(key).and_then(Value::as_array) {
+            counts.insert("page_items".into(), json!(items.len()));
+            break;
+        }
+    }
+    if !counts.is_empty() {
+        out.insert("counts".into(), Value::Object(counts));
+    }
+    if let Some(cursor) = value.get("next_cursor").and_then(Value::as_str) {
+        out.insert("next_cursor".into(), json!(cursor));
+    }
+    let mut refs = serde_json::Map::new();
+    for key in [
+        "task_id",
+        "request_id",
+        "generation_id",
+        "plan_id",
+        "snapshot_id",
+        "target_task_id",
+    ] {
+        let direct = value.get(key).and_then(Value::as_str);
+        let nested = value
+            .get("task")
+            .and_then(|task| task.get(key))
+            .and_then(Value::as_str);
+        if let Some(reference) = direct.or(nested) {
+            refs.insert(key.into(), json!(reference));
+        }
+    }
+    if !refs.is_empty() {
+        out.insert("refs".into(), Value::Object(refs));
+    }
+    out.insert("detail".into(), json!("see structuredContent"));
+    // Deterministic trim: counters first (they are the least specific), then
+    // refs, then the cursor; the status stays.
+    let mut guard = 0;
+    while summary_bytes(&out) > SUMMARY_LIMIT && guard < 64 {
+        guard += 1;
+        let mut trimmed = false;
+        if let Some(Value::Object(counts)) = out.get_mut("counts")
+            && let Some(last) = counts.keys().next_back().cloned()
+        {
+            counts.remove(&last);
+            trimmed = true;
+        }
+        if !trimmed
+            && let Some(Value::Object(refs)) = out.get_mut("refs")
+            && let Some(last) = refs.keys().next_back().cloned()
+        {
+            refs.remove(&last);
+            trimmed = true;
+        }
+        if !trimmed && out.remove("next_cursor").is_some() {
+            trimmed = true;
+        }
+        if !trimmed && out.remove("detail").is_some() {
+            trimmed = true;
+        }
+        if !trimmed {
+            break;
+        }
+    }
+    if matches!(out.get("counts"), Some(Value::Object(map)) if map.is_empty()) {
+        out.remove("counts");
+    }
+    if matches!(out.get("refs"), Some(Value::Object(map)) if map.is_empty()) {
+        out.remove("refs");
+    }
+    Value::Object(out)
+}
+
+type JsonObject = serde_json::Map<String, Value>;
+
+fn summary_bytes(summary: &JsonObject) -> usize {
+    serde_json::to_string(summary)
+        .map(|text| text.len())
+        .unwrap_or(usize::MAX)
 }
 
 fn rpc_error(
@@ -727,6 +915,11 @@ fn query_error(error: crate::query::QueryError) -> ApiError {
 pub trait ToolHandler {
     fn tools(&self) -> Value;
     fn call(&self, name: &str, args: Value) -> Result<Value, ApiError>;
+    /// Model-visible text policy for this surface; the default keeps the
+    /// pre-v8 behavior (full JSON in `content[0].text`).
+    fn text_mode(&self) -> TextMode {
+        TextMode::Full
+    }
     /// Background worker entry point. It is service-internal, not a published
     /// tool: implementations may bypass their per-entry tool surface. The
     /// default keeps the old behavior for handlers that expose it directly.

@@ -35,7 +35,11 @@ impl Access {
 pub mod presence;
 pub mod query;
 
+pub mod columnar;
+
 pub mod observe;
+
+pub mod task_v2;
 
 pub mod mcp;
 pub mod registry;

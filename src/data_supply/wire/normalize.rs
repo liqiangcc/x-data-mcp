@@ -47,11 +47,12 @@ const CONTRACT_TOOLS: &[&str] = &[
     "plan_market_update",
     "run_market_update",
     "compute_metrics",
+    // v8 PR-5 (#387 §14): the task surface gained `contract_version` so v2
+    // can be asked for explicitly; omitting it still means v1 (design §7.2
+    // row 11).
+    "list_tasks",
+    "get_task_progress",
 ];
-/// Tools with no `contract_version` field that still accept the redundant
-/// `"v1"` declaration (design §7.2 row 11: `get_task` requires it while
-/// `get_task_progress` does not — both mean v1).
-const VERSIONLESS_TOOLS: &[&str] = &["list_tasks", "get_task_progress"];
 /// Read tools whose `selection.kind` is dataset-discriminated (design §7.2
 /// row 6): the rejection lists the kinds the named dataset allows.
 const SELECTION_TOOLS: &[&str] = &["query_data", "list_data_versions", "get_data_availability"];
@@ -99,17 +100,10 @@ fn reserved(name: &str, input: &Value) -> Result<(), ApiError> {
 }
 
 fn contract_version(name: &str, map: &mut Fields) {
-    // `map.get(..).map(..)` ends the borrow before any insertion below.
-    match map.get("contract_version").map(|value| value == "v1") {
-        Some(true) if VERSIONLESS_TOOLS.contains(&name) => {
-            map.remove("contract_version");
-        }
-        Some(_) => {}
-        None if CONTRACT_TOOLS.contains(&name) => {
-            map.insert("contract_version".into(), json!("v1"));
-        }
-        None => {}
+    if map.contains_key("contract_version") || !CONTRACT_TOOLS.contains(&name) {
+        return;
     }
+    map.insert("contract_version".into(), json!("v1"));
 }
 
 /// Cross-field defaults and dataset-dependent rejections. Only the fields the

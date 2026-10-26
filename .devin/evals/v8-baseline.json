@@ -1,0 +1,53 @@
+{
+  "tokenizer": {
+    "ascii_chars_per_token": 4,
+    "non_ascii_chars_per_token": 1.5
+  },
+  "tasks": [
+    {
+      "id": "T1-panel-242",
+      "fixture": "fixtures/v8/query-panel-242.json",
+      "budget_tokens": 5000
+    },
+    {
+      "id": "T1-panel-5",
+      "fixture": "fixtures/v8/query-panel-five.json",
+      "budget_tokens": 400
+    },
+    {
+      "id": "T1-panel-batch-10",
+      "fixture": "fixtures/v8/query-panel-batch-ten.json",
+      "budget_tokens": 900
+    },
+    {
+      "id": "T4-catalog-industry",
+      "fixture": "fixtures/v8/query-catalog-industry.json",
+      "budget_tokens": 300
+    },
+    {
+      "id": "cross-section-2-days",
+      "fixture": "fixtures/v8/query-cross-section-two-days.json",
+      "budget_tokens": 400
+    },
+    {
+      "id": "versions",
+      "fixture": "fixtures/v8/query-versions.json",
+      "budget_tokens": 200
+    },
+    {
+      "id": "availability-single",
+      "fixture": "fixtures/v8/availability-single.json",
+      "budget_tokens": 1000
+    },
+    {
+      "id": "availability-batch-10",
+      "fixture": "fixtures/v8/availability-batch-ten.json",
+      "budget_tokens": 1500
+    },
+    {
+      "id": "T6-task-diagnosis",
+      "fixture": "fixtures/v8/task-diagnosis.json",
+      "budget_tokens": 2000
+    }
+  ]
+}

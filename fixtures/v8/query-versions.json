@@ -1,0 +1,63 @@
+{
+  "expected": {
+    "contract_version": "v2",
+    "dataset": "market.daily",
+    "layout": "table",
+    "next_cursor": null,
+    "page_complete": true,
+    "row_count": 2,
+    "snapshot_id": "snap-versions",
+    "snapshot_time": "2026-10-26T09:00:00Z",
+    "versions": [
+      {
+        "entity": "sh.600000",
+        "published_at": "2026-10-26T00:00:00Z",
+        "version_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "entity": "sh.600004",
+        "published_at": "2026-10-25T00:00:00Z",
+        "version_id": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ]
+  },
+  "input": {
+    "dataset": "market.daily",
+    "items": [
+      {
+        "published_at": "2026-10-26T00:00:00Z",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "version_id": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      },
+      {
+        "published_at": "2026-10-25T00:00:00Z",
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600004",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "version_id": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      }
+    ],
+    "layout": "versions",
+    "meta": {
+      "limitations": [],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "snap-versions",
+      "snapshot_time": "2026-10-26T09:00:00Z"
+    }
+  }
+}

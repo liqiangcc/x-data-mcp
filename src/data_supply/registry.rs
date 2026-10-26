@@ -405,7 +405,7 @@ pub fn entries() -> Vec<Entry> {
             RETRY_DESCRIPTION,
             json!({"contract_version":"v1","original_task_id":"returned-task-id","new_request_id":"retry-request","item_ids":["returned-item-id"]}),
         ),
-        entry::<TaskV1, TaskSummary>(
+        entry::<TaskQuery, TaskSummary>(
             "get_task",
             Handler::Task,
             TASK_DESCRIPTION,

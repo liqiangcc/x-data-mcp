@@ -153,6 +153,7 @@ fn real_task_list_and_progress_freeze_state_and_enforce_authorization() {
         "run".into(),
     );
     let p = ProgressQuery {
+        contract_version: ReadContractVersion::V1,
         task_id: task.into(),
         page_size: 1,
         cursor: None,

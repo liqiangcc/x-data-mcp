@@ -23,16 +23,42 @@ impl Dataset {
             Self::Catalog => None,
         }
     }
+    /// Wire spelling; used by v2 error messages (v8 PR-3, #387 §5).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Catalog => "securities.catalog",
+            Self::Daily => "market.daily",
+            Self::Yearly => "market.yearly",
+        }
+    }
 }
+// Write surfaces accept `v1` only; read surfaces use `ReadContractVersion`,
+// so a write tool's schema never advertises a version it rejects (v8 PR-3,
+// #387 §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ContractVersion {
     #[serde(rename = "v1")]
     V1,
 }
-/// One security identity. The typed contract stays `{exchange, code}`; the
-/// decode-layer `normalize` step (v8 PR-1, #387 §7) accepts the canonical
-/// text `"sh.600000"` and rewrites it to this form before decoding, so no
-/// response byte and no advertised schema changes.
+
+// `v1` keeps the row/task shape, `v2` selects the columnar read shape (PR-3)
+// or the task diagnosis shape (PR-5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ReadContractVersion {
+    #[serde(rename = "v1")]
+    #[default]
+    V1,
+    #[serde(rename = "v2")]
+    V2,
+}
+impl ReadContractVersion {
+    /// Cursor keys and v1 responses omit the default version, so the v1
+    /// bytes stay exactly what they were before v2 existed.
+    pub fn is_v1(&self) -> bool {
+        *self == Self::V1
+    }
+}
+/// Security identity (`{exchange, code}`; `"sh.600000"` is also accepted).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Security {
@@ -133,7 +159,7 @@ pub enum VersionChoice {
 #[serde(deny_unknown_fields)]
 pub struct Query {
     pub dataset: Dataset,
-    pub contract_version: ContractVersion,
+    pub contract_version: ReadContractVersion,
     pub selection: Selection,
     pub filter: Filter,
     pub version: VersionChoice,
@@ -141,6 +167,9 @@ pub struct Query {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
+    /// v2 only: column projection (omitted = the dataset's core fields).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
 }
 pub fn default_page() -> usize {
     100
@@ -236,7 +265,7 @@ pub struct DataPage {
 #[serde(deny_unknown_fields)]
 pub struct VersionsQuery {
     pub dataset: Dataset,
-    pub contract_version: ContractVersion,
+    pub contract_version: ReadContractVersion,
     pub selection: Selection,
     #[serde(default = "default_page")]
     #[schemars(range(min = 1, max = 1000))]
@@ -356,6 +385,14 @@ pub struct TasksQuery {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
+    /// v8 PR-5 (#387 §7.2 row 11): both task reads default to v1.
+    #[serde(default, skip_serializing_if = "ReadContractVersion::is_v1")]
+    pub contract_version: ReadContractVersion,
+    /// v2 only: keep tasks with at least one failed item of this class
+    /// (`REVISION_UNVERIFIED` / `PUBLISH_PRECONDITION` / `NO_BARS_IN_RANGE` /
+    /// `OTHER`). A v1 request carrying it is rejected, never ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -393,6 +430,9 @@ pub struct ProgressQuery {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
+    /// v8 PR-5 (#387 §7.2 row 11): both task reads default to v1.
+    #[serde(default, skip_serializing_if = "ReadContractVersion::is_v1")]
+    pub contract_version: ReadContractVersion,
     /// Optional server-side wait (long-poll), in seconds. Absent or 0
     /// returns immediately (the pre-existing behavior). A positive value
     /// lets the server hold the call until the task reaches a terminal
@@ -498,6 +538,123 @@ pub struct ProgressPage {
     pub yearly_results: Vec<YearlyExecutionResult>,
     pub stopped_write_check: Option<crate::task_verification::decision::Receipt>,
     pub publication_check: Option<crate::publication_verification::decision::Receipt>,
+}
+
+// ---------------------------------------------------------------------------
+// Task surface v2 (v8 PR-5, #387 §7.2 rows 9/14, §14 PR-5)
+// ---------------------------------------------------------------------------
+
+/// Structured task-item identity. A security item is the three components the
+/// stored `item_id` string already carries (`["market","sh.600000","day"]`);
+/// a server-internal derived item keeps its whole id in `dataset`
+/// (`derived:calendar`, `derived:index:sh.000001`) because the two derived
+/// items must stay distinguishable and neither has an entity or a period.
+/// `task_v2::item_id`/`ItemId::text` round-trip to the string `retry_task`
+/// still accepts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ItemId {
+    pub dataset: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period: Option<String>,
+}
+impl ItemId {
+    /// The stored `item_id` text (`retry_task`'s accepted spelling).
+    pub fn text(&self) -> String {
+        match (&self.entity, &self.period) {
+            (Some(entity), Some(period)) => {
+                serde_json::to_string(&[self.dataset.as_str(), entity.as_str(), period.as_str()])
+                    .expect("three strings always serialize")
+            }
+            _ => self.dataset.clone(),
+        }
+    }
+}
+
+/// One failed item in the bounded diagnosis sample: the class replaces the
+/// full error text (which stays in the task record) beyond
+/// `task_v2::BOUNDED_ERROR_CHARS`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ItemError {
+    pub item_id: ItemId,
+    pub reason_code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// v2 `get_task` counters: the same six numbers `get_task_progress` already
+/// reports, so a diagnosis does not need a second call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskCounts {
+    pub total: usize,
+    pub pending: usize,
+    pub running: usize,
+    pub finished: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+/// v2 progress item: identity, stage and outcome. `entity`/`period` live in
+/// `item_id` only, and a failed item always carries its class plus a bounded
+/// error (v1 only did that for bounded large-task pages).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProgressItemV2 {
+    pub item_id: ItemId,
+    pub progress_unit: String,
+    pub stage: String,
+    pub success: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+}
+/// v2 frozen-range receipt: `item_id` carries the entity (no second copy).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenDailyRangeV2 {
+    pub item_id: ItemId,
+    pub base_version_id: String,
+    pub base_integrity_sha256: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// v2 range receipt: `item_id` carries the entity (no second copy).
+#[serde(deny_unknown_fields)]
+pub struct RangeExecutionResultV2 {
+    pub result_id: String,
+    pub item_id: ItemId,
+    pub base_version: VersionRef,
+    pub result_version: VersionRef,
+    pub no_change: bool,
+    pub acquired_at: DateTime<Utc>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// v2 frozen yearly input: `item_id` carries the entity (no second copy).
+#[serde(deny_unknown_fields)]
+pub struct FrozenYearlyInputV2 {
+    pub item_id: ItemId,
+    pub base_daily_version_id: String,
+    pub base_integrity_sha256: String,
+    pub years: Vec<i32>,
+    pub publication: YearlyPublication,
+    pub comparison: Option<ComparisonVersion>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+/// v2 yearly receipt: `item_id` carries the entity (no second copy).
+#[serde(deny_unknown_fields)]
+pub struct YearlyExecutionResultV2 {
+    pub result_id: String,
+    pub item_id: ItemId,
+    pub base_daily_version: VersionRef,
+    pub result_version: VersionRef,
+    pub no_change: bool,
+    pub derived_at: DateTime<Utc>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -634,8 +791,9 @@ pub struct RetryItems {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct TaskV1 {
-    pub contract_version: ContractVersion,
+pub struct TaskQuery {
+    /// `v2` adds the diagnosis projection (v8 PR-5, #387 §7.2 row 9/14).
+    pub contract_version: ReadContractVersion,
     pub task_id: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

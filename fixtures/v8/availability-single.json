@@ -1,0 +1,198 @@
+{
+  "expected": {
+    "columns": {
+      "availability": [
+        "unknown"
+      ],
+      "confirmed_gaps": [
+        [
+          {
+            "evidence": "gap:fixture:sha256",
+            "range": {
+              "end_date": "2025-01-07",
+              "kind": "daily",
+              "start_date": "2025-01-06"
+            }
+          }
+        ]
+      ],
+      "coverage_evidence": [
+        "fixture coverage"
+      ],
+      "first_record": [
+        "2025-01-02"
+      ],
+      "freshness": [
+        "unknown"
+      ],
+      "integrity": [
+        "verified"
+      ],
+      "last_record": [
+        "2025-01-10"
+      ],
+      "record_count": [
+        7
+      ],
+      "related_tasks": [
+        [
+          "task-plan",
+          "task-update"
+        ]
+      ],
+      "related_tasks_total": [
+        2
+      ],
+      "related_tasks_truncated": [
+        false
+      ],
+      "unresolved_ranges": [
+        [
+          {
+            "end_date": "2025-01-10",
+            "kind": "daily",
+            "start_date": "2025-01-01"
+          }
+        ]
+      ],
+      "version_id": [
+        "2222222222222222222222222222222222222222222222222222222222222222"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.daily",
+    "entities": [
+      "sh.600000"
+    ],
+    "layout": "table",
+    "limitations": [
+      "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+    ],
+    "next_cursor": null,
+    "page_complete": true,
+    "row_count": 1,
+    "snapshot_id": "snap-availability-single",
+    "snapshot_time": "2026-10-26T09:00:00Z",
+    "tasks": {
+      "task-plan": {
+        "contract_version": "market-plan-run-task-v1",
+        "created_at": "2026-10-25T16:00:00Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-10-25T16:10:00Z",
+        "operation": "update_data",
+        "plan_counts": {
+          "absent": 4,
+          "already_current": 0,
+          "eligible": 5224,
+          "ineligible": 0
+        },
+        "plan_id": "9999999999999999999999999999999999999999999999999999999999999999",
+        "request_id": "req-plan",
+        "state_revision": 7,
+        "status": "succeeded",
+        "task_id": "task-plan"
+      },
+      "task-update": {
+        "contract_version": "explicit-range-task-v1",
+        "created_at": "2026-10-26T01:00:00Z",
+        "dataset": "market.daily",
+        "last_progress_at": "2026-10-26T01:02:00Z",
+        "operation": "update_data",
+        "request_id": "req-update",
+        "state_revision": 3,
+        "status": "succeeded",
+        "task_id": "task-update"
+      }
+    }
+  },
+  "input": {
+    "dataset": "market.daily",
+    "fields": null,
+    "items": [
+      {
+        "availability": "unknown",
+        "confirmed_gaps": [
+          {
+            "evidence": "gap:fixture:sha256",
+            "range": {
+              "end_date": "2025-01-07",
+              "kind": "daily",
+              "start_date": "2025-01-06"
+            }
+          }
+        ],
+        "coverage_evidence": "fixture coverage",
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "first_record": "2025-01-02",
+        "freshness": "unknown",
+        "integrity": "verified",
+        "last_record": "2025-01-10",
+        "limitations": [
+          "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair"
+        ],
+        "record_count": 7,
+        "related_tasks": [
+          {
+            "contract_version": "market-plan-run-task-v1",
+            "created_at": "2026-10-25T16:00:00Z",
+            "dataset": "market.daily",
+            "last_progress_at": "2026-10-25T16:10:00Z",
+            "operation": "update_data",
+            "plan_counts": {
+              "absent": 4,
+              "already_current": 0,
+              "eligible": 5224,
+              "ineligible": 0
+            },
+            "plan_id": "9999999999999999999999999999999999999999999999999999999999999999",
+            "request_id": "req-plan",
+            "state_revision": 7,
+            "status": "succeeded",
+            "task_id": "task-plan"
+          },
+          {
+            "contract_version": "explicit-range-task-v1",
+            "created_at": "2026-10-26T01:00:00Z",
+            "dataset": "market.daily",
+            "last_progress_at": "2026-10-26T01:02:00Z",
+            "operation": "update_data",
+            "request_id": "req-update",
+            "state_revision": 3,
+            "status": "succeeded",
+            "task_id": "task-update"
+          }
+        ],
+        "related_tasks_total": 2,
+        "related_tasks_truncated": false,
+        "unresolved_ranges": [
+          {
+            "end_date": "2025-01-10",
+            "kind": "daily",
+            "start_date": "2025-01-01"
+          }
+        ],
+        "version_ref": {
+          "contract_version": "v1",
+          "dataset": "market.daily",
+          "entity": {
+            "code": "600000",
+            "exchange": "sh"
+          },
+          "integrity_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "version_id": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      }
+    ],
+    "layout": "availability",
+    "meta": {
+      "limitations": [],
+      "next_cursor": null,
+      "page_complete": true,
+      "snapshot_id": "snap-availability-single",
+      "snapshot_time": "2026-10-26T09:00:00Z"
+    }
+  }
+}
