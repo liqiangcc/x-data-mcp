@@ -140,7 +140,7 @@
 
 - 部署方式不变：归档旧库，全新 init，全市场重建。**不做数据迁移**；schema 21 只出现在 fresh init 链尾。
 - 新二进制**只认 schema 21**；旧二进制遇到 schema 21 库报 unsupported schema 并 fail-closed。
-- 代码（main）已升到 **schema 22**（M1 PR-1…PR-6，issue-383 §14：口径/精度列、双序列写入、
+- 代码（main）已升到 **schema 22**（M1 PR-1…PR-8，issue-383 §14：口径/精度列、双序列写入、
   因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历），尚未部署；部署中的二进制与库仍是 schema 21。
 - **回滚 = 旧二进制 + 归档的 schema 20 库**（既定做法，不改变）。
 - 已部署事实不因本文改变：本文写作时生产仍是 schema 20 / preview.31（历史）；2026-10-13 起
@@ -167,3 +167,35 @@
 3. capability 版本号与 `tools/list` 描述；`mcp-tools.md`、`generic-data-tools.md`、`daily-sync.md`、README 与 Skill 的改写。
 4. 下游 KlineReader 在 `stale_version` 后的处理（重新列版本并重试）。需另行批准，不在本文范围。
 5. STATUS / SLO 的更新（实现合并并部署后）。
+
+## 13. schema 22（M1，代码已合并、未部署）
+
+M1（[#383](https://github.com/liqiangcc/x-data-mcp/issues/383)）在 schema 21 的"只存当前序列"模型上加
+**口径**与**精度**两维，不改变单版本模型本身。本章写代码事实；生产实例仍是 schema 21，部署事实见
+[STATUS](STATUS.md)。
+
+- **两条序列**：`market_series` 的身份从 `(entity, period)` 扩为 `(entity, period, adjustment)`
+  （`migrations/tasks/022_research_data.sql:31-61`，唯一键 `:50`）。同一实体同一周期现在有
+  `adjustment=0` 不复权与 `adjustment=1` 前复权两条序列；年线仍只存在于前复权
+  （`022:54` 的 `CHECK(period = 1 OR adjustment = 1)`）。`instrument_class` 区分股票 0 / 指数 1 /
+  ETF 2（M1 只写 0 与 1）。
+- **精度是序列属性**：`series_bars` 的价格列由 `*_cents` 改为 `*_units`
+  （`022:74-84`），整数按所属序列的 `price_scale` 解释（元 / 点）：不复权 2、前复权 6
+  （`src/compact_market.rs:17,24`）。`volume_quantum` 列同时预留（`022:84`，M1 恒写 NULL，
+  见 D-34）。
+- **摘要 v2**：`series-fold-v2` 把口径/品种/精度折进种子（`src/sqlite_market/series.rs:13,45`），
+  因此全部 `version_id` 与 schema 21 不同；D-08 的归档 + 全新重建本来就会让它们全变，不是额外的
+  兼容负担。`digest_format` 的 CHECK 只认 `series-fold-v2`（`022:40`），旧摘要不会被静默改名。
+- **事件分键**：`market_events` 增加 `adjustment`，唯一键由 `(task_id, item_id)` 改为
+  `(task_id, item_id, adjustment)`（`022:130-158`），覆盖索引也带口径（`022:187-188`），
+  两条序列的事件不再互相误判。`result_id` 仍全局唯一。
+- **解析事实与派生登记**：`adjustment_events`（`022:204-224`）存 gbbq cat1 的原始 f32 位模式与
+  派生 2dp 值，`known_at` 可空且 M1 恒为 NULL（知晓时间未知，不猜）；`derived_dataset_versions`
+  （`022:235-266`）登记非 bar 数据集（因子集、交易日历）的 `version_id` 与 `algorithm_version`。
+- **新增派生表**：`trading_days`（`022:294-297`，一行 = 至少一个日历输入指数当日有 bar）与
+  `index_series_meta`（`022:268-292`，逐指数的单位与量额口径，缺证据不可收录）。
+- **启动检查按三键**：闭合探测由 `(entity, period)` 改为 `(entity, period, adjustment)` 的索引
+  seek（`src/sqlite_market/series.rs:1295`），否则两条序列会互相误判；仍是 O(#series)，不是
+  O(#events)。
+- **写事务**：一个日线 item 在同一事务里写不复权序列、因子集、前复权序列与两条事件
+  （[M1 实现记录](tasks/issue-383-m1-implementation.md)）；未来生效事件只改前复权。
