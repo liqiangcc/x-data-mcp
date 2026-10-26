@@ -191,7 +191,7 @@ CREATE TABLE series_bars(
 ) STRICT, WITHOUT ROWID;
 ```
 
-**为什么更名而不是保留 `*_cents`**：一列叫 `close_cents` 却存 1e-6 元的整数，是给未来每个人埋的坑（M3 的 ETF 还会存 1e-3 元）。更名的成本只在 DDL 与 `compact_market.rs`（`CompactBar` 字段 + `cents()`），而这两处**本来就要为 `price_scale` 改动**（§2.3 第 2 条）。schema 22 走全新 init，没有存量数据迁移成本。价格语义由 `market_series.price_scale` 唯一决定，`series_bars` 不再自称单位。
+**为什么更名而不是保留 `*_cents`**：一列叫 `close_cents` 却存 1e-6 元的整数，是给未来每个人埋的坑（M3 的 ETF 还会存 1e-3 元）。更名的实际成本：DDL + `compact_market.rs`（`CompactBar` 字段 + `cents()`）+ `sqlite_market/series.rs` 的读写绑定 + 两个测试文件，全仓 `_cents` 共 89 处（`grep -rn _cents src/`，2026-10-26）；其中 `compact_market.rs` 与 `series.rs` **本来就要为 `price_scale` 改动**（§2.3 第 2 条），剩下的主要是测试字面量。schema 22 走全新 init，没有存量数据迁移成本。价格语义由 `market_series.price_scale` 唯一决定，`series_bars` 不再自称单位。
 
 `volume_quantum`：**不默认加**。XDM-19/#381 的"逐 bar 精度"方案尚未裁决（Q4）。若裁决为方案 1，schema 22 预留一列比之后升 schema 23 便宜（一次全新重建 vs 两次）；若裁决为"只写文档"，预留的列就是死列。故列为待确认，不写进 DDL。
 
@@ -514,6 +514,8 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 | `--dry-run` | 只算 `snapshot_id` 与清单，不写文件 | 关 |
 
 失败语义：任一 AC 不满足（版本漂移、混合 generation、目录版本不存在、范围为空）→ 非零退出码 + 一行结构化原因，**不写半成品**。
+
+`--entities`/`--catalog-version` 只约束个股日线与因子集；指数与日历由登记表（`index_registry` + `trading_days`）决定，不受 `--entities` 影响——否则"导出 100 只股票"会连带丢掉基准。
 
 ### 7.2 文件布局
 
