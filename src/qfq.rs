@@ -4,9 +4,20 @@
 //! Inputs are the existing structural decoders: `.day` bars
 //! (`crate::day_file::RawDayRecord`) and decoded GBBQ events
 //! (`crate::gbbq::Event`).  For each bar this module composes the affine
-//! transforms of **all events with `event_date > bar_date`**, oldest→newest
-//! with no intermediate rounding, applies the chain to the raw price, and
-//! rounds the business output to 2dp HALF_UP.
+//! transforms of **all events with `event_date > bar_date`**, oldest→newest,
+//! applies the chain to the raw price and rounds **once** at the target scale.
+//!
+//! Two entry points, one contract:
+//! * [`forward_adjust_exact`] (`qfq-exact-v1`, issue-383 §4.3) is what the
+//!   production path writes: the chain is composed over exact rationals
+//!   (`gbbq::exact_compose_chain`) and rounded once, so a 6dp value depends
+//!   only on (bar, events, scale, algorithm version) and never on intermediate
+//!   precision.  [`forward_adjust_exact_reference`] is its per-bar oracle.
+//! * [`forward_adjust`] / [`forward_adjust_reference`] are the **2dp baseline**
+//!   over 28-significant-digit `Decimal` arithmetic.  They are no longer
+//!   written to storage; they stay as the historical oracle AC-M1-3 measures
+//!   the difference against (every differing field must sit exactly on a 2dp
+//!   half-cent, see `tests/algorithms/qfq_exact.rs`).
 //!
 //! Boundaries (frozen contract):
 //! * an event date with no corresponding bar needs no special handling — the
@@ -29,7 +40,9 @@ use rust_decimal::{Decimal, RoundingStrategy};
 use crate::day_file::RawDayRecord;
 use crate::gbbq::{self, Event};
 
-/// A forward-adjusted daily bar.  Prices are business-decimal 2dp HALF_UP.
+/// A forward-adjusted daily bar.  Prices are business decimals at the scale
+/// the caller asked for: 2dp HALF_UP for the [`forward_adjust`] baseline, the
+/// series' `price_scale` (6, `qfq-exact-v1`) for [`forward_adjust_exact`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct QfqBar {
     pub date: NaiveDate,
@@ -73,7 +86,13 @@ fn cent(value: Decimal) -> Decimal {
     value.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
 }
 
-/// Forward-adjust a security's `.day` bar sequence against its GBBQ events.
+/// Forward-adjust a security's `.day` bar sequence against its GBBQ events,
+/// rounded to 2dp HALF_UP.
+///
+/// **2dp baseline only** — production writes [`forward_adjust_exact`]
+/// (`qfq-exact-v1`, issue-383 §4.3). This path keeps the pre-M1 numeric
+/// behaviour so AC-M1-3 can enumerate exactly where the exact chain differs
+/// from it, and so the frozen #54 client-display oracles stay checkable.
 ///
 /// `bars` stay in input order; `events` are ordered by date internally, so
 /// callers may pass them unsorted.  The verified event domain is the
@@ -179,6 +198,113 @@ pub fn forward_adjust_reference(
             }
         })
         .collect())
+}
+
+/// `qfq-exact-v1` — the forward series' `algorithm_version` (issue-383 §4.4).
+pub const ALGORITHM_VERSION: &str = "qfq-exact-v1";
+
+/// Forward-adjust a security's `.day` bar sequence over the **exact** rational
+/// chain, rounding once at `scale` (issue-383 §4.3, `qfq-exact-v1`).
+///
+/// Same frozen contract as [`forward_adjust`]: events with
+/// `event_date > bar_date` only, oldest→newest, unsorted input accepted,
+/// `amount`/`volume` untouched. The difference is arithmetic: the chain is
+/// composed over exact integers (`gbbq::exact_compose_chain`) and each price is
+/// rounded once HALF_UP away from zero at `scale`, so the last digit cannot
+/// depend on intermediate precision. `scale` is the series' `price_scale`
+/// (6 for the forward series, `market_series.price_scale` CHECK ≤ 6).
+///
+/// Chains are memoized per distinct event suffix exactly like
+/// [`forward_adjust`]: one fold per boundary, not per bar.
+pub fn forward_adjust_exact(
+    bars: &[RawDayRecord],
+    events: &[Event],
+    scale: u32,
+) -> Result<Vec<QfqBar>, gbbq::Error> {
+    gbbq::check_price_scale(scale)?;
+    let mut dated: Vec<(u32, [Decimal; 4])> = Vec::with_capacity(events.len());
+    for event in events {
+        dated.push((event.date_raw, event.factors()?));
+    }
+    dated.sort_by_key(|(date, _)| *date);
+
+    let mut chains: Vec<Option<gbbq::ExactUnits>> = (0..=dated.len()).map(|_| None).collect();
+    let mut k = 0usize;
+    let mut last_bar_date = 0u32;
+    let mut out = Vec::with_capacity(bars.len());
+    for bar in bars {
+        let bar_date = ymd(bar.date);
+        k = if bar_date >= last_bar_date {
+            k + dated[k..].partition_point(|(date, _)| *date <= bar_date)
+        } else {
+            dated.partition_point(|(date, _)| *date <= bar_date)
+        };
+        last_bar_date = bar_date;
+        if chains[k].is_none() {
+            let chain = gbbq::exact_compose_chain(dated[k..].iter().map(|(_, factors)| *factors))?;
+            chains[k] = Some(chain.units(scale)?);
+        }
+        let chain = chains[k].as_ref().expect("chain filled above");
+        out.push(QfqBar {
+            date: bar.date,
+            open: exact_price(chain, bar.ohlc_raw[0], scale)?,
+            high: exact_price(chain, bar.ohlc_raw[1], scale)?,
+            low: exact_price(chain, bar.ohlc_raw[2], scale)?,
+            close: exact_price(chain, bar.ohlc_raw[3], scale)?,
+            chain_event_count: dated.len() - k,
+            amount_float32_bits: bar.amount_float32_bits,
+            volume_raw: bar.volume_raw,
+            r7_raw: bar.r7_raw,
+        });
+    }
+    Ok(out)
+}
+
+/// Reference implementation of [`forward_adjust_exact`]: the direct per-bar
+/// filter + exact fold, with no suffix memoization. `forward_adjust_exact`
+/// composes the identical suffix with the identical exact arithmetic, so the
+/// two are bitwise equal by construction — this oracle guards the
+/// suffix-index bookkeeping, not the arithmetic.
+#[doc(hidden)]
+pub fn forward_adjust_exact_reference(
+    bars: &[RawDayRecord],
+    events: &[Event],
+    scale: u32,
+) -> Result<Vec<QfqBar>, gbbq::Error> {
+    gbbq::check_price_scale(scale)?;
+    let mut dated: Vec<(u32, [Decimal; 4])> = Vec::with_capacity(events.len());
+    for event in events {
+        dated.push((event.date_raw, event.factors()?));
+    }
+    dated.sort_by_key(|(date, _)| *date);
+
+    let mut out = Vec::with_capacity(bars.len());
+    for bar in bars {
+        let bar_date = ymd(bar.date);
+        let chain = gbbq::exact_compose_chain(
+            dated
+                .iter()
+                .filter(|(date, _)| *date > bar_date)
+                .map(|(_, factors)| *factors),
+        )?
+        .units(scale)?;
+        out.push(QfqBar {
+            date: bar.date,
+            open: exact_price(&chain, bar.ohlc_raw[0], scale)?,
+            high: exact_price(&chain, bar.ohlc_raw[1], scale)?,
+            low: exact_price(&chain, bar.ohlc_raw[2], scale)?,
+            close: exact_price(&chain, bar.ohlc_raw[3], scale)?,
+            chain_event_count: dated.iter().filter(|(date, _)| *date > bar_date).count(),
+            amount_float32_bits: bar.amount_float32_bits,
+            volume_raw: bar.volume_raw,
+            r7_raw: bar.r7_raw,
+        });
+    }
+    Ok(out)
+}
+
+fn exact_price(chain: &gbbq::ExactUnits, cents: u32, scale: u32) -> Result<Decimal, gbbq::Error> {
+    Ok(Decimal::new(chain.units(cents)?, scale))
 }
 
 /// Displayed event-day 昨结 marks for a security's events, queryable per

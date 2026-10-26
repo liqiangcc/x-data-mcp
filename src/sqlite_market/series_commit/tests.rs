@@ -364,7 +364,7 @@ fn append_then_replace_fold_equivalence() {
     let refold = series::fold_bars(
         SYMBOL,
         Period::Day,
-        series::SeriesShape::FORWARD_STOCK_CENTS,
+        series::SeriesShape::FORWARD_STOCK_UNITS,
         &all,
     )
     .unwrap();
@@ -393,12 +393,13 @@ fn append_then_replace_fold_equivalence() {
     assert_eq!(row2.record_count, 4);
     let bars = series::all_bars(&c2, row2.series_key).unwrap();
     // Old close values are gone; new digest = fold over the new content.
-    assert_eq!(bars[0].close_units, 200);
+    // 200 分 at the forward series' 6dp scale (PR-3).
+    assert_eq!(bars[0].close_units, 2_000_000);
     assert_eq!(
         series::fold_bars(
             SYMBOL,
             Period::Day,
-            series::SeriesShape::FORWARD_STOCK_CENTS,
+            series::SeriesShape::FORWARD_STOCK_UNITS,
             &bars
         )
         .unwrap(),
@@ -703,7 +704,7 @@ fn replace_rollback_keeps_series_consistent() {
     let new_bars = to_compact_bars(
         &[bar(0, 200), bar(1, 210)],
         Period::Day,
-        crate::compact_market::PRICE_SCALE_CENTS,
+        crate::compact_market::PRICE_SCALE_QFQ,
     )
     .unwrap();
     repo.write(|c| {
@@ -844,7 +845,8 @@ fn read_snapshot_isolated_from_concurrent_append() {
     )
     .unwrap();
     assert_eq!(after.len(), 1);
-    assert_eq!(after[0].close_units, 100);
+    // 100 分 at the forward series' 6dp scale (PR-3).
+    assert_eq!(after[0].close_units, 1_000_000);
     drop(rtx);
 }
 
@@ -2240,8 +2242,10 @@ fn yearly_rederive_rewrites_only_affected_years() {
         .unwrap();
     let bars = series::all_bars(&c, yearly.series_key).unwrap();
     assert_eq!(bars.len(), 2);
-    assert_eq!(bars[0].close_units, 100, "2020 bar must be untouched");
-    assert_eq!(bars[1].close_units, 220, "2021 bar rederived");
+    // Yearly bars are stored at the same 6dp scale as the daily forward
+    // series they are drawn from (PR-3): 1.00 and 2.20.
+    assert_eq!(bars[0].close_units, 1_000_000, "2020 bar must be untouched");
+    assert_eq!(bars[1].close_units, 2_200_000, "2021 bar rederived");
     // yearly_rederive event with daily base linkage.
     let (kind, base_digest): (String, Vec<u8>) = c
         .query_row(
@@ -2487,7 +2491,7 @@ fn yearly_rederive_replays_result_id() {
         .unwrap()
         .unwrap();
     let bars = series::all_bars(&c, yearly.series_key).unwrap();
-    assert_eq!(bars[0].close_units, 100);
+    assert_eq!(bars[0].close_units, 1_000_000);
 }
 
 #[test]
@@ -2567,7 +2571,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
     let replace_bars: Vec<CompactBar> = [bar(0, 100), bar(1, 110), bar(2, 120)]
         .iter()
         .map(|b| {
-            CompactBar::from_bar(b, Period::Day, crate::compact_market::PRICE_SCALE_CENTS).unwrap()
+            CompactBar::from_bar(b, Period::Day, crate::compact_market::PRICE_SCALE_QFQ).unwrap()
         })
         .collect();
     r.repo
@@ -2673,7 +2677,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
     let append_bars: Vec<CompactBar> = [CompactBar::from_bar(
         &bar(3, 130),
         Period::Day,
-        crate::compact_market::PRICE_SCALE_CENTS,
+        crate::compact_market::PRICE_SCALE_QFQ,
     )
     .unwrap()]
     .into_iter()
@@ -2898,7 +2902,7 @@ fn rejected_item_leaves_head_and_task_state_untouched() {
     let upserts = to_compact_bars(
         &[bar(2, 120)],
         Period::Day,
-        crate::compact_market::PRICE_SCALE_CENTS,
+        crate::compact_market::PRICE_SCALE_QFQ,
     )
     .unwrap();
     let err = repo
@@ -3356,7 +3360,7 @@ fn commit_pair_first(
         let forward_compact = to_compact_bars(
             forward_bars,
             Period::Day,
-            crate::compact_market::PRICE_SCALE_CENTS,
+            crate::compact_market::PRICE_SCALE_QFQ,
         )?;
         commit_item_tx(
             c,
@@ -3419,9 +3423,10 @@ fn daily_item_commits_both_口径_series_and_events_in_one_transaction() {
     let raw_bars = vec![bar(0, 1129), bar(1, 1131)];
     let receipt =
         commit_pair_first(&repo, &task_id, ITEM, revision, &forward_bars, &raw_bars).unwrap();
+    // 753/1131 分 at the forward series' 6dp scale; raw stays 分.
     assert_eq!(
         series_closes(&repo, Adjustment::Forward),
-        Some(vec![753, 1131])
+        Some(vec![7_530_000, 11_310_000])
     );
     assert_eq!(
         series_closes(&repo, Adjustment::Raw),
@@ -3535,7 +3540,7 @@ fn future_event_rewrites_only_the_forward_口径() {
         let forward_compact = to_compact_bars(
             &rewritten_forward,
             Period::Day,
-            crate::compact_market::PRICE_SCALE_CENTS,
+            crate::compact_market::PRICE_SCALE_QFQ,
         )?;
         commit_item_tx(
             c,
@@ -3572,7 +3577,7 @@ fn future_event_rewrites_only_the_forward_口径() {
     .unwrap();
     assert_eq!(
         series_closes(&repo, Adjustment::Forward),
-        Some(vec![800, 1131])
+        Some(vec![8_000_000, 11_310_000])
     );
     assert_eq!(
         series_closes(&repo, Adjustment::Raw),
@@ -3629,7 +3634,7 @@ fn raw_series_follows_an_authorized_forward_rewrite() {
         let forward_compact = to_compact_bars(
             &forward_bars,
             Period::Day,
-            crate::compact_market::PRICE_SCALE_CENTS,
+            crate::compact_market::PRICE_SCALE_QFQ,
         )?;
         commit_item_tx(
             c,
@@ -3664,9 +3669,10 @@ fn raw_series_follows_an_authorized_forward_rewrite() {
         )
     })
     .unwrap();
+    // 753/1131 分 at the forward series' 6dp scale; raw stays 分.
     assert_eq!(
         series_closes(&repo, Adjustment::Forward),
-        Some(vec![753, 1131])
+        Some(vec![7_530_000, 11_310_000])
     );
     assert_eq!(
         series_closes(&repo, Adjustment::Raw),

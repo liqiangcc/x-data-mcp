@@ -9,7 +9,12 @@
 `plan_market_update`/`run_market_update`，market 单版本序列：
 version_id=内容 hex，latest-only），acquisition socket 提供
 10 acquisition tools；已部署实例为 compact schema 21，代码（main）为 schema 22
-（M1 PR-1，未部署）。部署版本、
+（M1 PR-1，未部署）。
+`market.daily` 前复权价的精度同样要分开读：已部署实例（schema 21）为 **2 位小数**；
+代码（schema 22，`qfq-exact-v1`，M1 PR-3）为**最多 6 位小数**（精确有理数链、末次一次
+舍入，尾随零不补），且数值可能与旧 2dp 在"恰好落在半分位"的 bar 上差 1 分——这不是
+回归，是旧 2dp 本身依赖中间精度、不可跨实现复现（[issue-383 设计](tasks/issue-383-m1-research-data.md)
+§4.3）。部署版本、
 generation、catalog 与行情数据量等机器事实只在
 [STATUS](STATUS.md) 维护，本文不复述；工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。旧 strict Skill 会话遇

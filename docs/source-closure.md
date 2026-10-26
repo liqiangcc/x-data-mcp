@@ -42,6 +42,11 @@ query/compute ready 仅为接口实现；没有 published yearly 就不能算真
    提升为已验收契约；#169 全冻结域 94 事件回归 `unexplained_total=0`。
    实现：`src/gbbq.rs` + `src/qfq.rs`，official_market providers 已接线；
    `GBBQ_QFQ_NOT_VERIFIED` 已从 PRODUCTION_BLOCKERS 移除。
+   精度边界（M1 PR-3，`qfq-exact-v1`，issue-383 §4.3）：**输入**仍是上面那条 2dp
+   HALF_UP 业务十进制契约（`normalize_factor`），**输出**改为精确有理数链 + 末次一次
+   舍入到序列精度（前复权 `price_scale=6`）。事件日参考价 `displayed_previous_close`
+   是显示值，仍按 2dp 保留（`src/gbbq.rs` 的 `displayed_previous_close`）。2dp 基线
+   （`qfq::forward_adjust`/`forward_adjust_reference`）保留为历史 oracle，不再写库。
 2. #71 使用范围（已解决，2026-09-20 FG 限定 ACCEPT，comment-5749934485）：
    使用方声明范围=仓库所有者个人研究、本地使用、不对外暴露不再分发；
    服务架构本为本地 socket+UID 私有运行时。`FILE_ACCESS_USE_NOT_VERIFIED`

@@ -692,9 +692,9 @@ fn commit_series_inner(c: &Connection, w: &Commit, finish: ItemFinish) -> Result
         return Err(integrity("yearly series require SeriesChange::Yearly"));
     }
 
-    // The written 口径 is the item's own identity dimension; the other two
-    // shape fields are still fixed at stock/分 until PR-3 (6dp forward) and
-    // PR-5 (index series). Schema 22 §3.2.
+    // The written 口径 is the item's own identity dimension and it decides the
+    // series precision (2 for 不复权, 6 for 前复权, PR-3); the remaining shape
+    // field stays stock until PR-5 (index series). Schema 22 §3.2.
     let shape = series::SeriesShape::stock(w.adjustment);
 
     // Resolve the kind/effect and the new state fields.
@@ -1119,9 +1119,10 @@ fn commit_yearly_inner(
     if upserts.is_empty() {
         return Err(integrity("yearly commit carries no bars"));
     }
-    // Schema 22 materializes exactly one yearly shape (forward-adjusted stock,
-    // 分); the lineage records the base 口径 explicitly (§3.5).
-    let shape = series::SeriesShape::FORWARD_STOCK_CENTS;
+    // Schema 22 materializes exactly one yearly shape (forward-adjusted stock
+    // at the daily forward series' 6dp); the lineage records the base 口径
+    // explicitly (§3.5).
+    let shape = series::SeriesShape::FORWARD_STOCK_UNITS;
     // Merge the candidate's affected-year bars over the stored rows.
     let mut merged = match head {
         Some(row) => series::all_bars(c, row.series_key)?,

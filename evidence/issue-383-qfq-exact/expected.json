@@ -1,0 +1,388 @@
+{
+  "schema": "x-data-qfq-exact-reference.v1",
+  "algorithm": "qfq-exact-v1",
+  "produced_by": "evidence/issue-383-qfq-exact/reference.py (Python fractions.Fraction)",
+  "corpus": {
+    "digest_format": "sha256 over '<entity>\\t<yyyymmdd>\\t<open6>\\t<high6>\\t<low6>\\t<close6>\\t<chain_events>\\n' lines, entities ascending, bars in member order; <*6> are 6dp integer units",
+    "digest": "647f32eca214d7e38cac44046c2416a299f5c9dff56247265723e495ab55b01b",
+    "securities": [
+      {
+        "entity": "sh.600004",
+        "day_file": "evidence/issue-166-windows-official-behavior/raw/files/sh600004.day",
+        "bars": 5631,
+        "events": 22
+      },
+      {
+        "entity": "sh.600006",
+        "day_file": "evidence/issue-166-windows-official-behavior/raw/files/sh600006.day",
+        "bars": 6468,
+        "events": 28
+      },
+      {
+        "entity": "sz.000002",
+        "day_file": "evidence/issue-166-windows-official-behavior/raw/files/sz000002.day",
+        "bars": 8480,
+        "events": 36
+      }
+    ],
+    "totals": {
+      "bars": 20579,
+      "price_fields": 82316,
+      "events": 86
+    }
+  },
+  "tie_counts": {
+    "scale_2": 2992,
+    "scale_6": 0
+  },
+  "cases": [
+    {
+      "name": "identity_when_no_events",
+      "note": "Empty event set = identity chain: 6dp units are the raw cents × 10000.",
+      "scale": 6,
+      "bars": [
+        {
+          "date": 19990104,
+          "ohlc_cents": [
+            1234,
+            1300,
+            1200,
+            1288
+          ]
+        },
+        {
+          "date": 19990105,
+          "ohlc_cents": [
+            1288,
+            1290,
+            1275,
+            1280
+          ]
+        }
+      ],
+      "events": [],
+      "expected": [
+        {
+          "date": 19990104,
+          "units": [
+            12340000,
+            13000000,
+            12000000,
+            12880000
+          ],
+          "chain_event_count": 0
+        },
+        {
+          "date": 19990105,
+          "units": [
+            12880000,
+            12900000,
+            12750000,
+            12800000
+          ],
+          "chain_event_count": 0
+        }
+      ]
+    },
+    {
+      "name": "future_event_applies_to_every_bar",
+      "note": "event_date > bar_date is the rule, so a future event (last one 2026-11-02 in the live source) adjusts every earlier bar — by definition, not a bug (issue-383 §4.2).",
+      "scale": 6,
+      "bars": [
+        {
+          "date": 20200102,
+          "ohlc_cents": [
+            1000,
+            1010,
+            990,
+            1005
+          ]
+        },
+        {
+          "date": 20200103,
+          "ohlc_cents": [
+            1005,
+            1020,
+            1000,
+            1018
+          ]
+        }
+      ],
+      "events": [
+        {
+          "date": 20260101,
+          "c_2dp": [
+            0,
+            0,
+            200,
+            0
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "date": 20200102,
+          "units": [
+            8333333,
+            8416667,
+            8250000,
+            8375000
+          ],
+          "chain_event_count": 1
+        },
+        {
+          "date": 20200103,
+          "units": [
+            8375000,
+            8500000,
+            8333333,
+            8483333
+          ],
+          "chain_event_count": 1
+        }
+      ]
+    },
+    {
+      "name": "bar_on_event_date_is_not_adjusted",
+      "note": "Strict `event_date > bar_date`: the bar on the event date keeps chain_event_count 0, the earlier bar gets the chain.",
+      "scale": 6,
+      "bars": [
+        {
+          "date": 20200529,
+          "ohlc_cents": [
+            1000,
+            1010,
+            990,
+            1005
+          ]
+        },
+        {
+          "date": 20200601,
+          "ohlc_cents": [
+            800,
+            820,
+            795,
+            810
+          ]
+        }
+      ],
+      "events": [
+        {
+          "date": 20200601,
+          "c_2dp": [
+            0,
+            0,
+            250,
+            0
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "date": 20200529,
+          "units": [
+            8000000,
+            8080000,
+            7920000,
+            8040000
+          ],
+          "chain_event_count": 1
+        },
+        {
+          "date": 20200601,
+          "units": [
+            8000000,
+            8200000,
+            7950000,
+            8100000
+          ],
+          "chain_event_count": 0
+        }
+      ]
+    },
+    {
+      "name": "same_day_events_compose_in_input_order",
+      "note": "Two events on one date compose oldest→newest in the order the source lists them (stable sort); the affine chain is not commutative, so the order is part of the fixture.",
+      "scale": 6,
+      "bars": [
+        {
+          "date": 20200529,
+          "ohlc_cents": [
+            1000,
+            1010,
+            990,
+            1005
+          ]
+        }
+      ],
+      "events": [
+        {
+          "date": 20200601,
+          "c_2dp": [
+            25,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "date": 20200601,
+          "c_2dp": [
+            0,
+            0,
+            300,
+            0
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "date": 20200529,
+          "units": [
+            7673077,
+            7750000,
+            7596154,
+            7711538
+          ],
+          "chain_event_count": 2
+        }
+      ]
+    },
+    {
+      "name": "exact_half_cent_tie_at_scale_2",
+      "note": "10送2 (C3=2) on a 0.03 bar gives exactly 0.025 = 1/40: a 2dp half-cent. Exact rounding gives 0.03; the 28-significant-digit chain lands at 0.024999… and gives 0.02 — this is the class AC-M1-3 enumerates.",
+      "scale": 2,
+      "bars": [
+        {
+          "date": 20200601,
+          "ohlc_cents": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "events": [
+        {
+          "date": 20210101,
+          "c_2dp": [
+            0,
+            0,
+            200,
+            0
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "date": 20200601,
+          "units": [
+            3,
+            3,
+            3,
+            3
+          ],
+          "chain_event_count": 1
+        }
+      ]
+    },
+    {
+      "name": "exact_half_cent_tie_at_scale_2_six_dp_view",
+      "note": "Same inputs at 6dp: 0.025000 exactly — no 6dp half-cent tie (0.025 is representable), so the 6dp series keeps the value the 2dp baseline lost.",
+      "scale": 6,
+      "bars": [
+        {
+          "date": 20200601,
+          "ohlc_cents": [
+            3,
+            3,
+            3,
+            3
+          ]
+        }
+      ],
+      "events": [
+        {
+          "date": 20210101,
+          "c_2dp": [
+            0,
+            0,
+            200,
+            0
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "date": 20200601,
+          "units": [
+            25000,
+            25000,
+            25000,
+            25000
+          ],
+          "chain_event_count": 1
+        }
+      ]
+    },
+    {
+      "name": "event_before_every_bar_contributes_nothing",
+      "note": "An event older than the whole bar range is in no suffix; every bar stays raw.",
+      "scale": 6,
+      "bars": [
+        {
+          "date": 20200102,
+          "ohlc_cents": [
+            1000,
+            1010,
+            990,
+            1005
+          ]
+        },
+        {
+          "date": 20200103,
+          "ohlc_cents": [
+            1005,
+            1020,
+            1000,
+            1018
+          ]
+        }
+      ],
+      "events": [
+        {
+          "date": 19990104,
+          "c_2dp": [
+            50,
+            0,
+            300,
+            0
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "date": 20200102,
+          "units": [
+            10000000,
+            10100000,
+            9900000,
+            10050000
+          ],
+          "chain_event_count": 0
+        },
+        {
+          "date": 20200103,
+          "units": [
+            10050000,
+            10200000,
+            10000000,
+            10180000
+          ],
+          "chain_event_count": 0
+        }
+      ]
+    }
+  ]
+}

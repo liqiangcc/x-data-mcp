@@ -7,22 +7,22 @@
 //! external distribution is not authorized by that scoped acceptance.
 //!
 //! Verified domain only: `.day` member raw OHLC plus `category == 1` GBBQ
-//! records through `qfq::forward_adjust`. Other GBBQ categories are never
-//! interpreted or applied (the frozen oracle reproduces official client
-//! output from category-1 alone); their exclusion is counted into the
-//! published evidence reason. `.day` amount/volume units are anchored by
-//! #239 TdxQuant oracle evidence (shares / yuan) and promoted into published
-//! bars verbatim — prices only are QFQ-adjusted; amount/volume are never
-//! adjusted. The one exception is the u32 volume overflow case: TDX records a
-//! day in hands once the share count approaches the u32 limit and flags it
-//! with the `0xC36400xx` r7 marker, so such a bar is converted to shares
-//! (×100) when — and only when — the marker and a raw-value consistency check
-//! agree (#381, [`normalized_volume`]); an unprovable unit publishes `volume`
-//! unknown instead of a guess. The eighth `.day` field (`reserved`) otherwise
-//! stays unpromoted: its A-share ex-basis semantics are only evidenced for
-//! 1999–2010 (#240).
+//! records through `qfq::forward_adjust_exact` (`qfq-exact-v1`, 6dp). Other
+//! GBBQ categories are never interpreted or applied (the frozen oracle
+//! reproduces official client output from category-1 alone); their exclusion
+//! is counted into the published evidence reason. `.day` amount/volume units
+//! are anchored by #239 TdxQuant oracle evidence (shares / yuan) and promoted
+//! into published bars verbatim — prices only are QFQ-adjusted; amount/volume
+//! are never adjusted. The one exception is the u32 volume overflow case: TDX
+//! records a day in hands once the share count approaches the u32 limit and
+//! flags it with the `0xC36400xx` r7 marker, so such a bar is converted to
+//! shares (×100) when — and only when — the marker and a raw-value consistency
+//! check agree (#381, [`normalized_volume`]); an unprovable unit publishes
+//! `volume` unknown instead of a guess. The eighth `.day` field (`reserved`)
+//! otherwise stays unpromoted: its A-share ex-basis semantics are only
+//! evidenced for 1999–2010 (#240).
 use crate::{
-    day_file, gbbq,
+    compact_market, day_file, gbbq,
     market_data::{
         Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, CoverageStatus, EvidenceValue,
         MarketDataBatch, MarketDataPipeline, Period, Provenance, SnapshotInputBinding, SourceError,
@@ -586,19 +586,19 @@ impl MaterializeSession<'_> {
             .collect())
     }
 
-    /// Map verified-raw `.day` records through the QFQ event chain into
-    /// publishable bars. Output depends only on each record and the events
-    /// strictly after its date, so a proven-identical prefix never needs
-    /// re-adjustment.
+    /// Map verified-raw `.day` records through the exact QFQ event chain into
+    /// publishable bars (`qfq-exact-v1`, 6dp — issue-383 §4.2). Output depends
+    /// only on each record and the events strictly after its date, so a
+    /// proven-identical prefix never needs re-adjustment.
     fn qfq_bars(
         raw_bars: &[crate::day_file::RawDayRecord],
         events: &[gbbq::Event],
     ) -> Result<Vec<Bar>, SourceError> {
-        let adjusted = qfq::forward_adjust(raw_bars, events)
+        let adjusted = qfq::forward_adjust_exact(raw_bars, events, compact_market::PRICE_SCALE_QFQ)
             .map_err(|e| SourceError::InvalidResponse(format!("qfq chain failed: {e}")))?;
-        // `forward_adjust` maps one input record to one output bar in input
-        // order; the unit decision needs the raw record, so the two slices
-        // are zipped by index.
+        // `forward_adjust_exact` maps one input record to one output bar in
+        // input order; the unit decision needs the raw record, so the two
+        // slices are zipped by index.
         if adjusted.len() != raw_bars.len() {
             return Err(SourceError::InvalidResponse(
                 "qfq chain changed the bar count".into(),
@@ -675,7 +675,9 @@ impl MaterializeSession<'_> {
             Adjustment::Forward => AdjustmentEvidence::confirmed(
                 Adjustment::Forward.as_str(),
                 format!(
-                    "qfq::forward_adjust over category==1 GBBQ affine chain ({} events, {excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}",
+                    "{}: exact rational affine chain over category==1 GBBQ events, one final HALF_UP rounding at price_scale={} ({} events, {excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}",
+                    qfq::ALGORITHM_VERSION,
+                    compact_market::PRICE_SCALE_QFQ,
                     events.len()
                 ),
             ),

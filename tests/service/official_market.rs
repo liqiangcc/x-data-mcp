@@ -228,7 +228,9 @@ fn materializes_qfq_daily_with_snapshot_bound_provenance() {
     assert_eq!(batch.adjustment, Adjustment::Forward);
     assert_eq!(batch.bars.len(), 3);
     // Event 20250716 (divisor 1.5) adjusts only strictly earlier bars.
-    assert_eq!(batch.bars[0].close, dec("7.53")); // 11.29/1.5 = 7.5266..→7.53
+    // qfq-exact-v1 keeps all six decimals: 11.29/1.5 = 7.526666… → 7.526667
+    // (the pre-M1 2dp series said 7.53).
+    assert_eq!(batch.bars[0].close, dec("7.526667"));
     assert_eq!(batch.bars[1].close, dec("11.31"));
     assert_eq!(batch.bars[2].close, dec("11.34"));
     // #239-anchored units: raw volume (shares) / amount (yuan) promoted
@@ -327,7 +329,7 @@ fn raw_batch_is_the_day_price_fact_and_shares_the_forward_member_read() {
     // The 2025-07-16 allotment event rewrites only earlier bars, so the raw
     // and forward prices must differ there and agree afterwards.
     assert_ne!(raw.bars[0].close, forward.bars[0].close);
-    assert_eq!(forward.bars[0].close, dec("7.53"));
+    assert_eq!(forward.bars[0].close, dec("7.526667"));
     assert_eq!(raw.bars[0].close, dec("11.29"));
     assert_eq!(raw.bars[2].close, forward.bars[2].close);
     // Raw carries the same #381-normalized volume as the forward series.
@@ -502,7 +504,7 @@ fn unsupported_symbol_rejected_and_non_category1_never_applied() {
     ]);
     regbbq(&mut snap2, &[("gbbq", events.as_slice())]);
     let batch = make_source(&snap2).materialize_daily("sh.600006").unwrap();
-    assert_eq!(batch.bars[0].close, dec("7.53"));
+    assert_eq!(batch.bars[0].close, dec("7.526667"));
     assert!(
         batch
             .adjustment_evidence
@@ -517,7 +519,7 @@ fn unsupported_symbol_rejected_and_non_category1_never_applied() {
     ]);
     regbbq(&mut snap3, &[("gbbq", events.as_slice())]);
     let batch = make_source(&snap3).materialize_daily("sh.600006").unwrap();
-    assert_eq!(batch.bars[0].close, dec("7.53"));
+    assert_eq!(batch.bars[0].close, dec("7.526667"));
 }
 
 #[test]
@@ -688,7 +690,7 @@ fn runner_publishes_daily_through_governed_path() {
         )
         .unwrap();
     assert_eq!(page.rows.len(), 3);
-    assert_eq!(page.rows[0].close, dec("7.53"));
+    assert_eq!(page.rows[0].close, dec("7.526667"));
     // Snapshot input digests are bound into the stored record provenance.
     let stored = market.fixed(&receipt.version_id).unwrap();
     let inputs = stored.raw()["batch"]["provenance"]["snapshot_inputs"]
@@ -975,17 +977,32 @@ fn retained_gen2_snapshot_reproduces_frozen_oracle_end_to_end() {
             .iter()
             .find(|b| b.date == date)
             .unwrap_or_else(|| panic!("{symbol} missing oracle date {date}"));
+        // The client display is 2dp; the stored forward series is the exact
+        // 6dp chain (issue-383 §4.2), so the frozen oracle is reproduced after
+        // one 2dp rounding. A 2dp value that depended on intermediate
+        // precision is the enumerable class AC-M1-3 covers, not a silent
+        // mismatch: any difference must sit exactly on a half-cent.
         for (field, value) in [
             ("O", bar.open),
             ("H", bar.high),
             ("L", bar.low),
             ("C", bar.close),
         ] {
-            assert_eq!(
-                value,
-                dec(oracle["fields"][field]["observed"].as_str().unwrap()),
-                "{symbol} {date} {field}"
-            );
+            let display = dec(oracle["fields"][field]["observed"].as_str().unwrap());
+            let rounded = value
+                .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+            if rounded != display {
+                // Exactly on a 2dp half-cent means `value * 200` is an odd
+                // integer; anything else would be a silent numeric change.
+                let half_cents = value * rust_decimal::Decimal::from(200);
+                assert!(
+                    half_cents.fract() == rust_decimal::Decimal::ZERO
+                        && half_cents % rust_decimal::Decimal::from(2)
+                            != rust_decimal::Decimal::ZERO,
+                    "{symbol} {date} {field}: 6dp {value} rounds to {rounded} but the client \
+                     oracle shows {display}, and the value is not on a 2dp half-cent"
+                );
+            }
         }
     }
     // End-to-end through the governed publication path: collect sz.000002
@@ -1029,8 +1046,18 @@ fn retained_gen2_snapshot_reproduces_frozen_oracle_end_to_end() {
         .iter()
         .find(|b| b.date == chrono::NaiveDate::from_ymd_opt(2000, 1, 10).unwrap())
         .unwrap();
-    assert_eq!(bar.close, dec("-8.06"));
-    assert_eq!(bar.open, dec("-8.14"));
+    // qfq-exact-v1 stores six decimals; the values come from the committed
+    // sz000002 member and the 24-event chain (regenerate with
+    // evidence/issue-383-qfq-exact/reference.py).
+    assert_eq!(bar.close, dec("-8.064759"));
+    assert_eq!(bar.open, dec("-8.135130"));
+    // The frozen client display is still reproduced by one 2dp rounding.
+    for (value, display) in [(bar.close, "-8.06"), (bar.open, "-8.14")] {
+        assert_eq!(
+            value.round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero),
+            dec(display)
+        );
+    }
     let record = market.fixed(&receipt.version_id).unwrap();
     let inputs = record.raw()["batch"]["provenance"]["snapshot_inputs"]
         .as_array()
@@ -1133,7 +1160,9 @@ fn service_env_install_publishes_daily_and_derives_yearly() {
         .unwrap();
     let record = &page["records"][0];
     assert_eq!(record["date"], "2000-01-10");
-    assert_eq!(record["close"], "-8.06");
+    // The wire stays a decimal string; the forward series now carries six
+    // decimals (issue-383 §4.2/§8.2).
+    assert_eq!(record["close"], "-8.064759");
     // Derived yearly through the real worker path: update_data/market.yearly
     // → YearlyRunner + OfficialYearlyVerifier (env-installed source). One
     // complete natural year plus the still-running one.
@@ -1603,7 +1632,7 @@ fn update_continuity_append_materializes_only_tail() {
     // The segment carries the full range: proven prefix + adjusted tail.
     assert_eq!(acquired.batch.bars.len(), 4);
     assert_eq!(acquired.batch.bars[3].close, dec("11.39"));
-    assert_eq!(acquired.batch.bars[0].close, dec("7.53"));
+    assert_eq!(acquired.batch.bars[0].close, dec("7.526667"));
     // The combined candidate is the merged record ready to publish.
     let combined = acquired.combined.as_ref().unwrap();
     let records = combined.record["records"].as_array().unwrap();
@@ -2508,7 +2537,7 @@ fn gap_verifier_fails_closed_on_basis_digest_or_conflict() {
 
     // Overlapping value conflict on a shared date -> integrity doubt, not a gap.
     let mut conflict = batch.clone();
-    conflict.bars[0].close = dec("7.52"); // pinned source says 7.53
+    conflict.bars[0].close = dec("7.52"); // pinned source says 7.526667
     let raw = subject_raw("subject-conflict", &conflict);
     market
         .commit(&market::prepare(
@@ -3665,7 +3694,25 @@ fn forward_adjust_suffix_chains_bitwise_match_reference_on_retained_corpus() {
         let reference = x_data_mcp::qfq::forward_adjust_reference(&bars, events).unwrap();
         assert_eq!(
             fast, reference,
-            "{name}: suffix-chain QFQ diverged from the reference fold"
+            "{name}: suffix-chain 2dp QFQ diverged from the reference fold"
+        );
+        // issue-383 §4.3: the exact chain is what production writes, so the
+        // same corpus regression covers it at the series scale (6dp).
+        let exact = x_data_mcp::qfq::forward_adjust_exact(
+            &bars,
+            events,
+            x_data_mcp::compact_market::PRICE_SCALE_QFQ,
+        )
+        .unwrap();
+        let exact_reference = x_data_mcp::qfq::forward_adjust_exact_reference(
+            &bars,
+            events,
+            x_data_mcp::compact_market::PRICE_SCALE_QFQ,
+        )
+        .unwrap();
+        assert_eq!(
+            exact, exact_reference,
+            "{name}: suffix-chain exact QFQ diverged from the per-bar exact fold"
         );
         members += 1;
         bars_total += bars.len();
