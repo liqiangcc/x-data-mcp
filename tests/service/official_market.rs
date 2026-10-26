@@ -382,9 +382,16 @@ fn calendar_union_covers_a_single_index_session_and_ends_at_the_last_input_bar()
         calendar.last_day(),
         Some(NaiveDate::from_ymd_opt(2026, 10, 23).unwrap())
     );
+    // 1991-04-07 is inside the span and no index printed it → non-trading.
+    assert_eq!(
+        calendar.day_status(NaiveDate::from_ymd_opt(1991, 4, 7).unwrap()),
+        Some(DayStatus::NonTrading)
+    );
+    // After 2026-10-23 the calendar predicts nothing: 10-24 is a Saturday, but
+    // "past the last bar" outranks it, so the answer is unknown.
     assert_eq!(
         calendar.day_status(NaiveDate::from_ymd_opt(2026, 10, 24).unwrap()),
-        Some(DayStatus::NonTrading)
+        Some(DayStatus::BeyondCalendar)
     );
     assert_eq!(
         calendar.day_status(NaiveDate::from_ymd_opt(2026, 10, 26).unwrap()),

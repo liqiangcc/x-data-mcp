@@ -42,8 +42,12 @@ fn tempdir() -> tempfile::TempDir {
 }
 
 fn repo(dir: &tempfile::TempDir) -> (std::path::PathBuf, SqliteCompactMarket) {
+    use std::os::unix::fs::PermissionsExt;
     let path = dir.path().join("market.db");
     SqliteTasks::new(&path).initialize_compact().unwrap();
+    // The lease gate requires a private runtime path, exactly as the other
+    // compact-store fixtures set it up.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let repo = SqliteCompactMarket::open(&path).unwrap();
     (path, repo)
 }
