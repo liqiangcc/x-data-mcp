@@ -37,7 +37,7 @@ impl Service {
             .arg(db)
             .arg(socket)
             .args(["--poll-ms", &poll.to_string()])
-            .args(extra)
+            .args(extra.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .spawn()
