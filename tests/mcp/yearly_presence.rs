@@ -369,7 +369,10 @@ fn batch_is_sorted_and_discovery_exposes_the_tool_at_v4() {
         .iter()
         .find(|t| t["name"] == "get_yearly_base_years")
         .expect("tool must be discovered");
-    assert_eq!(tools.as_array().unwrap().len(), 23);
+    assert_eq!(
+        tools.as_array().unwrap().len(),
+        x_data_mcp::data_supply::registry::entries().len()
+    );
     jsonschema::validator_for(&tool["inputSchema"])
         .unwrap()
         .validate(&json!({"contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"published-daily-id","start_year":2020,"end_year":2026}]}))

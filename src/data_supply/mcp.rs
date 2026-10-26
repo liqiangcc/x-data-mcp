@@ -20,6 +20,9 @@ pub struct DataApi {
     pub observer: Observer<SqliteSupply>,
     pub legacy: SqliteTaskApi,
     pub access: Access,
+    /// Entry surface (v8 §3.3): `None` is the stdio/dev surface that serves
+    /// every registered tool; `data_service` always sets one.
+    entry: Option<super::registry::EntryKind>,
     market_source: Option<crate::official_market::TdxMarketSource>,
     generation: Option<super::generation::GenerationSource>,
     #[cfg(target_os = "linux")]
@@ -171,11 +174,18 @@ impl DataApi {
                 )?,
             },
             access,
+            entry: None,
             market_source: crate::official_market::TdxMarketSource::from_env(),
             generation,
             #[cfg(target_os = "linux")]
             worker_gate: None,
         })
+    }
+    /// Bind this server to one deployed entry. `data_service --entry` sets
+    /// it; the stdio/dev constructors leave it unset (all tools).
+    pub fn with_entry(mut self, entry: super::registry::EntryKind) -> Self {
+        self.entry = Some(entry);
+        self
     }
     /// Override the env-installed official-file snapshot source (tests).
     /// Only the market.daily collection item uses it; absent env installs
@@ -271,6 +281,50 @@ impl DataApi {
         }
         None
     }
+    fn capability_item(
+        &self,
+        e: &Entry,
+        dataset: Option<Dataset>,
+        detailed: bool,
+        entry: &str,
+    ) -> Capability {
+        let block = self.runtime_block(e, dataset);
+        let blocked = block.is_some();
+        Capability {
+            tool_name: e.name.into(),
+            description: detailed.then_some(e.description.into()),
+            dataset,
+            contract_version: ContractVersion::V1,
+            implemented: true,
+            operator_only: e.operator_only,
+            entry: entry.into(),
+            runtime_readiness: detailed.then_some(if blocked {
+                Readiness::Blocked
+            } else {
+                Readiness::Ready
+            }),
+            governance_readiness: detailed.then_some(Readiness::Ready),
+            blocking_reasons: detailed.then_some(block.into_iter().collect()),
+            declared_scope: detailed.then_some(crate::official_market::DECLARED_SCOPE.into()),
+            active_generation_ref: if detailed {
+                self.generation
+                    .as_ref()
+                    .and_then(|g| g.active_verified_id())
+            } else {
+                None
+            },
+            input_schema: detailed.then(|| crate::mcp::ensure_object_root(e.input.clone())),
+            output_schema: detailed.then(|| crate::mcp::ensure_object_root(e.output.clone())),
+            example: detailed.then(|| capability_example(e, dataset)),
+            schema_digest: detailed.then(|| {
+                crate::hash::sha256(
+                    serde_json::to_vec(&json!([e.input, e.output]))
+                        .unwrap()
+                        .as_slice(),
+                )
+            }),
+        }
+    }
     fn capabilities(&self, args: CapabilitiesQuery) -> Result<Value, ApiError> {
         if let Some(d) = args.dataset {
             self.access.require(d, None).map_err(mapped)?;
@@ -285,8 +339,13 @@ impl DataApi {
                 "operation not registered",
             ));
         }
+        let detailed = args.operation.is_some();
+        let entry = self.entry.map_or("all", |entry| entry.name()).to_string();
         let mut items = vec![];
         for e in entries() {
+            if !e.served_in(self.entry) {
+                continue;
+            }
             if matches!(e.handler, Handler::Compute)
                 && (!self.access.allows(Dataset::Yearly, None)
                     || args.dataset.is_some_and(|d| d != Dataset::Yearly))
@@ -299,41 +358,24 @@ impl DataApi {
             if args.operation.as_ref().is_some_and(|op| op != e.name) {
                 continue;
             }
-            for dataset in e.datasets(&self.access) {
-                if dataset.is_some() && args.dataset.is_some_and(|a| Some(a) != dataset) {
+            if detailed {
+                for dataset in e.datasets(&self.access) {
+                    if dataset.is_some() && args.dataset.is_some_and(|a| Some(a) != dataset) {
+                        continue;
+                    }
+                    items.push(self.capability_item(&e, dataset, true, &entry));
+                }
+            } else {
+                // Compact catalog: one row per tool. Dataset detail is what the
+                // detailed view (dataset + operation) is for, and it keeps the
+                // no-filter response within the v8 §6.2 byte budget.
+                if args
+                    .dataset
+                    .is_some_and(|dataset| !e.datasets(&self.access).contains(&Some(dataset)))
+                {
                     continue;
                 }
-                let detailed = args.operation.is_some();
-                let block = self.runtime_block(&e, dataset);
-                items.push(Capability {
-                    tool_name: e.name.into(),
-                    description: e.description.into(),
-                    dataset,
-                    contract_version: ContractVersion::V1,
-                    implemented: true,
-                    operator_only: e.operator_only,
-                    runtime_readiness: if block.is_some() {
-                        Readiness::Blocked
-                    } else {
-                        Readiness::Ready
-                    },
-                    governance_readiness: Readiness::Ready,
-                    blocking_reasons: block.into_iter().collect(),
-                    declared_scope: crate::official_market::DECLARED_SCOPE.into(),
-                    active_generation_ref: self
-                        .generation
-                        .as_ref()
-                        .and_then(|g| g.active_verified_id()),
-                    input_schema: detailed.then(|| crate::mcp::ensure_object_root(e.input.clone())),
-                    output_schema: detailed
-                        .then(|| crate::mcp::ensure_object_root(e.output.clone())),
-                    example: detailed.then(|| capability_example(&e, dataset)),
-                    schema_digest: crate::hash::sha256(
-                        serde_json::to_vec(&json!([e.input, e.output]))
-                            .unwrap()
-                            .as_slice(),
-                    ),
-                });
+                items.push(self.capability_item(&e, None, false, &entry));
             }
         }
         let mut production_blocking_reasons = vec![BlockingReason {
@@ -361,6 +403,52 @@ impl DataApi {
             declared_scope: crate::official_market::DECLARED_SCOPE.into(),
             production_ready: false,
             production_blocking_reasons,
+        })
+    }
+    /// Read-only catalog dimensions (v8 §4.5): industry code, name and member
+    /// count for one frozen catalog version. A data fact, deliberately not part
+    /// of get_data_capabilities (which is the contract catalog).
+    fn catalog_facets(&self, args: CatalogFacetsQuery) -> Result<Value, ApiError> {
+        if args
+            .dataset
+            .is_some_and(|dataset| dataset != Dataset::Catalog)
+        {
+            return Err(ApiError::new(
+                "invalid_arguments",
+                "list_catalog_facets serves securities.catalog only",
+            ));
+        }
+        self.access
+            .require(Dataset::Catalog, None)
+            .map_err(mapped)?;
+        let catalog =
+            crate::sqlite_catalog::SqliteCatalog::new(self.queries.repository.market.tasks());
+        let version = match args.catalog_version.as_deref() {
+            None | Some("latest") => catalog
+                .current()
+                .map_err(mapped)?
+                .ok_or_else(|| ApiError::new("catalog_not_found", "no published catalog head"))?,
+            Some(id) => catalog.fixed(id).map_err(mapped)?,
+        };
+        let mut counts: std::collections::BTreeMap<(String, String), u64> = Default::default();
+        for record in &version.records {
+            if let crate::catalog::IndustryInfo::Assigned { code, name, .. } = &record.industry {
+                *counts.entry((code.clone(), name.clone())).or_default() += 1;
+            }
+        }
+        encode(CatalogFacets {
+            dataset: Dataset::Catalog,
+            catalog_version: version.version_id,
+            facets: Facets {
+                industries: counts
+                    .into_iter()
+                    .map(|((code, name), members)| IndustryFacet {
+                        code,
+                        name,
+                        members,
+                    })
+                    .collect(),
+            },
         })
     }
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
@@ -606,14 +694,32 @@ impl DataApi {
         Value::Array(
             entries()
                 .into_iter()
-                .filter(|e| self.access == Access::local() || !e.requires_local())
+                .filter(|e| {
+                    e.served_in(self.entry)
+                        && (self.access == Access::local() || !e.requires_local())
+                })
                 .map(|e| {
-                    json!({"name":e.name,"description":e.description,"inputSchema":crate::mcp::ensure_object_root(e.input),"outputSchema":crate::mcp::ensure_object_root(e.output)})
+                    json!({"name":e.name,"description":e.description,"inputSchema":crate::mcp::ensure_object_root(e.input)})
                 })
                 .collect(),
         )
     }
     fn dispatch(&self, name: &str, input: Value) -> Result<Value, ApiError> {
+        // Entry closure (v8 §3.3): a tool outside this socket's allowlist is
+        // not visible and not dispatchable; report it as unknown rather than
+        // forbidden so the entry surface does not leak existence.
+        if !self.entry.is_none_or(|entry| entry.allows(name)) {
+            return Err(ApiError::new(
+                "unknown_tool",
+                format!("unsupported tool: {name}"),
+            ));
+        }
+        self.dispatch_internal(name, input)
+    }
+    /// Dispatch without the entry surface check. Only the service-internal
+    /// background worker uses it: ops must run tasks even though
+    /// `run_worker_once` is a maint-only published tool.
+    fn dispatch_internal(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         if input
             .get("dataset")
             .is_some_and(|dataset| serde_json::from_value::<Dataset>(dataset.clone()).is_err())
@@ -1056,6 +1162,7 @@ impl DataApi {
                 crate::stage_trace::timed("rpc.year_presence.encode", || encode(reply))
             }
             Handler::Capabilities => self.capabilities(decode(input)?),
+            Handler::Facets => self.catalog_facets(decode(input)?),
         }
     }
 }
@@ -1085,6 +1192,9 @@ impl ToolHandler for DataApi {
     fn tools(&self) -> Value {
         self.public_tools()
     }
+    fn worker_once(&self) -> Result<Value, ApiError> {
+        self.dispatch_internal("run_worker_once", json!({}))
+    }
     fn call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         let generic = input.get("contract_version").is_some()
             || input.get("dataset").is_some()
@@ -1097,6 +1207,7 @@ impl ToolHandler for DataApi {
                     | "list_tasks"
                     | "get_task_progress"
                     | "get_data_capabilities"
+                    | "list_catalog_facets"
                     | "compute_metrics"
                     | "verify_publication_result"
                     | "inspect_verification_task"
@@ -1156,11 +1267,14 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
     };
     v["dataset"] = serde_json::to_value(d).unwrap();
     if d == Dataset::Catalog {
-        v["selection"] = if matches!(e.handler, Handler::Collection) {
-            json!({"scope":"current_sh_sz_a"})
-        } else {
-            json!({"kind":"catalog","scope":"current_sh_sz_a"})
-        };
+        // Catalog facets take no selection; only rewrite the tools that do.
+        if v.get("selection").is_some() {
+            v["selection"] = if matches!(e.handler, Handler::Collection) {
+                json!({"scope":"current_sh_sz_a"})
+            } else {
+                json!({"kind":"catalog","scope":"current_sh_sz_a"})
+            };
+        }
         if v.get("filter").is_some() {
             v["filter"] = json!({"kind":"catalog"});
         }

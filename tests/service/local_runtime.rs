@@ -30,10 +30,14 @@ struct Service {
 }
 impl Service {
     fn start(db: &Path, socket: &Path, poll: u64) -> Self {
+        Self::start_with(db, socket, poll, &[])
+    }
+    fn start_with(db: &Path, socket: &Path, poll: u64, extra: &[&str]) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_data_service"))
             .arg(db)
             .arg(socket)
             .args(["--poll-ms", &poll.to_string()])
+            .args(extra.iter().copied())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .spawn()
@@ -211,7 +215,8 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(tools.len(), 23);
+    // data_service defaults to the ops entry (v8 §3.4): 15 tools.
+    assert_eq!(tools.len(), 15);
     let caps = session.call("get_data_capabilities", json!({}), false);
     assert_eq!(caps["production_ready"], false);
     let names: std::collections::BTreeSet<_> =
@@ -231,8 +236,14 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
         )["status"],
         "failed"
     );
+    // The worker control is maint-only now; ops still rejects unknown wire
+    // fields on a visible tool with the same code.
     assert_eq!(
-        session.call("run_worker_once", json!({"extra":true}), true)["code"],
+        session.call(
+            "get_task",
+            json!({"contract_version":"v1","task_id":task_id,"extra":true}),
+            true
+        )["code"],
         "invalid_arguments"
     );
     let replay = session.call(
@@ -245,6 +256,48 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
     drop(session);
     service.stop();
 }
+#[test]
+fn real_service_entry_selects_the_tool_surface_and_refuses_unknown_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = database(dir.path());
+    let socket = dir.path().join("research.sock");
+    let mut service = Service::start_with(&db, &socket, 60000, &["--entry", "research"]);
+    let mut session = Session::new(&socket);
+    session.request("initialize", json!({}));
+    let tools = session.request("tools/list", json!({}))["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let names: std::collections::BTreeSet<_> = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(tools.len(), 5, "{names:?}");
+    assert!(names.contains("query_data"));
+    assert!(names.contains("list_catalog_facets"));
+    assert!(!names.contains("update_data"));
+    assert_eq!(
+        session.call("update_data", json!({}), true)["code"],
+        "unknown_tool"
+    );
+    drop(session);
+    service.stop();
+
+    let refused = Command::new(env!("CARGO_BIN_EXE_data_service"))
+        .arg(&db)
+        .arg(dir.path().join("bad.sock"))
+        .args(["--entry", "all"])
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("--entry"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!dir.path().join("bad.sock").exists());
+}
+
 #[test]
 fn real_service_restart_does_not_resume_old_nonterminal_tasks() {
     let dir = tempfile::tempdir().unwrap();

@@ -50,6 +50,8 @@ preview.34 那次没有落盘报告（见「已知问题」），preview.35 这�
 `get_data_capabilities` 返回 `capability_revision=generic-data-v7`、`active_generation_ref=c184e9c4…`；
 acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.version` 均为 `0.2.0-preview.35`。
 
+代码（main）为 24 data tools（v8 PR-2，未部署）：三个入口 `research`/`ops`/`maint` 由 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联 `outputSchema`。隧道改指 `research.sock`、新增 `x-data-mcp-research`/`x-data-mcp-maint` 单元的步骤见 [v8 切换清单](contracts/v8-switch-checklist.md)（未执行）。已部署实例仍为 23 data tools、单入口。
+
 ## 数据
 
 以下为 **2026-10-24T17:19Z 终态**（O2 补采结束后实测；17:26Z 在 preview.35 切换后复核，数据未变）；补采过程见「日更」段的 2026-10-24 时间线。

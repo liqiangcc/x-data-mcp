@@ -13,4 +13,5 @@ mod query_cache;
 mod support_market;
 #[path = "../support/metrics.rs"]
 mod support_metrics;
+mod v8_tool_surface;
 mod yearly_presence;

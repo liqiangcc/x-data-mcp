@@ -23,7 +23,7 @@
 
 | 内容 | 权威入口 |
 |---|---|
-| 工具清单、输入输出 schema、调用示例 | 运行时 `get_data_capabilities`（`src/data_supply/registry.rs:311-315`）；[generic-data-v7](contracts/generic-data-v7.md) |
+| 工具清单、输入输出 schema、调用示例 | 运行时 `get_data_capabilities`（`src/data_supply/registry.rs` 的 `entries()`）；[generic-data-v7](contracts/generic-data-v7.md) |
 | 实体数、日期范围、部署版本、generation、新鲜度 | [STATUS](STATUS.md)（唯一权威；本文只链接） |
 | 单版本存储、`version_id`、事件日志、年线 stale 分类 | [latest-only-storage](latest-only-storage.md) |
 | `.day` 字段、单位与 `r7_raw` 语义 | [day-file](day-file.md)、`evidence/issue-240-r7-analysis/README.md`、`evidence/issue-239-day-volume-amount/README.md` |
@@ -392,7 +392,7 @@ T 日股票池 `universe(as_of=T)`。验收标准建议：
 - 版本选择：`latest_per_entity` / 显式版本映射 / 目录版本（`wire.rs:97-104`）。
 - 目录 scope 只有 `current_sh_sz_a`（`wire.rs:73-77`）。
 - `query_data` 是纯读：不触发采集、修复或换源（`src/data_supply/registry.rs:139`）。
-- 工具清单、参数与返回形状用 `get_data_capabilities` 查（`registry.rs:311-315`），本文不复述；
+- 工具清单、参数与返回形状用 `get_data_capabilities` 查（`registry.rs` 的 `entries()`），本文不复述；
   data 侧当前注册 23 个 data 工具，数量以 [STATUS](STATUS.md) 的「服务」表为权威。
 
 ### 5.2 过渡期直读（#373 分析脚本）

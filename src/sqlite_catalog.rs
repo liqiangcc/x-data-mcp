@@ -213,6 +213,10 @@ impl SqliteCatalog {
     pub fn fixed(&self, id: &str) -> Result<CatalogVersion, Error> {
         self.read(|c| read(c, id))
     }
+    /// Current catalog head, integrity-checked inside one read snapshot.
+    pub fn current(&self) -> Result<Option<CatalogVersion>, Error> {
+        self.read(|c| head(c)?.map(|id| read(c, &id)).transpose())
+    }
     /// Explicit fixture import, not a production publisher. Applies the existing catalog rules.
     pub fn publish_fixture(
         &self,

@@ -410,6 +410,80 @@ fn catalog_filter_and_selector_freeze_version_without_inventing_industry() {
     assert_eq!(accepted["item_ids"].as_array().unwrap().len(), 1);
 }
 #[test]
+fn catalog_facets_group_assigned_industries_for_the_frozen_head() {
+    use x_data_mcp::{
+        catalog::*, data_supply::mcp::DataApi, mcp::ToolHandler, sqlite_catalog::SqliteCatalog,
+    };
+    let d = tempfile::tempdir().unwrap();
+    let t = SqliteTasks::new(d.path().join("db"));
+    t.initialize().unwrap();
+    let now = chrono::Utc::now();
+    let source = "fixture:facets".to_string();
+    let record = |symbol: &str, industry: IndustryInfo| SecurityRecord {
+        symbol: symbol.into(),
+        name: format!("股票{symbol}"),
+        exchange: x_data_mcp::catalog::Exchange::Shanghai,
+        security_type: SecurityType::AShare,
+        source_security_id: symbol.into(),
+        industry,
+        source: source.clone(),
+        acquired_at: now,
+    };
+    let assigned = || IndustryInfo::Assigned {
+        code: "X2603".into(),
+        name: "半导体".into(),
+        scheme: None,
+    };
+    SqliteCatalog::new(t.clone())
+        .publish_fixture(
+            "catalog-facets",
+            CatalogSnapshot {
+                source: source.clone(),
+                acquired_at: now,
+                completeness: CompletenessEvidence::Complete { expected_count: 3 },
+                records: vec![
+                    record("600006", assigned()),
+                    record("600007", assigned()),
+                    record(
+                        "600008",
+                        IndustryInfo::Missing {
+                            reason: "not mapped".into(),
+                        },
+                    ),
+                ],
+            },
+            None,
+        )
+        .unwrap();
+    let api = DataApi::new(t, "run".into(), Access::local()).unwrap();
+    let facets = api
+        .call(
+            "list_catalog_facets",
+            json!({"dataset":"securities.catalog"}),
+        )
+        .unwrap();
+    assert_eq!(facets["dataset"], "securities.catalog");
+    assert_eq!(facets["catalog_version"], "catalog-facets");
+    assert_eq!(facets["facets"]["industries"].as_array().unwrap().len(), 1);
+    assert_eq!(facets["facets"]["industries"][0]["code"], "X2603");
+    assert_eq!(facets["facets"]["industries"][0]["name"], "半导体");
+    assert_eq!(facets["facets"]["industries"][0]["members"], 2);
+    let pinned = api
+        .call(
+            "list_catalog_facets",
+            json!({"catalog_version":"catalog-facets"}),
+        )
+        .unwrap();
+    assert_eq!(pinned, facets);
+    assert_eq!(
+        api.call("list_catalog_facets", json!({"dataset":"market.daily"}))
+            .unwrap_err()
+            .code,
+        "invalid_arguments"
+    );
+}
+
+#[test]
 fn yearly_collection_requires_exact_fixed_base_map_and_stores_frozen_years() {
     use x_data_mcp::{data_supply::mcp::DataApi, mcp::ToolHandler, task_control::TaskRepository};
     let d = tempfile::tempdir().unwrap();
@@ -761,7 +835,7 @@ mod default_selection_wire {
             )
             .unwrap();
     }
-    fn gap(id: &str, symbol: &str, start: &str, end: &str) -> ProvenGap {
+    fn proven_gap(id: &str, symbol: &str, start: &str, end: &str) -> ProvenGap {
         ProvenGap {
             gap_id: id.into(),
             symbol: symbol.into(),
@@ -865,7 +939,7 @@ mod default_selection_wire {
         catalog(&SqliteCatalog::new(t.clone()), "catalog-1", &["600006"]);
         market::published_fixture(&store, &market::samples()[0]["record"]);
         store
-            .record_proven_gap(&gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
+            .record_proven_gap(&proven_gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
             .unwrap();
         let api = DataApi::new(t.clone(), "run".into(), Access::local()).unwrap();
         let first = api.call("update_data", daily_write("d1")).unwrap();
@@ -907,7 +981,7 @@ mod default_selection_wire {
         // Facts change after acceptance; the same request replays the
         // original task instead of recomputing.
         store
-            .record_proven_gap(&gap("g9", "sh.600006", "2025-03-01", "2025-03-02"))
+            .record_proven_gap(&proven_gap("g9", "sh.600006", "2025-03-01", "2025-03-02"))
             .unwrap();
         let replay = api.call("update_data", daily_write("d1")).unwrap();
         assert_eq!(replay["reused"], json!(true));
@@ -944,7 +1018,7 @@ mod default_selection_wire {
         );
         assert!(t.read_request("b0").unwrap().is_none());
         store
-            .record_proven_gap(&gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
+            .record_proven_gap(&proven_gap("g1", "sh.600006", "2025-02-01", "2025-02-10"))
             .unwrap();
         let first = api.call("backfill_data", daily_write("b1")).unwrap();
         assert_eq!(first["contract_version"], json!("default-range-task-v1"));
@@ -1232,9 +1306,8 @@ fn every_advertised_data_tool_schema_has_an_object_root() {
     for tool in tools {
         let name = tool["name"].as_str().unwrap();
         assert_eq!(tool["inputSchema"]["type"], json!("object"), "input {name}");
-        if let Some(output) = tool.get("outputSchema") {
-            assert_eq!(output["type"], json!("object"), "output {name}");
-        }
+        // v8 §6.2: output schemas are not advertised in tools/list.
+        assert!(tool.get("outputSchema").is_none(), "output {name}");
         // A oneOf/anyOf-rooted input must also publish the union of its
         // branches' properties: clients that complete a property-less object
         // root with `additionalProperties: false` would otherwise reject every
@@ -1247,5 +1320,10 @@ fn every_advertised_data_tool_schema_has_an_object_root() {
                 "union root of {name} must declare the branch properties: {input}"
             );
         }
+    }
+    // The registry output root is still normalized for capabilities (AC-V8-3).
+    for entry in x_data_mcp::data_supply::registry::entries() {
+        let output = x_data_mcp::mcp::ensure_object_root(entry.output);
+        assert_eq!(output["type"], json!("object"), "output {}", entry.name);
     }
 }

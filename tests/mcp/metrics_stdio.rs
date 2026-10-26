@@ -79,7 +79,14 @@ fn compute_real_stdio_roundtrips_schema_and_fixed_version_reference() {
         .validate(&request)
         .unwrap();
     let response = s.call("compute_metrics", request.clone(), false);
-    jsonschema::validator_for(&tool["outputSchema"])
+    // tools/list no longer carries outputSchema (v8 §6.2); the registry
+    // descriptor is the single source the detailed capability publishes.
+    let output = x_data_mcp::data_supply::registry::entries()
+        .into_iter()
+        .find(|e| e.name == "compute_metrics")
+        .map(|e| x_data_mcp::mcp::ensure_object_root(e.output))
+        .unwrap();
+    jsonschema::validator_for(&output)
         .unwrap()
         .validate(&response)
         .unwrap();

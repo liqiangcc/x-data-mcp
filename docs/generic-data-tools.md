@@ -123,17 +123,23 @@ get_data_capabilities 输入为空对象或精确 dataset/operation 过滤，不
 数据库迁移副作用。返回完整有界描述；数据集增多到需要分页时另行版本化，
 当前不能截断却声称列全。只披露已授权调用者的能力。
 
-每个能力项至少包含：
+`get_data_capabilities` 有两种粒度：
 
-- tool_name、dataset、contract_version、implemented、operator_only；
-- runtime_readiness 与 governance_readiness（ready/blocked）分开表达：
-  前者反映当前运行事实（已安装 inspected source、catalog 输入位置），
-  后者反映授权/一致性/语义证据门槛；
-- blocking_reasons：结构化 {code, detail, evidence_ref?}，不包含密钥或工作流指令；
-- declared_scope 与 active_generation_ref（generation 契约落地前为 null）；
-- 完整 input_schema、output_schema，以及 schema_digest；
-- supported_sources、默认来源规则、数值/时间/覆盖语义；
-- selection_modes、page_size 上限、progress_unit、取消/重试是否支持。
+- **无过滤**返回紧凑目录：每个工具一行，只含 tool_name、dataset（工具级目录
+  省略）、contract_version、implemented、operator_only、entry；用于版本握手与
+  工具发现，不随数据版本变化。
+- **带 `dataset` + `operation`** 返回单项详版，包含：
+  - runtime_readiness 与 governance_readiness（ready/blocked）分开表达：
+    前者反映当前运行事实（已安装 inspected source、catalog 输入位置），
+    后者反映授权/一致性/语义证据门槛；
+  - blocking_reasons：结构化 {code, detail, evidence_ref?}，不包含密钥或工作流指令；
+  - declared_scope 与 active_generation_ref（generation 契约落地前为 null）；
+  - 完整 input_schema、output_schema，以及 schema_digest；
+  - supported_sources、默认来源规则、数值/时间/覆盖语义；
+  - selection_modes、page_size 上限、progress_unit、取消/重试是否支持。
+
+`outputSchema` 不进入 `tools/list`；需要 schema 的客户端按 dataset + operation
+从详版取，两者由同一个静态 registry 生成。
 
 顶层同时返回 capability_revision、declared_scope、production_ready 与
 production_blocking_reasons（同样结构化）。任何 capability 不返回 next_actions、
@@ -356,10 +362,11 @@ schema、大小写/规范化和排序规则在实现契约中固化，绑定请�
 
 ### 帮助与能力发现的两级返回
 
-get_data_capabilities 无过滤参数时返回简洁 dataset/operation 目录与 readiness，
-不重复发送所有完整 schema；指定 dataset + operation 后返回详细参数定义、
-最小调用示例、常见拒绝、前置条件、结果解释和可组合的后续操作。
-只指定 dataset 时返回该类别操作目录。此规则替代此前无参数返回全部详细描述的目标。
+get_data_capabilities 无过滤参数时返回紧凑工具目录（每个工具一行，含 tool_name、
+contract_version、implemented、operator_only、entry），不发送 readiness、schema 或示例；
+指定 dataset + operation 后返回详版：runtime_readiness/governance_readiness、
+blocking_reasons、input_schema/output_schema、最小调用示例、schema_digest 与结果解释。
+只指定 dataset 时返回该类别可用的工具目录。此规则替代此前无参数返回全部详细描述的目标。
 详细 schema、示例及 handler 由同一注册描述校验；工具基础描述仍须足够清楚，
 不强制每次调用前先查帮助。来源门禁明确显示，不用示例暗示生产已经可用。
 

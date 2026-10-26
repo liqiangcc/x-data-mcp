@@ -115,7 +115,10 @@ class RealDocs(unittest.TestCase):
 
 REGION_SCHEMA = 21
 REGION_REVISION = "generic-data-v7"
+# Current regions and STATUS state DEPLOYED facts; the registry may be ahead
+# (v8 PR-2 builds 24 data tools while preview.35 still serves 23).
 REGION_DATA_TOOLS = 23
+REGION_CODE_DATA_TOOLS = 24
 REGION_ACQUIRE_TOOLS = 10
 
 
@@ -127,6 +130,7 @@ def region_claims(text: str, offset: int = 0) -> list[tuple[int, str, str]]:
         REGION_DATA_TOOLS,
         REGION_ACQUIRE_TOOLS,
         offset,
+        code_data_tools=REGION_CODE_DATA_TOOLS,
     )
 
 
@@ -187,6 +191,19 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual(region_claims(good), [])
         bad_acquire = "| MCP | data socket 23 data tools、acquisition socket 8 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(bad_acquire)), ["acquire-tool-count"])
+
+    def test_code_tool_count_may_be_ahead_of_the_deployed_one(self):
+        # v8 PR-2 builds 24 data tools while preview.35 still serves 23: a
+        # sentence explicitly marked as the code fact is checked against the
+        # registry, and the deployed count stays valid.
+        self.assertEqual(
+            region_claims("已部署实例仍为 23 data tools。\n"), []
+        )
+        self.assertEqual(
+            region_claims("代码（main）为 24 data tools（未部署）。\n"), []
+        )
+        found = region_claims("代码（main）为 25 data tools（未部署）。\n")
+        self.assertEqual(rules(found), ["data-tool-count"], found)
 
     def test_bare_tool_count_must_be_one_of_the_registries(self):
         # The v6 switch checklist header said "21 tools" (stale current fact).
@@ -284,6 +301,7 @@ def contract_claims(text: str) -> list[tuple[int, str, str]]:
         REGION_REVISION,
         REGION_DATA_TOOLS,
         REGION_ACQUIRE_TOOLS,
+        code_data_tools=REGION_CODE_DATA_TOOLS,
     )
 
 
@@ -416,7 +434,12 @@ acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.
 
 
 def status_claims(text: str) -> list[tuple[int, str, str]]:
-    return cf.status_consistency_errors(text, REGION_DATA_TOOLS, REGION_ACQUIRE_TOOLS)
+    return cf.status_consistency_errors(
+        text,
+        REGION_DATA_TOOLS,
+        REGION_ACQUIRE_TOOLS,
+        code_data_tools=REGION_CODE_DATA_TOOLS,
+    )
 
 
 class StatusConsistency(unittest.TestCase):
@@ -478,6 +501,14 @@ class StatusConsistency(unittest.TestCase):
             "data socket `tools/list` 返回 21 个工具",
         )
         self.assertEqual(rules(status_claims(text)), ["status-tool-count"])
+
+    def test_code_tool_count_in_status_may_be_ahead(self):
+        text = STATUS_OK + (
+            "\n代码（main）为 24 data tools（未部署）；已部署实例仍为 23 data tools。\n"
+        )
+        self.assertEqual(status_claims(text), [])
+        wrong = STATUS_OK + "\n代码（main）为 25 data tools（未部署）。\n"
+        self.assertEqual(rules(status_claims(wrong)), ["status-data-tool-count"])
 
     def test_tool_pair_is_checked(self):
         text = STATUS_OK + "\npreview.34 与 preview.35 都是二进制热切换，21/10 工具不变。\n"
