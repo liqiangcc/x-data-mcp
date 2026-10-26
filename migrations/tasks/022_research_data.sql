@@ -187,3 +187,69 @@ ALTER TABLE market_events_v22 RENAME TO market_events;
 CREATE INDEX market_events_entity_period
   ON market_events(entity, period, adjustment, seq DESC, new_content_digest, kind);
 CREATE INDEX market_events_new_digest ON market_events(new_content_digest);
+
+-- ---------------------------------------------------------------------------
+-- New tables (M1 PR-4, issue-383 §3.6/§3.7). Both are new in schema 22, so
+-- they are created rather than rebuilt: no schema-21 row can exist for them.
+-- ---------------------------------------------------------------------------
+
+-- adjustment_events: the parsed factor facts (解析事实层, separation point 2).
+-- `c_bits_*` are the source's f32 factor values verbatim (immutable fact);
+-- `c1..c4` are the derived 2dp business decimals and are re-derivable from
+-- the bits (`gbbq-cat1-2dp-v1`), which a test binds.
+-- `effective_day` uses the same epoch-day integer as `series_bars.trade_day`.
+-- `known_at` is the 知晓时间 (separation point 3): the source carries only the
+-- ex-rights date, so M1 always writes NULL = unknown. No file mtime or other
+-- proxy is ever substituted.
+CREATE TABLE adjustment_events(
+  entity TEXT NOT NULL,
+  -- Decode order within the entity: same-day events stay distinguishable.
+  ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+  effective_day INTEGER NOT NULL,
+  -- Only the verified category is stored; other categories are counted into
+  -- the evidence bundle and never interpreted (§3.6 item 3).
+  category INTEGER NOT NULL CHECK(category = 1),
+  c_bits_1 INTEGER NOT NULL CHECK(c_bits_1 BETWEEN 0 AND 4294967295),
+  c_bits_2 INTEGER NOT NULL CHECK(c_bits_2 BETWEEN 0 AND 4294967295),
+  c_bits_3 INTEGER NOT NULL CHECK(c_bits_3 BETWEEN 0 AND 4294967295),
+  c_bits_4 INTEGER NOT NULL CHECK(c_bits_4 BETWEEN 0 AND 4294967295),
+  c1 TEXT NOT NULL,
+  c2 TEXT NOT NULL,
+  c3 TEXT NOT NULL,
+  c4 TEXT NOT NULL,
+  source_binding_digest BLOB NOT NULL REFERENCES source_bindings(source_binding_digest),
+  evidence_digest BLOB NOT NULL REFERENCES evidence_bundles(evidence_digest),
+  known_at TEXT,
+  PRIMARY KEY(entity, ordinal)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX adjustment_events_entity_day
+  ON adjustment_events(entity, effective_day, ordinal);
+
+-- derived_dataset_versions: identity + audit for the non-bar datasets, so an
+-- export manifest can name "the calendar" or "this entity's factor set" with
+-- a stable version id (§3.7). Business rows stay in their own typed tables.
+-- `digest_format` is the digest algorithm name ('adjustment-events-v1' for
+-- factor sets, §3.10); `algorithm_version` is the derivation label
+-- ('gbbq-cat1-2dp-v1'). `version_id` is the content digest in hex, exactly as
+-- `market_series.version_id`.
+CREATE TABLE derived_dataset_versions(
+  dataset_kind TEXT NOT NULL CHECK(dataset_kind IN ('adjustment_events','trading_calendar')),
+  -- Factor set = the entity; the calendar = 'exchange_union'.
+  dataset_key TEXT NOT NULL,
+  version_id TEXT NOT NULL UNIQUE,
+  content_digest BLOB NOT NULL CHECK(length(content_digest)=32),
+  digest_format TEXT NOT NULL,
+  record_count INTEGER NOT NULL CHECK(record_count > 0),
+  first_day INTEGER NOT NULL,
+  last_day INTEGER NOT NULL,
+  algorithm_version TEXT NOT NULL,
+  source_binding_digest BLOB NOT NULL REFERENCES source_bindings(source_binding_digest),
+  evidence_digest BLOB NOT NULL REFERENCES evidence_bundles(evidence_digest),
+  task_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(dataset_kind, dataset_key),
+  CHECK(first_day <= last_day),
+  CHECK(version_id = lower(hex(content_digest)))
+) STRICT;

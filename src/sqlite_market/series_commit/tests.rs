@@ -3353,7 +3353,11 @@ fn commit_pair_first(
     raw_bars: &[Bar],
 ) -> Result<crate::market_storage::Receipt, Error> {
     let raw_ev = AdjustmentEvidence::confirmed("raw", "raw .day fact");
-    let raw = crate::market_data::RawBatch::new(raw_bars.to_vec(), raw_ev);
+    let raw = crate::market_data::RawBatch::new(
+        raw_bars.to_vec(),
+        raw_ev,
+        crate::market_data::AdjustmentEventSet::empty(SYMBOL),
+    );
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
         let continuity = put_continuity_evidence(c, &json!({"mode":"first"}))?;
@@ -3533,7 +3537,11 @@ fn future_event_rewrites_only_the_forward_口径() {
     let (second_task, second_revision) = running_task_for(&repo, "req-2", "item-2");
     let rewritten_forward = vec![bar(0, 800), bar(1, 1131)];
     let raw_ev = AdjustmentEvidence::confirmed("raw", "raw .day fact");
-    let raw = crate::market_data::RawBatch::new(raw_bars.clone(), raw_ev);
+    let raw = crate::market_data::RawBatch::new(
+        raw_bars.clone(),
+        raw_ev,
+        crate::market_data::AdjustmentEventSet::empty(SYMBOL),
+    );
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
         let continuity = put_continuity_evidence(c, &json!({"mode":"full"}))?;
@@ -3627,7 +3635,11 @@ fn raw_series_follows_an_authorized_forward_rewrite() {
     // gate runs in `market_update::prepare` before any commit.
     let changed_raw = vec![bar(0, 1100), bar(1, 1131)];
     let raw_ev = AdjustmentEvidence::confirmed("raw", "raw .day fact");
-    let raw = crate::market_data::RawBatch::new(changed_raw, raw_ev);
+    let raw = crate::market_data::RawBatch::new(
+        changed_raw,
+        raw_ev,
+        crate::market_data::AdjustmentEventSet::empty(SYMBOL),
+    );
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
         let continuity = put_continuity_evidence(c, &json!({"mode":"full"}))?;
@@ -3683,4 +3695,324 @@ fn raw_series_follows_an_authorized_forward_rewrite() {
         .unwrap()
         .unwrap();
     assert_eq!(raw_event.kind, "replace");
+}
+
+// ---------------------------------------------------------------------------
+// M1 PR-4: the factor set is part of the same daily-item write set
+// (issue-383 §9.1 item 2) and the forward prices must be recomputable from
+// the stored parsed facts (AC-M1-2, half).
+// ---------------------------------------------------------------------------
+
+/// The source facts of one two-bar security plus one category-1 配股 event
+/// between the bars, so exactly the earlier bar is adjusted.
+fn factor_fixture() -> (
+    Vec<crate::day_file::RawDayRecord>,
+    crate::gbbq::Event,
+    crate::market_data::AdjustmentEventSet,
+) {
+    let records = vec![
+        crate::day_file::RawDayRecord {
+            date: NaiveDate::from_ymd_opt(2026, 1, 7).unwrap(),
+            ohlc_raw: [1000, 1010, 990, 1005],
+            amount_float32_bits: 0f32.to_bits(),
+            volume_raw: 100,
+            r7_raw: 0,
+        },
+        crate::day_file::RawDayRecord {
+            date: NaiveDate::from_ymd_opt(2026, 1, 9).unwrap(),
+            ohlc_raw: [1010, 1020, 1000, 1015],
+            amount_float32_bits: 0f32.to_bits(),
+            volume_raw: 110,
+            r7_raw: 0,
+        },
+    ];
+    let event = crate::gbbq::Event {
+        market: 1,
+        code: "600006".into(),
+        date_raw: 20260108,
+        category: 1,
+        c_raw: [0.0, 3.2, 4.0, 2.0],
+    };
+    let factors = crate::market_data::AdjustmentEventSet {
+        entity: SYMBOL.into(),
+        events: vec![crate::market_data::AdjustmentEvent {
+            ordinal: 0,
+            effective_day: NaiveDate::from_ymd_opt(2026, 1, 8).unwrap(),
+            category: 1,
+            c_bits: event.c_raw.map(f32::to_bits),
+            factors: event.factors().unwrap(),
+            known_at: None,
+        }],
+        excluded: 0,
+    };
+    (records, event, factors)
+}
+
+fn raw_bar(record: &crate::day_file::RawDayRecord) -> Bar {
+    Bar {
+        date: record.date,
+        open: rust_decimal::Decimal::new(i64::from(record.ohlc_raw[0]), 2),
+        high: rust_decimal::Decimal::new(i64::from(record.ohlc_raw[1]), 2),
+        low: rust_decimal::Decimal::new(i64::from(record.ohlc_raw[2]), 2),
+        close: rust_decimal::Decimal::new(i64::from(record.ohlc_raw[3]), 2),
+        volume: Some(rust_decimal::Decimal::from(record.volume_raw)),
+        amount: Some(rust_decimal::Decimal::ZERO),
+        r7_raw: Some(record.r7_raw),
+    }
+}
+
+fn six_dp(value: rust_decimal::Decimal) -> i64 {
+    use num_traits::ToPrimitive as _;
+    (value * rust_decimal::Decimal::from(1_000_000))
+        .to_i64()
+        .unwrap()
+}
+
+/// One daily item commit carrying the factor set, with the forward bars the
+/// source's exact chain produced from the same facts.
+fn commit_pair_with_factors(
+    repo: &super::super::compact_repo::SqliteCompactMarket,
+    task_id: &str,
+    item: &str,
+    revision: u64,
+    forward_bars: &[Bar],
+    raw_bars: &[Bar],
+    factors: crate::market_data::AdjustmentEventSet,
+) -> Result<crate::market_storage::Receipt, Error> {
+    let raw = crate::market_data::RawBatch::new(
+        raw_bars.to_vec(),
+        AdjustmentEvidence::confirmed("raw", "raw .day fact"),
+        factors,
+    );
+    repo.tx(|c| {
+        let (version_ev, binding) = put_seed_material(c);
+        let continuity = put_continuity_evidence(c, &json!({"mode":"first"}))?;
+        let forward_compact = to_compact_bars(
+            forward_bars,
+            Period::Day,
+            crate::compact_market::PRICE_SCALE_QFQ,
+        )?;
+        commit_item_tx(
+            c,
+            &Commit {
+                result_id: &format!("factors-{item}"),
+                task_id,
+                item_id: item,
+                run_id: RUN,
+                occupancy_key: &scope().occupancy_key(),
+                expected_task_revision: revision,
+                entity: SYMBOL,
+                period: Period::Day,
+                adjustment: Adjustment::Forward,
+                base_version_id: None,
+                change: SeriesChange::FirstPublish {
+                    bars: &forward_compact,
+                },
+                range_start_day: forward_compact[0].trade_day,
+                range_end_day: forward_compact[forward_compact.len() - 1].trade_day,
+                algorithm_version: COLLECTION_ALGO,
+                window_digest: None,
+                source_binding_digest: Some(binding),
+                evidence_digest: Some(version_ev),
+                coverage_status: Some(CoverageStatus::Complete),
+                metadata_changed: false,
+                event_evidence_digest: continuity,
+                published_at: Some(ts()),
+                staged_version_id: None,
+                defer_task_row: false,
+            },
+            Some(&raw),
+        )
+    })
+}
+
+#[test]
+fn daily_item_commits_the_factor_set_and_recomputes_its_forward_prices() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (task_id, revision) = running_task(&repo);
+    let (records, event, factors) = factor_fixture();
+    let raw_bars: Vec<Bar> = records.iter().map(raw_bar).collect();
+    let adjusted = crate::qfq::forward_adjust_exact(
+        &records,
+        &[event],
+        crate::compact_market::PRICE_SCALE_QFQ,
+    )
+    .unwrap();
+    let forward_bars: Vec<Bar> = adjusted
+        .iter()
+        .zip(&records)
+        .map(|(q, raw)| Bar {
+            date: q.date,
+            open: q.open,
+            high: q.high,
+            low: q.low,
+            close: q.close,
+            volume: Some(rust_decimal::Decimal::from(raw.volume_raw)),
+            amount: Some(rust_decimal::Decimal::ZERO),
+            r7_raw: Some(raw.r7_raw),
+        })
+        .collect();
+    let committed: Vec<i64> = forward_bars.iter().map(|b| six_dp(b.close)).collect();
+    commit_pair_with_factors(
+        &repo,
+        &task_id,
+        ITEM,
+        revision,
+        &forward_bars,
+        &raw_bars,
+        factors.clone(),
+    )
+    .unwrap();
+
+    // The factor set landed in the same transaction, as parsed facts.
+    let stored = repo
+        .read(|c| crate::sqlite_market::derived::read_adjustment_events(c, SYMBOL))
+        .unwrap();
+    assert_eq!(stored, factors.events);
+    let version = repo
+        .read(|c| {
+            crate::sqlite_market::derived::read_version(
+                c,
+                crate::sqlite_market::derived::ADJUSTMENT_EVENTS_KIND,
+                SYMBOL,
+            )
+        })
+        .unwrap()
+        .expect("the item registered a factor-set version");
+    assert_eq!(version.record_count, 1);
+    assert_eq!(
+        version.version_id,
+        crate::compact_market::digest_hex(
+            &crate::sqlite_market::derived::events_digest(
+                SYMBOL,
+                &factors.events,
+                factors.excluded
+            )
+            .unwrap()
+        )
+    );
+    assert_eq!(version.task_id, task_id);
+    assert_eq!(version.item_id, ITEM);
+
+    // AC-M1-2 (half): rebuilding the source event from the *stored* facts and
+    // re-running the exact chain reproduces the committed forward prices.
+    let rebuilt: Vec<crate::gbbq::Event> = stored
+        .iter()
+        .map(|stored| crate::gbbq::Event {
+            market: 1,
+            code: "600006".into(),
+            date_raw: stored
+                .effective_day
+                .format("%Y%m%d")
+                .to_string()
+                .parse()
+                .unwrap(),
+            category: stored.category,
+            c_raw: stored.c_bits.map(f32::from_bits),
+        })
+        .collect();
+    let recomputed = crate::qfq::forward_adjust_exact(
+        &records,
+        &rebuilt,
+        crate::compact_market::PRICE_SCALE_QFQ,
+    )
+    .unwrap();
+    let recomputed: Vec<i64> = recomputed.iter().map(|bar| six_dp(bar.close)).collect();
+    assert_eq!(recomputed, committed);
+    assert_eq!(series_closes(&repo, Adjustment::Forward), Some(committed));
+}
+
+#[test]
+fn factor_set_write_rolls_back_with_the_series_commit() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (task_id, revision) = running_task(&repo);
+    let (records, event, factors) = factor_fixture();
+    let raw_bars: Vec<Bar> = records.iter().map(raw_bar).collect();
+    let adjusted = crate::qfq::forward_adjust_exact(
+        &records,
+        &[event],
+        crate::compact_market::PRICE_SCALE_QFQ,
+    )
+    .unwrap();
+    let forward_bars: Vec<Bar> = adjusted
+        .iter()
+        .zip(&records)
+        .map(|(q, raw)| Bar {
+            date: q.date,
+            open: q.open,
+            high: q.high,
+            low: q.low,
+            close: q.close,
+            volume: Some(rust_decimal::Decimal::from(raw.volume_raw)),
+            amount: Some(rust_decimal::Decimal::ZERO),
+            r7_raw: Some(raw.r7_raw),
+        })
+        .collect();
+    // Abort the transaction after the pair commit: the factor rows and their
+    // registration must disappear with the series rows, or a later item could
+    // read facts that were never published.
+    let outcome = repo.tx(|c| {
+        let (version_ev, binding) = put_seed_material(c);
+        let continuity = put_continuity_evidence(c, &json!({"mode":"first"}))?;
+        let forward_compact = to_compact_bars(
+            &forward_bars,
+            Period::Day,
+            crate::compact_market::PRICE_SCALE_QFQ,
+        )?;
+        let raw = crate::market_data::RawBatch::new(
+            raw_bars.clone(),
+            AdjustmentEvidence::confirmed("raw", "raw .day fact"),
+            factors.clone(),
+        );
+        commit_item_tx(
+            c,
+            &Commit {
+                result_id: "factors-rollback",
+                task_id: &task_id,
+                item_id: ITEM,
+                run_id: RUN,
+                occupancy_key: &scope().occupancy_key(),
+                expected_task_revision: revision,
+                entity: SYMBOL,
+                period: Period::Day,
+                adjustment: Adjustment::Forward,
+                base_version_id: None,
+                change: SeriesChange::FirstPublish {
+                    bars: &forward_compact,
+                },
+                range_start_day: forward_compact[0].trade_day,
+                range_end_day: forward_compact[forward_compact.len() - 1].trade_day,
+                algorithm_version: COLLECTION_ALGO,
+                window_digest: None,
+                source_binding_digest: Some(binding),
+                evidence_digest: Some(version_ev),
+                coverage_status: Some(CoverageStatus::Complete),
+                metadata_changed: false,
+                event_evidence_digest: continuity,
+                published_at: Some(ts()),
+                staged_version_id: None,
+                defer_task_row: false,
+            },
+            Some(&raw),
+        )?;
+        Err::<(), Error>(Error::Integrity("rollback probe".into()))
+    });
+    assert!(outcome.is_err());
+    let (events, version) = repo
+        .read(|c| {
+            Ok((
+                crate::sqlite_market::derived::read_adjustment_events(c, SYMBOL)?,
+                crate::sqlite_market::derived::read_version(
+                    c,
+                    crate::sqlite_market::derived::ADJUSTMENT_EVENTS_KIND,
+                    SYMBOL,
+                )?,
+            ))
+        })
+        .unwrap();
+    assert!(events.is_empty());
+    assert_eq!(version, None);
+    assert_eq!(series_closes(&repo, Adjustment::Forward), None);
 }
