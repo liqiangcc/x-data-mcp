@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::{
-    market_data::{Bar, Period, UnitCurrencyEvidence, YearlyDerivation},
+    market_data::{Adjustment, Bar, Period, UnitCurrencyEvidence, YearlyDerivation},
     publish::EffectiveVersion,
 };
 
