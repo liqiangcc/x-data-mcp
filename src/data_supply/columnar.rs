@@ -537,7 +537,7 @@ pub fn availability_table(
 ) -> Value {
     let mut entities = Vec::new();
     let entity_bound = items.iter().all(|item| item.entity.is_some());
-    let mut tasks: BTreeMap<String, Value> = BTreeMap::new();
+    let mut tasks = Map::new();
     let mut cells: Cells<'_> = fields
         .iter()
         .map(|field| (field.as_str(), Vec::new()))
@@ -549,12 +549,12 @@ pub fn availability_table(
             entities.push(json!(item.entity.as_ref().unwrap().symbol()));
         }
         for task in &item.related_tasks {
-            tasks
-                .entry(task.task_id.clone())
-                .or_insert_with(|| serde_json::to_value(task).unwrap());
+            if !tasks.contains_key(&task.task_id) {
+                tasks.insert(task.task_id.clone(), serde_json::to_value(task).unwrap());
+            }
         }
         match first_limitations {
-            None => first_limitations = Some(&item.limitations),
+            None => first_limitations = Some(item.limitations.as_slice()),
             Some(first) if first != item.limitations.as_slice() => limitations_shared = false,
             Some(_) => {}
         }
