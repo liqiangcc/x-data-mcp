@@ -124,11 +124,21 @@ const SYMBOL: &str = "sh.600006";
 /// Accept + claim + start a one-item daily task bound to `SYMBOL` — the
 /// same task machinery the production runner drives.
 fn running_task(repo: &super::super::compact_repo::SqliteCompactMarket) -> (String, u64) {
+    running_task_for(repo, "req-1", ITEM)
+}
+
+/// `running_task` with an explicit request/item id, so one test can commit
+/// two daily items (two tasks) over the same scope.
+fn running_task_for(
+    repo: &super::super::compact_repo::SqliteCompactMarket,
+    request: &str,
+    item: &str,
+) -> (String, u64) {
     use crate::task_control::TaskRepository;
     let scope = task_control::legacy::scope_id(SYMBOL, "day");
     let work = task_control::FrozenWork {
         items: vec![ItemSpec {
-            item_id: ITEM.into(),
+            item_id: item.into(),
             target: json!({"symbol": SYMBOL, "period": "day"}),
             progress_unit: "bars".into(),
             frozen_inputs: json!({}),
@@ -145,7 +155,7 @@ fn running_task(repo: &super::super::compact_repo::SqliteCompactMarket) -> (Stri
         },
         intent: json!({}),
     };
-    let acceptance = repo.accept("req-1", &command, &work, RUN, None).unwrap();
+    let acceptance = repo.accept(request, &command, &work, RUN, None).unwrap();
     let task_id = match acceptance.record.outcome {
         task_control::RequestOutcome::Task(snapshot) => snapshot.task.task_id.clone(),
         _ => panic!("expected task outcome"),
@@ -161,7 +171,7 @@ fn running_task(repo: &super::super::compact_repo::SqliteCompactMarket) -> (Stri
             &task_id,
             revision,
             RUN,
-            task_control::Change::StartItem(ITEM.into()),
+            task_control::Change::StartItem(item.into()),
         )
         .unwrap()
         .task
@@ -3320,4 +3330,338 @@ fn full_commit_cycle_leaves_no_staged_rows() {
     r.repo.stage(checked(&y2).raw()).unwrap();
     commit_yearly_plan(&r, &mut yearly_task, y2, &base2, Some(prior), None, None).unwrap();
     assert_eq!(staged(&c), 0, "yearly rederive must consume its candidate");
+}
+
+// ---------------------------------------------------------------------------
+// M1 PR-2: one daily item writes the raw and the forward 口径 together
+// (issue-383 §9.1). Both series and both events commit in one transaction;
+// the raw price fact never rewrites silently.
+// ---------------------------------------------------------------------------
+
+/// Build the pair commit for one first publish: forward bars as the 口径
+/// candidate, raw bars as the `.day` fact.
+fn commit_pair_first(
+    repo: &super::super::compact_repo::SqliteCompactMarket,
+    task_id: &str,
+    item: &str,
+    revision: u64,
+    forward_bars: &[Bar],
+    raw_bars: &[Bar],
+) -> Result<crate::market_storage::Receipt, Error> {
+    let raw_ev = AdjustmentEvidence::confirmed("raw", "raw .day fact");
+    let raw = crate::market_data::RawBatch::new(raw_bars.to_vec(), raw_ev);
+    repo.tx(|c| {
+        let (version_ev, binding) = put_seed_material(c);
+        let continuity = put_continuity_evidence(c, &json!({"mode":"first"}))?;
+        commit_item_tx(
+            c,
+            &Commit {
+                result_id: &format!("pair-{item}"),
+                task_id,
+                item_id: item,
+                run_id: RUN,
+                occupancy_key: &scope().occupancy_key(),
+                expected_task_revision: revision,
+                entity: SYMBOL,
+                period: Period::Day,
+                adjustment: Adjustment::Forward,
+                base_version_id: None,
+                change: SeriesChange::FirstPublish { bars: forward_bars },
+                range_start_day: 0,
+                range_end_day: forward_bars.len() as i64 - 1,
+                algorithm_version: COLLECTION_ALGO,
+                window_digest: None,
+                source_binding_digest: Some(binding),
+                evidence_digest: Some(version_ev),
+                coverage_status: Some(CoverageStatus::Complete),
+                metadata_changed: false,
+                event_evidence_digest: continuity,
+                published_at: Some(ts()),
+                staged_version_id: None,
+                defer_task_row: false,
+            },
+            Some(&raw),
+        )
+    })
+}
+
+fn series_closes(
+    repo: &super::super::compact_repo::SqliteCompactMarket,
+    adjustment: Adjustment,
+) -> Option<Vec<i64>> {
+    repo.read(|c| {
+        Ok(
+            series::read_series_adjusted(c, SYMBOL, Period::Day, adjustment)?.map(|row| {
+                series::all_bars(c, row.series_key)
+                    .unwrap()
+                    .iter()
+                    .map(|bar| bar.close_units)
+                    .collect()
+            }),
+        )
+    })
+    .unwrap()
+}
+
+#[test]
+fn daily_item_commits_both_口径_series_and_events_in_one_transaction() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (task_id, revision) = running_task(&repo);
+    let forward_bars = vec![bar(0, 753), bar(1, 1131)];
+    let raw_bars = vec![bar(0, 1129), bar(1, 1131)];
+    let receipt =
+        commit_pair_first(&repo, &task_id, ITEM, revision, &forward_bars, &raw_bars).unwrap();
+    assert_eq!(
+        series_closes(&repo, Adjustment::Forward),
+        Some(vec![753, 1131])
+    );
+    assert_eq!(
+        series_closes(&repo, Adjustment::Raw),
+        Some(vec![1129, 1131])
+    );
+    let (forward_event, raw_event) = repo
+        .read(|c| {
+            Ok((
+                series::event_by_task_item(c, &task_id, ITEM, Adjustment::Forward)?.unwrap(),
+                series::event_by_task_item(c, &task_id, ITEM, Adjustment::Raw)?.unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(forward_event.kind, "first_publish");
+    assert_eq!(raw_event.kind, "first_publish");
+    assert_eq!(
+        raw_event.result_id,
+        format!("{}:raw", forward_event.result_id)
+    );
+    assert_eq!(raw_event.task_revision, forward_event.task_revision);
+    // The item finishes exactly once and the MCP-visible receipt is the
+    // forward 口径.
+    let task = repo.task(&task_id).unwrap();
+    assert!(task.items[0].outcome.as_ref().is_some_and(|o| o.success));
+    assert_eq!(task.task.status, task_control::Status::Succeeded);
+    let forward_head = repo
+        .read(|c| series::read_series_adjusted(c, SYMBOL, Period::Day, Adjustment::Forward))
+        .unwrap()
+        .unwrap();
+    assert_eq!(receipt.version_id, forward_head.version_id);
+    let raw_head = repo
+        .read(|c| series::read_series_adjusted(c, SYMBOL, Period::Day, Adjustment::Raw))
+        .unwrap()
+        .unwrap();
+    assert_ne!(raw_head.version_id, forward_head.version_id);
+    // The raw version evidence names the raw 口径; the forward one stays qfq.
+    for (adjustment, value) in [(Adjustment::Forward, "qfq"), (Adjustment::Raw, "raw")] {
+        let evidence = repo
+            .read(|c| {
+                let row =
+                    series::read_series_adjusted(c, SYMBOL, Period::Day, adjustment)?.unwrap();
+                let (kind, canonical) = evidence_store::read_evidence(c, &row.evidence_digest)?;
+                assert_eq!(kind, EvidenceKind::Version);
+                Ok(
+                    serde_json::from_str::<crate::compact_market::VersionEvidence>(&canonical)
+                        .unwrap(),
+                )
+            })
+            .unwrap();
+        assert_eq!(evidence.adjustment_evidence.value.as_deref(), Some(value));
+    }
+}
+
+#[test]
+fn daily_item_rolls_back_both_series_when_the_raw_side_fails() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (task_id, revision) = running_task(&repo);
+    let forward_bars = vec![bar(0, 753), bar(1, 1131)];
+    // The raw batch omits the forward date 1 — the pair cannot be aligned.
+    let raw_bars = vec![bar(0, 1129)];
+    let err =
+        commit_pair_first(&repo, &task_id, ITEM, revision, &forward_bars, &raw_bars).unwrap_err();
+    assert!(matches!(err, Error::Integrity(_)), "{err:?}");
+    assert_eq!(series_closes(&repo, Adjustment::Forward), None);
+    assert_eq!(series_closes(&repo, Adjustment::Raw), None);
+    assert!(
+        repo.read(|c| series::event_by_task_item(c, &task_id, ITEM, Adjustment::Forward))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        repo.read(|c| series::event_by_task_item(c, &task_id, ITEM, Adjustment::Raw))
+            .unwrap()
+            .is_none()
+    );
+    let task = repo.task(&task_id).unwrap();
+    assert!(task.items[0].outcome.is_none());
+    assert_eq!(task.task.status, task_control::Status::Running);
+}
+
+#[test]
+fn future_event_rewrites_only_the_forward_口径() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (first_task, first_revision) = running_task(&repo);
+    let forward_bars = vec![bar(0, 753), bar(1, 1131)];
+    let raw_bars = vec![bar(0, 1129), bar(1, 1131)];
+    let first = commit_pair_first(
+        &repo,
+        &first_task,
+        ITEM,
+        first_revision,
+        &forward_bars,
+        &raw_bars,
+    )
+    .unwrap();
+    let raw_head_before = repo
+        .read(|c| series::read_series_adjusted(c, SYMBOL, Period::Day, Adjustment::Raw))
+        .unwrap()
+        .unwrap();
+    // A future-effective corporate action reprices the derived history: the
+    // forward bars change, the raw `.day` facts do not.
+    let (second_task, second_revision) = running_task_for(&repo, "req-2", "item-2");
+    let rewritten_forward = vec![bar(0, 800), bar(1, 1131)];
+    let raw_ev = AdjustmentEvidence::confirmed("raw", "raw .day fact");
+    let raw = crate::market_data::RawBatch::new(raw_bars.clone(), raw_ev);
+    repo.tx(|c| {
+        let (version_ev, binding) = put_seed_material(c);
+        let continuity = put_continuity_evidence(c, &json!({"mode":"full"}))?;
+        commit_item_tx(
+            c,
+            &Commit {
+                result_id: "pair-item-2",
+                task_id: &second_task,
+                item_id: "item-2",
+                run_id: RUN,
+                occupancy_key: &scope().occupancy_key(),
+                expected_task_revision: second_revision,
+                entity: SYMBOL,
+                period: Period::Day,
+                adjustment: Adjustment::Forward,
+                base_version_id: Some(&first.version_id),
+                change: SeriesChange::Replace {
+                    bars: &rewritten_forward,
+                },
+                range_start_day: 0,
+                range_end_day: 1,
+                algorithm_version: UPDATE_ALGO,
+                window_digest: None,
+                source_binding_digest: Some(binding),
+                evidence_digest: Some(version_ev),
+                coverage_status: Some(CoverageStatus::Complete),
+                metadata_changed: false,
+                event_evidence_digest: continuity,
+                published_at: None,
+                staged_version_id: None,
+                defer_task_row: false,
+            },
+            Some(&raw),
+        )
+    })
+    .unwrap();
+    assert_eq!(
+        series_closes(&repo, Adjustment::Forward),
+        Some(vec![800, 1131])
+    );
+    assert_eq!(
+        series_closes(&repo, Adjustment::Raw),
+        Some(vec![1129, 1131])
+    );
+    let raw_head_after = repo
+        .read(|c| series::read_series_adjusted(c, SYMBOL, Period::Day, Adjustment::Raw))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        raw_head_after.version_id, raw_head_before.version_id,
+        "the raw content did not change"
+    );
+    let (forward_event, raw_event) = repo
+        .read(|c| {
+            Ok((
+                series::event_by_task_item(c, &second_task, "item-2", Adjustment::Forward)?
+                    .unwrap(),
+                series::event_by_task_item(c, &second_task, "item-2", Adjustment::Raw)?.unwrap(),
+            ))
+        })
+        .unwrap();
+    assert_eq!(forward_event.kind, "replace");
+    assert_eq!(raw_event.kind, "no_change");
+}
+
+#[test]
+fn raw_series_rewrite_without_evidence_fails_closed() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let (first_task, first_revision) = running_task(&repo);
+    let forward_bars = vec![bar(0, 753), bar(1, 1131)];
+    let raw_bars = vec![bar(0, 1129), bar(1, 1131)];
+    let first = commit_pair_first(
+        &repo,
+        &first_task,
+        ITEM,
+        first_revision,
+        &forward_bars,
+        &raw_bars,
+    )
+    .unwrap();
+    let (second_task, second_revision) = running_task_for(&repo, "req-2", "item-2");
+    // A rewritten raw price on an already-stored date is a basis conflict
+    // with no revision evidence: the pair must fail closed.
+    let changed_raw = vec![bar(0, 1100), bar(1, 1131)];
+    let raw_ev = AdjustmentEvidence::confirmed("raw", "raw .day fact");
+    let raw = crate::market_data::RawBatch::new(changed_raw, raw_ev);
+    let err = repo
+        .tx(|c| {
+            let (version_ev, binding) = put_seed_material(c);
+            let continuity = put_continuity_evidence(c, &json!({"mode":"full"}))?;
+            commit_item_tx(
+                c,
+                &Commit {
+                    result_id: "pair-item-2",
+                    task_id: &second_task,
+                    item_id: "item-2",
+                    run_id: RUN,
+                    occupancy_key: &scope().occupancy_key(),
+                    expected_task_revision: second_revision,
+                    entity: SYMBOL,
+                    period: Period::Day,
+                    adjustment: Adjustment::Forward,
+                    base_version_id: Some(&first.version_id),
+                    change: SeriesChange::Replace {
+                        bars: &forward_bars,
+                    },
+                    range_start_day: 0,
+                    range_end_day: 1,
+                    algorithm_version: UPDATE_ALGO,
+                    window_digest: None,
+                    source_binding_digest: Some(binding),
+                    evidence_digest: Some(version_ev),
+                    coverage_status: Some(CoverageStatus::Complete),
+                    metadata_changed: false,
+                    event_evidence_digest: continuity,
+                    published_at: None,
+                    staged_version_id: None,
+                    defer_task_row: false,
+                },
+                Some(&raw),
+            )
+        })
+        .unwrap_err();
+    assert!(matches!(err, Error::Integrity(_)), "{err:?}");
+    // The forward rewrite rolled back with the raw failure; both heads and
+    // the raw bars are untouched.
+    assert_eq!(
+        series_closes(&repo, Adjustment::Forward),
+        Some(vec![753, 1131])
+    );
+    assert_eq!(
+        series_closes(&repo, Adjustment::Raw),
+        Some(vec![1129, 1131])
+    );
+    assert_eq!(
+        repo.read(|c| series::read_series_adjusted(c, SYMBOL, Period::Day, Adjustment::Forward))
+            .unwrap()
+            .unwrap()
+            .version_id,
+        first.version_id
+    );
 }
