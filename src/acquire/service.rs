@@ -114,12 +114,15 @@ pub enum Source {
     Fetcher(Arc<dyn fetch::Fetcher>),
 }
 impl Source {
-    fn fetcher(&self) -> Arc<dyn fetch::Fetcher> {
-        match self {
-            Self::Remote => Arc::new(fetch::Helper::new()),
+    /// `Remote` resolves the pinned helper at construction time and fails
+    /// closed when it cannot be located (#375), so a misconfigured instance
+    /// never reaches a state where it accepts tasks it cannot download.
+    fn fetcher(&self) -> Result<Arc<dyn fetch::Fetcher>, fetch::Error> {
+        Ok(match self {
+            Self::Remote => Arc::new(fetch::Helper::new()?),
             Self::Mirror(dir) => Arc::new(fetch::Mirror::new(dir)),
             Self::Fetcher(fetcher) => fetcher.clone(),
-        }
+        })
     }
 }
 impl std::fmt::Debug for Source {
@@ -231,7 +234,7 @@ impl AcquireService {
         let service = Self {
             store,
             db,
-            fetcher: source.fetcher(),
+            fetcher: source.fetcher()?,
             mutations: Arc::new(Mutex::new(())),
         };
         service.reconcile()?;
