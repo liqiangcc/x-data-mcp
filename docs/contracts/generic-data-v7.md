@@ -5,9 +5,8 @@
 `run_market_update` 两个工具，供 AI 以「服务器侧计划 + 单任务执行」完成全市场
 日线/年线更新，不再用 ≤100 item 的显式批次编排刷全市场。
 
-**状态**：代码已宣告 `generic-data-v7`（`src/data_supply/mcp.rs`
-`capabilities()`），但**尚未部署**；当前部署仍为 `generic-data-v6` /
-compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），无
+**状态**：已部署。`generic-data-v7` 自 preview.33 起运行（2026-10-16 发布）；当前部署
+仍为 compact schema 21（见 [STATUS](../STATUS.md)）。schema 不变（仍 21），无
 迁移；部署仅需替换二进制（见 [v7-switch-checklist](v7-switch-checklist.md)）。
 凡下文标注「实现已核」的论断附 文件:行号；未标者为契约目标。
 

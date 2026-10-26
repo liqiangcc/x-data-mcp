@@ -175,7 +175,8 @@ preview.31 / 21 tools / v5——部署日时若该 PR 已合入，「旧句」�
 - `AGENTS.md`：部署管线段「全新 init 最新 compact schema（现 v20）」
   → `现 v21`；preview.29 runtime 段为历史记录不改（STATUS.md
   维护规则指明 AGENTS 环境段由后续 PR 清理，本项可与之一并）。
-- `docs/tasks/`、`docs/contracts/mcp-tools-current.json`、
+- `docs/tasks/`、`docs/contracts/mcp-tools-b3fe2b3.json`（原
+  `mcp-tools-current.json`，已改名，#296）、
   `docs/contracts/generic-start-collection-v1.json`：历史快照/任务
   档案——**不改**。
 - `docs/SLO.md`：无 v5/schema-20 当前事实要改；schema20 字样都在

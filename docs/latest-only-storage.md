@@ -1,8 +1,10 @@
 # 单版本（latest-only）行情存储模型
 
-> **状态：待合并的新模型（schema 21）。已部署的是 schema 20 版本链模型（v0.2.0-preview.31）。**
-> 本文随实现一起合入（实现 PR：`feat/latest-only-storage`）；合并并部署之前，STATUS 与
-> 已部署文档仍以 schema 20 为准，不能把本文描述的 schema 21 当作线上事实。
+> **状态：已部署（schema 21，preview.32 起）。** schema 21 随 preview.32 于 2026-10-13 全新 init
+> 部署（旧 v20 库归档），`generic-data-v7` 自 preview.33 起运行；当前部署事实以
+> [STATUS](STATUS.md) 为准。
+> 历史：本文写于实现合入前（实现 PR：`feat/latest-only-storage`，已随 PR #329 合入 main），
+> 下面「待合并」「合并并部署之前」等表述是当时的语境，保留作历史记录。
 > 年线 fresh / behind / invalid 的对外出参形状、契约版本号与 Skill 变更**以 S3/S4 定稿为准**，
 > 本文只写已裁定的语义，凡未定稿处标为「占位」，不编造 wire 形状。
 > 凡标「估计」的数字均未在生产形态上实测。
@@ -42,7 +44,7 @@
 - **追加是 O(k)**：k 根新 bar 从已存的 `content_digest` 继续折叠，不重扫旧 bar；**替换是 O(n)**：整序列重折叠（约 6,000 根 bar 为数毫秒量级，估计）。
 - 摘要**只取决于** `(entity, period, 有序 bar 序列)`：同一内容无论经追加还是替换得到，摘要相同。因此摘要**不含** coverage、来源、证据等元数据。
 - **`version_id = lower(hex(content_digest))`**（裸 64 位 hex，无前缀）。`VersionRef.integrity_sha256` 是同一个 hex。
-  - 与已部署模型的区别：schema 20 的 `version_id` 是时序派生的 `version-{nanos}-{seq}`，不是内容派生。
+  - 与 schema 20（历史）的区别：schema 20 的 `version_id` 是时序派生的 `version-{nanos}-{seq}`，不是内容派生。
   - **契约要点（必须在契约文档写明）：`version_id` 锚定 bar 的取值，不含 coverage 与来源元数据。** 只改元数据、bar 不变时 `version_id` 不变；pin 仍有效，但元数据（`evidence_digest`、`coverage_status`）已变，由事件日志表达。
 - `no_change` 不改 `version_id`；同内容重提交得到同一个 `version_id`。
 
@@ -77,7 +79,7 @@
 
 ## 6. 追加、替换与修订的判定
 
-判定语义沿用已部署模型，只是输入从「版本行」换成「当前序列」：
+判定语义沿用 schema 20（历史）模型，只是输入从「版本行」换成「当前序列」：
 
 - `prepare()`：缺失旧日期拒绝；改了已存日期的值而没有 revision 依据 → `RevisionUnverified`（fail-closed）；coverage 非 Complete 拒绝；单位/币种元数据变化影响全部年份。
 - 连续性证据三档：unchanged / append / full（源 `.day` 成员的前缀字节、单证券公司行动事件摘要）。typed append 谓词（候选只有新增尾部、没有删除、起始日晚于序列末日）保留；不满足就回落到全量校验路径。
@@ -139,11 +141,12 @@
 - 部署方式不变：归档旧库，全新 init，全市场重建。**不做数据迁移**；schema 21 只出现在 fresh init 链尾。
 - 新二进制**只认 schema 21**；旧二进制遇到 schema 21 库报 unsupported schema 并 fail-closed。
 - **回滚 = 旧二进制 + 归档的 schema 20 库**（既定做法，不改变）。
-- 已部署事实不因本文改变：生产仍是 schema 20 / preview.31。
+- 已部署事实不因本文改变：本文写作时生产仍是 schema 20 / preview.31（历史）；2026-10-13 起
+  生产已是 schema 21（preview.32 全新 init），当前事实见 [STATUS](STATUS.md)。
 
-## 11. 与已部署模型对照
+## 11. 与 schema 20（历史）模型对照
 
-| 方面 | 已部署（schema 20，版本链） | 待合并（schema 21，单版本） |
+| 方面 | 历史（schema 20，版本链；preview.31 及更早） | 当前（schema 21，单版本；preview.32 起） |
 |---|---|---|
 | 存储单位 | 每次变更一个不可变版本；checkpoint + delta 链 | 每 `(实体, 周期)` 一行当前序列 + 逐根 bar |
 | 历史 | 保留所有版本，可按旧 `version_id` 读 | 不保留旧值；事件日志只记摘要变化 |

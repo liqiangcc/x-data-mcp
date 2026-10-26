@@ -34,7 +34,7 @@ versions；当时的 live discovery 为 `generic-data-v3`、20 data tools。
   子范围过滤仍走完整校验。该 tier 下不重复"年线 bar 与基础日线重新聚合一致"这一内容级检查（读取行情内容的 `query_data` 不受影响）。
 
 下方八工具章节是提交 `b3fe2b3bae22d558c3f193e668773728a2e0df34` 的历史快照，
-对应 [旧输入 schema](contracts/mcp-tools-current.json)，不再代表当前部署。通用工具目标与现状差距见
+对应 [旧输入 schema](contracts/mcp-tools-b3fe2b3.json)（历史快照，文件名取自基线提交 `b3fe2b3`），不再代表当前部署。通用工具目标与现状差距见
 [通用工具设计](generic-data-tools.md)；跨两个 server 的每日同步边界、Skill 编排和当前禁止声明见
 [每日同步说明](daily-sync.md)与 [Issue #260](https://github.com/liqiangcc/x-data-mcp/issues/260)。
 

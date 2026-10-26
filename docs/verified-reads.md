@@ -1,10 +1,11 @@
 # 已发布版本完整性读取（#66）
 
 > **历史文档（JSON 文件存储时期）。** 下文把「按 `version_id` 读取某个历史版本」「列表按提交次序」作为
-> 完整性读取的前提，这是版本链模型（已部署的 schema 20 沿用其语义）。待合并的 schema 21 单版本模型
-> 不再保留历史版本：`version_id` 是当前内容摘要（`hex(content_digest)`），旧 `version_id` 读取返回
-> `stale_version`（曾存在）或 `version_not_found`（从未存在），**不回退到旧内容**；完整性校验的对象
-> 从「版本记录摘要」变为序列的顺序折叠摘要。见 [单版本（latest-only）行情存储模型](latest-only-storage.md)。
+> 完整性读取的前提，这是版本链模型（schema 20 及更早；已被 schema 21 取代，历史）。当前部署的
+> schema 21 单版本模型不再保留历史版本：`version_id` 是当前内容摘要（`hex(content_digest)`），旧
+> `version_id` 读取返回 `stale_version`（曾存在）或 `version_not_found`（从未存在），**不回退到旧内容**；
+> 完整性校验的对象从「版本记录摘要」变为序列的顺序折叠摘要（schema 21 自 preview.32 起部署）。
+> 见 [单版本（latest-only）行情存储模型](latest-only-storage.md)。
 
 新发布的每个记录包含integrity_sha256，对该记录除摘要字段外的完整JSON值计算SHA256。
 使用serde_json默认有序键映射的紧凑序列化作为规范表示；价格仍为十进制字符串。
