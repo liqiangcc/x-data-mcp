@@ -522,6 +522,60 @@ fn unsupported_symbol_rejected_and_non_category1_never_applied() {
     assert_eq!(batch.bars[0].close, dec("7.526667"));
 }
 
+/// issue-383 §3.6 / AC-M1-2 (half): the adapter hands the domain neutral
+/// parsed facts — decode-order ordinals, the effective day, the raw f32 bits
+/// and the 2dp business decimals derived from them — and counts (never
+/// interprets) the records outside the verified category. The 知晓时间 is
+/// unknown because the source has no announcement date (BR-M1-9).
+#[test]
+fn factor_set_is_parsed_facts_with_decode_order_and_excluded_count() {
+    let mut snap = valid_snapshot();
+    // Decode order is the file order: the 2026 event precedes the 2025 one,
+    // and a category-2 record sits between them.
+    let events = gbbq_member(&[
+        gbbq_record(1, "600006", 20260109, 1, [0.0, 0.0, 2.0, 0.0]),
+        gbbq_record(1, "600006", 20250716, 2, [0.0, 0.0, 0.0, 99.0]),
+        gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0]),
+        // Another security's record never joins this set.
+        gbbq_record(1, "600007", 20250715, 1, [1.0, 0.0, 0.0, 0.0]),
+    ]);
+    regbbq(&mut snap, &[("gbbq", events.as_slice())]);
+    let source = make_source(&snap);
+    let session = source.materialize_session();
+    let set = session.factor_set("sh.600006").unwrap();
+    assert_eq!(set.entity, "sh.600006");
+    assert_eq!(set.excluded, 1);
+    assert_eq!(set.events.len(), 2);
+    // Ordinals are the decode order of this entity's category-1 records.
+    assert_eq!(
+        set.events.iter().map(|e| e.ordinal).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(
+        set.events[0].effective_day,
+        NaiveDate::from_ymd_opt(2026, 1, 9).unwrap()
+    );
+    assert_eq!(
+        set.events[1].effective_day,
+        NaiveDate::from_ymd_opt(2025, 7, 16).unwrap()
+    );
+    // The immutable fact is the f32 bit pattern, not a re-rendered decimal.
+    assert_eq!(set.events[1].c_bits[3], 5.0f32.to_bits());
+    // The derived value is the frozen 2dp rule applied to those bits.
+    for event in &set.events {
+        let expected = event
+            .c_bits
+            .map(|bits| gbbq::normalize_factor(f32::from_bits(bits)).unwrap());
+        assert_eq!(event.factors, expected);
+        assert_eq!(event.category, 1);
+        assert_eq!(event.known_at, None);
+    }
+    assert_eq!(set.events[1].factors[3], dec("5.00"));
+    // The pair carries exactly the set the forward prices were derived from.
+    let pair = session.materialize_pair("sh.600006").unwrap();
+    assert_eq!(pair.factors, set);
+}
+
 #[test]
 fn absent_or_corrupt_members_fail_closed() {
     // Missing .day member for the requested security.

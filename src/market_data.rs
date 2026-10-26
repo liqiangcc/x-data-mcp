@@ -287,9 +287,73 @@ pub struct Provenance {
     #[serde(default)]
     pub snapshot_inputs: Option<Vec<SnapshotInputBinding>>,
 }
-/// The 不复权 side of one daily item's write set: the raw series is the
-/// source price fact and the forward series is derived from it, so both are
-/// committed in one transaction with one event each (issue-383 §9.1).
+/// One category-1 corporate-action event of one entity — a 解析事实
+/// (separation point 2, issue-383 §3.6).
+///
+/// Two times are deliberately kept apart (separation point 3):
+/// * [`Self::effective_day`] is the 生效日 (ex-rights day) the source carries;
+/// * [`Self::known_at`] is the 知晓时间 (when the fact became knowable). The
+///   source has no announcement date, so M1 always stores `None` = unknown
+///   (BR-M1-9) instead of guessing or substituting a file timestamp. Any
+///   point-in-time query therefore has to declare that the factor set has an
+///   effective date but no known-at date.
+///
+/// `c_bits` is the immutable fact (the source's f32 bit patterns verbatim);
+/// `factors` is the derived 2dp business decimal (`gbbq-cat1-2dp-v1`). The
+/// relation `normalize(c_bits) == factors` is bound by a test, so "the factors
+/// can be recomputed" is an executable assertion rather than a promise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdjustmentEvent {
+    /// Decode order within the entity: a stable ordinal that keeps same-day
+    /// events distinguishable (`adjustment_events` primary key).
+    pub ordinal: i64,
+    /// 生效日, as the same epoch-day integer `series_bars.trade_day` uses.
+    pub effective_day: NaiveDate,
+    /// Category as decoded; M1 stores only the verified value 1.
+    pub category: u8,
+    /// C1..C4 exactly as stored by the source (f32 bit patterns).
+    pub c_bits: [u32; 4],
+    /// C1..C4 as the derived 2dp business decimals (stored as `c1..c4`).
+    pub factors: [Decimal; 4],
+    /// 知晓时间; `None` = unknown, which is the only M1 value.
+    pub known_at: Option<NaiveDate>,
+}
+
+/// The whole parsed factor set of one entity plus the records this build
+/// refuses to interpret (issue-383 §3.6).
+///
+/// Non-category-1 records are never stored: their semantics are not verified.
+/// They survive only as the `excluded` count in the evidence bundle, which is
+/// the same accounting the per-security event binding already used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdjustmentEventSet {
+    pub entity: String,
+    /// Ordered by `ordinal` (the source's decode order).
+    pub events: Vec<AdjustmentEvent>,
+    pub excluded: usize,
+}
+
+impl AdjustmentEventSet {
+    /// The empty set: an entity with no verified event. It carries no version
+    /// (a `derived_dataset_versions` row requires `record_count > 0`), and a
+    /// commit carrying it clears any stored set.
+    pub fn empty(entity: impl Into<String>) -> Self {
+        Self {
+            entity: entity.into(),
+            events: Vec::new(),
+            excluded: 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+/// The 不复权 + 因子 side of one daily item's write set: the raw series is the
+/// source price fact, the factor set is the parsed corporate-action fact, and
+/// the forward series is derived from both, so all of them are committed in
+/// one transaction (issue-383 §9.1).
 ///
 /// The commit aligns `bars` to the dates the forward side actually writes:
 /// the raw series always covers exactly the forward series' date range.
@@ -303,18 +367,27 @@ pub struct RawBatch {
     pub bars: Vec<Bar>,
     /// Raw 口径 evidence (`value == "raw"`) the raw version evidence uses.
     pub adjustment_evidence: AdjustmentEvidence,
+    /// The entity's current factor set, replaced wholesale in the same
+    /// transaction. Every production daily path fills it from the same gbbq
+    /// decode that produced the forward prices.
+    pub factors: AdjustmentEventSet,
 }
 
 impl RawBatch {
-    pub fn new(bars: Vec<Bar>, adjustment_evidence: AdjustmentEvidence) -> Self {
+    pub fn new(
+        bars: Vec<Bar>,
+        adjustment_evidence: AdjustmentEvidence,
+        factors: AdjustmentEventSet,
+    ) -> Self {
         Self {
             bars,
             adjustment_evidence,
+            factors,
         }
     }
 
-    pub fn no_change(adjustment_evidence: AdjustmentEvidence) -> Self {
-        Self::new(Vec::new(), adjustment_evidence)
+    pub fn no_change(adjustment_evidence: AdjustmentEvidence, factors: AdjustmentEventSet) -> Self {
+        Self::new(Vec::new(), adjustment_evidence, factors)
     }
 }
 

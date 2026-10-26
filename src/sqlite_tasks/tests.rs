@@ -835,7 +835,7 @@ fn head_transition_refreshes_a_stale_held_head() {
 /// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
 /// version-manifest/result tables below are replaced by `market_series` +
 /// `series_bars` + `yearly_series_lineage` + `market_events`.
-const COMPACT_TABLES: [&str; 8] = [
+const COMPACT_TABLES: [&str; 10] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
@@ -844,6 +844,10 @@ const COMPACT_TABLES: [&str; 8] = [
     "yearly_series_lineage",
     "market_events",
     "staged_records",
+    // Schema 22 (M1 PR-4, issue-383 §3.6/§3.7): the parsed factor facts and
+    // the non-bar dataset version registration.
+    "adjustment_events",
+    "derived_dataset_versions",
 ];
 /// Dropped by migration 021 — their absence is part of the v21 shape.
 const DROPPED_V19_TABLES: [&str; 12] = [
@@ -960,6 +964,41 @@ fn assert_compact_shape(path: &std::path::Path) {
     let lineage = raw_columns(path, "yearly_series_lineage");
     assert!(lineage.contains(&"base_adjustment".to_string()));
     assert!(lineage.contains(&"base_instrument_class".to_string()));
+    // §3.6: the immutable factor bits and the derived decimals share one row,
+    // and the 知晓时间 is a separate nullable column (never inferred).
+    let factors = raw_columns(path, "adjustment_events");
+    for column in [
+        "entity",
+        "ordinal",
+        "effective_day",
+        "category",
+        "c_bits_1",
+        "c_bits_4",
+        "c1",
+        "c4",
+        "source_binding_digest",
+        "evidence_digest",
+        "known_at",
+    ] {
+        assert!(factors.contains(&column.to_string()), "missing {column}");
+    }
+    // §3.7: identity + audit only — no business columns in the registry.
+    let derived = raw_columns(path, "derived_dataset_versions");
+    for column in [
+        "dataset_kind",
+        "dataset_key",
+        "version_id",
+        "content_digest",
+        "digest_format",
+        "record_count",
+        "first_day",
+        "last_day",
+        "algorithm_version",
+        "task_id",
+        "item_id",
+    ] {
+        assert!(derived.contains(&column.to_string()), "missing {column}");
+    }
 }
 fn assert_legacy_shape(path: &std::path::Path) {
     assert_eq!(raw_user_version(path), SCHEMA_VERSION);

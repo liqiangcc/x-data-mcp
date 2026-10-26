@@ -24,9 +24,9 @@
 use crate::{
     compact_market, day_file, gbbq,
     market_data::{
-        Adjustment, AdjustmentEvidence, Bar, CoverageEvidence, CoverageStatus, EvidenceValue,
-        MarketDataBatch, MarketDataPipeline, Period, Provenance, SnapshotInputBinding, SourceError,
-        UnitCurrencyEvidence,
+        Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, Bar, CoverageEvidence,
+        CoverageStatus, EvidenceValue, MarketDataBatch, MarketDataPipeline, Period, Provenance,
+        SnapshotInputBinding, SourceError, UnitCurrencyEvidence,
     },
     market_storage::{
         Error, MarketRepository, Publication, PublishIntent, Publisher, Receipt, Scope,
@@ -302,6 +302,28 @@ struct DayMemberRead {
     sha256: String,
 }
 
+/// One security's complete daily write set from a single source read: both
+/// 口径 plus the parsed factor set the forward prices were derived from
+/// (issue-383 §9.1).
+pub struct MaterializedPair {
+    /// 不复权: the `.day` price fact (`price_scale=2`).
+    pub raw: MarketDataBatch,
+    /// 前复权: derived from `raw` and `factors` (`qfq-exact-v1`, 6dp).
+    pub forward: MarketDataBatch,
+    /// The entity's parsed category-1 factor facts (§3.6).
+    pub factors: AdjustmentEventSet,
+}
+
+/// `yyyymmdd` (the GBBQ date encoding) → calendar date; `None` when the
+/// integer is not a real date, which the caller fails closed on.
+fn event_day(date_raw: u32) -> Option<NaiveDate> {
+    NaiveDate::from_ymd_opt(
+        i32::try_from(date_raw / 10000).ok()?,
+        date_raw / 100 % 100,
+        date_raw % 100,
+    )
+}
+
 /// One archive's parsed central directory: member name → all entry
 /// indices, so duplicate names stay detectable (absent-or-ambiguous is a
 /// source failure, unchanged from the per-call path).
@@ -456,6 +478,45 @@ impl MaterializeSession<'_> {
         ]
     }
 
+    /// This security's parsed factor set: the verified category-1 records as
+    /// neutral facts (issue-383 §3.6), in decode order, plus the count of
+    /// records this build refuses to interpret.
+    ///
+    /// This is the only place a decoded source record becomes an
+    /// [`AdjustmentEvent`], so the domain layer never names a source. The
+    /// derived 2dp decimals come from the frozen `gbbq-cat1-2dp-v1` rule, and
+    /// the 知晓时间 stays `None` because the source carries no announcement
+    /// date (BR-M1-9).
+    pub fn factor_set(&self, symbol: &str) -> Result<AdjustmentEventSet, SourceError> {
+        let (market, code) = Self::split_symbol(symbol)?;
+        let (events, excluded) = self.security_events(market, code)?;
+        let mut parsed = Vec::with_capacity(events.len());
+        for (ordinal, event) in events.iter().enumerate() {
+            let effective_day = event_day(event.date_raw).ok_or_else(|| {
+                SourceError::InvalidResponse(format!(
+                    "gbbq event date {} is not a calendar date",
+                    event.date_raw
+                ))
+            })?;
+            parsed.push(AdjustmentEvent {
+                ordinal: i64::try_from(ordinal)
+                    .map_err(|_| SourceError::InvalidResponse("event ordinal overflow".into()))?,
+                effective_day,
+                category: event.category,
+                c_bits: event.c_raw.map(f32::to_bits),
+                factors: event
+                    .factors()
+                    .map_err(|e| SourceError::InvalidResponse(format!("gbbq factor: {e}")))?,
+                known_at: None,
+            });
+        }
+        Ok(AdjustmentEventSet {
+            entity: symbol.into(),
+            events: parsed,
+            excluded,
+        })
+    }
+
     /// Same output as `TdxMarketSource::materialize_daily`: the `.day`
     /// member is re-read per symbol through the shared archive index while
     /// the verified gbbq member bytes are decoded once and shared.
@@ -473,13 +534,12 @@ impl MaterializeSession<'_> {
     }
 
     /// Both 口径 of one security from a single member read: the raw batch
-    /// (the price fact) and the forward-adjusted batch derived from it
-    /// (issue-383 §9.1). The `.day` member bytes are read and CRC-verified
-    /// once, parsed once, and the gbbq event set is decoded once.
-    pub fn materialize_pair(
-        &self,
-        symbol: &str,
-    ) -> Result<(MarketDataBatch, MarketDataBatch), SourceError> {
+    /// (the price fact), the forward-adjusted batch derived from it, and the
+    /// factor set both were built from (issue-383 §9.1). The `.day` member
+    /// bytes are read and CRC-verified once, parsed once, and the gbbq event
+    /// set is decoded once — so the committed factor rows and the forward
+    /// prices provably share one input.
+    pub fn materialize_pair(&self, symbol: &str) -> Result<MaterializedPair, SourceError> {
         let (market, code) = Self::split_symbol(symbol)?;
         let source = self.source;
         let (day_member, day_bytes) =
@@ -514,7 +574,11 @@ impl MaterializeSession<'_> {
             events,
             excluded,
         )?;
-        Ok((raw, forward))
+        Ok(MaterializedPair {
+            raw,
+            forward,
+            factors: self.factor_set(symbol)?,
+        })
     }
 
     /// One 口径 through the ordinary single-symbol path.
@@ -1136,6 +1200,7 @@ impl TdxRangeProvider<'_> {
                     // still reaches the raw series through the forward side.
                     raw: Some(crate::market_data::RawBatch::no_change(
                         raw_adjustment_evidence(excluded),
+                        self.session.factor_set(symbol)?,
                     )),
                 }))
             }
@@ -1218,8 +1283,11 @@ impl TdxRangeProvider<'_> {
                 }
                 // The commit aligns the raw tail to the forward upsert dates;
                 // an empty forward decision leaves the raw series unchanged.
-                let raw =
-                    crate::market_data::RawBatch::new(raw_tail, raw_adjustment_evidence(excluded));
+                let raw = crate::market_data::RawBatch::new(
+                    raw_tail,
+                    raw_adjustment_evidence(excluded),
+                    self.session.factor_set(symbol)?,
+                );
                 Ok(Some(crate::market_update::runner::TypedAcquisition {
                     decision: if upserts.is_empty() {
                         crate::market_update::runner::TypedDecision::Unchanged
@@ -1416,7 +1484,10 @@ impl RangeProvider for TdxRangeProvider<'_> {
                 (
                     segment,
                     combined,
-                    crate::market_data::RawBatch::no_change(raw_adjustment_evidence(excluded)),
+                    crate::market_data::RawBatch::no_change(
+                        raw_adjustment_evidence(excluded),
+                        self.session.factor_set(&symbol)?,
+                    ),
                 )
             }
             Continuity::Append { tail, .. } => {
@@ -1465,6 +1536,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                         crate::market_data::RawBatch::new(
                             raw_tail,
                             raw_adjustment_evidence(excluded),
+                            self.session.factor_set(&symbol)?,
                         ),
                     )
                 } else {
@@ -1476,6 +1548,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                         crate::market_data::RawBatch::new(
                             raw_tail,
                             raw_adjustment_evidence(excluded),
+                            self.session.factor_set(&symbol)?,
                         ),
                     )
                 }
@@ -1487,8 +1560,8 @@ impl RangeProvider for TdxRangeProvider<'_> {
                 // as a combined rewrite candidate (evidence mode `full`);
                 // `prepare_range` binds it by requiring every acquired
                 // segment bar verbatim and every base date still present.
-                let (full_raw, full_batch) = self.session.materialize_pair(&symbol)?;
-                let mut segment = full_batch.clone();
+                let pair = self.session.materialize_pair(&symbol)?;
+                let mut segment = pair.forward.clone();
                 segment
                     .bars
                     .retain(|b| range.start <= b.date && b.date <= range.end);
@@ -1500,15 +1573,19 @@ impl RangeProvider for TdxRangeProvider<'_> {
                 let combined = self.combined_candidate(
                     &ctx,
                     base,
-                    &full_batch,
+                    &pair.forward,
                     &segment,
-                    full_batch.bars.clone(),
+                    pair.forward.bars.clone(),
                     true,
                 )?;
                 (
                     segment,
                     Some(combined),
-                    crate::market_data::RawBatch::new(full_raw.bars, full_raw.adjustment_evidence),
+                    crate::market_data::RawBatch::new(
+                        pair.raw.bars,
+                        pair.raw.adjustment_evidence,
+                        pair.factors,
+                    ),
                 )
             }
         };
@@ -1706,7 +1783,9 @@ fn acquire_merged_segment(
     let source = session.source();
     // One member read yields both 口径; the raw side mirrors the forward
     // bars' dates (issue-383 §9.1).
-    let (raw_batch, batch) = session.materialize_pair(&base.version().symbol)?;
+    let pair = session.materialize_pair(&base.version().symbol)?;
+    let (raw_batch, batch) = (pair.raw, pair.forward);
+    let factors = pair.factors;
     // Same pinned snapshot = same QFQ basis: the base's declared
     // snapshot inputs must equal the member/archive digests this
     // installed source actually read.
@@ -1790,6 +1869,7 @@ fn acquire_merged_segment(
         raw: Some(crate::market_data::RawBatch::new(
             raw_batch.bars,
             raw_batch.adjustment_evidence,
+            factors,
         )),
         combined: Some(CombinedCandidate {
             evidence: CombinedEvidence {
@@ -2227,11 +2307,12 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "existing daily head requires the update_data range path".into(),
             ));
         }
-        let (raw_batch, batch) = match self.session {
+        let pair = match self.session {
             Some(session) => session.materialize_pair(symbol),
             None => self.source.materialize_session().materialize_pair(symbol),
         }
         .map_err(|e| Error::Invalid(e.to_string()))?;
+        let (raw_batch, batch, factors) = (pair.raw, pair.forward, pair.factors);
         let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
         let (records, _) =
             publish::validate_and_deduplicate(&batch).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -2269,6 +2350,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             raw: Some(crate::market_data::RawBatch::new(
                 raw_batch.bars,
                 raw_batch.adjustment_evidence,
+                factors,
             )),
         }))
     }
@@ -2296,11 +2378,12 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "existing daily head requires the update_data range path".into(),
             ));
         }
-        let (raw_batch, batch) = match self.session {
+        let pair = match self.session {
             Some(session) => session.materialize_pair(symbol),
             None => self.source.materialize_session().materialize_pair(symbol),
         }
         .map_err(|e| Error::Invalid(e.to_string()))?;
+        let (raw_batch, batch, factors) = (pair.raw, pair.forward, pair.factors);
         let current = self.repository.task_head(&binding.head.task_id)?;
         if current.status != Status::Running
             || current.state_revision != binding.head.state_revision
@@ -2354,6 +2437,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
         plan.raw = Some(crate::market_data::RawBatch::new(
             raw_batch.bars,
             raw_batch.adjustment_evidence,
+            factors,
         ));
         self.repository.commit(&plan)
     }

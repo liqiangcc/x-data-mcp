@@ -1099,6 +1099,8 @@ pub(crate) mod collection;
 pub(crate) mod compact_repo;
 #[allow(dead_code)]
 pub(crate) mod compact_runtime;
+#[allow(dead_code)]
+pub(crate) mod derived;
 pub(crate) mod envelope;
 pub(crate) mod evidence_store;
 pub(crate) mod gaps;

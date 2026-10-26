@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use sha2::Digest as _;
 
 use super::compact_repo::period_code;
-use super::{evidence_store, integrity, series, storage};
+use super::{derived, evidence_store, integrity, series, storage};
 use crate::compact_market::{
     self, CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence,
 };
@@ -399,6 +399,7 @@ pub(crate) fn commit_item_tx(
     let receipt = commit_series_inner(c, forward, ItemFinish::None)?;
     if let Some(raw) = raw {
         commit_raw_side(c, forward, raw)?;
+        commit_factor_set(c, forward, raw)?;
     }
     let task_revision = forward
         .expected_task_revision
@@ -419,6 +420,34 @@ pub(crate) fn commit_item_tx(
 /// `UNIQUE(task_id,item_id,adjustment)` both stay satisfied.
 pub(crate) fn raw_result_id(forward_result_id: &str) -> String {
     format!("{forward_result_id}:raw")
+}
+
+/// Write the entity's factor set and its version registration in the same
+/// transaction as the two 口径 (issue-383 §9.1 item 2). The set is replaced
+/// wholesale (no incremental patch); the source binding is the forward
+/// series' — one gbbq member and one per-security event digest, so the parsed
+/// facts and the forward prices they produced stay provably the same input.
+fn commit_factor_set(
+    c: &Connection,
+    forward: &Commit,
+    raw: &crate::market_data::RawBatch,
+) -> Result<(), Error> {
+    if raw.factors.entity != forward.entity {
+        return Err(integrity("factor set belongs to another entity"));
+    }
+    let head =
+        series::read_series_adjusted(c, forward.entity, forward.period, Adjustment::Forward)?
+            .ok_or_else(|| integrity("paired daily commit lost its forward head"))?;
+    // The registration row is the read model's handle; the commit only needs
+    // the write to have happened (a non-empty set always registers).
+    let _ = derived::replace_adjustment_events(
+        c,
+        &raw.factors,
+        head.source_binding_digest,
+        forward.task_id,
+        forward.item_id,
+    )?;
+    Ok(())
 }
 
 /// Write the raw 口径 half of a daily item. The raw series is the source
