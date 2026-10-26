@@ -647,7 +647,7 @@ python3 -m venv /root/.venvs/x-research
 - `--self-check`：用 pyarrow 按 §7.4 契约自造 5 个文件再双读，**本机已通过**——证明这份契约本身能被第三方 reader 表达；
 - `--snapshot-dir DIR`：读 `<DIR>/manifest.json`，逐文件校验 arrow 逻辑类型、Parquet 物理类型与行数，并用 duckdb 做 `count(*)`/`min(trade_day)`/`max(trade_day)` 流式聚合。
 
-本机**未**跑 `--snapshot-dir`：真实导出要 Rust 二进制，而本机禁止编译；该路径由 CI 的 `export` job 在 `cargo build --release --features export` 之后执行（`.github/workflows/ci.yml`）。物理类型检查只在真实导出上严格（pyarrow 自写文件用最小宽度 `FLBA`，不是 §7.4 的 9/16 字节），该检查已用反证确认非空转：故意写 16 字节 `amount` 时脚本报 `fixed length 16 != 9`。
+本机**未**跑 `--snapshot-dir`：真实导出要 Rust 二进制，而本机禁止编译；该路径由 CI 的 `export` job 执行（`.github/workflows/ci.yml`：先用 `cargo test --features export smoke_export_for_external_readers` 落一份真实快照，再让本脚本读它），已在 PR #408 通过，结果见 §7.8。物理类型检查只在真实导出上严格（pyarrow 自写文件用最小宽度 `FLBA`，不是 §7.4 的 9/16 字节），该检查已用反证确认非空转：故意写 16 字节 `amount` 时脚本报 `fixed length 16 != 9`。
 
 读大文件的约束不变：按列投影 + `ParquetFile.iter_batches()` 或 duckdb 流式聚合，全历史 1,675 万行不一次读入。
 
@@ -655,7 +655,7 @@ python3 -m venv /root/.venvs/x-research
 
 | 选项 | 依赖树 | 体积/编译 | 结论 |
 |---|---|---|---|
-| `parquet`（default-features=false, features=["snap"]），用低层 `SerializedFileWriter` | `parquet` + `snap` + `twox-hash`/`half`/`seq-macro` 等少量（`thrift` 编解码在 `parquet` 内部，不是独立依赖） | 估计二进制 +1.5–2.5MB、CI 编译 +60–120s（**待实测**，实测值由 CI `export` job 记录） | **推荐** |
+| `parquet`（default-features=false, features=["snap"]），用低层 `SerializedFileWriter` | `parquet` + `snap` + `twox-hash`/`half`/`seq-macro` 等少量（`thrift` 编解码在 `parquet` 内部，不是独立依赖） | **实测**（CI `export` job，无缓存的一次 release 构建）：`target/release/export_research` = **5,030,424 B**（4.8MiB），构建 **110s** | **推荐** |
 | `parquet` + `arrow` | 再加 `arrow-array/buffer/schema/select/cast/...` | 估计 +5–8MB、编译 +2–4min | 不采用：M1 只需要"按列写定长类型"，不需要 Arrow 计算生态 |
 | 自己写 Parquet 编码 | 0 依赖 | 体积最小 | 不采用：thrift 编码 + 页格式 + 统计信息，自研成本远大于依赖成本 |
 
@@ -675,7 +675,7 @@ path = "src/bin/export_research.rs"
 required-features = ["export"]
 ```
 
-- 默认 `cargo build`/`cargo nextest` **不编译 parquet**，CI 的既有 Rust 关键路径不受影响；新增 CI job **`export`**（`.github/workflows/ci.yml`）专门跑 `cargo nextest run --features export`、`cargo test --features export smoke_export_for_external_readers`（落一份真实快照给 pyarrow/duckdb 读）与 `cargo build --features export --release`，并把二进制字节数与构建秒数写进 job summary（这两个数字进 PR 正文，作为"体积预算"的实测值）。
+- 默认 `cargo build`/`cargo nextest` **不编译 parquet**，CI 的既有 Rust 关键路径不受影响；新增 CI job **`export`**（`.github/workflows/ci.yml`）专门跑 `cargo nextest run --features export`、`cargo test --features export smoke_export_for_external_readers`（落一份真实快照给 pyarrow/duckdb 读）与 `cargo build --features export --release`，并把二进制字节数与构建秒数写进 job summary。实测（PR #408 首次运行，无缓存）：**5,030,424 B / 110s**；`export_research` 是唯一带该 feature 的产物，所以这个字节数是"整只二进制"而不是 parquet 的边际体积——边际值需要一次 stub writer 的对照构建，没有为它单独跑一轮 CI。
 - 实际依赖树（`Cargo.lock` 由 `cargo metadata` 生成）：+106/−3 行，新增包为 `parquet`、`snap`、`twox-hash`、`half`、`seq-macro`、`tiny-keccak`、`const-random`(+`-macro`)、`crunchy`、`libm`、`num-bigint 0.5.1`（仓库已用 0.4，两版并存，semver 不兼容是正常的）；**没有** `arrow-*`。默认构建不拉这些。
 - **发布管线要改**：`scripts/build_release.sh` 需要带 `--features export`，否则发布包里没有导出命令。这是 owner 批准项（§10.3）。
 - 压缩选 `snap`（纯 Rust，无 C 依赖）：`zstd` 体积更小但引入 C 代码与更大的二进制；M1 的导出体积不是门禁项（§7.7），先用 snappy。
@@ -716,7 +716,11 @@ required-features = ["export"]
 5. **一致性（AC-M1-8）**：`SnapshotWriter` 分三步，`finalize()` 在**新连接**上重新 `plan()` 并与写文件时的计划逐字段比对（`verify_unchanged`），通过后才写 `manifest.json` 再 `rename`。因此"日更在导出期间提交"只会得到 `EXPORT_DRIFT` 且目录为空，不会留下半新半旧的快照；`--dry-run` 也在单一只读事务内规划。
 6. **只读（AC-M1-9）**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`；测试直接对读连接执行 `UPDATE` 断言失败，并断言导出前后主库文件字节完全相同。
 
-未运行（本机禁止 Rust 编译，按 §15）：`cargo fmt --check` 已跑（通过）；`cargo test --features export`、`cargo build --release --features export`、`cargo clippy --all-targets --all-features` 与 `scripts/export_smoke.py --snapshot-dir` 全部**未运行**，只能由 PR 上的 CI 证明。
+验证状态（本机禁止 Rust 编译，按 §15）：本机只跑了 `cargo fmt --check`（通过）与 `scripts/export_smoke.py --self-check`（通过）；Rust 侧全部由 PR #408 的 CI 证明，三个 job（`rust`/`export`/`package`）在 run `40336874624` 这一轮全绿：
+
+- `rust`：`clippy --all-targets --all-features -D warnings`、`nextest` 全量（930 个）、doc tests；
+- `export`：`--features export` 的 938 个测试（含 19 个 `research` 测试）、一份真实快照被 pyarrow 26.0.0 / duckdb 2.0.0 读回（5 个文件的 §7.4 逻辑类型逐列相等，duckdb 聚合行数与 `min/max(trade_day)` 相符，`daily_raw` 的 3 行非 NULL `volume_quantum`），以及 release 构建；
+- `package`：发布包结构未变（导出命令尚未进发布包，见 §10.3 第 3 条）。
 
 ---
 
