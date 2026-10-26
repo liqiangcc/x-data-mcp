@@ -3,7 +3,11 @@
 //! `file://` sources work the same way, which is how pinned snapshots and
 //! tests flow through the identical byte-verified pipeline.
 use serde::Deserialize;
-use std::{path::Path, process::Command};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Head {
@@ -24,6 +28,8 @@ pub enum Error {
     Failed(String),
     #[error("fetch helper output invalid: {0}")]
     Output(String),
+    #[error("fetch helper not found: {0}")]
+    NotFound(String),
 }
 
 /// The fetch surface the service depends on; production impl shells to the
@@ -33,18 +39,51 @@ pub trait Fetcher: Send + Sync {
     fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error>;
 }
 
-/// Runs `scripts/tdx_fetch.py` (or `X_DATA_MCP_TDX_FETCH` override).
+/// Environment variable naming the helper script. Production units set it;
+/// when set it wins outright and its value is used as-is.
+pub const TDX_FETCH_ENV: &str = "X_DATA_MCP_TDX_FETCH";
+/// Release-package layout (`scripts/build_release.sh`): binaries land in
+/// `<package>/bin/`, the helper in `<package>/scripts/tdx_fetch.py`.
+const PACKAGED_HELPER: &str = "../scripts/tdx_fetch.py";
+
+/// Runs the pinned `tdx_fetch.py` helper: `X_DATA_MCP_TDX_FETCH` when set,
+/// otherwise the packaged copy next to the executable.
 pub struct Helper {
-    script: std::path::PathBuf,
+    script: PathBuf,
 }
 impl Helper {
-    pub fn new() -> Self {
-        let script = std::env::var_os("X_DATA_MCP_TDX_FETCH")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/tdx_fetch.py")
-            });
-        Self { script }
+    pub fn new() -> Result<Self, Error> {
+        let exe = std::env::current_exe().ok();
+        let script = Self::resolve(std::env::var_os(TDX_FETCH_ENV), exe.as_deref())?;
+        Ok(Self { script })
+    }
+    /// Resolve the helper path without touching the environment, so the
+    /// rules are directly testable. There is deliberately no compile-time
+    /// fallback: a packaged binary must never reach back into the build
+    /// machine's source tree, so a miss fails closed here instead of
+    /// surfacing as an unexplained download failure later (#375).
+    fn resolve(explicit: Option<OsString>, exe: Option<&Path>) -> Result<PathBuf, Error> {
+        if let Some(path) = explicit {
+            return Ok(PathBuf::from(path));
+        }
+        let mut tried = Vec::new();
+        if let Some(dir) = exe.and_then(Path::parent) {
+            let path = dir.join(PACKAGED_HELPER);
+            if path.is_file() {
+                return Ok(path);
+            }
+            tried.push(path.display().to_string());
+        }
+        let tried = if tried.is_empty() {
+            "no path (executable path unavailable)".to_string()
+        } else {
+            tried.join(", ")
+        };
+        Err(Error::NotFound(format!(
+            "{TDX_FETCH_ENV} is not set and the packaged helper is missing; tried {tried} \
+             (release layout: <exe dir>/{PACKAGED_HELPER}). Set {TDX_FETCH_ENV} to the \
+             helper script path."
+        )))
     }
     fn run(&self, args: &[&str]) -> Result<serde_json::Value, Error> {
         let output = Command::new("python3")
@@ -77,11 +116,6 @@ struct FetchJson {
     content_length: Option<u64>,
     bytes: u64,
     sha256: String,
-}
-impl Default for Helper {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 impl Fetcher for Helper {
     fn head(&self, url: &str) -> Result<Head, Error> {
@@ -164,6 +198,60 @@ impl Fetcher for Mirror {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A throw-away release-package layout: `<package>/bin/<exe>` plus an
+    /// empty `<package>/scripts/` directory.
+    fn package_layout() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("bin")).unwrap();
+        std::fs::create_dir(dir.path().join("scripts")).unwrap();
+        let exe = dir.path().join("bin").join("acquire_service");
+        std::fs::write(&exe, b"").unwrap();
+        (dir, exe)
+    }
+
+    /// #375: an explicit `X_DATA_MCP_TDX_FETCH` wins outright and is not
+    /// second-guessed — production units rely on it, and a missing file
+    /// stays python's error to report, exactly as before the change.
+    #[test]
+    fn explicit_helper_path_wins_even_when_the_file_is_absent() {
+        let (dir, exe) = package_layout();
+        std::fs::write(dir.path().join("scripts/tdx_fetch.py"), b"").unwrap();
+        let explicit = dir.path().join("elsewhere").join("helper.py");
+        let resolved =
+            Helper::resolve(Some(explicit.clone().into_os_string()), Some(&exe)).unwrap();
+        assert_eq!(resolved, explicit);
+    }
+
+    /// #375: without the variable, the release-package layout next to the
+    /// executable is the only candidate.
+    #[test]
+    fn packaged_helper_is_found_next_to_the_executable() {
+        let (dir, exe) = package_layout();
+        let packaged = dir.path().join("scripts").join("tdx_fetch.py");
+        std::fs::write(&packaged, b"").unwrap();
+        let resolved = Helper::resolve(None, Some(&exe)).unwrap();
+        assert_eq!(resolved, exe.parent().unwrap().join(PACKAGED_HELPER));
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            packaged.canonicalize().unwrap()
+        );
+    }
+
+    /// #375: a miss is fail-closed and names the variable and the path it
+    /// tried. No compile-time path may appear anywhere in the message.
+    #[test]
+    fn missing_packaged_helper_fails_closed_with_the_tried_path() {
+        let (_dir, exe) = package_layout();
+        let err = Helper::resolve(None, Some(&exe)).unwrap_err();
+        assert!(matches!(&err, Error::NotFound(_)), "{err:?}");
+        let message = err.to_string();
+        assert!(message.contains(TDX_FETCH_ENV), "{message}");
+        let tried = exe.parent().unwrap().join(PACKAGED_HELPER);
+        assert!(message.contains(&tried.display().to_string()), "{message}");
+        assert!(!message.contains("CARGO_MANIFEST_DIR"), "{message}");
+    }
+
     /// The helper owns the head/fetch wire shape: numeric `status`,
     /// `content_length` and `bytes` — HTTP header strings are normalized
     /// inside `tdx_fetch.py`, not here. A stringly-typed regression fails
