@@ -22,8 +22,8 @@ use chrono::NaiveDate;
 use rusqlite::{Connection, params};
 
 const ENTITY: &str = "sh.600006";
-/// Schema 22's only materialized shape (forward-adjusted stock, 分).
-const SHAPE: SeriesShape = SeriesShape::FORWARD_STOCK_CENTS;
+/// The daily forward shape: stock, `qfq-exact-v1` 1e-6 元 (issue-383 §4.2).
+const SHAPE: SeriesShape = SeriesShape::FORWARD_STOCK_UNITS;
 
 fn db() -> (tempfile::TempDir, SqliteTasks, Connection) {
     use std::os::unix::fs::PermissionsExt;
@@ -397,13 +397,25 @@ fn digest_fold_is_path_independent() {
         whole,
         fold_bars(ENTITY, Period::Day, index_shape, &bars).unwrap()
     );
-    let six_dp_shape = SeriesShape {
-        price_scale: 6,
+    // PR-3: the forward stock shape itself is 6dp now, so the "different
+    // precision" witness is the reserved ETF scale (厘, issue-383 §3.2).
+    let three_dp_shape = SeriesShape {
+        price_scale: 3,
         ..SHAPE
     };
     assert_ne!(
         whole,
-        fold_bars(ENTITY, Period::Day, six_dp_shape, &bars).unwrap()
+        fold_bars(ENTITY, Period::Day, three_dp_shape, &bars).unwrap()
+    );
+    assert_ne!(
+        whole,
+        fold_bars(
+            ENTITY,
+            Period::Day,
+            SeriesShape::stock(Adjustment::Raw),
+            &bars
+        )
+        .unwrap()
     );
     // Non-increasing input is rejected.
     let mut bad = bars.clone();

@@ -56,22 +56,28 @@ pub(crate) struct SeriesShape {
 }
 
 impl SeriesShape {
-    /// The only shape schema 22 materializes before PR-2/PR-3: forward
-    /// adjusted, stock, 分. Every write path names it explicitly so widening
-    /// the write set cannot silently reuse the wrong 口径.
-    pub(crate) const FORWARD_STOCK_CENTS: Self = Self {
+    /// Forward-adjusted stock series at 1e-6 元 (`qfq-exact-v1`). Daily and
+    /// yearly both use it: a yearly bar is drawn from daily forward values, so
+    /// a coarser yearly scale could not hold them. Every write path names the
+    /// shape explicitly so widening the write set cannot silently reuse the
+    /// wrong 口径.
+    pub(crate) const FORWARD_STOCK_UNITS: Self = Self {
         adjustment: Adjustment::Forward,
         instrument_class: INSTRUMENT_CLASS_STOCK,
-        price_scale: compact_market::PRICE_SCALE_CENTS,
+        price_scale: compact_market::PRICE_SCALE_QFQ,
     };
 
-    /// Stock series at 分 for the given 口径 — the shape every daily commit
-    /// writes in M1 (issue-383 §9.1).
+    /// Stock series for the given 口径 at its own precision: 不复权 keeps the
+    /// `.day` 分 integers (`price_scale=2`), 前复权 carries the exact chain's
+    /// 1e-6 元 (`price_scale=6`) — issue-383 §4.1/§4.2.
     pub(crate) const fn stock(adjustment: Adjustment) -> Self {
         Self {
             adjustment,
             instrument_class: INSTRUMENT_CLASS_STOCK,
-            price_scale: compact_market::PRICE_SCALE_CENTS,
+            price_scale: match adjustment {
+                Adjustment::Raw => compact_market::PRICE_SCALE_CENTS,
+                Adjustment::Forward => compact_market::PRICE_SCALE_QFQ,
+            },
         }
     }
 

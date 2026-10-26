@@ -15,9 +15,13 @@ pub type Digest = [u8; 32];
 /// `market_series.price_scale` ceiling (schema 22 DDL, issue-383 §3.2): an
 /// integer price is `value / 10^price_scale` in 元 (点 for indexes).
 pub const MAX_PRICE_SCALE: u32 = 6;
-/// A-share prices in 分: `price_scale=2`. The only scale schema 22 writes
-/// until the forward-adjusted 6dp series lands (M1 PR-3).
+/// A-share raw prices in 分: `price_scale=2` (`.day` 原值, issue-383 §4.1).
 pub const PRICE_SCALE_CENTS: u32 = 2;
+/// Forward-adjusted series precision: `price_scale=6` (1e-6 元), written by
+/// `qfq-exact-v1` (issue-383 §4.2/§4.3). The forward chain is composed over
+/// exact rationals and rounded once, so the stored integer *is* the rounded
+/// value — there is no further rounding a reader could apply.
+pub const PRICE_SCALE_QFQ: u32 = 6;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
@@ -60,15 +64,22 @@ impl CompactBar {
 
     /// Decode with the scale stored on the owning series row — a reader that
     /// assumes 2dp would misprice every 6dp series (issue-383 §3.10).
+    ///
+    /// The returned values are exact at the row's scale but not padded to it:
+    /// trailing zeros carry no information, and the project rule is not to fix
+    /// an output width (`docs/sqlite-storage-design.md`: 不擅自固定两位或六位
+    /// 小数). A 6dp series therefore renders `11.75` for an exact cent value
+    /// and `7.526667` where the chain actually has six decimals — "最多 6 位"
+    /// (issue-383 §8.2), not "总是 6 位".
     pub fn to_bar(&self, period: Period, price_scale: u32) -> Result<Bar, Error> {
         let (date, amount) = self.decode_checked(period)?;
         let scale = checked_scale(price_scale)?;
         Ok(Bar {
             date,
-            open: Decimal::new(self.open_units, scale),
-            high: Decimal::new(self.high_units, scale),
-            low: Decimal::new(self.low_units, scale),
-            close: Decimal::new(self.close_units, scale),
+            open: Decimal::new(self.open_units, scale).normalize(),
+            high: Decimal::new(self.high_units, scale).normalize(),
+            low: Decimal::new(self.low_units, scale).normalize(),
+            close: Decimal::new(self.close_units, scale).normalize(),
             volume: self.volume.map(Decimal::from),
             amount,
             r7_raw: self.r7_raw,

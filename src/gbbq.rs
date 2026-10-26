@@ -22,7 +22,16 @@
 use std::convert::TryInto;
 use std::str::FromStr;
 
+use num_bigint::BigInt;
+// Trait methods only (`abs`, `is_negative`, `is_zero`, `to_i64`); the trait
+// names never appear in this module.
+use num_traits::{Signed as _, ToPrimitive as _, Zero as _};
 use rust_decimal::{Decimal, RoundingStrategy};
+
+// The exact chain is the only place a target price scale enters this module;
+// the ceiling is the `market_series.price_scale` CHECK, so the derivation
+// layer cannot produce a value the storage layer must reject.
+use crate::compact_market::MAX_PRICE_SCALE;
 
 pub const RECORD_BYTES: usize = 29;
 
@@ -48,6 +57,16 @@ pub enum Error {
     InvalidCode { index: usize, bytes: [u8; 7] },
     #[error("GBBQ factor {index} is not a finite decimal input")]
     NonFiniteFactor { index: usize },
+    #[error("GBBQ exact chain: factor is not a 2dp business decimal")]
+    ExactFactorNotTwoDecimals,
+    #[error("GBBQ exact chain: degenerate event denominator (10 + C3 + C4 = 0)")]
+    ExactDegenerateEvent,
+    #[error("GBBQ exact chain: integer size budget exceeded")]
+    ExactChainTooLarge,
+    #[error("GBBQ exact chain: adjusted price leaves the i64 unit range")]
+    ExactPriceOutOfRange,
+    #[error("GBBQ exact chain: target scale is outside 0..=6")]
+    ExactScaleOutOfRange,
 }
 
 /// Validate the observed container shape while preserving every encrypted
@@ -181,6 +200,192 @@ where
 /// ((10+C3+C4)/10)` evaluated in business decimals without rounding.
 pub fn reference_price(prev_close: Decimal, c: &[Decimal; 4]) -> Decimal {
     event_transform(c).apply(prev_close)
+}
+
+// ---------------------------------------------------------------------------
+// Exact rational chain (`qfq-exact-v1`, issue-383 §4.3)
+//
+// A 2dp output is not reproducible across implementations: 8.44% of the
+// verified price fields land exactly on a half-cent, and there the direction is
+// decided by intermediate precision (the 28-significant-digit `Decimal` chain
+// above vs. the exact value). The chain below is composed over exact integers
+// and rounded **once** at the target scale, so a value depends only on
+// (bar, events, scale, algorithm version). `compose_chain`/`event_transform`
+// above stay as the frozen 2dp oracle that measures the difference.
+// ---------------------------------------------------------------------------
+
+/// Ceiling on the exact chain's integers in bits. Each composed event
+/// multiplies the common denominator by at most `100 * (1000 + C3 + C4)`; the
+/// widest verified chain (36 events) needs 70 bits, so this bound fails closed
+/// far above anything the source produces instead of letting a malformed input
+/// grow without limit.
+const EXACT_CHAIN_MAX_BITS: u64 = 4096;
+
+/// Exact affine transform `T(x) = (pa * x + 100 * pb) / (100 * den)` over yuan,
+/// held as three integers with `den > 0` and `gcd(pa, pb, den) = 1`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactAffine {
+    pa: BigInt,
+    pb: BigInt,
+    den: BigInt,
+}
+
+impl ExactAffine {
+    /// `T(x) = x` — the empty event set.
+    pub fn identity() -> Self {
+        Self {
+            pa: BigInt::from(1u32),
+            pb: BigInt::from(0u32),
+            den: BigInt::from(1u32),
+        }
+    }
+
+    /// `next ∘ self`: apply `self` first, then `next` — the oldest→newest fold
+    /// `compose_chain` performs, without any intermediate rounding.
+    pub fn then(&self, next: &ExactAffine) -> Result<Self, Error> {
+        Self {
+            pa: &next.pa * &self.pa,
+            pb: &next.pa * &self.pb + &next.pb * &self.den,
+            den: &next.den * &self.den,
+        }
+        .reduced()
+    }
+
+    /// Fold the target scale in, so one price costs one multiply-add and one
+    /// rounding division: `units = round((pa * cents + pb) / den)`.
+    pub fn units(&self, scale: u32) -> Result<ExactUnits, Error> {
+        check_price_scale(scale)?;
+        let factor = BigInt::from(10u32).pow(scale);
+        Ok(ExactUnits {
+            pa: &self.pa * &factor,
+            pb: &self.pb * BigInt::from(100u32) * &factor,
+            den: &self.den * BigInt::from(100u32),
+        })
+    }
+
+    /// Normalize the sign, divide the common factor out and enforce the size
+    /// budget. Reduction keeps every later step on small integers: the widest
+    /// verified chain is 70 bits instead of the ~900 bits an unreduced product
+    /// of per-event denominators would need.
+    fn reduced(self) -> Result<Self, Error> {
+        let Self { pa, pb, den } = self;
+        if den.is_zero() {
+            return Err(Error::ExactDegenerateEvent);
+        }
+        let (pa, pb, den) = if den.is_negative() {
+            (-pa, -pb, -den)
+        } else {
+            (pa, pb, den)
+        };
+        let common = gcd(&gcd(&pa, &pb), &den);
+        let (pa, pb, den) = if common > BigInt::from(1u32) {
+            (&pa / &common, &pb / &common, &den / &common)
+        } else {
+            (pa, pb, den)
+        };
+        if pa.bits() > EXACT_CHAIN_MAX_BITS
+            || pb.bits() > EXACT_CHAIN_MAX_BITS
+            || den.bits() > EXACT_CHAIN_MAX_BITS
+        {
+            return Err(Error::ExactChainTooLarge);
+        }
+        Ok(Self { pa, pb, den })
+    }
+}
+
+/// [`ExactAffine`] with the target scale folded in — one instance per distinct
+/// event suffix, reused by every bar that shares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactUnits {
+    pa: BigInt,
+    pb: BigInt,
+    den: BigInt,
+}
+
+impl ExactUnits {
+    /// Exact adjusted price in `scale` units, rounded once HALF_UP away from
+    /// zero. Fails closed when the value leaves the i64 range the storage layer
+    /// can represent (a 6dp series stores `price * 10^6`).
+    pub fn units(&self, price_cents: u32) -> Result<i64, Error> {
+        let numerator = &self.pa * BigInt::from(price_cents) + &self.pb;
+        let quotient = &numerator / &self.den;
+        let remainder = &numerator - &quotient * &self.den;
+        let rounded = if &remainder.abs() * 2u32 >= self.den {
+            if numerator.is_negative() {
+                quotient - 1u32
+            } else {
+                quotient + 1u32
+            }
+        } else {
+            quotient
+        };
+        rounded.to_i64().ok_or(Error::ExactPriceOutOfRange)
+    }
+}
+
+/// Validate a target price scale against the series ceiling
+/// (`market_series.price_scale` CHECK ≤ 6) before any work is done, so a bad
+/// scale fails closed even for an empty bar list.
+pub fn check_price_scale(scale: u32) -> Result<(), Error> {
+    if scale > MAX_PRICE_SCALE {
+        return Err(Error::ExactScaleOutOfRange);
+    }
+    Ok(())
+}
+
+/// Exact per-event transform `T_i(x) = (x - C1/10 + C4*C2/10) /
+/// ((10+C3+C4)/10)`. With the 2dp integer factors `n_i = C_i * 100` this is
+/// `a = 100000 / (100 * (1000 + n3 + n4))` and
+/// `b = (n2*n4 - 100*n1) / (100 * (1000 + n3 + n4))` — the same transform
+/// `event_transform` evaluates in 28-significant-digit decimals, kept exact.
+pub fn exact_event_transform(c: &[Decimal; 4]) -> Result<ExactAffine, Error> {
+    let mut n: Vec<BigInt> = Vec::with_capacity(4);
+    for value in c {
+        n.push(BigInt::from(
+            two_decimal_units(*value).ok_or(Error::ExactFactorNotTwoDecimals)?,
+        ));
+    }
+    let denominator = BigInt::from(1000u32) + &n[2] + &n[3];
+    if denominator.is_zero() {
+        return Err(Error::ExactDegenerateEvent);
+    }
+    ExactAffine {
+        pa: BigInt::from(100_000u32),
+        pb: &n[2] * &n[3] - BigInt::from(100u32) * &n[1],
+        den: BigInt::from(100u32) * denominator,
+    }
+    .reduced()
+}
+
+/// Compose the exact forward-adjustment chain over events ordered
+/// oldest→newest, with no intermediate rounding.
+pub fn exact_compose_chain<I>(events: I) -> Result<ExactAffine, Error>
+where
+    I: IntoIterator<Item = [Decimal; 4]>,
+{
+    let mut chain = ExactAffine::identity();
+    for c in events {
+        chain = chain.then(&exact_event_transform(&c)?)?;
+    }
+    Ok(chain)
+}
+
+/// `value` as an integer number of 1/100 units, or `None` when it carries more
+/// precision than the 2dp factor contract allows.
+fn two_decimal_units(value: Decimal) -> Option<i64> {
+    let scaled = value.checked_mul(Decimal::from(100u32))?;
+    let units = scaled.to_i64()?;
+    (Decimal::from(units) == scaled).then_some(units)
+}
+
+fn gcd(a: &BigInt, b: &BigInt) -> BigInt {
+    let (mut a, mut b) = (a.abs(), b.abs());
+    while !b.is_zero() {
+        let remainder = &a % &b;
+        a = b;
+        b = remainder;
+    }
+    a
 }
 
 /// Displayed event-day 昨结: the reference price rounded to 2dp HALF_UP.

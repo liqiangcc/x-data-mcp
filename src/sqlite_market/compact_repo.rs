@@ -794,9 +794,11 @@ fn commit_plan(
     }
     let head = series::read_series(c, &scope.symbol, scope.period)?;
     // Encode at the head's scale when the series exists: a re-commit of a
-    // stored series must not silently change its price_scale.
+    // stored series must not silently change its price_scale. A first publish
+    // takes the scale of its own 口径 (2 for 不复权, 6 for 前复权) instead of
+    // assuming the forward series.
     let price_scale = head.as_ref().map_or(
-        series::SeriesShape::FORWARD_STOCK_CENTS.price_scale,
+        series::SeriesShape::stock(v.adjustment).price_scale,
         |row| row.price_scale,
     );
     let new_bars: Vec<CompactBar> = v
@@ -1997,7 +1999,7 @@ fn collection_item_commit(
             CompactBar::from_bar(
                 b,
                 Period::Day,
-                series::SeriesShape::FORWARD_STOCK_CENTS.price_scale,
+                series::SeriesShape::FORWARD_STOCK_UNITS.price_scale,
             )
         })
         .collect::<Result<Vec<_>, _>>()
@@ -2131,7 +2133,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                     CompactBar::from_bar(
                         r,
                         Period::Year,
-                        series::SeriesShape::FORWARD_STOCK_CENTS.price_scale,
+                        series::SeriesShape::FORWARD_STOCK_UNITS.price_scale,
                     )
                 })
                 .collect::<Result<_, _>>()
