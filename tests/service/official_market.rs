@@ -24,6 +24,7 @@ use x_data_mcp::{
         Contract, RequestOutcome, Stage, Status, TaskRepository, legacy::LegacyCollection,
         service::TaskControl,
     },
+    trading_calendar::{DayStatus, TradingCalendar},
 };
 #[path = "../support/market.rs"]
 mod market;
@@ -241,6 +242,197 @@ fn index_batch_promotes_the_day_member_without_gbbq_or_hand_scaling() {
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0].role, "day");
     assert_eq!(inputs[0].member_sha256, sha(bars.as_slice()));
+}
+
+/// M1 PR-6 (issue-383 §5.1, AC-M1-5): 16 `.day` members — the two registered
+/// index members plus 14 A-share members — prove the union's semantics.
+///
+/// The 1991 Shenzhen Saturday sessions are the case that makes a weekday rule
+/// wrong: `sh.000001` has no bar on 1991-04-06 (a Saturday), `sz.399001` does,
+/// so the union must keep the day, and a bar printed only by the Shenzhen index
+/// must not be reported as "outside the calendar". The one A-share bar on
+/// 1991-04-07 is the opposite case: neither index printed that day, so it is a
+/// non-trading day and the coverage self-check (§5.2) is what turns that into a
+/// visible number instead of a silent assumption.
+fn calendar_fixture() -> (Snapshot, Vec<(String, Vec<NaiveDate>)>) {
+    let sh_index: Vec<u8> = [
+        day_record(19910405, [10_000, 10_100, 9_900, 10_050], 0.0, 10),
+        day_record(19910408, [10_050, 10_200, 10_000, 10_150], 0.0, 11),
+        day_record(20261022, [300_000, 300_500, 299_800, 300_100], 0.0, 12),
+        day_record(20261023, [300_100, 300_900, 300_000, 300_800], 0.0, 13),
+    ]
+    .concat();
+    let sz_index: Vec<u8> = [
+        day_record(19910406, [9_000, 9_100, 8_900, 9_050], 0.0, 20),
+        day_record(19910408, [9_050, 9_200, 9_000, 9_150], 0.0, 21),
+        day_record(20261022, [100_000, 100_500, 99_800, 100_100], 0.0, 22),
+        day_record(20261023, [100_100, 100_900, 100_000, 100_800], 0.0, 23),
+    ]
+    .concat();
+    // 13 securities trading on dates the union covers, and one with a bar on a
+    // date neither index printed (the coverage check's finding).
+    let mut stocks: Vec<(String, Vec<u8>, Vec<NaiveDate>)> = Vec::new();
+    for code in 1..=13 {
+        let bytes: Vec<u8> = [
+            day_record(19910408, [1_000, 1_010, 990, 1_005], 0.0, 100),
+            day_record(20261022, [1_100, 1_110, 1_090, 1_105], 0.0, 110),
+        ]
+        .concat();
+        stocks.push((
+            format!("sh\\lday\\sh6000{code:02}.day"),
+            bytes,
+            vec![
+                NaiveDate::from_ymd_opt(1991, 4, 8).unwrap(),
+                NaiveDate::from_ymd_opt(2026, 10, 22).unwrap(),
+            ],
+        ));
+    }
+    let outside = NaiveDate::from_ymd_opt(1991, 4, 7).unwrap();
+    stocks.push((
+        "sz\\lday\\sz000002.day".into(),
+        [
+            day_record(19910407, [2_000, 2_010, 1_990, 2_005], 0.0, 200),
+            day_record(20261022, [2_100, 2_110, 2_090, 2_105], 0.0, 210),
+        ]
+        .concat(),
+        vec![outside, NaiveDate::from_ymd_opt(2026, 10, 22).unwrap()],
+    ));
+    let mut members: Vec<(String, Vec<u8>)> = vec![
+        ("sh\\lday\\sh000001.day".into(), sh_index),
+        ("sz\\lday\\sz399001.day".into(), sz_index),
+    ];
+    let mut stock_days = Vec::new();
+    for (name, bytes, days) in stocks {
+        members.push((name.clone(), bytes));
+        stock_days.push((name, days));
+    }
+    assert_eq!(
+        members.len(),
+        16,
+        "16 `.day` members, per the PR-6 test plan"
+    );
+    let borrowed: Vec<(&str, &[u8])> = members
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+        .collect();
+    (
+        snapshot(
+            borrowed.as_slice(),
+            &[("gbbq", b"not consulted".as_slice())],
+            &base_members(),
+        ),
+        stock_days,
+    )
+}
+
+#[test]
+fn calendar_union_covers_a_single_index_session_and_ends_at_the_last_input_bar() {
+    let (snap, stock_days) = calendar_fixture();
+    let source = make_source(&snap);
+    let batch = source.calendar_dates().unwrap();
+    // §5.1: exactly the registered inputs, each bound to its own member.
+    assert_eq!(batch.inputs.len(), 2);
+    assert_eq!(batch.inputs[0].entity, "sh.000001");
+    assert_eq!(batch.inputs[0].member, "sh\\lday\\sh000001.day");
+    assert_eq!(
+        batch.inputs[0].days,
+        vec![
+            NaiveDate::from_ymd_opt(1991, 4, 5).unwrap(),
+            NaiveDate::from_ymd_opt(1991, 4, 8).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 10, 22).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 10, 23).unwrap(),
+        ]
+    );
+    assert_eq!(batch.inputs[1].entity, "sz.399001");
+    assert_eq!(batch.inputs[1].member, "sz\\lday\\sz399001.day");
+    assert_eq!(
+        batch.inputs[1].days[0],
+        NaiveDate::from_ymd_opt(1991, 4, 6).unwrap()
+    );
+    assert!(
+        batch
+            .inputs
+            .iter()
+            .all(|input| x_data_mcp::hash::is_sha256(&input.day_member_sha256))
+    );
+    // A calendar has no corporate actions: it binds the empty event set, the
+    // same digest an index series binds.
+    assert_eq!(
+        batch.security_event_sha256,
+        source
+            .index_batch("sh.000001")
+            .unwrap()
+            .security_event_sha256
+    );
+
+    let calendar = TradingCalendar::union(&batch).unwrap();
+    assert_eq!(calendar.len(), 5);
+    let saturday = NaiveDate::from_ymd_opt(1991, 4, 6).unwrap();
+    // AC-M1-5: only the Shenzhen index printed that Saturday, and the day is
+    // still a trading day — not "one index is missing, so it is not".
+    assert_eq!(calendar.sources_on(saturday), Some(1 << 1));
+    assert_eq!(calendar.day_status(saturday), Some(DayStatus::InCalendar));
+    assert_eq!(
+        calendar.sources_on(NaiveDate::from_ymd_opt(1991, 4, 8).unwrap()),
+        Some(0b11)
+    );
+    // §3.8: the span ends at the last input bar; later days are unknown, and a
+    // gap inside the span is a non-trading day.
+    assert_eq!(
+        calendar.last_day(),
+        Some(NaiveDate::from_ymd_opt(2026, 10, 23).unwrap())
+    );
+    // 1991-04-07 is inside the span and no index printed it → non-trading.
+    assert_eq!(
+        calendar.day_status(NaiveDate::from_ymd_opt(1991, 4, 7).unwrap()),
+        Some(DayStatus::NonTrading)
+    );
+    // After 2026-10-23 the calendar predicts nothing: 10-24 is a Saturday, but
+    // "past the last bar" outranks it, so the answer is unknown.
+    assert_eq!(
+        calendar.day_status(NaiveDate::from_ymd_opt(2026, 10, 24).unwrap()),
+        Some(DayStatus::BeyondCalendar)
+    );
+    assert_eq!(
+        calendar.day_status(NaiveDate::from_ymd_opt(2026, 10, 26).unwrap()),
+        Some(DayStatus::BeyondCalendar)
+    );
+    // The 14 A-share members: every bar date is inside the union except the
+    // one 1991-04-07 bar, which the coverage self-check reports (§5.2).
+    let mut outside = Vec::new();
+    for (member, days) in &stock_days {
+        for day in days {
+            if !calendar.contains(*day) {
+                outside.push((member.clone(), *day));
+            }
+        }
+    }
+    assert_eq!(
+        outside,
+        vec![(
+            "sz\\lday\\sz000002.day".to_string(),
+            NaiveDate::from_ymd_opt(1991, 4, 7).unwrap()
+        )]
+    );
+
+    // An absent registered input fails closed instead of silently shrinking
+    // the calendar to one exchange.
+    let mut snap = snap;
+    reday(
+        &mut snap,
+        &[(
+            "sz\\lday\\sz399001.day",
+            [day_record(19910406, [9_000, 9_100, 8_900, 9_050], 0.0, 20)]
+                .concat()
+                .as_slice(),
+        )],
+    );
+    let narrowed = make_source(&snap);
+    let error = narrowed.calendar_dates().unwrap_err();
+    assert!(
+        error.to_string().contains("sh.000001"),
+        "an absent input must fail closed: {error}"
+    );
 }
 
 /// Rebuild a snapshot's gbbq archive with new member bytes and re-pin the

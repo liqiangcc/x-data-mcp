@@ -134,6 +134,25 @@ impl SqliteCompactMarket {
     ) -> Result<Receipt, Error> {
         self.tx(|c| super::index::commit_index(c, write))
     }
+
+    /// Replace the derived trading calendar and register its version in one
+    /// transaction (issue-383 §5.2, M1 PR-6). The internal `derived:calendar`
+    /// item drives this (PR-7).
+    pub(crate) fn commit_calendar(
+        &self,
+        write: &super::calendar::CalendarWrite<'_>,
+    ) -> Result<super::derived::DerivedVersionRow, Error> {
+        self.tx(|c| super::calendar::commit_calendar(c, write))
+    }
+
+    /// The coverage self-check of §5.2 against the stored 不复权 series, on a
+    /// read connection so the full scan never holds the write lock.
+    pub(crate) fn measure_calendar_coverage(
+        &self,
+        calendar: &crate::trading_calendar::TradingCalendar,
+    ) -> Result<crate::trading_calendar::CalendarCoverage, Error> {
+        self.read(|c| super::calendar::measure_coverage(c, calendar))
+    }
 }
 
 pub(crate) fn period_code(period: Period) -> i64 {

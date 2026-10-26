@@ -410,6 +410,38 @@ pub struct IndexBatch {
     pub security_event_sha256: String,
 }
 
+/// One calendar input's neutral facts (issue-383 §5.1, M1 PR-6): the bar dates
+/// of one index `.day` member and that member's digest.
+///
+/// Dates only — the calendar needs "an index printed a level that day", not
+/// the prices — so the derived calendar depends on the narrowest possible fact
+/// and stays recomputable from the layer below (§11 separation point 2). The
+/// entity is the registry key (`trading_calendar::INPUTS`); the adapter never
+/// decides which indices feed the calendar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarInputDates {
+    /// The registered index entity this member belongs to.
+    pub entity: String,
+    /// Resolved member name inside the day archive, for the evidence bundle.
+    pub member: String,
+    /// sha256 of the decompressed `.day` member actually read.
+    pub day_member_sha256: String,
+    /// Strictly increasing bar dates as the member records them.
+    pub days: Vec<NaiveDate>,
+}
+
+/// Every registered calendar input's dates for one generation (§5.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalendarBatch {
+    pub inputs: Vec<CalendarInputDates>,
+    /// sha256 of the **empty** corporate-action set: a calendar is derived from
+    /// index levels, which have no ex-rights event, so its
+    /// `source_bindings.security_event_sha256` records "no events" rather than
+    /// borrowing a security's gbbq set (the same value an index series binds,
+    /// §3.1).
+    pub security_event_sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataBatch {
     pub symbol: String,
