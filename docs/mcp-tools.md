@@ -8,7 +8,8 @@
 `generic-data-v7`，含只读 `get_yearly_base_years` 与
 `plan_market_update`/`run_market_update`，market 单版本序列：
 version_id=内容 hex，latest-only），acquisition socket 提供
-10 acquisition tools；fresh init 库使用 compact schema 21。部署版本、
+10 acquisition tools；已部署实例为 compact schema 21，代码（main）为 schema 22
+（M1 PR-1，未部署）。部署版本、
 generation、catalog 与行情数据量等机器事实只在
 [STATUS](STATUS.md) 维护，本文不复述；工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。旧 strict Skill 会话遇

@@ -12,6 +12,25 @@ pub enum Adjustment {
     Forward,
 }
 
+impl Adjustment {
+    /// Storage code (schema 22 `market_series.adjustment` and
+    /// `market_events.adjustment`): 0 = 不复权, 1 = 前复权 (issue-383 §3.2).
+    /// The enum has no raw variant yet — M1 PR-2 materializes it; until then
+    /// the storage layer refuses code 0 instead of guessing a meaning.
+    pub fn code(self) -> i64 {
+        match self {
+            Self::Forward => 1,
+        }
+    }
+}
+
+/// Schema-22 `market_series.instrument_class` values (issue-383 §3.2).
+/// M1 writes `Stock` and (from PR-5) `Index`; `Etf` is the reserved M3 value
+/// and no M1 code writes it.
+pub const INSTRUMENT_CLASS_STOCK: i64 = 0;
+pub const INSTRUMENT_CLASS_INDEX: i64 = 1;
+pub const INSTRUMENT_CLASS_ETF: i64 = 2;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CoverageStatus {
     Complete,

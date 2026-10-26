@@ -227,6 +227,44 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual([line for line, _, _ in found], [13])
 
 
+class DeployedSchemaRow(unittest.TestCase):
+    """The deployed schema is a STATUS fact; the code schema may be ahead."""
+
+    def test_row_is_parsed(self):
+        text = (
+            "| 数据库 schema | 已部署：schema 21（`pragma user_version=21`）；"
+            "代码：schema 22（未部署） | src |\n"
+        )
+        self.assertEqual(cf.deployed_schema_number(text), 21)
+
+    def test_absent_row_is_none(self):
+        self.assertIsNone(
+            cf.deployed_schema_number("| 部署版本 | v0.2.0-preview.35 |\n")
+        )
+        self.assertIsNone(cf.deployed_schema_number(None))
+
+    def test_code_schema_ahead_keeps_deployed_claim_valid(self):
+        # M1 PR-1 builds schema 22 while the deployed instance stays on 21:
+        # the current region states the deployed number, and the code number
+        # is explicitly marked as not deployed.
+        text = "已部署实例为 compact schema 21；代码（main）为 schema 22（M1 PR-1，未部署）。\n"
+        self.assertEqual(region_claims(text), [])
+
+    def test_deployed_claim_ahead_of_status_is_flagged(self):
+        text = "当前部署的是 schema 22 的单版本存储。\n"
+        found = region_claims(text)
+        self.assertEqual(rules(found), ["stale-schema"], found)
+
+    def test_required_facts_follow_the_deployed_schema(self):
+        facts = cf.required_facts(21)
+        labels = [label for label, _ in facts]
+        self.assertIn("schema 21", labels)
+        self.assertNotIn("schema 22", labels)
+        schema = dict(facts)["schema 21"]
+        self.assertTrue(schema.search("已部署：schema 21"))
+        self.assertFalse(schema.search("代码：schema 22"))
+
+
 CONTRACT_OK = """# 某历史快照
 
 **状态**：历史快照。当前契约见 [generic-data-v7](generic-data-v7.md)。

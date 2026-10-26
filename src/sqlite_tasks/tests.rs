@@ -937,8 +937,29 @@ fn assert_compact_shape(path: &std::path::Path) {
     assert!(series.contains(&"series_key".to_string()));
     assert!(series.contains(&"content_digest".to_string()));
     assert!(series.contains(&"version_id".to_string()));
-    assert!(raw_columns(path, "series_bars").contains(&"series_key".to_string()));
-    assert!(raw_columns(path, "market_events").contains(&"result_id".to_string()));
+    // Schema 22 (issue-383 §3.2): 口径 and 精度 are series properties.
+    for column in ["adjustment", "instrument_class", "price_scale"] {
+        assert!(series.contains(&column.to_string()), "missing {column}");
+    }
+    let bars = raw_columns(path, "series_bars");
+    assert!(bars.contains(&"series_key".to_string()));
+    // §3.3: prices are scale-interpreted integers, so the `_cents` names are
+    // gone; `volume_quantum` reserves the #381 option-1 precision column.
+    for column in ["open_units", "high_units", "low_units", "close_units"] {
+        assert!(bars.contains(&column.to_string()), "missing {column}");
+        assert!(
+            !bars.contains(&column.replace("units", "cents")),
+            "{column} still claims 分"
+        );
+    }
+    assert!(bars.contains(&"volume_quantum".to_string()));
+    // §3.4/§3.5: events carry the 口径, lineage the base 口径.
+    let events = raw_columns(path, "market_events");
+    assert!(events.contains(&"adjustment".to_string()));
+    assert!(events.contains(&"result_id".to_string()));
+    let lineage = raw_columns(path, "yearly_series_lineage");
+    assert!(lineage.contains(&"base_adjustment".to_string()));
+    assert!(lineage.contains(&"base_instrument_class".to_string()));
 }
 fn assert_legacy_shape(path: &std::path::Path) {
     assert_eq!(raw_user_version(path), SCHEMA_VERSION);

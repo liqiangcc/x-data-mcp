@@ -45,8 +45,12 @@ CREATE TABLE series_bars(
 ) STRICT, WITHOUT ROWID;
 """
 
+# Schema 22 (issue-383 §3.3) renamed the price columns to ``*_units``: the
+# analysis resolves the names per connection, so both shapes must read the same.
+SCHEMA_22 = SCHEMA.replace("_cents", "_units")
 
-def write_fixture(path: Path, daily: dict, highs: dict) -> None:
+
+def write_fixture(path: Path, daily: dict, highs: dict, schema: str = SCHEMA) -> None:
     """Create the fixture database.
 
     `daily` maps entity -> [(trade_day, open, high, low, close), ...] and
@@ -55,7 +59,7 @@ def write_fixture(path: Path, daily: dict, highs: dict) -> None:
     """
     conn = sqlite3.connect(path)
     try:
-        conn.executescript(SCHEMA)
+        conn.executescript(schema)
         key = 1
         for entity, bars in daily.items():
             conn.execute(
@@ -464,6 +468,31 @@ class RandomisedEquivalenceTest(FixtureCase):
                     ) + rng.randint(0, 120)
                 self.path = Path(self._dir.name) / f"seed{seed}.sqlite"
                 self.assert_trades_match(daily, highs)
+
+
+class SchemaShapeTest(FixtureCase):
+    """The analysis reads both the deployed schema-21 and the schema-22 names."""
+
+    def test_schema22_units_columns_match_the_reference(self) -> None:
+        rng = random.Random(7)
+        daily = {"sz.000903": random_series(rng, 20362, 140)}
+        highs = {"sz.000903": min(bar[2] for bar in daily["sz.000903"][:80])}
+        write_fixture(self.path, daily, highs, schema=SCHEMA_22)
+        dataset = boll.load(str(self.path), workers=1)
+        expected = reference_trades(daily, highs)
+        self.assertEqual(
+            sorted(trade["entity"] for trade in dataset.trades), sorted(expected)
+        )
+        actual = {trade["entity"]: trade for trade in dataset.trades}
+        for entity, reference in expected.items():
+            for field, value in reference.items():
+                self.assertEqual(actual[entity][field], value, f"{entity}.{field}")
+
+    def test_price_suffix_follows_the_table_shape(self) -> None:
+        write_fixture(self.path, {"sz.000904": [(20362, 1, 1, 1, 1)]}, {})
+        conn = boll.connect(str(self.path))
+        self.addCleanup(conn.close)
+        self.assertEqual(boll._price_suffix(conn), "cents")
 
 
 class ReadOnlyTest(FixtureCase):

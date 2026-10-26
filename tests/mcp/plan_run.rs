@@ -566,15 +566,15 @@ fn seed_daily_heads(r: &Rig, symbols: &[String]) {
     let bar = |day| {
         x_data_mcp::compact_market::CompactBar {
             trade_day: day,
-            open_cents: 1000,
-            high_cents: 1010,
-            low_cents: 990,
-            close_cents: 1005,
+            open_units: 1000,
+            high_units: 1010,
+            low_units: 990,
+            close_units: 1005,
             volume: Some(100),
             amount: Some("1000".into()),
             r7_raw: Some(7),
         }
-        .to_bar(Period::Day)
+        .to_bar(Period::Day, x_data_mcp::compact_market::PRICE_SCALE_CENTS)
         .unwrap()
     };
     let units = || UnitCurrencyEvidence {
@@ -1670,15 +1670,18 @@ impl x_data_mcp::market_update::runner::RangeProvider for AppendProvider {
         let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         let bar = x_data_mcp::compact_market::CompactBar {
             trade_day: range.end.signed_duration_since(epoch).num_days(),
-            open_cents: 1000,
-            high_cents: 1010,
-            low_cents: 990,
-            close_cents: 1005,
+            open_units: 1000,
+            high_units: 1010,
+            low_units: 990,
+            close_units: 1005,
             volume: Some(100),
             amount: Some("1000".into()),
             r7_raw: Some(7),
         }
-        .to_bar(x_data_mcp::market_data::Period::Day)
+        .to_bar(
+            x_data_mcp::market_data::Period::Day,
+            x_data_mcp::compact_market::PRICE_SCALE_CENTS,
+        )
         .unwrap();
         Ok(Some(x_data_mcp::market_update::runner::TypedAcquisition {
             decision: x_data_mcp::market_update::runner::TypedDecision::Append {
@@ -1786,7 +1789,7 @@ fn market_projection(path: &Path) -> (SqlRows, SqlRows, SqlRows) {
             .unwrap()
     };
     let bars = dump(
-        "SELECT s.entity,b.trade_day,b.open_cents,b.high_cents,b.low_cents,b.close_cents,b.volume,b.amount,b.r7_raw \
+        "SELECT s.entity,b.trade_day,b.open_units,b.high_units,b.low_units,b.close_units,b.volume,b.amount,b.r7_raw \
          FROM series_bars b JOIN market_series s USING(series_key) ORDER BY s.entity,b.trade_day",
     );
     let series = dump(

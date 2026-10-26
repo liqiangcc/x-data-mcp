@@ -34,12 +34,15 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
 /// are refused by `check_schema` above so legacy adapters stay fail-closed.
 /// Schema 21 replaces the version-manifest store with latest-only
 /// `market_series`/`series_bars` + the `market_events` log
-/// (SPEC-LATEST-ONLY §1; still fresh-init only, never in-place).
-pub const COMPACT_SCHEMA_VERSION: u32 = 21;
-pub(crate) const COMPACT_MIGRATIONS: [&str; 3] = [
+/// (SPEC-LATEST-ONLY §1; still fresh-init only, never in-place). Schema 22
+/// makes 口径/精度 series properties (M1 PR-1, issue-383 §3) — still
+/// fresh-init only, never in-place.
+pub const COMPACT_SCHEMA_VERSION: u32 = 22;
+pub(crate) const COMPACT_MIGRATIONS: [&str; 4] = [
     include_str!("../migrations/tasks/019_compact_market.sql"),
     include_str!("../migrations/tasks/020_evidence_parts.sql"),
     include_str!("../migrations/tasks/021_latest_only.sql"),
+    include_str!("../migrations/tasks/022_research_data.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
@@ -250,7 +253,7 @@ impl SqliteTasks {
         }
         registry_sweep(&tx)
     }
-    /// Latest-only market deep check (schema 21): the series/event closure
+    /// Latest-only market deep check (schema 21/22): the series/event closure
     /// probes plus a full digest recompute per series — the explicit
     /// `task_sqlite check` pass (SPEC-LATEST-ONLY §3.5/RULINGS Q11). Empty on
     /// other schemas.
@@ -265,7 +268,7 @@ impl SqliteTasks {
         }
         if !crate::sqlite_market::is_latest_only_schema(&tx).map_err(storage)? {
             return Err(Error::StorageUnavailable(
-                "schema 21 without market_series tables".into(),
+                "latest-only schema without market_series tables".into(),
             ));
         }
         crate::sqlite_market::series::deep_check(&tx)

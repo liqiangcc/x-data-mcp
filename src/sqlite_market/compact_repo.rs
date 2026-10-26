@@ -322,7 +322,7 @@ impl MarketRepository for SqliteCompactMarket {
             let end = compact_market::epoch_day(range.end);
             let mut bars = series::bars_in_range(c, series_row.series_key, start, end)?
                 .iter()
-                .map(|b| b.to_bar(scope.period))
+                .map(|b| b.to_bar(scope.period, series_row.price_scale))
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(integrity)?;
             if let Some(after) = range.after {
@@ -392,7 +392,7 @@ impl MarketRepository for SqliteCompactMarket {
                 compact_market::epoch_day(last_day),
             )?
             .iter()
-            .map(|b| b.to_bar(row.period))
+            .map(|b| b.to_bar(row.period, row.price_scale))
             .collect::<Result<Vec<_>, _>>()
             .map_err(integrity)?;
             record.version.records = bars.clone();
@@ -634,7 +634,7 @@ fn commit_ops(
         )));
     }
     let (new_binding, new_evidence, new_coverage) = metadata_fields(c, &head, metadata)?;
-    let compact_upserts = series_commit::to_compact_bars(upserts, scope.period)?;
+    let compact_upserts = series_commit::to_compact_bars(upserts, scope.period, head.price_scale)?;
     let tail_only = removes.is_empty()
         && !compact_upserts.is_empty()
         && compact_upserts.iter().all(|b| b.trade_day > head.last_day);
@@ -654,7 +654,7 @@ fn commit_ops(
             // content (the runner only routes proven appends here).
             return Err(Error::Conflict("ops diff is not a tail append".into()));
         };
-        full_bars = series_commit::to_compact_bars(expected, scope.period)?;
+        full_bars = series_commit::to_compact_bars(expected, scope.period, head.price_scale)?;
         (
             series_commit::SeriesChange::Replace {
                 bars: full_bars.as_slice(),
@@ -732,7 +732,7 @@ fn classify_envelope<'a>(
                 return Err(invalid("commit scope mismatch"));
             }
             let stored = series::all_bars(c, row.series_key)?;
-            let new_digest = series::fold_bars(entity, period, new_bars)?;
+            let new_digest = series::fold_bars(entity, period, row.shape(), new_bars)?;
             if new_digest == row.content_digest {
                 return Ok(series_commit::SeriesChange::NoChange);
             }
@@ -789,13 +789,19 @@ fn commit_plan(
             return Err(Error::Conflict("effective head changed".into()));
         }
     }
+    let head = series::read_series(c, &scope.symbol, scope.period)?;
+    // Encode at the head's scale when the series exists: a re-commit of a
+    // stored series must not silently change its price_scale.
+    let price_scale = head.as_ref().map_or(
+        series::SeriesShape::FORWARD_STOCK_CENTS.price_scale,
+        |row| row.price_scale,
+    );
     let new_bars: Vec<CompactBar> = v
         .records
         .iter()
-        .map(|b| CompactBar::from_bar(b, v.period))
+        .map(|b| CompactBar::from_bar(b, v.period, price_scale))
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)?;
-    let head = series::read_series(c, &scope.symbol, scope.period)?;
     // Version evidence + binding re-derived at commit time (put_* is
     // idempotent on identical canonical content).
     let evidence_digest = evidence_store::put_evidence(
@@ -1019,7 +1025,13 @@ impl RangeRepository for SqliteCompactMarket {
                     Ok(crate::market_update::publication::RangeItemState {
                         binding: crate::sqlite_tasks::read_item_binding(c, task_id, item_id)
                             .map_err(Error::Task)?,
-                        has_receipt: series::event_by_task_item(c, task_id, item_id)?.is_some(),
+                        has_receipt: series::event_by_task_item(
+                            c,
+                            task_id,
+                            item_id,
+                            crate::market_data::Adjustment::Forward,
+                        )?
+                        .is_some(),
                     })
                 })
                 .collect())
@@ -1267,12 +1279,15 @@ impl RangeRepository for SqliteCompactMarket {
     }
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| {
-            Ok(series::event_by_task_item(c, task, item)?.map(|e| Receipt {
-                publication_id: e.result_id.clone(),
-                version_id: series::version_id(&e.new_content_digest),
-                task_id: task.into(),
-                task_revision: e.task_revision as u64,
-            }))
+            Ok(
+                series::event_by_task_item(c, task, item, crate::market_data::Adjustment::Forward)?
+                    .map(|e| Receipt {
+                        publication_id: e.result_id.clone(),
+                        version_id: series::version_id(&e.new_content_digest),
+                        task_id: task.into(),
+                        task_revision: e.task_revision as u64,
+                    }),
+            )
         })
     }
     fn transition_task(
@@ -1435,7 +1450,7 @@ fn base_bars_in_range_on(
             compact_market::epoch_day(end),
         )?
         .iter()
-        .map(|b| b.to_bar(row.period))
+        .map(|b| b.to_bar(row.period, row.price_scale))
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)?,
     ))
@@ -1583,7 +1598,8 @@ fn update_batch_item(
             } => {
                 let head = series::read_series_by_version_id(c, base_version_id)?
                     .ok_or(Error::NotFound)?;
-                let compact_upserts = series_commit::to_compact_bars(upserts, Period::Day)?;
+                let compact_upserts =
+                    series_commit::to_compact_bars(upserts, Period::Day, head.price_scale)?;
                 let (binding, evidence_d, coverage) =
                     metadata_fields(c, &head, metadata.as_deref())?;
                 let evidence = series_commit::put_continuity_evidence(
@@ -1957,7 +1973,13 @@ fn collection_item_commit(
     let bars: Vec<CompactBar> = item
         .bars
         .iter()
-        .map(|b| CompactBar::from_bar(b, Period::Day))
+        .map(|b| {
+            CompactBar::from_bar(
+                b,
+                Period::Day,
+                series::SeriesShape::FORWARD_STOCK_CENTS.price_scale,
+            )
+        })
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)?;
     if bars.is_empty() {
@@ -2083,7 +2105,13 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
             let bars: Vec<CompactBar> = v
                 .records
                 .iter()
-                .map(|r| CompactBar::from_bar(r, Period::Year))
+                .map(|r| {
+                    CompactBar::from_bar(
+                        r,
+                        Period::Year,
+                        series::SeriesShape::FORWARD_STOCK_CENTS.price_scale,
+                    )
+                })
                 .collect::<Result<_, _>>()
                 .map_err(integrity)?;
             let daily_base = series_commit::hex_digest(&plan.base.version().version_id)?;

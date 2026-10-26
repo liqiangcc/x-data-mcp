@@ -190,6 +190,7 @@ fn read_facts_series(
     type Row = (
         String,
         i64,
+        i64,
         String,
         i64,
         String,
@@ -203,23 +204,24 @@ fn read_facts_series(
     );
     let rows: Vec<Row> = c
         .prepare(
-            "SELECT entity,period,kind,seq,item_id,outcome,task_revision,result_id,result_digest,old_content_digest,new_content_digest,evidence_digest FROM market_events WHERE task_id=?1",
+            "SELECT entity,period,adjustment,kind,seq,item_id,outcome,task_revision,result_id,result_digest,old_content_digest,new_content_digest,evidence_digest FROM market_events WHERE task_id=?1",
         )
         .map_err(storage)?
         .query_map([&task_id], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, String>(5)?,
                 r.get::<_, i64>(6)?,
-                r.get::<_, String>(7)?,
-                r.get::<_, Vec<u8>>(8)?,
-                r.get::<_, Option<Vec<u8>>>(9)?,
-                r.get::<_, Vec<u8>>(10)?,
+                r.get::<_, i64>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, Vec<u8>>(9)?,
+                r.get::<_, Option<Vec<u8>>>(10)?,
                 r.get::<_, Vec<u8>>(11)?,
+                r.get::<_, Vec<u8>>(12)?,
             ))
         })
         .map_err(storage)?
@@ -231,12 +233,13 @@ fn read_facts_series(
         chain_tip: Option<series::SeriesRow>,
         events: Vec<series::EventRow>,
     }
-    let mut entities: std::collections::BTreeMap<(String, i64), EntityEvents> =
+    let mut entities: std::collections::BTreeMap<(String, i64, i64), EntityEvents> =
         std::collections::BTreeMap::new();
     let mut found = std::collections::BTreeMap::new();
     for (
         entity,
         period,
+        adjustment_code,
         kind,
         seq,
         item,
@@ -274,6 +277,9 @@ fn read_facts_series(
         } else {
             crate::market_data::Period::Year
         };
+        // Schema 22: one item audits one event per 口径, so the per-series
+        // state below is keyed by (entity, period, adjustment).
+        let adjustment = series::decode_adjustment(*adjustment_code)?;
         let recomputed = series_commit::event_result_digest(
             id,
             &task_id,
@@ -288,17 +294,17 @@ fn read_facts_series(
             return Err(integrity("market event result digest mismatched"));
         }
         let group = entities
-            .entry((entity.clone(), *period))
+            .entry((entity.clone(), *period, *adjustment_code))
             .or_insert_with(|| EntityEvents {
                 chain_tip: None,
                 events: vec![],
             });
         if group.chain_tip.is_none() {
             group.chain_tip = Some(
-                series::read_series(c, entity, period_enum)?
+                series::read_series_adjusted(c, entity, period_enum, adjustment)?
                     .ok_or_else(|| integrity("publication event without a series row"))?,
             );
-            group.events = series::events_after(c, entity, period_enum, 0)?;
+            group.events = series::events_after(c, entity, period_enum, adjustment, 0)?;
         }
         let series_row = group.chain_tip.as_ref().unwrap();
         // §6.6: current event → new_content_digest == series.content_digest
