@@ -218,16 +218,18 @@ fn progress_v2_structures_items_and_lists_by_reason_code() {
         v2["task_contract_version"]
     );
 
-    // `status` keeps working next to the new filter (#387 §14).
+    // `status` keeps working next to the new filter (#387 §14). `pending` is
+    // the one status the stored column and the visible status spell alike.
     let by_status = api
         .call(
             "list_tasks",
-            json!({"contract_version": "v2", "status": ["partially_failed"]}),
+            json!({"contract_version": "v2", "status": ["pending"]}),
         )
         .unwrap();
     let status_items = by_status["items"].as_array().unwrap();
     assert_eq!(status_items.len(), 1, "{by_status}");
-    assert_eq!(status_items[0]["status"], "partially_failed");
+    assert_eq!(status_items[0]["status"], "pending");
+    assert_ne!(status_items[0]["task_id"], task);
 
     // v1 never reads item failures: the filter is rejected, not ignored.
     let error = api
