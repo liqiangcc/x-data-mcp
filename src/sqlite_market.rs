@@ -1089,6 +1089,10 @@ fn commit_publication(c: &Connection, plan: &PublishPlan) -> Result<Receipt, Err
 }
 
 pub mod backend;
+// Trading-calendar storage is consumed by the internal `derived:calendar` item
+// (PR-7) and the research read model (PR-8); until then only its tests drive it.
+#[allow(dead_code)]
+pub(crate) mod calendar;
 pub(crate) mod collection;
 #[allow(dead_code)]
 pub(crate) mod compact_repo;
