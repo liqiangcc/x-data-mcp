@@ -94,7 +94,7 @@
 | acquire `tools/list` | 6,040（10 工具） | **6,040**（10 工具，无 outputSchema） | 一致 |
 | 研究四工具 desc+input（去 outputSchema） | 9,459 | **9,225** | 同量级（口径差：本次不含 name/键） |
 | 14 个入参拒绝 | 逐条有精确消息 | **逐条复现**（§2.1.1） | 一致 |
-| `get_data_capabilities` 按工具过滤 | 9,677（`query_data`） | 22,140（`market.daily`+`query_data` 线上字节） | 同一对象，线上字节含 2× payload |
+| `get_data_capabilities` 按 dataset+operation 过滤 | 22,140 线上 / 9,677 struct | **22,140 线上**（`{dataset:"market.daily",operation:"query_data"}`） | 口径不同（线上 = 2 × payload + 信封），两者都说明详版 ≈10–11 KB |
 
 > 口径：本文一律用**线上响应行字节**（socket 上 `len(line)`）；token 用 ASCII/4 估算
 > （研究响应全 ASCII），非 ASCII 按 1.5 字符/token（reading-mcp 的做法）。
