@@ -190,6 +190,26 @@ pub trait ProgressRead {
         items.truncate(limit);
         Ok(items)
     }
+    /// The first `limit` failed items by `item_id` (v8 PR-5, #387 §14): the
+    /// bounded sample a v2 `get_task` diagnosis carries. The default filters
+    /// `task`'s materialized items.
+    fn failed_items(
+        &self,
+        id: &str,
+        limit: usize,
+        access: &Access,
+    ) -> Result<Vec<crate::task_control::TaskItem>, Error> {
+        let mut items = self
+            .task(id, access)?
+            .snapshot
+            .items
+            .into_iter()
+            .filter(|i| i.outcome.as_ref().is_some_and(|o| !o.success))
+            .collect::<Vec<_>>();
+        items.sort_by(|a, b| a.spec.item_id.cmp(&b.spec.item_id));
+        items.truncate(limit);
+        Ok(items)
+    }
     /// Failed items grouped by `reason_code`, for the bounded progress
     /// path. The default counts `task`'s materialized items.
     fn failed_reason_counts(
