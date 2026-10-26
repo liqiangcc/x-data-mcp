@@ -135,7 +135,7 @@ def rules(claims: list[tuple[int, str, str]]) -> list[str]:
 
 
 class StaleCurrentRegions(unittest.TestCase):
-    """P1-2 (#296): the regions P1-1 corrected (XDM-1 7d class)."""
+    """P1-2 (#296): the regions P1-1 corrected (its 7d class)."""
 
     def test_deployed_schema_is_accepted(self):
         self.assertEqual(
@@ -143,7 +143,7 @@ class StaleCurrentRegions(unittest.TestCase):
         )
 
     def test_old_schema_written_as_deployed_is_flagged(self):
-        # design.md before P1-1 (XDM-1 7d).
+        # design.md before the P1-1 correction (item 7d).
         old = (
             "本文中「版本」等表述描述的是**版本链模型**：它是已部署的\n"
             "schema 20（v0.2.0-preview.31）的行为，但**不再被视为目标模型**。"
@@ -165,7 +165,7 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual(region_claims(text), [])
 
     def test_old_revision_written_as_deployed_is_flagged(self):
-        # generic-data-v7.md before P1-1 (XDM-1 7d #9).
+        # generic-data-v7.md before the P1-1 correction (item 7d #9).
         old = "**状态**：尚未部署；当前部署仍为 `generic-data-v6` / compact schema 21。\n"
         found = region_claims(old)
         self.assertEqual(rules(found), ["stale-revision"], found)
@@ -180,7 +180,7 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual(region_claims(text), [])
 
     def test_tool_counts_must_match_the_registries(self):
-        # design.md:69 before P1-1 said 21 data tools (XDM-1 7d #2).
+        # design.md:69 before the P1-1 correction said 21 data tools (item 7d #2).
         old = "| MCP | data socket 21 data tools、acquisition socket 10 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(old)), ["data-tool-count"])
         good = "| MCP | data socket 23 data tools、acquisition socket 10 acquisition tools | x |\n"
@@ -194,7 +194,7 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual(region_claims("双 server 共 23 tools。\n"), [])
 
     def test_data_history_word_is_not_a_history_marker(self):
-        # verified-reads.md before P1-1 (XDM-1 7d #5): "某个历史版本" is a data
+        # verified-reads.md before the P1-1 correction (item 7d #5): "某个历史版本" is a data
         # concept, not a marker that the sentence is historical.
         old = (
             "下文把「按 `version_id` 读取某个历史版本」作为完整性读取的前提，"
@@ -382,13 +382,13 @@ def status_claims(text: str) -> list[tuple[int, str, str]]:
 
 
 class StatusConsistency(unittest.TestCase):
-    """P1-2 (#296) item 3: STATUS must not contradict itself (XDM-1 7c)."""
+    """P1-2 (#296) item 3: STATUS must not contradict itself (P1-1, item 7c)."""
 
     def test_consistent_status_passes(self):
         self.assertEqual(status_claims(STATUS_OK), [])
 
     def test_hot_count_contradiction_is_flagged(self):
-        # XDM-1 7c: the 容量 row said hot 6/6 while the 数据 table said 5/6.
+        # P1-1, item 7c: the 容量 row said hot 6/6 while the 数据 table said 5/6.
         text = STATUS_OK + (
             "\n## 新鲜度\n\n| 项 | 事实 | 来源 |\n|---|---|---|\n"
             "| 容量 | hot **6/6**（实测：1 active + 4 superseded） | acquire.sqlite |\n"

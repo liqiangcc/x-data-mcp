@@ -54,6 +54,15 @@ CURRENT_REGIONS: dict[str, tuple[str | None, ...]] = {
     "docs/verified-reads.md": (None,),
     "docs/yearly.md": (None,),
     "docs/publish-storage.md": (None,),
+    # The data catalog states current dataset semantics and read limits;
+    # deployment numbers stay in STATUS.md (linked only).
+    "docs/data-catalog.md": (
+        "## 1. 说明与权威入口",
+        "## 2. 已提供的数据",
+        "## 3. 缺口清单",
+        "## 4. 按用途看现在能做什么",
+        "## 5. 现在的访问方式和限制",
+    ),
     "docs/decisions.md": (
         "## 1. 性能与门禁",
         "## 2. 部署",
@@ -154,7 +163,7 @@ CONTRACT_CURRENT_SELF_CLAIM = re.compile(
 # values are the ones the file itself declares.
 DECISION_STATUS_DECL = re.compile(r"状态取值\s*[:：]\s*(.+)")
 
-# docs/STATUS.md internal consistency (XDM-1 7c class): one authoritative
+# docs/STATUS.md internal consistency (P1-1, item 7c): one authoritative
 # "| 热 generation | N/M" row, one "| 部署版本 |" row, and one 服务 table whose
 # 工具数 column must match the source registries.
 HOT_GENERATION_ROW = re.compile(r"\|\s*热\s*generation\s*\|\s*\**\s*(\d+)\s*/\s*(\d+)")
@@ -429,7 +438,7 @@ def decision_status_claims(text: str) -> list[tuple[int, str, str]]:
 def status_consistency_errors(
     text: str, data_tools: int, acquire_tools: int
 ) -> list[tuple[int, str, str]]:
-    """docs/STATUS.md must not contradict itself (XDM-1 7c class).
+    """docs/STATUS.md must not contradict itself (P1-1, item 7c).
 
     One authoritative row per fact: "| 热 generation | N/M", "| 部署版本 |", and
     the 服务 table's 工具数 column. Current-state restatements elsewhere must
