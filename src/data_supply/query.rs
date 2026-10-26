@@ -22,7 +22,7 @@ impl QueryPlan {
         page_size(args.page_size)?;
         // v2 shape only (v8 PR-3, #387 §4.3): `fields` projects columns, so a
         // v1 request carrying it is rejected rather than silently ignored.
-        if args.contract_version == ContractVersion::V1 && args.fields.is_some() {
+        if args.contract_version == ReadContractVersion::V1 && args.fields.is_some() {
             return Err(invalid("fields requires contract_version v2"));
         }
         let entities = entities(args.dataset, &args.selection, access)?;

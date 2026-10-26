@@ -842,7 +842,7 @@ fn supply_reads_on_schema21() {
         .versions(
             &VersionsQuery {
                 dataset: Dataset::Daily,
-                contract_version: crate::data_supply::wire::ContractVersion::V1,
+                contract_version: crate::data_supply::wire::ReadContractVersion::V1,
                 selection: Selection::Single {
                     entity: sec.clone(),
                 },
@@ -860,7 +860,7 @@ fn supply_reads_on_schema21() {
     let plan = QueryPlan::new(
         Query {
             dataset: Dataset::Daily,
-            contract_version: crate::data_supply::wire::ContractVersion::V1,
+            contract_version: crate::data_supply::wire::ReadContractVersion::V1,
             selection: Selection::Single {
                 entity: sec.clone(),
             },
@@ -910,7 +910,7 @@ fn supply_reads_on_schema21() {
     let yearly_plan = QueryPlan::new(
         Query {
             dataset: Dataset::Yearly,
-            contract_version: crate::data_supply::wire::ContractVersion::V1,
+            contract_version: crate::data_supply::wire::ReadContractVersion::V1,
             selection: Selection::Single {
                 entity: sec.clone(),
             },
@@ -964,7 +964,7 @@ fn supply_reads_on_schema21() {
         .year_presence(
             &crate::data_supply::presence::PresencePlan::new(
                 YearPresenceQuery {
-                    contract_version: crate::data_supply::wire::ContractVersion::V1,
+                    contract_version: crate::data_supply::wire::ReadContractVersion::V1,
                     items: vec![YearPresenceItem {
                         entity: sec.clone(),
                         base_daily_version_id: d.version_id.clone(),
@@ -1021,7 +1021,7 @@ fn presence_reasons_distinguish_superseded_from_never_seen() {
     };
     let plan = crate::data_supply::presence::PresencePlan::new(
         YearPresenceQuery {
-            contract_version: crate::data_supply::wire::ContractVersion::V1,
+            contract_version: crate::data_supply::wire::ReadContractVersion::V1,
             items: vec![
                 YearPresenceItem {
                     entity: security(),

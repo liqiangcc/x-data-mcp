@@ -1136,7 +1136,7 @@ impl DataApi {
             }
             Handler::Query => {
                 let query = decode::<Query>(input)?;
-                if query.contract_version == ContractVersion::V2 {
+                if query.contract_version == ReadContractVersion::V2 {
                     return self.queries.query_v2(query, &self.access).map_err(mapped);
                 }
                 let reply = self.queries.query(query, &self.access).map_err(mapped)?;
@@ -1144,7 +1144,7 @@ impl DataApi {
             }
             Handler::Versions => {
                 let query = decode::<VersionsQuery>(input)?;
-                if query.contract_version == ContractVersion::V2 {
+                if query.contract_version == ReadContractVersion::V2 {
                     return self
                         .queries
                         .versions_v2(query, &self.access)
@@ -1154,7 +1154,7 @@ impl DataApi {
             }
             Handler::Availability => {
                 let query = decode::<Query>(input)?;
-                if query.contract_version == ContractVersion::V2 {
+                if query.contract_version == ReadContractVersion::V2 {
                     return self
                         .observer
                         .availability_v2(query, &self.access)

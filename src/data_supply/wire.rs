@@ -32,13 +32,22 @@ impl Dataset {
         }
     }
 }
+/// Contract version for the write/task surfaces: `v1` only. The read surface
+/// uses [`ReadContractVersion`], so a write tool's schema never advertises a
+/// version it rejects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ContractVersion {
     #[serde(rename = "v1")]
     V1,
-    /// Columnar read responses (v8 PR-3, #387 §5). Only the read surface
-    /// (`query_data`, `get_data_availability`, `list_data_versions`) serves
-    /// it; every other tool still accepts `v1` only.
+}
+
+/// `contract_version` for `query_data`, `get_data_availability` and
+/// `list_data_versions` (v8 PR-3, #387 §5): `v1` keeps the row shape, `v2`
+/// selects the columnar shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum ReadContractVersion {
+    #[serde(rename = "v1")]
+    V1,
     #[serde(rename = "v2")]
     V2,
 }
@@ -143,7 +152,7 @@ pub enum VersionChoice {
 #[serde(deny_unknown_fields)]
 pub struct Query {
     pub dataset: Dataset,
-    pub contract_version: ContractVersion,
+    pub contract_version: ReadContractVersion,
     pub selection: Selection,
     pub filter: Filter,
     pub version: VersionChoice,
@@ -249,7 +258,7 @@ pub struct DataPage {
 #[serde(deny_unknown_fields)]
 pub struct VersionsQuery {
     pub dataset: Dataset,
-    pub contract_version: ContractVersion,
+    pub contract_version: ReadContractVersion,
     pub selection: Selection,
     #[serde(default = "default_page")]
     #[schemars(range(min = 1, max = 1000))]
