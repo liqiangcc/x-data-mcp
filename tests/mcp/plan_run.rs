@@ -1230,6 +1230,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
         removes: &[chrono::NaiveDate],
         metadata: Option<&x_data_mcp::market_update::TypedVersionMetadata>,
         continuity_evidence: Option<&Value>,
+        raw: Option<&x_data_mcp::market_data::RawBatch>,
     ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
     {
         self.inner.commit_range_ops_typed(
@@ -1240,6 +1241,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
             removes,
             metadata,
             continuity_evidence,
+            raw,
         )
     }
     fn commit_range_no_change_typed(
@@ -1248,6 +1250,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
         base_version_id: &str,
         range: &x_data_mcp::market_update::DateRange,
         continuity_evidence: Option<&Value>,
+        raw: Option<&x_data_mcp::market_data::RawBatch>,
     ) -> Result<Option<x_data_mcp::market_storage::Receipt>, x_data_mcp::market_storage::Error>
     {
         self.inner.commit_range_no_change_typed(
@@ -1255,6 +1258,7 @@ impl x_data_mcp::market_update::publication::RangeRepository for Spy {
             base_version_id,
             range,
             continuity_evidence,
+            raw,
         )
     }
     fn commit_update_batch(
