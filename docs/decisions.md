@@ -17,6 +17,7 @@
 | D-05 | 2026-10-11 | `get_yearly_base_years` 叶节点完整校验、祖先已提交层；年线发布时先验年线 head 读取降到已提交层；全链完整校验保留在发布提交、启动 sweep、`task_sqlite check`、`query_data` | 年线分批耗时的主要成分是逐节点重复校验 | 生效 | [STATUS](STATUS.md)、PR #323 |
 | D-06 | 2026-10-11 | 错开的提前全量重写（每实体阈值 64–127），校验放宽为父深度 64..=256 | 避免同一天所有实体同时 rollover 的耗时悬崖 | 已取代（D-09 已落地：schema 21 无 rollover/链深，自 preview.32 起部署） | PR #323 |
 | D-07 | 2026-10-11 | 合并 PR #323（squash，`8a446b1`）并发布 v0.2.0-preview.31；接受第三类「保留的真实 mixed 负载」记为**未运行**；不改写已推送的历史 | retained gen-1 字节永久不可得；改写历史会破坏已有引用 | 生效 | [STATUS](STATUS.md)、[SLO](SLO.md) |
+| D-19 | 2026-10-26 | #295 **先测量再定方向**：由看板任务 XDM-14（P2-4）在私有 perf 栈上做 schema 21 的耗时分解，再由 XDM-11（P3-4）按实测瓶颈在四个候选方向中选一个（窄投影 / 放宽批量和分页粒度 / 服务端筛选（随 #268）/ 降为低优先级）；本条只记录「先测量」，不预设方向。本地全市场分析的需求由 [#373](https://github.com/liqiangcc/x-data-mcp/issues/373) 的分析脚本解决：直读 SQL 的旁路只限分析脚本（`scripts/analysis/boll.py`，`mode=ro`），不进入 MCP 产品路径；schema 21 只保存每个实体的当前序列，脚本读到的是读取时刻的 head，结论必须连同读取时刻与 generation 一起记录，不能当作固定版本重放 | #295 的 383s 是 preview.28（schema 20）上测的，当时每次读取都要校验整条版本链（[STATUS](STATUS.md)「校验分层变化」：全链完整校验保留在 `query_data`）；schema 21 换了读路径，每页校验只读表头（`src/sqlite_market.rs:538-547`），这个数字已不能代表现状，「瓶颈是传输」的判断也没有分段测量支撑；未重新测量前选方向等于猜 | 实施中（测量未做，方向未定） | [#295](https://github.com/liqiangcc/x-data-mcp/issues/295)、owner 2026-10-26 同意「先测量」、[#373](https://github.com/liqiangcc/x-data-mcp/issues/373) |
 
 ## 2. 部署
 
@@ -43,7 +44,19 @@
 | D-15 | 2026-10-12 | 公开仓库信息卫生：`docs/STATUS.md` 不再记录主机名与访问边界细节；新增 CI 门禁拒绝 tracked 文本中的邮箱、内部主机名、私网地址 | 仓库公开后这些信息无法撤回 | 生效（PR #331 于 2026-10-13 合并；`check_public_hygiene.py` 已在 CI） | PR #331、`.github/workflows/ci.yml:35-38` |
 | D-16 | 2026-10-12 | GOAL-008 收尾后清理性能测试夹具与构建产物（约 30G）；开放 Issue 按验收清单逐条对账后再收口，证据不足不关闭 | 夹具已无复用价值，开放 Issue 不得不经对账就关闭 | 生效（夹具清理待 GOAL-008 收尾后执行；Issue 对账进行中） | #296 |
 
-## 5. 待决（尚无结论，不得当作已决定执行）
+## 5. 受理协议与编排
+
+| # | 日期 | 决策 | 原因 | 状态 | 来源 |
+|---|---|---|---|---|---|
+| D-18 | 2026-10-26 | #294 选**方向 C**：`update_data` 显式 items **保持调用级 fail-closed 受理**，协议不改（不返回 per-item 受理结果、不加 dry-run 校验端点）。推荐编排是日更走 `plan_market_update`/`run_market_update`（`generic-data-v7`）：plan 阶段已把可预知的单项不合格（无 head、`STALE_BASE`、年份非子集、未来窗口）提前分类，写路径不会因单项整批被拒；只在显式 items 场景下使用**分裂重试**，规则写在 [`.devin/skills/x-data-daily-sync/SKILL.md`](../.devin/skills/x-data-daily-sync/SKILL.md) §3.8 | 调用级 fail-closed 是既有契约（[generic-data-v7](contracts/generic-data-v7.md) §6），改协议需要独立 contract review 并改动 wire 形状；v7 已把日更主路径挪到服务器侧 plan/run，plan/run 内部没有整批拒绝模式。2026-10-24 日更实测：日线 plan/run 5,224 项，5,199 succeeded、25 `REVISION_UNVERIFIED`，25 项显式前向窗口补推 25/25 succeeded，全程未出现整批被拒 | 生效 | [#294 最后一条状态评论（2026-10-13）](https://github.com/liqiangcc/x-data-mcp/issues/294#issuecomment-6148089096)、[STATUS](STATUS.md)「日更」段、owner 2026-10-26 同意按 Claude 推荐裁决 |
+
+## 6. 数据来源
+
+| # | 日期 | 决策 | 原因 | 状态 | 来源 |
+|---|---|---|---|---|---|
+| D-20 | 2026-10-26 | 生产来源原则修订（关联 #55）：为达到首期严谨回测级，允许引入**一手官方来源**——交易所与证监会的官方披露，以及 TDX 官方文件；每个新来源按 [#308](https://github.com/liqiangcc/x-data-mcp/issues/308) 的「离线输入准入」模式过证据门禁；**不接入任何第三方数据商或聚合源**；具体来源逐个由 owner 裁决。BaoStock 等第三方仍只能作交叉验证证据。README「唯一目标链路」段与[官方文件架构](production-source.md)中冲突的表述保留原文、标为历史并指向本条 | 只靠 TDX 衍生文件锚不住交易所层面的官方事实（ETF 身份、ST 时间线都要交易所名单与公告），首期要的是严谨回测级而不是「能跑」；证据门禁本身不变，放开的只是来源类别 | 生效 | [#55](https://github.com/liqiangcc/x-data-mcp/issues/55)、[#308](https://github.com/liqiangcc/x-data-mcp/issues/308)、owner 2026-10-26 批准 |
+
+## 7. 待决（尚无结论，不得当作已决定执行）
 
 | # | 事项 | 需要谁决定 | 备注 |
 |---|---|---|---|

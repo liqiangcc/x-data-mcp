@@ -84,7 +84,7 @@ schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
 （既有库显式 upgrade 的来源版本），`COMPACT_SCHEMA_VERSION=21` 是 fresh 部署的
 compact schema。Issue/Epic 中的“v15”是交付规划标签，不是 schema 编号。
 
-唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →
+**历史（2026-09 来源收敛口径，已被 [D-20](docs/decisions.md) 修订）：** 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →
 从同一已发布 QFQ daily version 本地聚合 yearly。不存在多源生产 fallback。
 
 - BaoStock、源端直接 QFQ 仅 evidence/交叉验证。
@@ -94,7 +94,12 @@ compact schema。Issue/Epic 中的“v15”是交付规划标签，不是 schema
 - 既有 `evidence/`、历史文档与 Final Gate 裁定原样保留；历史结论不外推为当前生产状态。
 - 每个新 generation 必须重新建立字节与跨文件一致性证据，不能继承旧代 PASS。
 
-生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55)，
+**2026-10-26 修订（[D-20](docs/decisions.md)）：** 允许引入一手官方来源——交易所与证监会的官方披露、
+TDX 官方文件；每个新来源按 [#308](https://github.com/liqiangcc/x-data-mcp/issues/308) 的「离线输入准入」
+模式过证据门禁，不接入任何第三方数据商或聚合源，具体来源逐个由 owner 裁决。
+BaoStock 等第三方仍只能作交叉验证证据。
+
+生产来源决策见 [Issue #55](https://github.com/liqiangcc/x-data-mcp/issues/55) 与 [D-20](docs/decisions.md)，
 完整边界见[官方文件架构](docs/production-source.md)。
 
 ## 本地入口
