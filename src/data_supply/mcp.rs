@@ -496,10 +496,24 @@ impl DataApi {
             }
             "cancel_task" => {
                 let a: CancelV1 = decode(input)?;
+                // An absent `expected_revision` reads the current revision
+                // first (v8 PR-1, #387 §7.2 row 10); an explicit value keeps
+                // the strict CAS precondition.
+                let revision = match a.expected_revision {
+                    Some(revision) => revision,
+                    None => {
+                        self.legacy
+                            .control
+                            .read_task(&a.task_id)
+                            .map_err(task_error)?
+                            .task
+                            .state_revision
+                    }
+                };
                 let s = self
                     .legacy
                     .control
-                    .cancel(&a.task_id, a.expected_revision)
+                    .cancel(&a.task_id, revision)
                     .map_err(task_error)?;
                 return encode(Cancellation {
                     task_id: s.task.task_id.clone(),
@@ -615,6 +629,10 @@ impl DataApi {
                 "unsupported contract version",
             ));
         }
+        // v8 PR-1 (#387 §7): widen the accepted spellings once, before any
+        // typed decode. Normalized values feed the same intent payload, so
+        // the idempotency digest is unchanged.
+        let input = super::wire::normalize(name, input)?;
         let Some(entry) = entries().into_iter().find(|e| e.name == name) else {
             return self.control_call(name, input);
         };

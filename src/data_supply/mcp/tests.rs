@@ -1261,6 +1261,155 @@ fn verify_data_gap_accepts_frozen_subject_and_rejects_bad_target() {
     );
 }
 
+/// v8 PR-1 (#387 §7): the friendly spellings (`entity` text, `YYYYMMDD`,
+/// omitted `contract_version`/`version`) reach the read core as the same
+/// request as the contract form — same records, same manifest.
+#[test]
+fn friendly_read_inputs_match_the_contract_form() {
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 1, "day", "req-n1");
+    publish_daily(
+        &f,
+        &task_id,
+        "item-1",
+        SYMBOL,
+        vec![
+            bar(day_epoch(2020, 1, 6), 100),
+            bar(day_epoch(2020, 2, 4), 110),
+        ],
+        None,
+    );
+    let friendly = json!({
+        "dataset": "market.daily",
+        "selection": {"kind": "single", "entity": SYMBOL},
+        "filter": {"kind": "daily", "start_date": "20200106", "end_date": "20200204"},
+        "version": {"kind": "latest"},
+    });
+    let contract = json!({
+        "dataset": "market.daily",
+        "contract_version": "v1",
+        "selection": {"kind": "single", "entity": {"exchange": "sh", "code": "600006"}},
+        "filter": {"kind": "daily", "start_date": "2020-01-06", "end_date": "2020-02-04"},
+        "version": {"kind": "latest_per_entity"},
+    });
+    let friendly_page = f.api.call("query_data", friendly).unwrap();
+    let contract_page = f.api.call("query_data", contract).unwrap();
+    assert_eq!(friendly_page["records"].as_array().unwrap().len(), 2);
+    assert_eq!(friendly_page["records"], contract_page["records"]);
+    assert_eq!(
+        friendly_page["version_manifest"],
+        contract_page["version_manifest"]
+    );
+    // A date that is not a calendar day names the field and both formats.
+    let err = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.daily",
+                "selection": {"kind": "single", "entity": SYMBOL},
+                "filter": {"kind": "daily", "start_date": "20200230", "end_date": "20200204"},
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_arguments");
+    assert!(
+        err.message.contains("$.filter.start_date"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("YYYYMMDD"), "{}", err.message);
+    // The display name in `code` is still rejected with routing advice.
+    let err = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.daily",
+                "selection": {"kind": "single", "entity": {"exchange": "sh", "code": SYMBOL}},
+                "filter": {"kind": "daily", "start_date": "2020-01-06", "end_date": "2020-02-04"},
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_arguments");
+    assert!(err.message.contains("six digits"), "{}", err.message);
+    assert!(err.message.contains(SYMBOL), "{}", err.message);
+    // A cross-dataset selection is still rejected, naming the allowed kinds.
+    let err = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.daily",
+                "selection": {"kind": "catalog", "scope": "current_sh_sz_a"},
+                "filter": {"kind": "daily", "start_date": "2020-01-06", "end_date": "2020-02-04"},
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "invalid_arguments");
+    assert!(err.message.contains("\"single\""), "{}", err.message);
+    // M2 point-in-time parameters are reserved, not silently ignored.
+    let err = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.daily",
+                "selection": {"kind": "single", "entity": SYMBOL},
+                "filter": {"kind": "daily", "start_date": "2020-01-06", "end_date": "2020-02-04"},
+                "as_of": "2020-02-04",
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "reserved_for_m2");
+}
+
+/// §2.1.1 #10: `list_tasks(operation=update_data)` filters the operation the
+/// production tasks actually carry instead of failing at decode.
+#[test]
+fn list_tasks_filters_by_the_update_data_operation() {
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 1, "day", "req-lt");
+    let page = f
+        .api
+        .call("list_tasks", json!({"operation": "update_data"}))
+        .unwrap();
+    let items = page["items"].as_array().unwrap();
+    assert!(
+        items.iter().any(|t| t["task_id"] == task_id.as_str()),
+        "{page}"
+    );
+    assert!(items.iter().all(|t| t["operation"] == "update_data"));
+    let none = f
+        .api
+        .call("list_tasks", json!({"operation": "republish_data"}))
+        .unwrap();
+    assert!(none["items"].as_array().unwrap().is_empty());
+}
+
+/// §7.2 row 10: cancelling without `expected_revision` reads the current
+/// revision; an explicit revision still works.
+#[test]
+fn cancel_task_defaults_to_the_current_revision() {
+    let f = fixture();
+    let task_id = task(&f, SYMBOL, 1, "day", "req-cx");
+    let cancelled = f
+        .api
+        .call("cancel_task", json!({"task_id": task_id}))
+        .unwrap();
+    assert_eq!(cancelled["task_id"], task_id.as_str());
+    assert_eq!(cancelled["status"], "cancel_requested");
+    let other = task(&f, "sz.000001", 1, "day", "req-cx2");
+    let explicit = f
+        .api
+        .call(
+            "cancel_task",
+            json!({"task_id": other, "expected_revision": 0}),
+        )
+        .unwrap();
+    assert_eq!(explicit["status"], "cancel_requested");
+}
+
 // ---------------------------------------------------------------------------
 // M1 PR-2 downstream constraint (x-data-mcp/32 §4.3): the MCP daily read is
 // the forward 口径 only, and the manifest still reports the literal "qfq".
