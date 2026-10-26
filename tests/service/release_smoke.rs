@@ -1,3 +1,5 @@
+use x_data_mcp::acquire::fetch::TDX_FETCH_ENV;
+
 #[test]
 fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
     let dir = tempfile::tempdir().unwrap();
@@ -14,6 +16,16 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
         .arg(bin)
         .arg("--report")
         .arg(&report)
+        // The smoke's `acquire_service` runs on the `Remote` source. Under
+        // `cargo test` the binary lives in `target/debug`, which is not a
+        // release package, so the helper must be named explicitly — the
+        // packaged `<exe dir>/../scripts/tdx_fetch.py` lookup (#375) would
+        // otherwise fail closed, and relying on it here would be a
+        // coincidence of the build tree.
+        .env(
+            TDX_FETCH_ENV,
+            concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/tdx_fetch.py"),
+        )
         .output()
         .unwrap();
     assert!(
