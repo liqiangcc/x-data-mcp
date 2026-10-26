@@ -437,9 +437,11 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
         indices,
         x_data_mcp::index_registry::INDEX_SERIES.len() as i64
     );
-    // §9.1 write set of each entity item: both 口径 series, the factor-set
-    // registration and one event per 口径.
-    for entity in ["sh.600006", "sz.000002"] {
+    // §9.1 write set of each entity item: both 口径 series, one event per
+    // 口径, and the factor-set registration. The registration exists only for
+    // a non-empty set (§3.7: an empty set deletes the row); the fixture's gbbq
+    // carries one event for sh.600006 and none for sz.000002.
+    for (entity, factors_expected) in [("sh.600006", 1i64), ("sz.000002", 0i64)] {
         let series: i64 = c
             .query_row(
                 "SELECT count(*) FROM market_series WHERE entity=?1 AND period=1",
@@ -456,7 +458,10 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(factors, 1, "{entity} factor set registration");
+        assert_eq!(
+            factors, factors_expected,
+            "{entity} factor set registration"
+        );
         let events: i64 = c
             .query_row(
                 "SELECT count(*) FROM market_events WHERE entity=?1 AND period=1",
