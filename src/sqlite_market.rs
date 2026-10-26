@@ -185,18 +185,13 @@ pub(crate) fn is_latest_only_schema(c: &Connection) -> Result<bool, Error> {
 
 pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Error> {
     if is_latest_only_schema(c)? {
-        return c
-            .query_row(
-                "SELECT version_id FROM market_series WHERE entity=?1 AND period=?2 AND adjustment=?3",
-                params![
-                    scope.symbol,
-                    compact_repo::period_code(scope.period),
-                    crate::market_data::Adjustment::Forward.code()
-                ],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(storage);
+        // The public read surface resolves stock 前复权 series only: an index
+        // or ETF series is export-only (issue-383 §6.3, AC-M1-10). The
+        // predicate lives in `series::read_public_series` so head resolution
+        // and version listing cannot drift apart.
+        return Ok(
+            series::read_public_series(c, &scope.symbol, scope.period)?.map(|row| row.version_id)
+        );
     }
     if is_compact_schema(c)? {
         // schema 21 (market_series) is handled above; older compact
@@ -1104,6 +1099,10 @@ pub(crate) mod derived;
 pub(crate) mod envelope;
 pub(crate) mod evidence_store;
 pub(crate) mod gaps;
+// Index benchmark storage is consumed by the internal index items (PR-7) and
+// the research read model (PR-8); until then only its tests drive it.
+#[allow(dead_code)]
+pub(crate) mod index;
 pub(crate) mod manifest;
 pub(crate) mod series;
 #[allow(dead_code)]

@@ -122,6 +122,18 @@ impl SqliteCompactMarket {
     ) -> Result<T, Error> {
         self.coordinator.transaction(f)
     }
+
+    /// Commit one registered index benchmark series and its
+    /// `index_series_meta` row in one transaction (issue-383 §6.3, M1 PR-5).
+    /// The internal `derived:index:*` items drive this (PR-7); the event,
+    /// bars and metadata are one unit, so a failed commit leaves no
+    /// half-written index.
+    pub(crate) fn commit_index(
+        &self,
+        write: &super::index::IndexWrite<'_>,
+    ) -> Result<Receipt, Error> {
+        self.tx(|c| super::index::commit_index(c, write))
+    }
 }
 
 pub(crate) fn period_code(period: Period) -> i64 {

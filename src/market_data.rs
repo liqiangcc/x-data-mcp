@@ -391,6 +391,25 @@ impl RawBatch {
     }
 }
 
+/// One index benchmark's materialized daily facts plus the member digests the
+/// commit binds (issue-383 §6.3).
+///
+/// An index is an ordinary bar series (no separate bar table), but its facts
+/// differ from a security's in three ways the adapter states here rather than
+/// in code constants: the unit evidence is index-point/手/元, the 口径 is
+/// 不复权 only (an index level has no ex-rights event), and the bound event
+/// set is the **empty** set digest instead of a security's gbbq records.
+/// `batch` stays the neutral fact set the domain layer understands.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IndexBatch {
+    pub batch: MarketDataBatch,
+    /// sha256 of the decompressed `.day` member actually read.
+    pub day_member_sha256: String,
+    /// sha256 of the empty corporate-action set — the index's
+    /// `source_bindings.security_event_sha256` (§3.1).
+    pub security_event_sha256: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarketDataBatch {
     pub symbol: String,

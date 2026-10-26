@@ -172,6 +172,77 @@ fn valid_snapshot() -> Snapshot {
     )
 }
 
+/// M1 PR-5 (issue-383 §6.3): an index is materialized from its own `.day`
+/// member only — no gbbq read, no #381 hand normalization, `r7_raw` kept
+/// verbatim, units stated as 0.01 点 / 手 / 元, and the bound event set is the
+/// empty-set digest.
+#[test]
+fn index_batch_promotes_the_day_member_without_gbbq_or_hand_scaling() {
+    let bars: Vec<u8> = [
+        day_record_r7(
+            20261022,
+            [300_000, 300_500, 299_800, 300_100],
+            1234.5,
+            1234,
+            28_641_085,
+        ),
+        day_record_r7(
+            20261023,
+            [300_100, 300_900, 300_000, 300_800],
+            987.25,
+            2345,
+            28_641_086,
+        ),
+    ]
+    .concat();
+    // A malformed gbbq member proves the index path never decodes it: the
+    // stock pair path would fail here.
+    let snap = snapshot(
+        &[("sh\\lday\\sh000001.day", bars.as_slice())],
+        &[("gbbq", b"not a gbbq table".as_slice())],
+        &base_members(),
+    );
+    let source = make_source(&snap);
+    let index = source.index_batch("sh.000001").unwrap();
+    assert_eq!(index.batch.symbol, "sh.000001");
+    assert_eq!(index.batch.period, Period::Day);
+    assert_eq!(index.batch.adjustment, Adjustment::Raw);
+    assert_eq!(index.batch.bars.len(), 2);
+    let first = &index.batch.bars[0];
+    assert_eq!(first.date, NaiveDate::from_ymd_opt(2026, 10, 22).unwrap());
+    // 0.01 点: the raw fen-style integer divided by 100.
+    assert_eq!(first.open, dec("3000.00"));
+    assert_eq!(first.high, dec("3005.00"));
+    assert_eq!(first.low, dec("2998.00"));
+    assert_eq!(first.close, dec("3001.00"));
+    // Volume is 手 exactly as recorded — the marker must not be read as the
+    // stock hand-volume flag (which would multiply by 100).
+    assert_eq!(first.volume, Some(dec("1234")));
+    assert_eq!(first.amount, Some(dec("1234.5")));
+    assert_eq!(first.r7_raw, Some(28_641_085));
+    assert_eq!(index.batch.bars[1].r7_raw, Some(28_641_086));
+    let unit = &index.batch.unit_currency;
+    assert_eq!(unit.price_unit.value.as_deref(), Some("index_point"));
+    assert_eq!(unit.volume_unit.value.as_deref(), Some("hand"));
+    assert_eq!(unit.amount_unit.value.as_deref(), Some("yuan"));
+    assert_eq!(unit.amount_currency.value.as_deref(), Some("CNY"));
+    // An index level is a point value; the adapter does not claim a currency.
+    assert!(unit.price_currency.value.is_none());
+    assert!(unit.price_unit.is_confirmed());
+    assert_eq!(
+        index.batch.adjustment_evidence.value.as_deref(),
+        Some("raw")
+    );
+    // The bound member digests: this exact `.day` member, and the digest of
+    // the empty corporate-action set (`security_events_digest(&[], 0)`).
+    assert_eq!(index.day_member_sha256, sha(bars.as_slice()));
+    assert_eq!(index.security_event_sha256, sha(&[0u8; 8]));
+    let inputs = index.batch.provenance.snapshot_inputs.as_deref().unwrap();
+    assert_eq!(inputs.len(), 1);
+    assert_eq!(inputs[0].role, "day");
+    assert_eq!(inputs[0].member_sha256, sha(bars.as_slice()));
+}
+
 /// Rebuild a snapshot's gbbq archive with new member bytes and re-pin the
 /// manifest to the new archive digest (still inspect()-valid).
 fn regbbq(snap: &mut Snapshot, members: &[(&str, &[u8])]) {

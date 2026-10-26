@@ -27,8 +27,8 @@ use crate::compact_market::{
     self, CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence,
 };
 use crate::market_data::{
-    Adjustment, CoverageEvidence, CoverageStatus, INSTRUMENT_CLASS_STOCK, MarketDataBatch, Period,
-    Provenance, SnapshotInputBinding, YearlyDerivation,
+    Adjustment, CoverageEvidence, CoverageStatus, INSTRUMENT_CLASS_INDEX, INSTRUMENT_CLASS_STOCK,
+    MarketDataBatch, Period, Provenance, SnapshotInputBinding, YearlyDerivation,
 };
 use crate::market_storage::{Error, compat::CheckedRecord};
 use crate::publish::{EffectiveVersion, ValidationSummary};
@@ -80,6 +80,15 @@ impl SeriesShape {
             },
         }
     }
+
+    /// Index benchmark series (issue-383 §6.3): 0.01 点 (`price_scale=2`),
+    /// 不复权 only — an index level has no corporate action, so it never has
+    /// a forward series and never feeds a yearly derivation.
+    pub(crate) const INDEX_UNITS: Self = Self {
+        adjustment: Adjustment::Raw,
+        instrument_class: INSTRUMENT_CLASS_INDEX,
+        price_scale: compact_market::PRICE_SCALE_CENTS,
+    };
 
     /// Decode the three stored identity columns; values the DDL allows but
     /// this build does not implement fail closed instead of being coerced.
@@ -380,6 +389,38 @@ pub(crate) fn read_series_adjusted(
             adjustment.code()
         ],
     )
+}
+
+/// The series the public (MCP) read surface resolves: **stock 前复权 only**
+/// (issue-383 §6.3, AC-M1-10). Index and (later) ETF series are export-only;
+/// this function is the one place that visibility predicate is written, so
+/// `query_data`/`list_data_versions` cannot drift from it.
+pub(crate) fn read_public_series(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+) -> Result<Option<SeriesRow>, Error> {
+    read_series_row(
+        c,
+        &format!(
+            "SELECT {SERIES_COLUMNS} FROM market_series WHERE entity=?1 AND period=?2 \
+             AND adjustment=?3 AND instrument_class=?4"
+        ),
+        params![
+            entity,
+            super::compact_repo::period_code(period),
+            Adjustment::Forward.code(),
+            INSTRUMENT_CLASS_STOCK
+        ],
+    )
+}
+
+/// True when `version_id` names an existing series the public surface must
+/// not expose (issue-383 §6.3): an explicitly pinned version id is still
+/// subject to the same `instrument_class=0` boundary as head resolution.
+pub(crate) fn is_public_invisible_version(c: &Connection, version_id: &str) -> Result<bool, Error> {
+    Ok(read_series_by_version_id(c, version_id)?
+        .is_some_and(|row| row.instrument_class != INSTRUMENT_CLASS_STOCK))
 }
 
 pub(crate) fn read_series_by_version_id(

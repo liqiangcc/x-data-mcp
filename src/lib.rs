@@ -6,6 +6,7 @@ pub mod compact_market;
 pub mod dbf;
 pub mod execution;
 pub mod gbbq;
+pub mod index_registry;
 pub mod market_data;
 pub mod mcp;
 pub mod official_files;
