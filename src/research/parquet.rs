@@ -105,7 +105,10 @@ fn properties(compression: Compression, row_group_rows: usize) -> WriterProperti
             Compression::Snappy => ParquetCompression::SNAPPY,
             Compression::None => ParquetCompression::UNCOMPRESSED,
         })
-        .set_max_row_group_row_count(row_group_rows)
+        // Recorded for readers that inspect the writer metadata; the actual
+        // row groups are flushed by hand in `flush_*` (the low-level writer
+        // does not split them itself).
+        .set_max_row_group_row_count(Some(row_group_rows))
         // Constant, never the crate version: the file bytes must be
         // reproducible (AC-M1-7).
         .set_created_by("x-data-mcp research export".into())
