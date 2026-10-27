@@ -228,20 +228,15 @@ impl SnapshotWriter {
             Some(&self.files),
             self.options.compression.as_str(),
         );
+        // Only output options, never the run's clock or WAL growth: the
+        // manifest is part of the reproducible snapshot (AC-M1-7). The times
+        // travel in `ExportOutcome` and the CLI's one-line summary.
         let export = json!({
-            "started_at": started_at.clone(),
-            "finished_at": created_at.clone(),
-            "wal_bytes_delta": wal_bytes_delta,
             "row_group_rows": self.options.row_group_rows,
             "compression": self.options.compression.as_str(),
         });
-        let document = manifest::document(
-            &self.plan.identity,
-            &self.plan.snapshot_id,
-            &created_at,
-            files,
-            export,
-        );
+        let document =
+            manifest::document(&self.plan.identity, &self.plan.snapshot_id, files, export);
         let text = serde_json::to_string_pretty(&document)?;
         fs::write(self.temp.path().join("manifest.json"), text.as_bytes())?;
         let directory = self.options.out_root.join(&self.plan.snapshot_id);
@@ -300,13 +295,6 @@ pub fn dry_run(
         "row_group_rows": options.row_group_rows,
         "compression": options.compression.as_str(),
     });
-    let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let document = manifest::document(
-        &plan.identity,
-        &plan.snapshot_id,
-        &created_at,
-        files,
-        export,
-    );
+    let document = manifest::document(&plan.identity, &plan.snapshot_id, files, export);
     Ok((plan, document))
 }

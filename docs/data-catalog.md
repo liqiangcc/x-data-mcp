@@ -428,8 +428,8 @@ T 日股票池 `universe(as_of=T)`。验收标准建议：
 ### 5.3 研究快照导出（代码已合并，未部署）
 
 - **代码在 main**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
-  它），产物是 5 个 Parquet 文件 + `manifest.json`（`src/research/export.rs:271`），默认落
-  `/root/x-data-exports/`（`src/research/mod.rs:583`；D-29）。发布包还没有这个命令
+  它），产物是 5 个 Parquet 文件 + `manifest.json`（`src/research/export.rs:266`），默认落
+  `/root/x-data-exports/`（`src/research/mod.rs:611`；D-29）。发布包还没有这个命令
   （`scripts/build_release.sh` 未加 `--features export`，属 owner 批准项）。
 - **MCP 仍没有 `export_data`**：v8 只设计、不实现（D-39）；工具数与 `capability_revision` 不因此变化。
 - **只读**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`，并要求库的 `user_version` 等于
@@ -437,12 +437,16 @@ T 日股票池 `universe(as_of=T)`。验收标准建议：
 - **导出范围**：目录 + 日线（`daily_raw` / `daily_qfq`）+ 因子（`factors`）+ 日历（`calendar`）
   + 指数（`index_daily`），文件名固定、顺序固定（`src/research/mod.rs:436-476`）。不复权、因子、
   日历与指数在 MCP 读不到，但在导出里可见（AC-M1-10）。
-- **清单必须同时带**：目录版本、每序列 `version_id`、来源 generation（manifest 与成员 sha256）、
-  文件 sha256，以及已知偏差说明（`src/research/manifest.rs`；`src/research/mod.rs:587` 的
+- **清单必须同时带**：目录版本、每序列 `version_id`、每条序列/派生数据集的来源 generation
+  （manifest 与成员 sha256，逐项 `source_generation`；顶部 `generations` 是去重列表）、文件
+  sha256，以及已知偏差说明（`src/research/manifest.rs`；`src/research/mod.rs` 的
   `LIMITATIONS`）。原因：`version_id` 只锚定 bar 取值，不含 coverage 与来源
   （[latest-only-storage](latest-only-storage.md) §3），单靠它无法复现「这份数据从哪来」。
-- **未验证**：真实全量导出的体积与耗时（设计估算约 340MB，`docs/tasks/issue-383-m1-research-data.md`
-  §7.7）；本机读取用 `/root` 下的独立 venv（`scripts/export_smoke.py`）。
+- **跨代导出（M1 修复 B）**：日更跨过 generation 切换后仍可全量导出；每一项记录自己的来源代，
+  只有 binding 查不到（血缘无法证明）才拒绝。`manifest.json` 不写运行时间/WAL，两次同输入导出
+  逐字节相同。
+- **未验证**：真实全量导出的耗时。体积已按夹具实测修正为约 1.5GB（设计 §7.7；旧估算 340MB
+  低于 6dp 定宽列的下限）；本机读取用 `/root` 下的独立 venv（`scripts/export_smoke.py`）。
 
 ## 6. 维护规则
 

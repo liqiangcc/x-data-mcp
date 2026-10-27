@@ -17,7 +17,13 @@ Two modes, both offline:
     the check that a Rust-only test cannot make: that a third-party reader
     accepts the bytes the exporter wrote.
 
-Both modes exit non-zero on the first contract violation and print one line
+``--measure``
+    Write production-shaped daily tables with the §7.4 schema and snappy and
+    print bytes/row plus the extrapolation to the full history. This is the
+    fixture behind the §7.7 size correction (M1 fix B); it uses pyarrow, so it
+    measures the schema and encoding, not the Rust writer's exact bytes.
+
+All modes exit non-zero on the first contract violation and print one line
 per check, so CI can attribute a failure to a file and a column.
 
 Versions are pinned by the caller (see ``.github/workflows/ci.yml`` and
@@ -292,17 +298,88 @@ def self_check() -> None:
             print(f"ok   {name}: self-check round trip")
 
 
+def measure() -> None:
+    """§7.7 fixture: bytes/row of the two daily files, production-shaped.
+
+    The values are deterministic. The 前复权 prices carry varying low digits
+    because that is what a 6dp exact adjustment produces; a run of small
+    integers would compress unrealistically well and hide the fixed-width
+    floor (4 × int64 prices + int64 volume + 9-byte amount).
+    """
+    import datetime
+    import decimal
+
+    rows = 100_000
+    entities = 5_228
+    base = datetime.date(2000, 1, 3)
+    entity = [f"sh.{600000 + index % entities}" for index in range(rows)]
+    days = [base + datetime.timedelta(days=index // entities) for index in range(rows)]
+    scale = pa.array([2] * rows, type=pa.int8())
+    volume = [(index * 7_919) % 10_000_000 + 1_000 for index in range(rows)]
+    amount = [(index * 104_729) % 10_000_000_000 + 1_000_000 for index in range(rows)]
+    r7 = [(index * 2_654_435_761) % 2**32 for index in range(rows)]
+
+    def write(name: str, prices: list[int]) -> None:
+        table = pa.table(
+            {
+                "entity": pa.array(entity, pa.string()),
+                "trade_day": pa.array(days, pa.date32()),
+                "open": pa.array([p - 10 for p in prices], pa.int64()),
+                "high": pa.array([p + 10 for p in prices], pa.int64()),
+                "low": pa.array([p - 20 for p in prices], pa.int64()),
+                "close": pa.array(prices, pa.int64()),
+                "price_scale": scale,
+                "volume": pa.array(volume, pa.int64()),
+                "amount": pa.array(
+                    [decimal.Decimal(value).scaleb(-2) for value in amount],
+                    DECIMAL_20_2,
+                ),
+                "r7_raw": pa.array(r7, pa.uint32()),
+                "volume_quantum": pa.array([None] * rows, pa.int32()),
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / name
+            # The Rust writer uses format 1.0, dictionary encoding and snappy
+            # (§7.6 / §7.8); match those so the numbers are comparable.
+            pq.write_table(
+                table,
+                path,
+                compression="snappy",
+                row_group_size=65_536,
+                use_dictionary=True,
+                data_page_version="1.0",
+            )
+            size = path.stat().st_size
+        per_row = size / rows
+        full = per_row * 16_749_060
+        print(
+            f"{name}: {rows} rows, {size} bytes, {per_row:.1f} B/row, "
+            f"full history ~{full / 1e6:.0f} MB"
+        )
+
+    # 2dp raw values widened to the 6dp price column: exact ×10,000.
+    raw = [((index * 37) % 4_500 + 500) * 10_000 for index in range(rows)]
+    # 6dp qfq values with varying low digits (1 to 900 yuan).
+    qfq = [1_000_000 + ((index * 2_654_435_761) % 900_000_000) for index in range(rows)]
+    write("daily_raw.parquet", raw)
+    write("daily_qfq.parquet", qfq)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot-dir", type=pathlib.Path)
     parser.add_argument("--self-check", action="store_true")
+    parser.add_argument("--measure", action="store_true")
     args = parser.parse_args()
     if args.self_check:
         self_check()
+    if args.measure:
+        measure()
     if args.snapshot_dir:
         check_snapshot(args.snapshot_dir)
-    if not args.self_check and not args.snapshot_dir:
-        parser.error("one of --self-check / --snapshot-dir is required")
+    if not args.self_check and not args.measure and not args.snapshot_dir:
+        parser.error("one of --self-check / --measure / --snapshot-dir is required")
     print(f"pyarrow {pa.__version__}, duckdb {getattr(duckdb, '__version__', 'missing')}")
     if failures:
         print(f"{len(failures)} failure(s)")
