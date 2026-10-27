@@ -15,10 +15,10 @@
 //!
 //! Scope (issue-391 §16 PR-2): only TDX facts. `SSDATE` is a *subject-level*
 //! listing date (#399 A-5), `infoharbor_spec.cfg` gives the delisting
-//! arrangement interval (#401 A-6), and only `gbbq` categories 2/3/9/10 are
-//! capital facts (§5.1). Categories 5/7/8 stay excluded: schema 23's
-//! `capital_events.category` CHECK accepts only 2/3/9/10, and the owner's
-//! later R-3 admission needs a migration before those rows can be stored.
+//! arrangement interval (#401 A-6), and `gbbq` categories 2/3/5/7/8/9/10 are
+//! capital facts (§5.1, D-50 R-3 revision). For every admitted category only
+//! the after value and the event day are state; the before value is retained
+//! as audit evidence and never extrapolated across a chain break (D-50).
 
 use std::collections::BTreeMap;
 
@@ -67,7 +67,8 @@ pub struct CapitalEvent {
     pub ordinal: i64,
     /// The ex-rights/effective date. The source has no announcement date.
     pub effective_day: NaiveDate,
-    /// `gbbq` category: 2 (分红), 3 (送配股), 9 (股本变动), 10 (其他).
+    /// `gbbq` category: 2 (分红), 3 (送配股), 5/7/8 (D-50 admitted),
+    /// 9 (股本变动), 10 (其他).
     pub category: u8,
     /// `float_before` f32 bit pattern, verbatim.
     pub float_before_bits: u32,
@@ -86,7 +87,7 @@ pub struct CapitalEvent {
     /// `to_shares(total_after_bits)`.
     pub total_after: i64,
     /// The source's "before" is the previous record's state, which may already
-    /// be stale (the owner's semantics declaration); always true in schema 23.
+    /// be stale (the owner's semantics declaration); always true in schema 24.
     pub prev_is_lagged: bool,
     /// The §5.2 quality gate. Stored, not a reason to drop the event.
     pub suspicious: bool,
@@ -97,7 +98,7 @@ pub struct CapitalEvent {
 
 impl CapitalEvent {
     /// Build one event from the four source values. Fails closed on a category
-    /// outside 2/3/9/10 or a value that is not representable as integer
+    /// outside 2/3/5/7/8/9/10 or a value that is not representable as integer
     /// shares (NaN/inf/overflow).
     pub fn from_raw(
         ordinal: i64,
@@ -105,7 +106,7 @@ impl CapitalEvent {
         category: u8,
         c_bits: [u32; 4],
     ) -> Result<Self, Error> {
-        if !matches!(category, 2 | 3 | 9 | 10) {
+        if !is_admitted_category(category) {
             return Err(Error::Category(category));
         }
         let float_before = to_shares(c_bits[0]).ok_or(Error::Shares)?;
@@ -141,6 +142,16 @@ impl CapitalEvent {
     }
 }
 
+/// `gbbq` categories admitted as capital facts. D-50 (R-3 revision) admits
+/// 5/7/8 at the OWNER_RISK_ACCEPTED tier; 2/3/9/10 keep their earlier
+/// admission. The order is the evidence vocabulary, not the event order.
+pub const ADMITTED_CATEGORIES: [u8; 7] = [2, 3, 5, 7, 8, 9, 10];
+
+/// Whether `gbbq` category `category` is stored as a capital fact.
+pub fn is_admitted_category(category: u8) -> bool {
+    ADMITTED_CATEGORIES.contains(&category)
+}
+
 /// Per-category count of records this build refuses to interpret. A type
 /// alias keeps the field list readable and the pre-push arity heuristic from
 /// splitting the generic's comma into a second field.
@@ -148,8 +159,8 @@ pub type ExcludedCategories = BTreeMap<u8, usize>;
 
 /// One entity's complete capital-event set. `excluded` counts every `gbbq`
 /// record for the entity that this build refuses to interpret (categories
-/// other than 2/3/9/10); it is folded into the identity even though it never
-/// reaches the table.
+/// outside [`ADMITTED_CATEGORIES`]); it is folded into the identity even though
+/// it never reaches the table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CapitalEventSet {
     /// Canonical `sh.600000`/`sz.000001` entity.
@@ -300,7 +311,7 @@ impl SecurityLifecycleFact {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
-    #[error("capital category {0} is not storable (only 2,3,9,10)")]
+    #[error("capital category {0} is not storable (only 2,3,5,7,8,9,10)")]
     Category(u8),
     #[error("capital value cannot be represented as integer shares")]
     Shares,

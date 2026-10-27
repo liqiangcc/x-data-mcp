@@ -246,8 +246,12 @@ fn assembles_lifecycle_capital_and_current_shares() {
         gbbq_event(0, "000001", 20250620, 3, [0.0, 1000.0, 0.0, 1000.0]),
         gbbq_event(0, "000001", 20260620, 9, [0.0, 1000.0, 1000.0, 1000.0]),
         gbbq_event(0, "000001", 20270620, 10, [0.0, 1000.0, 1000.0, 1000.0]),
-        gbbq_event(0, "000001", 20280620, 5, [0.0, 0.0, 0.0, 0.0]),
-        gbbq_event(0, "000001", 20290620, 8, [0.0, 0.0, 0.0, 0.0]),
+        // D-50 R-3 revision: 5/7/8 are admitted; only the after value and the
+        // event day become state, the before value stays for audit.
+        gbbq_event(0, "000001", 20280620, 5, [1000.0, 1000.0, 600.0, 1500.0]),
+        gbbq_event(0, "000001", 20290620, 7, [1000.0, 1000.0, 700.0, 1500.0]),
+        gbbq_event(0, "000001", 20300620, 8, [1000.0, 1000.0, 800.0, 1500.0]),
+        gbbq_event(0, "000001", 20310620, 1, [0.0, 0.0, 0.0, 0.0]),
     ];
     let facts = parse_security_facts(&base, &arrangements, &events).unwrap();
 
@@ -292,21 +296,38 @@ fn assembles_lifecycle_capital_and_current_shares() {
         .iter()
         .find(|set| set.entity == "sz.000001")
         .unwrap();
-    assert_eq!(capital.events.len(), 4);
+    assert_eq!(capital.events.len(), 7);
     assert_eq!(
         capital
             .events
             .iter()
             .map(|event| event.category)
             .collect::<Vec<_>>(),
-        vec![2, 3, 9, 10]
+        vec![2, 3, 9, 10, 5, 7, 8]
     );
     assert_eq!(capital.events[0].ordinal, 0);
     assert_eq!(capital.events[0].float_after, 5_000_000);
     assert_eq!(capital.events[0].total_after, 15_000_000);
-    assert_eq!(capital.excluded, 2);
-    assert_eq!(capital.excluded_by_category.get(&5), Some(&1));
-    assert_eq!(capital.excluded_by_category.get(&8), Some(&1));
+    // D-50: cat5/7/8 are stored, and the after value is what the state uses.
+    // The before value is still parsed and kept for audit.
+    for (index, (float_after, total_after)) in [
+        (6_000_000, 15_000_000),
+        (7_000_000, 15_000_000),
+        (8_000_000, 15_000_000),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let event = &capital.events[4 + index];
+        assert_eq!(event.float_before, 10_000_000);
+        assert_eq!(event.total_before, 10_000_000);
+        assert_eq!(event.float_after, float_after);
+        assert_eq!(event.total_after, total_after);
+    }
+    // cat1 is still not a capital fact.
+    assert_eq!(capital.excluded, 1);
+    assert_eq!(capital.excluded_by_category.get(&1), Some(&1));
+    assert_eq!(capital.excluded_by_category.get(&5), None);
 
     let shares = facts
         .current_shares
@@ -353,12 +374,23 @@ fn market_mismatch_and_unmatched_arrangements_are_counted() {
 }
 
 #[test]
-fn category_one_is_excluded_like_five_seven_and_eight() {
+fn category_one_is_excluded_while_five_seven_eight_are_admitted() {
     let base = BaseDbf::parse(&dbf(&[row("0", "000001", "19910403", "1.00", "1.00")])).unwrap();
-    let events = vec![gbbq_event(0, "000001", 20240620, 1, [0.0, 0.0, 0.0, 0.0])];
+    let events = vec![
+        gbbq_event(0, "000001", 20240620, 1, [0.0, 0.0, 0.0, 0.0]),
+        gbbq_event(0, "000001", 20250620, 5, [0.0, 0.0, 0.0, 0.0]),
+        gbbq_event(0, "000001", 20260620, 7, [0.0, 0.0, 0.0, 0.0]),
+        gbbq_event(0, "000001", 20270620, 8, [0.0, 0.0, 0.0, 0.0]),
+    ];
     let facts = parse_security_facts(&base, &[], &events).unwrap();
     let set = &facts.capital[0];
-    assert!(set.events.is_empty());
+    assert_eq!(
+        set.events
+            .iter()
+            .map(|event| event.category)
+            .collect::<Vec<_>>(),
+        vec![5, 7, 8]
+    );
     assert_eq!(set.excluded, 1);
     assert_eq!(set.excluded_by_category.get(&1), Some(&1));
 }

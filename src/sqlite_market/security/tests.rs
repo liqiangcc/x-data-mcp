@@ -124,11 +124,11 @@ type MasterRow = (
 fn capital_digest_depends_on_facts_and_order_only() {
     let a = event(0, day(2024, 6, 20), 2, [0.0, 1000.0, 500.0, 1500.0]);
     let b = event(1, day(2025, 6, 20), 3, [0.0, 1000.0, 0.0, 1000.0]);
-    let mut first = set(ENTITY, vec![a, b], 2, BTreeMap::from([(5, 1), (8, 1)]));
+    let mut first = set(ENTITY, vec![a, b], 2, BTreeMap::from([(1, 1), (4, 1)]));
     let digest = capital_events_digest(&first).unwrap();
     assert_eq!(digest, capital_events_digest(&first).unwrap());
     // Order is part of the identity.
-    let reordered = set(ENTITY, vec![b, a], 2, BTreeMap::from([(5, 1), (8, 1)]));
+    let reordered = set(ENTITY, vec![b, a], 2, BTreeMap::from([(1, 1), (4, 1)]));
     assert_ne!(digest, capital_events_digest(&reordered).unwrap());
     // The excluded count is folded even though it never reaches the table.
     let mut more_excluded = first.clone();
@@ -153,8 +153,13 @@ fn replace_stores_capital_facts_and_registers_one_version() {
         event(1, day(2025, 6, 20), 3, [0.0, 1000.0, 0.0, 1000.0]),
         event(2, day(2026, 6, 20), 9, [0.0, 1000.0, 1000.0, 1000.0]),
         event(3, day(2027, 6, 20), 10, [0.0, 1000.0, 1000.0, 1000.0]),
+        // D-50 R-3 revision: cat5/7/8 are admitted. The before value stays
+        // stored as audit evidence; only the after value is state.
+        event(4, day(2028, 6, 20), 5, [1000.0, 1000.0, 600.0, 1500.0]),
+        event(5, day(2029, 6, 20), 7, [1000.0, 1000.0, 700.0, 1500.0]),
+        event(6, day(2030, 6, 20), 8, [1000.0, 1000.0, 800.0, 1500.0]),
     ];
-    let set = set(ENTITY, events.clone(), 2, BTreeMap::from([(5, 1), (8, 1)]));
+    let set = set(ENTITY, events.clone(), 1, BTreeMap::from([(1, 1)]));
     let written = replace_capital_events(&c, &set, binding, "task-1", "item-1")
         .unwrap()
         .expect("a non-empty set registers a version");
@@ -166,19 +171,19 @@ fn replace_stores_capital_facts_and_registers_one_version() {
     assert_eq!(written.dataset_key, ENTITY);
     assert_eq!(written.digest_format, "capital-events-v1");
     assert_eq!(written.algorithm_version, "gbbq-capital-2dp-v1");
-    assert_eq!(written.record_count, 4);
+    assert_eq!(written.record_count, 7);
     assert_eq!(
         written.first_day,
         compact_market::epoch_day(day(2024, 6, 20))
     );
     assert_eq!(
         written.last_day,
-        compact_market::epoch_day(day(2027, 6, 20))
+        compact_market::epoch_day(day(2030, 6, 20))
     );
     assert_eq!(written.source_binding_digest, binding);
 
     let stored = read_capital_events(&c, ENTITY).unwrap();
-    assert_eq!(stored.len(), 4);
+    assert_eq!(stored.len(), 7);
     for (read, original) in stored.iter().zip(&events) {
         assert_eq!(read.ordinal, original.ordinal);
         assert_eq!(read.effective_day, original.effective_day);
@@ -187,11 +192,33 @@ fn replace_stores_capital_facts_and_registers_one_version() {
         assert_eq!(read.total_before_bits, original.total_before_bits);
         assert_eq!(read.float_after_bits, original.float_after_bits);
         assert_eq!(read.total_after_bits, original.total_after_bits);
+        assert_eq!(read.float_before, original.float_before);
+        assert_eq!(read.total_before, original.total_before);
         assert_eq!(read.float_after, original.float_after);
         assert_eq!(read.total_after, original.total_after);
         assert!(read.prev_is_lagged);
         assert_eq!(read.suspicious, original.suspicious);
         assert_eq!(read.known_at, None);
+    }
+    // D-50: the admitted 5/7/8 rows store the after-value conversion, while
+    // their before values remain available for audit.
+    for (index, (category, float_after, total_after)) in [
+        (5, 6_000_000, 15_000_000),
+        (7, 7_000_000, 15_000_000),
+        (8, 8_000_000, 15_000_000),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let row = &stored[4 + index];
+        assert_eq!(
+            (row.category, row.float_after, row.total_after),
+            (category, float_after, total_after)
+        );
+        assert_eq!(
+            (row.float_before, row.total_before),
+            (10_000_000, 10_000_000)
+        );
     }
     // `to_shares(bits)` is exactly the stored derived value.
     for read in &stored {
@@ -212,7 +239,7 @@ fn replace_stores_capital_facts_and_registers_one_version() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(nulls, 4);
+    assert_eq!(nulls, 7);
 
     let (kind, canonical) =
         super::super::evidence_store::read_evidence(&c, &written.evidence_digest).unwrap();
@@ -220,17 +247,22 @@ fn replace_stores_capital_facts_and_registers_one_version() {
     let evidence: Value = serde_json::from_str(&canonical).unwrap();
     assert_eq!(evidence["dataset"], "capital_events");
     assert_eq!(evidence["dataset_key"], ENTITY);
-    assert_eq!(evidence["event_count"], 4);
-    assert_eq!(evidence["excluded_categories"], 2);
-    assert_eq!(evidence["excluded_by_category"]["5"], 1);
-    assert_eq!(evidence["excluded_by_category"]["8"], 1);
-    assert_eq!(evidence["included_categories"], json!([2, 3, 9, 10]));
+    assert_eq!(evidence["event_count"], 7);
+    assert_eq!(evidence["excluded_categories"], 1);
+    assert_eq!(evidence["excluded_by_category"]["1"], 1);
+    assert_eq!(evidence["excluded_by_category"].get("5"), None);
+    assert_eq!(
+        evidence["included_categories"],
+        json!([2, 3, 5, 7, 8, 9, 10])
+    );
     assert_eq!(evidence["known_at"], "unknown");
     assert_eq!(evidence["content_digest"], written.version_id);
     assert_eq!(evidence["suspicious_count"], 0);
-    // Event 0 ends at 5,000,000 but event 1 starts at 0, and event 2 ends at
-    // 10,000,000 but event 3 starts at 0: §5.2 counts both breaks.
-    assert_eq!(evidence["chain_gap_count"], 2);
+    // Event 0 ends at 5,000,000 but event 1 starts at 0; event 2 ends at
+    // 10,000,000 but event 3 starts at 0; event 4 ends at 6,000,000 but event
+    // 5 starts at 10,000,000; event 5 ends at 7,000,000 but event 6 starts at
+    // 10,000,000: §5.2 counts these four breaks.
+    assert_eq!(evidence["chain_gap_count"], 4);
     assert_eq!(evidence["same_day_multi_event_count"], 0);
 }
 
@@ -256,7 +288,7 @@ fn replace_is_whole_group_and_an_empty_set_clears_the_registration() {
         ENTITY,
         vec![event(0, day(2024, 6, 20), 2, [0.0, 1000.0, 500.0, 1500.0])],
         1,
-        BTreeMap::from([(7, 1)]),
+        BTreeMap::from([(1, 1)]),
     );
     let second_version = replace_capital_events(&c, &second, binding, "task-2", "item-2")
         .unwrap()
@@ -284,17 +316,17 @@ fn replace_is_whole_group_and_an_empty_set_clears_the_registration() {
 }
 
 #[test]
-fn replace_rejects_unverified_categories_inconsistent_shares_and_bad_order() {
+fn replace_rejects_unadmitted_categories_inconsistent_shares_and_bad_order() {
     let (_dir, _tasks, c) = db();
     let binding = seed_binding(&c);
     let base = event(0, day(2024, 6, 20), 2, [0.0, 1000.0, 500.0, 1500.0]);
 
-    let mut category_five = base;
-    category_five.category = 5;
+    let mut category_one = base;
+    category_one.category = 1;
     assert!(
         replace_capital_events(
             &c,
-            &set(ENTITY, vec![category_five], 0, BTreeMap::new()),
+            &set(ENTITY, vec![category_one], 0, BTreeMap::new()),
             binding,
             "t",
             "i"

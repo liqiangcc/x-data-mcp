@@ -64,9 +64,19 @@ fn capital_event_keeps_the_bits_and_recomputes_the_shares() {
 }
 
 #[test]
-fn capital_event_refuses_unverified_categories_and_unrepresentable_values() {
+fn capital_event_admits_d50_categories_and_refuses_the_rest() {
     let day = day(2024, 6, 20);
-    for category in [0, 1, 5, 7, 8, 11] {
+    for category in ADMITTED_CATEGORIES {
+        assert!(is_admitted_category(category));
+        assert_eq!(
+            CapitalEvent::from_raw(0, day, category, [0; 4])
+                .unwrap()
+                .category,
+            category
+        );
+    }
+    for category in [0, 1, 4, 6, 11] {
+        assert!(!is_admitted_category(category));
         assert_eq!(
             CapitalEvent::from_raw(0, day, category, [0; 4]),
             Err(Error::Category(category))

@@ -8,8 +8,10 @@
 //!   fields are preserved by the container parser but not interpreted.
 //! - `infoharbor_spec.cfg` — `market|code|0|start|end` (#401 A-6). The third
 //!   field is always `0` and is validated but not assigned a meaning.
-//! - `gbbq` — only categories 2/3/9/10 are capital facts (§5.1). Categories
-//!   5/7/8 are counted as excluded, never stored.
+//! - `gbbq` — categories 2/3/5/7/8/9/10 are capital facts (§5.1, D-50 R-3
+//!   revision). Other categories are counted as excluded, never stored. For an
+//!   admitted event only the after value and event day become state; the
+//!   before value is kept as audit evidence (D-50).
 //!
 //! The adapter does not open a zip or a session: it takes the already
 //! CRC-verified member bytes, so the same functions can be unit-tested without
@@ -24,7 +26,7 @@ use crate::dbf::{self, DbfRecord, FieldDescriptor};
 use crate::gbbq;
 use crate::security_master::{
     CapitalEvent, CapitalEventSet, CurrentShares, DelistingSource, Exchange, IssuerResolution,
-    ListingSource, SecurityLifecycleFact,
+    ListingSource, SecurityLifecycleFact, is_admitted_category,
 };
 
 /// One anchored field: name, dBase type byte, length, decimals (#399 A-5).
@@ -728,7 +730,7 @@ pub fn parse_security_facts(
 fn capital_set(entity: &str, events: &[&gbbq::Event]) -> Result<CapitalEventSet, Error> {
     let mut set = CapitalEventSet::empty(entity);
     for (index, event) in events.iter().enumerate() {
-        if !matches!(event.category, 2 | 3 | 9 | 10) {
+        if !is_admitted_category(event.category) {
             set.excluded += 1;
             *set.excluded_by_category.entry(event.category).or_insert(0) += 1;
             continue;

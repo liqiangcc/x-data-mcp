@@ -24,8 +24,8 @@ use super::{evidence_store, integrity, storage};
 use crate::compact_market::{self, Digest, EvidenceKind};
 use crate::market_storage::Error;
 use crate::security_master::{
-    CapitalEvent, CapitalEventSet, DelistingSource, ListingSource, SecurityLifecycleFact,
-    is_suspicious,
+    ADMITTED_CATEGORIES, CapitalEvent, CapitalEventSet, DelistingSource, ListingSource,
+    SecurityLifecycleFact, is_admitted_category, is_suspicious,
 };
 
 /// `derived_dataset_versions.dataset_kind` of the capital-event set.
@@ -178,14 +178,14 @@ pub(crate) fn replace_capital_events(
 ) -> Result<Option<DerivedVersionRow>, Error> {
     let (exchange, code) = split_entity(&set.entity)?;
     for event in &set.events {
-        if !matches!(event.category, 2 | 3 | 9 | 10) {
+        if !is_admitted_category(event.category) {
             return Err(integrity(
-                "only capital categories 2/3/9/10 are stored (cat5/7/8 stay excluded)",
+                "only capital categories 2/3/5/7/8/9/10 are stored (D-50 R-3 revision)",
             ));
         }
         if !event.prev_is_lagged {
             return Err(integrity(
-                "capital_events.prev_is_lagged is always true in schema 23",
+                "capital_events.prev_is_lagged is always true in schema 24",
             ));
         }
         if !event.shares_match_bits() {
@@ -351,7 +351,7 @@ fn capital_evidence(
         "content_digest": compact_market::digest_hex(digest),
         "source_binding_digest": compact_market::digest_hex(&source_binding_digest),
         "event_count": set.events.len(),
-        "included_categories": [2, 3, 9, 10],
+        "included_categories": ADMITTED_CATEGORIES,
         "excluded_categories": set.excluded,
         "excluded_by_category": excluded_by_category,
         "suspicious_count": set.events.iter().filter(|event| event.suspicious).count(),
