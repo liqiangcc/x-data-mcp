@@ -166,7 +166,7 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
   （含 `manifest.json`），不只是 `snapshot_id`。
 - **体积**：§7.7 的 340MB 估算修正为约 1.5GB。夹具实测（`scripts/export_smoke.py --measure`，
   pyarrow 26.0.0，100k 行）不复权 32.3 B/行、6dp 前复权 55.9 B/行；Rust 侧
-  `daily_parquet_bytes_per_row_match_the_measured_fixture`（`src/research/tests.rs:1159`）
+  `daily_parquet_bytes_per_row_match_the_measured_fixture`（`src/research/tests.rs:1192`）
   锁住同一量级。压缩仍是 §7.6 的 snappy + format 1.0 + 字典编码，测试
   `parquet_files_read_back_with_the_expected_schema` 断言每个列的 compression 与 format。
 - **测试**：跨两代夹具 `cross_generation_export_records_each_series_generation`
