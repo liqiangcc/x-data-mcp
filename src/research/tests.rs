@@ -446,6 +446,19 @@ impl Fixture {
         )
         .unwrap();
 
+        // `risk_warning_intervals.evidence_digest` is an FK to
+        // `evidence_bundles`, so the fixture has to mint one even though no
+        // production writer exists yet.
+        let risk_evidence = crate::sqlite_market::evidence_store::put_evidence(
+            c,
+            EvidenceKind::Derived,
+            &serde_json::json!({
+                "dataset": "risk_warnings",
+                "note": "fixture only: the source has no writer yet, the bundle \
+                         exists so the foreign key holds",
+            }),
+        )
+        .unwrap();
         for (code, status, raw) in [
             ("600000", crate::security_master::RiskStatus::Normal, "N"),
             (
