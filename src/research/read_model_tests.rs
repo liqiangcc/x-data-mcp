@@ -645,10 +645,11 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
             "sz.300114",
             "sz.302132",
         ],
-        // day 4: 600519 lists
+        // day 4: 600519 lists (its bars on days 0..3 predate the listing)
         vec![
             "sh.600018",
             "sh.600028",
+            "sh.600519",
             "sz.000001",
             "sz.000002",
             "sz.000003",
@@ -662,6 +663,7 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
         vec![
             "sh.600018",
             "sh.600028",
+            "sh.600519",
             "sz.000001",
             "sz.000002",
             "sz.000003",
@@ -675,6 +677,7 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
         vec![
             "sh.600018",
             "sh.600028",
+            "sh.600519",
             "sz.000001",
             "sz.000002",
             "sz.000003",
@@ -688,6 +691,7 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
         vec![
             "sh.600018",
             "sh.600028",
+            "sh.600519",
             "sz.000001",
             "sz.000002",
             "sz.000004",
@@ -700,6 +704,7 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
         vec![
             "sh.600018",
             "sh.600028",
+            "sh.600519",
             "sz.000001",
             "sz.000002",
             "sz.000004",
@@ -712,6 +717,7 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
         vec![
             "sh.600018",
             "sh.600028",
+            "sh.600519",
             "sz.000001",
             "sz.000002",
             "sz.000004",
@@ -721,9 +727,10 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
             "sz.302132",
         ],
     ];
-    // Members without a bar: the confirmed suspension (days 3/4) and the
-    // 000631 gap (days 1..8). 000631's bars are days 0 and 9.
-    let expected_member_without_bar: Vec<usize> = vec![0, 1, 1, 2, 2, 1, 1, 1, 1, 0];
+    // Members without a bar, per day: `sh.600018` has no series at all (the
+    // reused code is only in the main table), `sz.000004` is suspended on days
+    // 3/4, and `sz.000631` only has bars on days 0 and 9.
+    let expected_member_without_bar: Vec<usize> = vec![1, 1, 1, 2, 2, 1, 1, 1, 1, 1];
     // Bars before the listing date: 600519 on days 0..3.
     let expected_bar_without_member: Vec<usize> = vec![1, 1, 1, 1, 0, 0, 0, 0, 0, 0];
 
@@ -767,15 +774,17 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
         // the listing date is `before_listing`.
         for entity in &member_without_bar {
             let report = tradability(&c, entity, Temporal::effective_only(*as_of)).unwrap();
-            assert!(
-                matches!(
-                    report.state,
-                    Tradability::NotTradable(TradabilityReason::Suspended)
-                        | Tradability::Unknown(TradabilityReason::DataGap)
-                ),
-                "{entity} on {as_of}: {}",
-                report.reason_code()
-            );
+            let expected_state = match entity.as_str() {
+                // No series was ever written for the reused code.
+                "sh.600018" => Tradability::Unknown(TradabilityReason::NoBar),
+                // The confirmed suspension row covers days 3 and 4.
+                "sz.000004" => Tradability::NotTradable(TradabilityReason::Suspended),
+                // The interval is `unresolved_gap`: a missing bar is a data gap,
+                // never a suspension (AC-M2-8).
+                "sz.000631" => Tradability::Unknown(TradabilityReason::DataGap),
+                other => panic!("unexpected member without a bar: {other}"),
+            };
+            assert_eq!(report.state, expected_state, "{entity} on {as_of}");
         }
         for entity in &bar_without_member {
             let state = member_state(&c, entity, &request).unwrap().unwrap();
@@ -1165,19 +1174,19 @@ fn share_state_skips_suspicious_events_and_stops_at_a_chain_break() {
     let options = ShareOptions::default();
     let events = vec![
         event(0, days[0], 0.0, 0.0, 100_000.0, 120_000.0),
-        event(1, days[2], 100_000.0, 120_000.0, 200_000.0, 240_000.0),
+        event(1, days[2], 100_000.0, 120_000.0, 130_000.0, 150_000.0),
     ];
     let state = shares_at(&events, days[1], &options);
     assert_eq!(state.float_shares, Some(1_000_000_000));
     assert_eq!(state.total_shares, Some(1_200_000_000));
     assert_eq!(state.event_day, Some(days[0]));
     let state = shares_at(&events, days[3], &options);
-    assert_eq!(state.float_shares, Some(2_000_000_000));
-    assert_eq!(state.total_shares, Some(2_400_000_000));
+    assert_eq!(state.float_shares, Some(1_300_000_000));
+    assert_eq!(state.total_shares, Some(1_500_000_000));
 
     // A suspicious event (the total jumps by more than 50% in one record) does
     // not become state unless explicitly relaxed.
-    let suspicious = event(2, days[4], 200_000.0, 240_000.0, 200_000.0, 500_000.0);
+    let suspicious = event(2, days[4], 130_000.0, 150_000.0, 130_000.0, 500_000.0);
     assert!(
         suspicious.suspicious,
         "the fixture event must trip the gate"
@@ -1185,7 +1194,7 @@ fn share_state_skips_suspicious_events_and_stops_at_a_chain_break() {
     let mut with_suspicious = events.clone();
     with_suspicious.push(suspicious);
     let state = shares_at(&with_suspicious, days[5], &options);
-    assert_eq!(state.float_shares, Some(2_000_000_000));
+    assert_eq!(state.float_shares, Some(1_300_000_000));
     assert_eq!(state.skipped_suspicious, 1);
     let relaxed = ShareOptions {
         allow_suspicious: true,
@@ -1197,7 +1206,9 @@ fn share_state_skips_suspicious_events_and_stops_at_a_chain_break() {
     // A chain break (the next "before" does not match the previous "after")
     // makes the history from the break on unknown; nothing is bridged.
     let mut broken = events.clone();
-    broken[1] = event(1, days[2], 150_000.0, 120_000.0, 200_000.0, 240_000.0);
+    // Not suspicious on its own (+33% float, +20% total): the only defect is
+    // that its "before" does not match the previous "after".
+    broken[1] = event(1, days[2], 150_000.0, 150_000.0, 200_000.0, 180_000.0);
     let state = shares_at(&broken, days[1], &options);
     assert_eq!(state.float_shares, Some(1_000_000_000));
     let state = shares_at(&broken, days[2], &options);
