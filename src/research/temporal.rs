@@ -71,6 +71,17 @@ impl KnownAtCoverage {
             Self::Complete => "complete",
         }
     }
+
+    /// The coverage the read model declares for a dataset name (issue-391
+    /// §12.2/§12.3). The v8 capability declaration mirrors this table; the
+    /// wire layer owns the spelling, this layer owns the semantics.
+    pub fn declared(dataset: &str) -> Self {
+        match dataset {
+            "security_master" | "security_names" | "risk_warnings" | "suspensions" => Self::Partial,
+            "capital_events" | "price_limit_rules" => Self::None,
+            _ => Self::None,
+        }
+    }
 }
 
 /// Per-dataset counters behind [`TemporalReport`].

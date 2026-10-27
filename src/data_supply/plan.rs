@@ -168,6 +168,12 @@ impl Plan {
             Dataset::Index => "market.index",
             Dataset::AdjustmentEvents => "market.adjustment_events",
             Dataset::Calendar => "market.calendar",
+            Dataset::SecurityMaster => "market.security_master",
+            Dataset::SecurityNames => "market.security_names",
+            Dataset::CapitalEvents => "market.capital_events",
+            Dataset::RiskWarnings => "market.risk_warnings",
+            Dataset::Suspensions => "market.suspensions",
+            Dataset::PriceLimitRules => "market.price_limit_rules",
         }
     }
     /// Canonical serialization — the exact digest input.
@@ -482,11 +488,18 @@ pub fn resolve_plan(
         .read(|c| match dataset {
             Dataset::Daily => resolve_daily_on(c, target_day, today),
             Dataset::Yearly => resolve_yearly_on(c, target_day, today),
-            Dataset::Catalog | Dataset::Index | Dataset::AdjustmentEvents | Dataset::Calendar => {
-                Err(iinvalid(
-                    "plan_market_update supports market.daily and market.yearly",
-                ))
-            }
+            Dataset::Catalog
+            | Dataset::Index
+            | Dataset::AdjustmentEvents
+            | Dataset::Calendar
+            | Dataset::SecurityMaster
+            | Dataset::SecurityNames
+            | Dataset::CapitalEvents
+            | Dataset::RiskWarnings
+            | Dataset::Suspensions
+            | Dataset::PriceLimitRules => Err(iinvalid(
+                "plan_market_update supports market.daily and market.yearly",
+            )),
         })
         .map_err(|e| PlanError::Storage(e.to_string()))?;
     plan.generation_id = generation_id;
@@ -519,7 +532,13 @@ pub fn resolve_run(
                 Dataset::Catalog
                 | Dataset::Index
                 | Dataset::AdjustmentEvents
-                | Dataset::Calendar => Err(iinvalid(
+                | Dataset::Calendar
+                | Dataset::SecurityMaster
+                | Dataset::SecurityNames
+                | Dataset::CapitalEvents
+                | Dataset::RiskWarnings
+                | Dataset::Suspensions
+                | Dataset::PriceLimitRules => Err(iinvalid(
                     "run_market_update supports market.daily and market.yearly",
                 )),
             }?;

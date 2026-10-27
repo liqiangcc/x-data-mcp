@@ -284,7 +284,11 @@ v1 请求带 `fields`、`selection.kind=universe|market` 或 `filter.kind=cross_
 
 仍然拒绝（每条都有测试，`src/data_supply/wire/normalize/tests.rs`）：
 
-- `as_of`/`known_at` → `reserved_for_m2`，消息指向 M2（`src/data_supply/wire/normalize.rs:62,86-100`）。
+- M2 点时间参数 `filter.as_of` / `known_at` 只在目标 dataset 的 `temporal` 声明为 `true`
+  时接受（当前：`market.security_master`、`market.security_names`、`market.risk_warnings`、
+  `market.suspensions` 两者都接受；`market.capital_events`、`market.price_limit_rules` 只接受
+  `filter.as_of`）；未声明、`temporal=false` 或工具不消费该参数时 → `invalid_arguments`，
+  message 以 `unsupported_for_dataset:` 开头（`src/data_supply/wire/normalize.rs`）。
 - 非六位代码、未知 exchange、无法解析的日期 → `invalid_arguments`，消息给出可接受写法。
 - `selection.kind` 与 dataset 不匹配 → `invalid_arguments`，消息列出该 dataset 接受的 kind
   （`src/data_supply/wire/normalize.rs:132-156`）。
@@ -313,11 +317,9 @@ v1 请求带 `fields`、`selection.kind=universe|market` 或 `filter.kind=cross_
 | code | 条件 |
 |---|---|
 | `unknown_tool` | 工具不在本入口 allowlist，或根本未注册（`src/data_supply/mcp.rs:662,721`） |
-| `reserved_for_m2` | 请求带 `as_of`/`known_at` |
-| `unsupported_operation` | capabilities 的 `operation` 不是注册工具名 |
+| `invalid_arguments` | 解码/归一化/投影/窗口超限/cursor 条件变化；M2 点时间参数（`filter.as_of`、`known_at`）在未声明 `temporal` 的数据集或工具上被拒，message 以 `unsupported_for_dataset:` 开头（`src/data_supply/wire/normalize.rs`） |
 | `catalog_not_found` | `list_catalog_facets` 没有已发布目录 |
-| `invalid_arguments` | 解码/归一化/投影/窗口超限/cursor 条件变化 |
-| `version_not_found`、`stale_version`、`precondition_conflict`、`integrity_error`、`forbidden` | 同 v7（`src/data_supply/mcp.rs:686-698`） |
+| `unsupported_operation` | capabilities 的 `operation` 不是注册工具名 | |
 | 任务面 | `task_not_found`、`unsupported_contract`、`needs_verification`、`request_conflict`、`range_conflict`、`retry_request_id_conflict`、`empty_request_id`、`invalid_retry_selection`、`outcome_unknown`（`src/data_supply/mcp.rs:1210-1232`） |
 
 ## 9. 升版、并行期与下线

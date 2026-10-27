@@ -27,13 +27,36 @@ pub enum Dataset {
     // entity and no security price.
     #[serde(rename = "market.calendar")]
     Calendar,
+    // M2 parsed-fact datasets (issue-391 §12.3). They have no v1 row shape
+    // both because they arrived after v7 and because their rows are intervals,
+    // not price panels; a `v1` request is rejected rather than reshaped.
+    #[serde(rename = "market.security_master")]
+    SecurityMaster,
+    #[serde(rename = "market.security_names")]
+    SecurityNames,
+    #[serde(rename = "market.capital_events")]
+    CapitalEvents,
+    #[serde(rename = "market.risk_warnings")]
+    RiskWarnings,
+    #[serde(rename = "market.suspensions")]
+    Suspensions,
+    #[serde(rename = "market.price_limit_rules")]
+    PriceLimitRules,
 }
 impl Dataset {
     pub fn period(self) -> Option<Period> {
         match self {
             Self::Daily | Self::Index => Some(Period::Day),
             Self::Yearly => Some(Period::Year),
-            Self::Catalog | Self::AdjustmentEvents | Self::Calendar => None,
+            Self::Catalog
+            | Self::AdjustmentEvents
+            | Self::Calendar
+            | Self::SecurityMaster
+            | Self::SecurityNames
+            | Self::CapitalEvents
+            | Self::RiskWarnings
+            | Self::Suspensions
+            | Self::PriceLimitRules => None,
         }
     }
     /// Wire spelling; used by v2 error messages (v8 PR-3, #387 §5).
@@ -45,12 +68,161 @@ impl Dataset {
             Self::Index => "market.index",
             Self::AdjustmentEvents => "market.adjustment_events",
             Self::Calendar => "market.calendar",
+            Self::SecurityMaster => "market.security_master",
+            Self::SecurityNames => "market.security_names",
+            Self::CapitalEvents => "market.capital_events",
+            Self::RiskWarnings => "market.risk_warnings",
+            Self::Suspensions => "market.suspensions",
+            Self::PriceLimitRules => "market.price_limit_rules",
         }
     }
-    /// The three datasets added after v7 have no v1 row shape: their requests
-    /// require `contract_version: "v2"` (v8 PR-4, #387 §14).
+    /// The datasets added after v7 have no v1 row shape: their requests
+    /// require `contract_version: "v2"` (v8 PR-4, #387 §14; M2 in #391 §12.3).
     pub fn is_v2_only(self) -> bool {
-        matches!(self, Self::Index | Self::AdjustmentEvents | Self::Calendar)
+        matches!(
+            self,
+            Self::Index
+                | Self::AdjustmentEvents
+                | Self::Calendar
+                | Self::SecurityMaster
+                | Self::SecurityNames
+                | Self::CapitalEvents
+                | Self::RiskWarnings
+                | Self::Suspensions
+                | Self::PriceLimitRules
+        )
+    }
+    /// M2 facts served by the research read model (issue-391 §12.3). This is
+    /// the one predicate the decode layer, capability declaration and storage
+    /// branch share; adding an M2 dataset in one place cannot silently leave
+    /// another accepting point-in-time parameters it cannot honour.
+    pub fn is_m2(self) -> bool {
+        matches!(
+            self,
+            Self::SecurityMaster
+                | Self::SecurityNames
+                | Self::CapitalEvents
+                | Self::RiskWarnings
+                | Self::Suspensions
+                | Self::PriceLimitRules
+        )
+    }
+    /// Whether rows carry an entity column (the interval/point facts). The
+    /// whole-market `market.price_limit_rules` does not.
+    pub fn is_entity_bound(self) -> bool {
+        matches!(
+            self,
+            Self::SecurityMaster
+                | Self::SecurityNames
+                | Self::CapitalEvents
+                | Self::RiskWarnings
+                | Self::Suspensions
+        )
+    }
+    /// Per-dataset `temporal` declaration published by
+    /// `get_data_capabilities` (issue-391 §12.3). A dataset absent from this
+    /// table declares neither parameter, so both are rejected with
+    /// `unsupported_for_dataset`.
+    pub fn temporal(self) -> TemporalSupport {
+        match self {
+            Self::SecurityMaster | Self::SecurityNames | Self::RiskWarnings | Self::Suspensions => {
+                TemporalSupport::declared(TemporalCoverage::Partial)
+            }
+            Self::CapitalEvents | Self::PriceLimitRules => {
+                TemporalSupport::as_of_only(TemporalCoverage::None)
+            }
+            _ => TemporalSupport::NONE,
+        }
+    }
+    /// The read model's dataset name in `temporal.datasets_without_known_at`
+    /// (issue-391 §12.2). `None` for datasets the read model never observes.
+    pub fn temporal_name(self) -> Option<&'static str> {
+        Some(match self {
+            Self::SecurityMaster => "security_master",
+            Self::SecurityNames => "security_names",
+            Self::CapitalEvents => "capital_events",
+            Self::RiskWarnings => "risk_warnings",
+            Self::Suspensions => "suspensions",
+            Self::PriceLimitRules => "price_limit_rules",
+            _ => return None,
+        })
+    }
+}
+/// How much of a dataset carries a 知晓时间 (mirrors the read model's
+/// `KnownAtCoverage`, issue-391 §12.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TemporalCoverage {
+    Full,
+    Partial,
+    None,
+}
+/// The per-dataset `temporal` declaration in `get_data_capabilities`
+/// (issue-391 §12.3). `as_of`/`known_at` are accepted only when the named
+/// field is `true`; otherwise the decode layer rejects them with
+/// `invalid_arguments` + `unsupported_for_dataset`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TemporalSupport {
+    pub as_of: bool,
+    pub known_at: bool,
+    pub known_at_coverage: TemporalCoverage,
+}
+impl TemporalSupport {
+    /// No point-in-time parameter is declared.
+    pub const NONE: Self = Self {
+        as_of: false,
+        known_at: false,
+        known_at_coverage: TemporalCoverage::None,
+    };
+    const fn declared(coverage: TemporalCoverage) -> Self {
+        Self {
+            as_of: true,
+            known_at: true,
+            known_at_coverage: coverage,
+        }
+    }
+    const fn as_of_only(coverage: TemporalCoverage) -> Self {
+        Self {
+            as_of: true,
+            known_at: false,
+            known_at_coverage: coverage,
+        }
+    }
+}
+/// The `temporal` block every M2 read-model answer carries (issue-391 §12.2):
+/// the point in time used, the information-set cutoff (if any), how many rows
+/// lost their 知晓时间, and which datasets never had one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TemporalBlock {
+    pub as_of: NaiveDate,
+    pub known_at: Option<NaiveDate>,
+    pub unknown_known_at_rows: usize,
+    pub datasets_without_known_at: Vec<String>,
+}
+/// One cell of an M2 fact row. The v2 layouts project these by field name;
+/// the tagged `Row` shape is never serialized for these datasets (they are
+/// v2-only), so a closed value vocabulary is enough.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum FactValue {
+    Null,
+    Bool(bool),
+    Int(i64),
+    Text(String),
+}
+impl FactValue {
+    pub fn json(self) -> serde_json::Value {
+        match self {
+            Self::Null => serde_json::Value::Null,
+            Self::Bool(value) => serde_json::json!(value),
+            Self::Int(value) => serde_json::json!(value),
+            Self::Text(value) => serde_json::json!(value),
+        }
+    }
+    pub fn day(day: Option<NaiveDate>) -> Self {
+        day.map_or(Self::Null, |day| Self::Text(day.to_string()))
     }
 }
 // Write surfaces accept `v1` only; read surfaces use `ReadContractVersion`,
@@ -197,6 +369,11 @@ pub enum Filter {
     Daily {
         start_date: NaiveDate,
         end_date: NaiveDate,
+        /// M2 only: the interval/point must be effective at this day. It is
+        /// rejected (not ignored) for every dataset whose `temporal.as_of` is
+        /// false (issue-391 §12.2).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_of: Option<NaiveDate>,
     },
     Yearly {
         start_year: i32,
@@ -213,6 +390,16 @@ pub enum Filter {
         start_date: NaiveDate,
         end_date: NaiveDate,
     },
+}
+impl Filter {
+    /// The M2 point-in-time value lives inside `filter` (issue-387 §4.6,
+    /// issue-391 §12.2): it constrains the record set, not the selection.
+    pub fn as_of(&self) -> Option<NaiveDate> {
+        match self {
+            Self::Daily { as_of, .. } => *as_of,
+            _ => None,
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -242,6 +429,11 @@ pub struct Query {
     // v2 only: column projection (omitted = the dataset's core fields).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<String>>,
+    /// M2 only: restrict the whole information set to rows known by this day
+    /// (issue-391 §12.2). Rejected for datasets whose `temporal.known_at` is
+    /// false, and only accepted by the query tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_at: Option<NaiveDate>,
 }
 pub fn default_page() -> usize {
     100
@@ -331,6 +523,14 @@ pub enum Row {
         c3: String,
         c4: String,
     },
+    /// One M2 parsed-fact row (issue-391 §12.3). `day` is the row's ordering
+    /// key and the availability window bound; `cells` follows the dataset's
+    /// column set. Never serialized on the wire: these datasets are v2-only.
+    Fact {
+        entity: Option<Security>,
+        day: NaiveDate,
+        cells: std::collections::BTreeMap<String, FactValue>,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -345,6 +545,10 @@ pub struct DataPage {
     pub page_complete: bool,
     pub selection_complete: bool,
     pub limitations: Vec<String>,
+    /// M2 point-in-time facts (issue-391 §12.2); absent for datasets that
+    /// declare neither parameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal: Option<TemporalBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -820,6 +1024,10 @@ pub struct AvailabilityPage {
     pub items: Vec<AvailabilityItem>,
     pub next_cursor: Option<String>,
     pub page_complete: bool,
+    /// M2 point-in-time state of this availability read (issue-391 §12.2);
+    /// absent for datasets that declare neither parameter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temporal: Option<TemporalBlock>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

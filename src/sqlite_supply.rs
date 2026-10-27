@@ -9,6 +9,7 @@ use crate::{
 };
 use chrono::{DateTime, Datelike, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
+mod m2;
 #[derive(Clone)]
 pub struct SqliteSupply {
     pub market: MarketBackend,
@@ -252,11 +253,16 @@ impl ReadRepository for SqliteSupply {
             });
         }
         let entities = if let Selection::Universe { catalog_version } = &args.selection {
-            self.universe_members(args.dataset, catalog_version.as_deref())?
+            self.universe_members(args.dataset, catalog_version.as_deref(), None, None)?
                 .1
         } else {
             entities(args.dataset, &args.selection, access)?
         };
+        if args.dataset.is_m2() {
+            return self
+                .market
+                .read(|c| m2::versions(c, args.dataset, &entities));
+        }
         self.market.read(|c|{
             let mut ctx = VerifyCtx;
             let mut result=vec![];
@@ -320,6 +326,8 @@ impl ReadRepository for SqliteSupply {
         &self,
         dataset: Dataset,
         catalog_version: Option<&str>,
+        as_of: Option<NaiveDate>,
+        known_at: Option<NaiveDate>,
     ) -> Result<(String, Vec<Security>), Error> {
         match dataset {
             Dataset::Index => {
@@ -331,37 +339,46 @@ impl ReadRepository for SqliteSupply {
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok((String::new(), members))
             }
-            Dataset::Daily | Dataset::AdjustmentEvents => self.market.read(|c| {
-                let id = match catalog_version {
-                    None | Some("latest") => sqlite_catalog::head(c)?.ok_or_else(|| {
-                        invalid(
-                            "selection.kind=universe requires a published catalog; none is available",
-                        )
-                    })?,
-                    Some(id) => id.to_owned(),
+            Dataset::Daily | Dataset::AdjustmentEvents => {
+                self.market.read(|c| catalog_members(c, catalog_version))
+            }
+            Dataset::SecurityMaster
+            | Dataset::SecurityNames
+            | Dataset::CapitalEvents
+            | Dataset::RiskWarnings
+            | Dataset::Suspensions => self.market.read(|c| {
+                if let Some(id) = catalog_version {
+                    // §11's "today" mode: the catalog is the main table's
+                    // projection of today. It cannot be combined with `as_of`
+                    // (QueryPlan rejects that).
+                    return catalog_members(c, Some(id));
+                }
+                let as_of = match as_of {
+                    Some(day) => day,
+                    None => m2::last_trading_day_upto(c, crate::data_supply::query::today())?,
                 };
-                let version = sqlite_catalog::read(c, &id)?;
-                let members = version
-                    .records
-                    .into_iter()
-                    .map(|record| {
-                        let exchange = match record.exchange {
-                            crate::catalog::Exchange::Shanghai => Exchange::Sh,
-                            crate::catalog::Exchange::Shenzhen => Exchange::Sz,
-                            _ => return Err(Error::Integrity("catalog exchange".into())),
-                        };
-                        Ok(Security {
-                            exchange,
-                            code: record.symbol,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, Error>>()?;
-                Ok((id, members))
+                let mut request = crate::research::universe::UniverseRequest::new(as_of);
+                if let Some(known_at) = known_at {
+                    request = request.with_known_at(known_at);
+                }
+                let answer = crate::research::universe::universe(c, &request)?;
+                let members = answer
+                    .members
+                    .iter()
+                    .map(|member| Security::parse(&member.entity).map_err(Error::Integrity))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((String::new(), members))
             }),
+            // The rule set has no entity, so `selection.kind=universe` selects
+            // nothing; the record-set constraint still applies to the rows.
+            Dataset::PriceLimitRules => Ok((String::new(), vec![])),
             _ => Err(invalid(
                 "selection.kind=universe is not supported for this dataset",
             )),
         }
+    }
+    fn last_trading_day_upto(&self, day: NaiveDate) -> Result<NaiveDate, Error> {
+        self.market.read(|c| m2::last_trading_day_upto(c, day))
     }
     fn calendar_days(
         &self,
@@ -405,6 +422,37 @@ impl ReadRepository for SqliteSupply {
         })
     }
 }
+/// Members of one catalog version, with the concrete version id echoed back.
+/// `None`/`"latest"` resolve the head; a pinned id is read as-is.
+fn catalog_members(
+    c: &Connection,
+    catalog_version: Option<&str>,
+) -> Result<(String, Vec<Security>), Error> {
+    let id = match catalog_version {
+        None | Some("latest") => sqlite_catalog::head(c)?.ok_or_else(|| {
+            invalid("selection.kind=universe requires a published catalog; none is available")
+        })?,
+        Some(id) => id.to_owned(),
+    };
+    let version = sqlite_catalog::read(c, &id)?;
+    let members = version
+        .records
+        .into_iter()
+        .map(|record| {
+            let exchange = match record.exchange {
+                crate::catalog::Exchange::Shanghai => Exchange::Sh,
+                crate::catalog::Exchange::Shenzhen => Exchange::Sz,
+                _ => return Err(Error::Integrity("catalog exchange".into())),
+            };
+            Ok(Security {
+                exchange,
+                code: record.symbol,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    Ok((id, members))
+}
+
 /// The 口径/品种 pair a versioned price dataset serves (v8 PR-4, #387 §4.2).
 /// `market.index` is raw/point; `market.daily`/`market.yearly` keep the stock
 /// 前复权 shape. Datasets without a price series return `None`.
@@ -418,7 +466,15 @@ fn dataset_shape(dataset: Dataset) -> Option<(crate::market_data::Adjustment, i6
             crate::market_data::Adjustment::Raw,
             crate::market_data::INSTRUMENT_CLASS_INDEX,
         )),
-        Dataset::Catalog | Dataset::AdjustmentEvents | Dataset::Calendar => None,
+        Dataset::Catalog
+        | Dataset::AdjustmentEvents
+        | Dataset::Calendar
+        | Dataset::SecurityMaster
+        | Dataset::SecurityNames
+        | Dataset::CapitalEvents
+        | Dataset::RiskWarnings
+        | Dataset::Suspensions
+        | Dataset::PriceLimitRules => None,
     }
 }
 
@@ -608,9 +664,13 @@ pub(crate) fn query(
     plan: &QueryPlan,
     access: &Access,
 ) -> Result<QuerySnapshot, Error> {
+    if plan.args.dataset.is_m2() {
+        return m2::query(c, plan, access);
+    }
     let mut result = QuerySnapshot {
         manifest: vec![],
         rows: vec![],
+        temporal: None,
     };
     if plan.args.dataset == Dataset::Calendar {
         calendar_query(c, plan, &mut result)?;
@@ -818,6 +878,7 @@ pub(crate) fn query(
                 Filter::Daily {
                     start_date,
                     end_date,
+                    ..
                 } => (start_date, end_date),
                 Filter::CrossSection {
                     start_date,
@@ -1062,6 +1123,7 @@ fn market_range(plan: &QueryPlan) -> Result<(chrono::NaiveDate, chrono::NaiveDat
         Filter::Daily {
             start_date,
             end_date,
+            ..
         } => Ok((start_date, end_date)),
         Filter::CrossSection {
             start_date,
@@ -1931,6 +1993,8 @@ fn verify_versions_conn(
             )?
             .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
             derived_reference(r.dataset, None, &registration)
+        } else if r.dataset.is_m2() {
+            m2::version_ref(c, r)?
         } else {
             let entity = r
                 .entity
@@ -2018,6 +2082,8 @@ fn verify_versions_meta_conn(
                 )?
                 .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
                 derived_reference(r.dataset, None, &registration)
+            } else if r.dataset.is_m2() {
+                m2::version_ref(c, r)?
             } else {
                 let entity = r
                     .entity
@@ -2346,12 +2412,14 @@ impl ObservationRepository for SqliteSupply {
         self.market.read(|c| {
             let mut ctx = VerifyCtx;
             let universe = matches!(plan.args.selection, Selection::Universe { .. });
-            let entities: Vec<Option<Security>> =
-                if matches!(plan.args.dataset, Dataset::Catalog | Dataset::Calendar) {
-                    vec![None]
-                } else {
-                    plan.entities.iter().cloned().map(Some).collect()
-                };
+            let entities: Vec<Option<Security>> = if matches!(
+                plan.args.dataset,
+                Dataset::Catalog | Dataset::Calendar | Dataset::PriceLimitRules
+            ) {
+                vec![None]
+            } else {
+                plan.entities.iter().cloned().map(Some).collect()
+            };
             // Related tasks come from the requested entities only (XP-025 D):
             // one narrow task_scopes pass, facts for the matching tasks.
             let task_span = crate::stage_trace::span("availability.related_tasks");
@@ -2376,6 +2444,11 @@ impl ObservationRepository for SqliteSupply {
             );
             drop(task_span);
             let mut out = vec![];
+            let m2_snapshot = if plan.args.dataset.is_m2() {
+                Some(m2::query(c, plan, access)?)
+            } else {
+                None
+            };
             for entity in entities {
                 let (related_tasks, related_tasks_total) = match &entity {
                     Some(e) => related.get(&e.symbol()).cloned().unwrap_or_default(),
@@ -2387,7 +2460,10 @@ impl ObservationRepository for SqliteSupply {
                     }
                     _ => vec![],
                 };
-                match availability_stats(c, &mut ctx, plan, entity.as_ref(), access) {
+                match match &m2_snapshot {
+                    Some(snapshot) => Ok(m2::stats(snapshot, entity.as_ref())),
+                    None => availability_stats(c, &mut ctx, plan, entity.as_ref(), access),
+                } {
                     Ok((manifest, first_record, last_record, record_count)) => {
                         out.push(AvailabilityFacts {
                             entity,

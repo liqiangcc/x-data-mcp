@@ -96,7 +96,13 @@ fn availability_item(
         .is_some_and(|m| m.status == ManifestStatus::Absent)
     {
         Availability::Absent
-    } else if dataset == Dataset::Catalog || dataset == Dataset::Calendar {
+    } else if dataset == Dataset::Catalog
+        || dataset == Dataset::Calendar
+        || (dataset.is_m2()
+            && f.manifest
+                .as_ref()
+                .is_some_and(|m| m.status == ManifestStatus::Present))
+    {
         Availability::Available
     } else {
         Availability::Unknown
@@ -182,6 +188,7 @@ fn confirmed_gap(g: &crate::market_storage::ProvenGap) -> Result<ConfirmedGap, E
         crate::market_data::Period::Day => Filter::Daily {
             start_date: g.start_date,
             end_date: g.end_date,
+            as_of: None,
         },
         crate::market_data::Period::Year => {
             let start = chrono::NaiveDate::from_ymd_opt(g.start_date.year(), 1, 1);
@@ -1235,6 +1242,7 @@ impl<R: ObservationRepository + super::query::ReadRepository> Observer<R> {
             next_cursor: page.next_cursor.as_deref(),
             page_complete: page.page_complete,
             limitations: &[],
+            temporal: page.temporal.as_ref(),
         };
         let mut out =
             super::columnar::availability_table(plan.args.dataset, &page.items, &fields, &meta);
@@ -1295,6 +1303,22 @@ impl<R: ObservationRepository + super::query::ReadRepository> Observer<R> {
             items: result,
             next_cursor: None,
             page_complete: !more,
+            temporal: plan.temporal.map(|t| TemporalBlock {
+                as_of: t.as_of,
+                known_at: t.known_at,
+                // Availability only counts matching rows; the per-row 知晓时间
+                // loss is reported by `query_data` (issue-391 §12.2).
+                unknown_known_at_rows: 0,
+                datasets_without_known_at: match plan.args.dataset.temporal().known_at_coverage {
+                    TemporalCoverage::None => plan
+                        .args
+                        .dataset
+                        .temporal_name()
+                        .map(|name| vec![name.to_owned()])
+                        .unwrap_or_default(),
+                    TemporalCoverage::Full | TemporalCoverage::Partial => vec![],
+                },
+            }),
         };
         if more {
             p.next_cursor = Some(self.save(s));

@@ -1348,7 +1348,8 @@ fn friendly_read_inputs_match_the_contract_form() {
         .unwrap_err();
     assert_eq!(err.code, "invalid_arguments");
     assert!(err.message.contains("\"single\""), "{}", err.message);
-    // M2 point-in-time parameters are reserved, not silently ignored.
+    // AC-M2-12: point-in-time parameters are dataset-declared, not silently
+    // ignored; market.daily declares neither.
     let err = f
         .api
         .call(
@@ -1357,11 +1358,16 @@ fn friendly_read_inputs_match_the_contract_form() {
                 "dataset": "market.daily",
                 "selection": {"kind": "single", "entity": SYMBOL},
                 "filter": {"kind": "daily", "start_date": "2020-01-06", "end_date": "2020-02-04"},
-                "as_of": "2020-02-04",
+                "known_at": "2020-02-04",
             }),
         )
         .unwrap_err();
-    assert_eq!(err.code, "reserved_for_m2");
+    assert_eq!(err.code, "invalid_arguments");
+    assert!(
+        err.message.contains("unsupported_for_dataset"),
+        "{}",
+        err.message
+    );
 }
 
 /// §2.1.1 #10: `list_tasks(operation=update_data)` filters the operation the

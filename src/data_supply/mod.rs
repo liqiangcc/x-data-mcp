@@ -22,6 +22,14 @@ impl Access {
                 Dataset::Index,
                 Dataset::AdjustmentEvents,
                 Dataset::Calendar,
+                // M2 facts (issue-391 §12.3): visible to the local owner like
+                // the other research datasets.
+                Dataset::SecurityMaster,
+                Dataset::SecurityNames,
+                Dataset::CapitalEvents,
+                Dataset::RiskWarnings,
+                Dataset::Suspensions,
+                Dataset::PriceLimitRules,
             ]),
             securities: None,
         }
