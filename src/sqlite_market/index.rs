@@ -19,15 +19,16 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 
 use super::{evidence_store, integrity, series, series_commit, storage};
-use crate::compact_market::{self, Digest, EvidenceKind, VersionEvidence};
+use crate::compact_market::{self, Digest, EvidenceKind, ExcludedBar, VersionEvidence};
 use crate::index_registry::{self, IndexRegistration};
-use crate::market_data::{Adjustment, IndexBatch, Period, UnitCurrencyEvidence};
+use crate::market_data::{Adjustment, Bar, IndexBatch, Period, UnitCurrencyEvidence};
 use crate::market_storage::{Error, Receipt, Scope};
 
 /// Durable `algorithm_version` of an index daily series. The derivation is
-/// "promote the `.day` member verbatim at 0.01 点, no adjustment"; a later
-/// change to that mapping must bump this label.
-pub(crate) const INDEX_ALGORITHM: &str = "index-daily-v1";
+/// "promote the `.day` member verbatim at 0.01 点, no adjustment, dropping
+/// bars whose own OHLC ordering is impossible" (#383 owner ruling 2026-10-27);
+/// a later change to that mapping must bump this label.
+pub(crate) const INDEX_ALGORITHM: &str = "index-daily-v2";
 
 fn invalid(message: impl std::fmt::Display) -> Error {
     Error::Invalid(message.to_string())
@@ -185,11 +186,14 @@ pub(crate) fn commit_index(c: &Connection, w: &IndexWrite<'_>) -> Result<Receipt
     if batch.bars.is_empty() {
         return Err(integrity("index batch carries no bars"));
     }
-    let bars = series_commit::to_compact_bars(
-        &batch.bars,
-        Period::Day,
-        compact_market::PRICE_SCALE_CENTS,
-    )?;
+    let (valid, excluded) = split_invalid_ohlc(&batch.bars);
+    if valid.is_empty() {
+        return Err(integrity(
+            "index batch carries no valid bar after OHLC ordering",
+        ));
+    }
+    let bars =
+        series_commit::to_compact_bars(&valid, Period::Day, compact_market::PRICE_SCALE_CENTS)?;
     let head = series::read_series_adjusted(c, &batch.symbol, Period::Day, Adjustment::Raw)?;
     let change = classify(c, &batch.symbol, head.as_ref(), &bars)?;
     let range_start_day = bars[0].trade_day;
@@ -210,6 +214,7 @@ pub(crate) fn commit_index(c: &Connection, w: &IndexWrite<'_>) -> Result<Receipt
             coverage_reason: batch.coverage.reason.clone(),
             unit_currency: batch.unit_currency.clone(),
             adjustment_evidence: batch.adjustment_evidence.clone(),
+            excluded_bars: (!excluded.is_empty()).then_some(excluded),
         }),
     )?;
     let scope = Scope {
@@ -249,6 +254,41 @@ pub(crate) fn commit_index(c: &Connection, w: &IndexWrite<'_>) -> Result<Receipt
         .ok_or_else(|| integrity("index commit left no series row"))?;
     write_meta(c, registration, &series, binding, w.index)?;
     Ok(receipt)
+}
+
+/// Split an index batch into the bars whose OHLC ordering is possible and the
+/// bars excluded from the series (#383 owner ruling 2026-10-27, option a).
+///
+/// The rule is only about the bar's own four prices — `low <= min(open, close)`,
+/// `max(open, close) <= high`, `low <= high`. An excluded bar is not repaired,
+/// clamped or estimated: it never reaches `series_bars`, while every other bar
+/// is committed as usual. The caller records `excluded` in the version evidence
+/// so the decision is deterministic and reproducible from the stored bundle.
+///
+/// This is deliberately reachable only from the index commit: a stock series
+/// still fails closed in `series_commit::to_compact_bars`.
+fn split_invalid_ohlc(bars: &[Bar]) -> (Vec<Bar>, Vec<ExcludedBar>) {
+    let mut valid = Vec::with_capacity(bars.len());
+    let mut excluded = Vec::new();
+    for bar in bars {
+        if bar.low <= bar.open
+            && bar.low <= bar.close
+            && bar.low <= bar.high
+            && bar.high >= bar.open
+            && bar.high >= bar.close
+        {
+            valid.push(bar.clone());
+            continue;
+        }
+        excluded.push(ExcludedBar {
+            date: bar.date,
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close,
+        });
+    }
+    (valid, excluded)
 }
 
 /// The unit gate (AC-M1-6): the batch must carry exactly the units the

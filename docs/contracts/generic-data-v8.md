@@ -209,7 +209,9 @@ v1 请求带 `fields`、`selection.kind=universe|market` 或 `filter.kind=cross_
   `src/sqlite_supply.rs:1142-1149`），`value` 为 `"raw"`/`"qfq"`。它**不含** `price_scale` 或
   `algorithm_version`——设计文档写的是 `{algorithm_version, price_scale, basis}`，实现未提供，见 §12。
 - `metadata.index` 只在 `market.index` 出现：`aggregate_scope`、`member_count`、`price_unit`、
-  `volume_unit`、`amount_unit`、`aliases`（`src/data_supply/wire.rs:410-419`）。
+  `volume_unit`、`amount_unit`、`aliases`、`excluded_bar_count`（指数坏 bar 剔除数量，
+  #383 owner 2026-10-27 裁决；`src/data_supply/wire.rs:410-421`，
+  `src/sqlite_supply.rs:2556-2596`）。
 - `metadata.lineage` 只在派生年线出现：`base_daily_version_id`、`algorithm_version`、
   `first_trading_date`、`last_trading_date`（`src/data_supply/wire.rs:387-392`）。
 

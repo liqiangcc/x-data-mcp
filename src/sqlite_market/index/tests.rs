@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
+use rust_decimal::Decimal;
 use serde_json::json;
 
 use super::*;
@@ -247,9 +248,14 @@ fn registry_matches_the_stored_series_and_metadata() {
             registration.evidence_note
         );
         // The version evidence is a normal `version` bundle (the series row
-        // contract), not the derived unit/scope proof.
-        let (version_kind, _) = evidence_store::read_evidence(&c, &series.evidence_digest).unwrap();
+        // contract), not the derived unit/scope proof. A clean member carries
+        // no exclusion list, so adding the field did not change its evidence.
+        let (version_kind, version_canonical) =
+            evidence_store::read_evidence(&c, &series.evidence_digest).unwrap();
         assert_eq!(version_kind, crate::compact_market::EvidenceKind::Version);
+        let version: crate::compact_market::VersionEvidence =
+            serde_json::from_str(&version_canonical).unwrap();
+        assert!(version.excluded_bars.is_none());
     }
     // The registry is exactly the stored set: 9 series rows, 9 metadata rows.
     let c = Connection::open(&path).unwrap();
@@ -433,6 +439,71 @@ fn second_commit_is_no_change_and_append_extends() {
     assert_eq!(series.record_count, 3);
     // The metadata row survives re-commits (created_at is preserved).
     assert!(read_meta_by_entity(&c, "sh.000001").unwrap().is_some());
+}
+
+/// #383 owner ruling 2026-10-27 (option a): an index bar whose own OHLC
+/// ordering is impossible is dropped whole, the remaining series is built, and
+/// the dropped bar (date + original OHLC) is recorded verbatim in the version
+/// evidence. Nothing is repaired, clamped or estimated.
+#[test]
+fn bad_ohlc_bar_is_dropped_and_recorded() {
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let mut bad = bar(1, 301_000, 8);
+    bad.high = bad.close - Decimal::new(1, 2); // close > high
+    let expected = bad.clone();
+    let batch = index_batch(
+        "sh.000001",
+        vec![bar(0, 300_000, 7), bad, bar(2, 302_000, 9)],
+    );
+    let receipt = commit(&repo, "req-bad-bar", &batch);
+
+    let c = Connection::open(&path).unwrap();
+    let series = series::read_series_adjusted(&c, "sh.000001", Period::Day, Adjustment::Raw)
+        .unwrap()
+        .expect("series survives the excluded bar");
+    assert_eq!(series.record_count, 2);
+    assert_eq!(receipt.version_id, series.version_id);
+    let bars = series::all_bars(&c, series.series_key).unwrap();
+    assert_eq!(
+        bars.iter().map(|b| b.trade_day).collect::<Vec<_>>(),
+        vec![0, 2]
+    );
+
+    let (kind, canonical) = evidence_store::read_evidence(&c, &series.evidence_digest).unwrap();
+    assert_eq!(kind, crate::compact_market::EvidenceKind::Version);
+    let evidence: crate::compact_market::VersionEvidence =
+        serde_json::from_str(&canonical).unwrap();
+    let excluded = evidence.excluded_bars.expect("excluded list");
+    assert_eq!(excluded.len(), 1);
+    assert_eq!(excluded[0].date, expected.date);
+    assert_eq!(excluded[0].open, expected.open);
+    assert_eq!(excluded[0].high, expected.high);
+    assert_eq!(excluded[0].low, expected.low);
+    assert_eq!(excluded[0].close, expected.close);
+}
+
+/// AC-M1-7 analogue for the exclusion record: the same input twice yields the
+/// same content digest, version id and exclusion evidence.
+#[test]
+fn excluded_bar_record_is_deterministic() {
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let mut bad = bar(1, 301_000, 8);
+    bad.high = bad.close - Decimal::new(1, 2);
+    let batch = index_batch("sh.000001", vec![bar(0, 300_000, 7), bad]);
+    let first = commit(&repo, "req-det-1", &batch);
+    let c = Connection::open(&path).unwrap();
+    let before = series::read_series_adjusted(&c, "sh.000001", Period::Day, Adjustment::Raw)
+        .unwrap()
+        .unwrap();
+    let second = commit(&repo, "req-det-2", &batch);
+    let after = series::read_series_adjusted(&c, "sh.000001", Period::Day, Adjustment::Raw)
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.version_id, first.version_id);
+    assert_eq!(after.content_digest, before.content_digest);
+    assert_eq!(after.evidence_digest, before.evidence_digest);
 }
 
 #[test]

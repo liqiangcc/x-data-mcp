@@ -414,6 +414,9 @@ pub struct IndexMetadata {
     pub volume_unit: String,
     pub amount_unit: String,
     pub aliases: String,
+    /// Bars dropped from this index series because their own OHLC ordering was
+    /// impossible (#383 owner ruling 2026-10-27). Always 0 for a clean member.
+    pub excluded_bar_count: usize,
 }
 
 fn presence_min_year() -> i32 {
