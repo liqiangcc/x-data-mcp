@@ -41,8 +41,11 @@ use super::member_state::{MemberFlag, Membership, NotMemberReason};
 use super::temporal::{KnownAtCoverage, Temporal};
 use super::tradability::{Tradability, TradabilityReason, tradability};
 use super::universe::{UniverseRequest, member_state, universe};
-use crate::compact_market::{CompactBar, EvidenceKind, SourceBinding};
-use crate::market_data::{Adjustment, CalendarBatch, CalendarInputDates, CoverageStatus, Period};
+use crate::compact_market::{CompactBar, EvidenceKind, SourceBinding, VersionEvidence};
+use crate::market_data::{
+    Adjustment, AdjustmentEvidence, CalendarBatch, CalendarInputDates, CoverageStatus,
+    EvidenceValue, Period, UnitCurrencyEvidence,
+};
 use crate::security_master::assembly::{Assembly, CodeMigrationFact, MigrationCertainty};
 use crate::security_master::{
     CapitalEvent, CapitalEventSet, DelistingReason, DelistingSource, Exchange, IssuerResolution,
@@ -100,6 +103,25 @@ fn bar(day: NaiveDate, close_units: i64) -> CompactBar {
 
 fn digest(seed: u8) -> [u8; 32] {
     [seed; 32]
+}
+
+/// A complete `VersionEvidence` bundle: the store rejects anything else, so the
+/// fixture cannot use a stub here.
+fn series_evidence() -> serde_json::Value {
+    serde_json::to_value(VersionEvidence {
+        source: "official".into(),
+        coverage_reason: "fixture".into(),
+        unit_currency: UnitCurrencyEvidence {
+            price_currency: EvidenceValue::confirmed("CNY", "bound"),
+            price_unit: EvidenceValue::confirmed("share", "bound"),
+            volume_unit: EvidenceValue::confirmed("share", "bound"),
+            amount_currency: EvidenceValue::confirmed("CNY", "bound"),
+            amount_unit: EvidenceValue::confirmed("yuan", "bound"),
+        },
+        adjustment_evidence: AdjustmentEvidence::confirmed("raw", "bound"),
+        excluded_bars: None,
+    })
+    .unwrap()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -193,12 +215,8 @@ impl Fixture {
             },
         )
         .unwrap();
-        let version_evidence = evidence_store::put_evidence(
-            &tx,
-            EvidenceKind::Version,
-            &json!({"fixture": "read model"}),
-        )
-        .unwrap();
+        let version_evidence =
+            evidence_store::put_evidence(&tx, EvidenceKind::Version, &series_evidence()).unwrap();
 
         // 不复权 daily series per entity. The bar days are the witness lists.
         let series_bars: Vec<(&str, Vec<usize>, i64)> = vec![

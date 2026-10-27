@@ -251,7 +251,7 @@ pub(crate) fn member_state_report(
     if states.is_empty() {
         return Ok((None, report));
     }
-    states.sort_by(|left, right| left.effective_from.cmp(&right.effective_from));
+    states.sort_by_key(|state| state.effective_from);
     if let Some(index) = states.iter().position(MemberState::is_member) {
         return Ok((Some(states.swap_remove(index)), report));
     }
