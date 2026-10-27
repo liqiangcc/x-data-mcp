@@ -324,11 +324,13 @@ fn entry<I: JsonSchema, O: JsonSchema>(
     description: &'static str,
     example: Value,
 ) -> Entry {
+    let mut input = schema_for!(I);
+    super::wire::strip_additional_properties(&mut input);
     Entry {
         name,
         handler,
         description,
-        input: serde_json::to_value(schema_for!(I)).unwrap(),
+        input: serde_json::to_value(input).unwrap(),
         output: serde_json::to_value(schema_for!(O)).unwrap(),
         example,
         operator_only: false,

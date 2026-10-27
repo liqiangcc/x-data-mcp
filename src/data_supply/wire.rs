@@ -135,8 +135,9 @@ impl Security {
     }
 }
 /// `deny_unknown_fields` already rejects extras at runtime; dropping the
-/// redundant schema keyword keeps `tools/list` inside its byte budget.
-fn strip_additional_properties(schema: &mut schemars::Schema) {
+/// redundant schema keyword keeps `tools/list` inside its byte budget
+/// (v8 #387 §6.3). Applies to published input schemas, not to validation.
+pub(crate) fn strip_additional_properties(schema: &mut schemars::Schema) {
     fn walk(value: &mut serde_json::Value) {
         match value {
             serde_json::Value::Object(map) => {
@@ -162,7 +163,6 @@ fn strip_additional_properties(schema: &mut schemars::Schema) {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-#[schemars(transform = strip_additional_properties)]
 pub enum Selection {
     Single {
         entity: Security,
@@ -191,7 +191,6 @@ pub enum CatalogScope {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-#[schemars(transform = strip_additional_properties)]
 pub enum Filter {
     Daily {
         start_date: NaiveDate,
