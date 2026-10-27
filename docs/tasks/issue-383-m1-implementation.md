@@ -128,11 +128,11 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
 
 ### PR-8：研究快照导出（`d502f8d`）
 
-- `src/research/`：`plan()`（`src/research/mod.rs:510`）、只读连接
+- `src/research/`：`plan()`（`src/research/mod.rs:530`）、只读连接
   （`src/research/read.rs:58-80`：`SQLITE_OPEN_READ_ONLY` + `query_only=1` + schema 22 校验）、
   清单（`src/research/manifest.rs`）、五份 Parquet（`src/research/parquet.rs`）、三步式
-  `export()`/`dry_run()`（`src/research/export.rs:271,286`）、`LIMITATIONS`
-  （`src/research/mod.rs:587`）；bin 只在 feature `export` 下编译（`Cargo.toml:6-17`）；
+  `export()`/`dry_run()`（`src/research/export.rs:266,281`）、`LIMITATIONS`
+  （`src/research/mod.rs:615`）；bin 只在 feature `export` 下编译（`Cargo.toml:6-17`）；
   CI 新 job `export`（`.github/workflows/ci.yml:102`）跑 `--features export` 的测试、release
   构建与 pyarrow/duckdb 读回。
 - AC：AC-M1-7 断言到 `files` 逐项相等；AC-M1-8 的 `verify_unchanged` 在新连接上重新 `plan()`
@@ -148,13 +148,43 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
 - 设计文档 §7.8 引用的是更早一轮绿 run `40336874624`（head `43950e5`）；最终一轮是
   `40339245530`（head `8c8484a`），两者都 success。
 
+### PR-8 修复 B：跨代全量导出与可复现（本 PR，Refs #383）
+
+- **跨代**：`plan()` 不再要求全库只有一个来源代。`read::resolve_lineage`
+  （`src/research/read.rs:405`）一次性读出 `source_bindings`，逐条解析每个序列/派生数据集的
+  `source_binding_digest`；`SnapshotPlan.generations` 是去重排序后的来源代列表
+  （`src/research/mod.rs:486`）。只有某个 digest 在 `source_bindings` 里查不到才
+  `EXPORT_LINEAGE`（`src/research/mod.rs:61`），也就是“血缘无法证明”才拒绝。原
+  `EXPORT_MIXED_GENERATION` 与 `unique_generation` 删除。
+- **清单**：`manifest::identity`（`src/research/manifest.rs:119`）写顶部 `generations`，并在
+  每条 `series`/`derived` 上写 `source_generation`（`src/research/manifest.rs:62`），与已有的
+  `version_id` 一起构成逐项来源绑定。设计 §7.3 已按此修订。
+- **可复现**：`manifest::document`（`src/research/manifest.rs:194`）不再写 `created_at`；
+  `export` 段只留 `row_group_rows`/`compression`，不再写 `started_at`/`finished_at`/
+  `wal_bytes_delta`。运行信息只进 `ExportOutcome` 与 CLI 一行摘要。测试
+  `export_is_byte_reproducible`（`src/research/tests.rs:965`）比较两次导出的全部文件字节
+  （含 `manifest.json`），不只是 `snapshot_id`。
+- **体积**：§7.7 的 340MB 估算修正为约 1.5GB。夹具实测（`scripts/export_smoke.py --measure`，
+  pyarrow 26.0.0，100k 行）不复权 32.3 B/行、6dp 前复权 55.9 B/行；Rust 侧
+  `daily_parquet_bytes_per_row_match_the_measured_fixture`（`src/research/tests.rs:1192`）
+  锁住同一量级。压缩仍是 §7.6 的 snappy + format 1.0 + 字典编码，测试
+  `parquet_files_read_back_with_the_expected_schema` 断言每个列的 compression 与 format。
+- **测试**：跨两代夹具 `cross_generation_export_records_each_series_generation`
+  （`src/research/tests.rs:562`）断言每个序列的来源代；`cross_generation_snapshot_writes_each_series_generation`
+  （`src/research/tests.rs:998`）落盘后读回 manifest；`unproven_lineage_is_rejected`
+  （`src/research/tests.rs:613`）断言查不到 binding 时仍拒绝。
+- **旧校验对账**：删除了 `mixed_generation_is_rejected`（原断言 `EXPORT_MIXED_GENERATION` +
+  `2 source generations`）与 `unique_generation`/`read_source_binding`/`decode_hex`。替换为：
+  跨代允许（逐项来源代）+ 孤儿 binding 拒绝（`EXPORT_LINEAGE`）。原有
+  “同输入同 id”“漂移拒绝”“只读”“不留半成品”断言全部保留并加严到逐字节比较。
+
 ## 3. 分离点落位（实现对照设计 §11）
 
 | # | 分离点 | 实现落点 | 边界怎么守 |
 |---|---|---|---|
 | 1 | 来源接入 ↔ 领域 | `.day` 与 gbbq 只在 `official_market` 适配；指数清单是 `src/index_registry.rs:131` 的一处登记 | 领域类型只收不复权 bar / cat1 事件 / 日历日期 / 指数口径；领域代码里没有 `hsjday`/`gbbq`/`infoharbor` 字样（PR-4/5/6 正文逐条列出） |
 | 2 | 原始证据 → 解析事实 → 派生 | 原始：generation zip（不可变）；解析事实：不复权 bar、`adjustment_events`（f32 位模式）、日历输入日期；派生：6dp 前复权、因子仿射、日历并集、指数口径 | 每条派生带算法版本，且可从下层重算：AC-M1-2 双验（同一实现参考路径 + Python `Fraction`）；`c_bits`→`c1..c4` 有断言 |
-| 3 | 生效时间 ↔ 知晓时间 | `adjustment_events.effective_day` 有值，`known_at` 恒 NULL（`022:222`） | 导出 `LIMITATIONS` 明写"因子只有生效日"（`src/research/mod.rs:587`），不假装无前视 |
+| 3 | 生效时间 ↔ 知晓时间 | `adjustment_events.effective_day` 有值，`known_at` 恒 NULL（`022:222`） | 导出 `LIMITATIONS` 明写"因子只有生效日"（`src/research/mod.rs:615`），不假装无前视 |
 | 4 | 存储模型 ↔ 研究读模型 | 存储：`market_series`/`series_bars`/`adjustment_events`/`trading_days`/`index_series_meta`；读模型：`src/research/` | 研究接口不出现表名/SQL；导出只调 `plan()`；换存储不改导出 |
 | 5 | 核心用例 ↔ 入口适配 | 核心：`research::plan()`（纯读）；入口：`export_research` bin | 入口只做参数解析与一行 JSON 摘要（`src/bin/export_research.rs`）；AC-M1-10 固定 MCP 边界 |
 | 6 | 交易规则 ↔ 数据 | M1 没有涨跌停/最小变动常量；指数口径是 `index_series_meta` 的行 | 代码里没有幅度常量可 grep；指数口径不是 `if entity == ...` |
@@ -165,7 +195,7 @@ AC 的定义在 Issue #383 的验收表（AC-M1-1…12），本文按 PR 行引�
 | # | 项 | 现状 |
 |---|---|---|
 | U-1 | 全市场 6dp 复权的耗时与峰值内存 | **未验证**。CI 只证明正确性与合成夹具；全量在私有栈测（部署清单 §3） |
-| U-2 | Parquet 导出的真实体积与压缩率 | **部分**：小夹具 5,030,424 B；全历史未跑（部署清单 §4） |
+| U-2 | Parquet 导出的真实体积与压缩率 | **夹具已实测（修复 B）**：不复权 32.3 B/行、6dp 前复权 55.9 B/行 → 全历史约 1.5GB（私有栈外推 1.9GB 同量级）；真实全历史导出仍未跑（部署清单 §4） |
 | U-3 | `parquet` crate 的编译时间与二进制增量 | **已验证（CI）**：`export` job 记录 release 构建 110s；体积记录见该 job 的 job summary |
 | U-4 | 冷启动在 schema 22 下的实际耗时 | **未验证**：设计估算冷 20–23s（序列数 5,224→10,457），部署前实测（部署清单 §2） |
 | U-5 | 下游 `x` 仓库对 6dp 的兼容性 | **代码侧已核对**（另一仓库只读）：`KlineReader` 无 2dp 假设、无版本 pin；两个上游契约点部署前实测（部署清单 §5） |

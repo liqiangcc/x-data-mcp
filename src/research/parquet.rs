@@ -105,6 +105,9 @@ fn properties(compression: Compression, row_group_rows: usize) -> WriterProperti
             Compression::Snappy => ParquetCompression::SNAPPY,
             Compression::None => ParquetCompression::UNCOMPRESSED,
         })
+        // Dictionary encoding is what §7.7's measured B/row assumes (the
+        // crate default, stated here so a future property change is visible).
+        .set_dictionary_enabled(true)
         // Recorded for readers that inspect the writer metadata; the actual
         // row groups are flushed by hand in `flush_*` (the low-level writer
         // does not split them itself).
