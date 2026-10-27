@@ -16,6 +16,7 @@ tempdir root with three stand-ins, so no real switch ever happens:
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -461,6 +462,65 @@ class ReadinessWiring(unittest.TestCase):
             '--expect-tool plan_market_update || fail "service socket did not become ready"',
             PREVIEW.read_text(),
         )
+
+
+class ExpectedSchemaFromRelease(unittest.TestCase):
+    """#383: the fresh-init schema is read from the release commit.
+
+    preview.36 init'd schema 24 while the script still required 21, so a real
+    deploy failed at init and rolled back. The number now travels with the
+    code: it is parsed from `src/sqlite_tasks.rs` at the tag's SHA before
+    anything is mutated.
+    """
+
+    def test_no_hardcoded_fresh_schema(self):
+        text = DEPLOY.read_text()
+        for needle in (
+            "task schema 21 ready",
+            '== "21"',
+            "schema=20",
+            "user_version=20",
+            "step=schema21_fresh",
+        ):
+            self.assertNotIn(needle, text, needle)
+        self.assertIn("step=schema_fresh", text)
+
+    def test_expected_schema_is_read_before_any_mutation(self):
+        text = DEPLOY.read_text()
+        step_at = text.index("step=expected_schema")
+        self.assertLess(step_at, text.index("MUTATING=1"))
+        # Only top-level stops matter; the rollback helper's stops are indented.
+        first_stop = re.search(r"^systemctl stop", text, re.MULTILINE)
+        self.assertIsNotNone(first_stop)
+        self.assertLess(step_at, first_stop.start())
+        # The number comes from the release commit's source tree, and the tag
+        # SHA is already resolved by then (the step must not depend on HEAD).
+        self.assertIn('git -C "$REPO" show "$SHA:src/sqlite_tasks.rs"', text)
+        self.assertIn('fail "cannot read COMPACT_SCHEMA_VERSION at $SHA"', text)
+        self.assertIn("XDM_EXPECTED_SCHEMA:-", text)
+
+    def test_both_init_checks_compare_against_expected_schema(self):
+        text = DEPLOY.read_text()
+        self.assertIn('*"task schema $EXPECTED_SCHEMA ready"*', text)
+        self.assertIn('[[ "$fresh_schema" == "$EXPECTED_SCHEMA" ]]', text)
+        self.assertIn("user_version=$fresh_schema", text)
+
+    def test_extraction_pattern_matches_current_source(self):
+        text = DEPLOY.read_text()
+        start = text.index("step=expected_schema")
+        block = text[start:text.index("MUTATING=1", start)]
+        expr = re.search(r"sed -nE '(s/[^']+)'", block)
+        self.assertIsNotNone(expr, "expected_schema step lost its COMPACT_SCHEMA_VERSION sed")
+        # s/<pattern>/<replacement>/p -> use the pattern and check it parses the
+        # version out of the source that ships it.
+        self.assertTrue(expr.group(1).startswith("s/"), expr.group(1))
+        pattern = expr.group(1).split("/")[1]
+        source = (REPO / "src" / "sqlite_tasks.rs").read_text()
+        match = re.search(pattern, source, re.MULTILINE)
+        self.assertIsNotNone(
+            match, f"{pattern!r} does not match src/sqlite_tasks.rs"
+        )
+        self.assertGreater(int(match.group(1)), 0)
 
 
 class TunnelDropinTemplate(unittest.TestCase):

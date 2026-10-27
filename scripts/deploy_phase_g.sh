@@ -6,7 +6,7 @@
 #   x-data-mcp-data.service     data_service <db> <mcp.sock>
 #   x-data-mcp-acquire.service  acquire_service <generation-root> <acquire.sock>
 #
-# Fresh schema-20 install semantics (#259 FRESH_REBUILD_REQUIRED): the
+# Fresh compact-schema install semantics (#259 FRESH_REBUILD_REQUIRED): the
 # existing market database is NEVER upgraded in place and NEVER deleted —
 # it is renamed aside and `task_sqlite init21` creates a fresh compact
 # database at the path the service unit already uses.
@@ -241,7 +241,8 @@ DRY-RUN phase-g deploy $TAG
   plan: fetch+verify tarball -> stage release dir -> archive existing db
         aside (never migrated/deleted) -> task_sqlite init21 fresh db ->
         stop both services -> switch current -> start both -> socket +
-        schema=20 + tools smoke -> report; failures after mutation restore
+        schema=<release COMPACT_SCHEMA_VERSION> + tools smoke -> report;
+        failures after mutation restore
         previous release + archived db + old services
 EOF
     exit 0
@@ -288,8 +289,16 @@ if [[ ! -d "$RELEASE_DIR" ]]; then
     INSTALLED_NEW=1
 fi
 
+# The fresh-init schema is a fact of the release commit, not of this script:
+# read COMPACT_SCHEMA_VERSION at the tag's SHA (before anything is mutated) so
+# the check moves with the code instead of pinning one schema number here.
+step=expected_schema
+EXPECTED_SCHEMA=${XDM_EXPECTED_SCHEMA:-$(git -C "$REPO" show "$SHA:src/sqlite_tasks.rs" 2>/dev/null \
+    | sed -nE 's/^pub const COMPACT_SCHEMA_VERSION: u32 = ([0-9]+);$/\1/p')}
+[[ "$EXPECTED_SCHEMA" =~ ^[0-9]+$ ]] || fail "cannot read COMPACT_SCHEMA_VERSION at $SHA"
+
 # --- 3. mutation: archive old db, fresh init21, switch, start -----------------
-step=schema21_fresh
+step=schema_fresh
 MUTATING=1
 systemctl stop "$ACQ_SERVICE" || fail "stop $ACQ_SERVICE"
 systemctl stop "$DATA_SERVICE" || fail "stop $DATA_SERVICE"
@@ -302,11 +311,13 @@ fi
 # fresh init21 file is a new identity, so rebind deliberately.
 rm -f "$SOCK_DATA.owner.json" || fail "clear stale endpoint owner"
 init_out=$("$RELEASE_DIR/bin/task_sqlite" init21 "$DB") || fail "task_sqlite init21"
-[[ "$init_out" == *"task schema 21 ready"* ]] || fail "init21 did not report schema 21"
+[[ "$init_out" == *"task schema $EXPECTED_SCHEMA ready"* ]] \
+    || fail "init21 did not report schema $EXPECTED_SCHEMA"
 chmod 600 "$DB" || fail "chmod private market db"
 chown "$(id -u):$(id -g)" "$DB" || fail "chown market db"
 fresh_schema=$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DB?mode=ro', uri=True).execute('PRAGMA user_version').fetchone()[0])")
-[[ "$fresh_schema" == "21" ]] || fail "fresh db user_version=$fresh_schema != 21"
+[[ "$fresh_schema" == "$EXPECTED_SCHEMA" ]] \
+    || fail "fresh db user_version=$fresh_schema != $EXPECTED_SCHEMA"
 
 step=switch
 ln -sfn "$RELEASE_DIR" "$DEPLOY_ROOT/current" || fail "switch current"
@@ -357,6 +368,6 @@ PY
 
 step=report
 report "DEPLOYED"
-echo "DEPLOYED $TAG ($SHA) phase-g topology; market db user_version=20 (fresh)"
+echo "DEPLOYED $TAG ($SHA) phase-g topology; market db user_version=$fresh_schema (fresh)"
 [[ -z "$DB_ARCHIVED" ]] || echo "previous market db archived at $DB_ARCHIVED"
 echo "report: $REPORTS/${TAG_SHORT}-phaseg-deployment.json"
