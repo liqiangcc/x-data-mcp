@@ -3,6 +3,19 @@ name = "x-data-mcp"
 version = "0.2.0-preview.35"
 edition = "2024"
 
+# M1 PR-8 (issue-383 §7.6): the research snapshot exporter is an optional
+# feature, so the default build/test path does not compile a Parquet stack.
+[features]
+default = []
+export = ["dep:parquet"]
+
+# `export_research` exists only with the feature; a default build keeps
+# producing exactly the binaries it produced before.
+[[bin]]
+name = "export_research"
+path = "src/bin/export_research.rs"
+required-features = ["export"]
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde"] }
@@ -23,6 +36,12 @@ num-traits = "0.2"
 encoding_rs = "0.8.41"
 zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 serde_json_canonicalizer = "=0.3.2"
+
+# Research snapshot writer (issue-383 §7.6): low-level `SerializedFileWriter`
+# only, no Arrow. `snap` is a pure-Rust Snappy implementation, so the export
+# feature adds no C toolchain dependency. The writer lives in
+# `src/research/parquet.rs`.
+parquet = { version = "59.3.2", optional = true, default-features = false, features = ["snap"] }
 
 [dev-dependencies]
 # Validate generated wire schemas against real stdio results; no HTTP schema resolution.

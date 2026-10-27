@@ -40,6 +40,11 @@ pub mod hash;
 pub mod market_storage;
 pub mod sqlite_market;
 
+/// Research snapshot export (issue-383 §7, M1 PR-8). The read model is always
+/// compiled; the Parquet writer and the `export_research` binary are behind the
+/// `export` feature.
+pub mod research;
+
 pub mod data_supply;
 pub mod sqlite_catalog;
 

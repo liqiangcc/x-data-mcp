@@ -92,3 +92,69 @@ jobs:
         run: |
           python3 -B evidence/issue-383-qfq-exact/reference.py --check
           python3 -B -m unittest discover -s evidence/issue-383-qfq-exact -p 'test_*.py'
+
+  # M1 PR-8 (issue-383 §7): the research exporter is an optional feature, so it
+  # gets its own job instead of slowing down the default Rust path. The job
+  # proves three things the default job cannot: the `export` feature compiles
+  # and its tests pass, a real snapshot is readable by the third-party readers a
+  # researcher uses (pyarrow/duckdb, §7.5), and the release build's size and
+  # build time are recorded (§7.6 "体积预算" — the two numbers go in the PR).
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Decide whether Rust steps are needed
+        id: scope
+        run: |
+          python3 scripts/ci_changed_scope.py --event "${{ github.event_name }}" \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}"
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.scope.outputs.rust == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.scope.outputs.rust == 'true'
+        with:
+          key: export
+      - uses: taiki-e/install-action@v2
+        if: steps.scope.outputs.rust == 'true'
+        with:
+          tool: nextest@0.9.146
+      - name: Tests with the export feature
+        if: steps.scope.outputs.rust == 'true'
+        run: cargo nextest run --features export --locked
+        env:
+          TMPDIR: /dev/shm
+      - name: Leave a real snapshot on disk for the third-party readers
+        if: steps.scope.outputs.rust == 'true'
+        run: |
+          X_DATA_EXPORT_SMOKE_DIR="$PWD/export-smoke" \
+            cargo test --features export --locked smoke_export_for_external_readers
+          test -f export-smoke/snapshot-id.txt
+        env:
+          TMPDIR: /dev/shm
+      - name: Read the snapshot with pyarrow and duckdb (§7.5)
+        if: steps.scope.outputs.rust == 'true'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/research-venv"
+          "$RUNNER_TEMP/research-venv/bin/pip" install --disable-pip-version-check \
+            'pyarrow==26.0.0' 'duckdb==2.0.0'
+          "$RUNNER_TEMP/research-venv/bin/python" scripts/export_smoke.py \
+            --snapshot-dir "export-smoke/$(cat export-smoke/snapshot-id.txt)"
+      - name: Release build cost (§7.6)
+        if: steps.scope.outputs.rust == 'true'
+        run: |
+          start=$(date +%s)
+          cargo build --features export --release --locked --bin export_research
+          seconds=$(( $(date +%s) - start ))
+          bytes=$(stat -c%s target/release/export_research)
+          {
+            echo "### export_research release build (feature \`export\`)"
+            echo ""
+            echo "| metric | value |"
+            echo "|---|---|"
+            echo "| binary bytes | ${bytes} |"
+            echo "| build seconds (warm cache) | ${seconds} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "export_research: ${bytes} bytes, ${seconds}s"
