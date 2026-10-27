@@ -39,7 +39,7 @@ impl QueryPlan {
             }
             if matches!(
                 args.selection,
-                Selection::Universe { .. } | Selection::Market
+                Selection::Universe { .. } | Selection::Market { .. }
             ) {
                 return Err(invalid("selection kind requires contract_version v2"));
             }
@@ -79,7 +79,7 @@ impl QueryPlan {
             _ => return Err(invalid("dataset/filter range mismatch")),
         }
         match &mut args.version {
-            VersionChoice::LatestPerEntity => {}
+            VersionChoice::LatestPerEntity {} => {}
             VersionChoice::CatalogVersion { version_id }
                 if args.dataset == Dataset::Catalog && !version_id.is_empty() => {}
             VersionChoice::ExplicitVersionMap { versions }
@@ -174,7 +174,7 @@ pub fn page_size(n: usize) -> Result<(), Error> {
 pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<Security>, Error> {
     let mut e = match (dataset, s) {
         (Dataset::Catalog, Selection::Catalog { .. }) => vec![],
-        (Dataset::Calendar, Selection::Market) => vec![],
+        (Dataset::Calendar, Selection::Market { .. }) => vec![],
         (_, Selection::Universe { .. }) => vec![],
         (
             Dataset::Daily | Dataset::Yearly | Dataset::Index | Dataset::AdjustmentEvents,
@@ -189,7 +189,7 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
     if !matches!(
         (dataset, s),
         (Dataset::Catalog, Selection::Catalog { .. })
-            | (Dataset::Calendar, Selection::Market)
+            | (Dataset::Calendar, Selection::Market { .. })
             | (_, Selection::Universe { .. })
     ) && (e.is_empty() || e.len() > 100)
     {

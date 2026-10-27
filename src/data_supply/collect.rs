@@ -63,7 +63,7 @@ impl CollectionContract {
                     json!({"catalog_version_id":version_id,"catalog_digest":digest}),
                 ))
             }
-            WriteSelection::Default => Err(invalid(
+            WriteSelection::Default { .. } => Err(invalid(
                 "default selection is only implemented for market.daily update/backfill",
             )),
         }
@@ -101,7 +101,7 @@ impl Contract for CollectionContract {
                             return Err(invalid("catalog version required"));
                         }
                     }
-                    WriteSelection::Default => {
+                    WriteSelection::Default { .. } => {
                         return Err(invalid(
                             "default selection is only implemented for market.daily update/backfill",
                         ));

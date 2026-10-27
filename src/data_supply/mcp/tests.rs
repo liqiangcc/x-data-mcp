@@ -2123,3 +2123,70 @@ fn facets_agree_with_the_catalog_query() {
         .unwrap();
     assert_eq!(catalog["records"].as_array().unwrap().len(), 2);
 }
+
+/// Internally-tagged unit variants silently ignore extra keys under serde's
+/// `deny_unknown_fields`; these variants are structs so a caller cannot widen
+/// `market` into a single-entity request by accident.
+#[test]
+fn market_selection_rejects_extra_keys() {
+    let f = fixture();
+    for (selection, key) in [
+        (json!({"kind":"market","entity":"sh.600006"}), "entity"),
+        (json!({"kind":"market","exchange":"sz"}), "exchange"),
+    ] {
+        let error = f
+            .api
+            .call(
+                "query_data",
+                json!({
+                    "dataset":"market.calendar",
+                    "contract_version":"v2",
+                    "selection":selection,
+                    "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                    "version":{"kind":"latest_per_entity"}
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments");
+        assert!(error.message.contains(key), "{}", error.message);
+    }
+}
+
+#[test]
+fn latest_per_entity_rejects_extra_keys() {
+    let f = fixture();
+    let error = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.daily",
+                "contract_version":"v2",
+                "selection":{"kind":"single","entity":"sh.600006"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity","entity":"sh.600006"}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(error.message.contains("entity"), "{}", error.message);
+}
+
+#[test]
+fn default_write_selection_rejects_extra_keys() {
+    let f = fixture();
+    let error = f
+        .api
+        .call(
+            "start_collection",
+            json!({
+                "request_id":"r",
+                "dataset":"market.daily",
+                "contract_version":"v1",
+                "selection":{"kind":"default","symbols":["sh.600006"]}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(error.message.contains("symbols"), "{}", error.message);
+}

@@ -182,7 +182,9 @@ pub enum Selection {
         catalog_version: Option<String>,
     },
     // A market-level dataset with no security entity (`market.calendar`).
-    Market,
+    // Struct variant, not a unit: `deny_unknown_fields` ignores extra keys on
+    // internally-tagged unit variants (see default_range.rs).
+    Market {},
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum CatalogScope {
@@ -221,7 +223,7 @@ pub struct VersionBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum VersionChoice {
-    LatestPerEntity,
+    LatestPerEntity {},
     ExplicitVersionMap { versions: Vec<VersionBinding> },
     CatalogVersion { version_id: String },
 }
@@ -830,7 +832,7 @@ pub enum WriteSelection {
     /// Snapshot-resolved selection, implemented only for market.daily
     /// update/backfill acceptance. Carries no caller-provided base, range
     /// or gap overrides.
-    Default,
+    Default {},
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "dataset", deny_unknown_fields)]
