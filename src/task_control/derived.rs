@@ -29,6 +29,16 @@ use super::legacy;
 pub const PREFIX: &str = "derived:";
 /// The one trading-calendar item (§9.2).
 pub const CALENDAR: &str = "derived:calendar";
+/// The M2 whole-market datasets maintained by the same daily run (issue-391
+/// §12.1). Each is one item because one write covers the whole market.
+pub const SECURITY_MASTER: &str = "derived:security_master";
+pub const RISK_WARNINGS: &str = "derived:risk_warnings";
+pub const SUSPENSIONS: &str = "derived:suspensions";
+pub const TRADING_RULES: &str = "derived:trading_rules";
+/// Every M2 dataset item, in execution order: the main table first (the
+/// suspension gaps are derived from it), then the datasets whose source is
+/// still pending, then the rules.
+pub const DATASETS: [&str; 4] = [SECURITY_MASTER, RISK_WARNINGS, SUSPENSIONS, TRADING_RULES];
 /// Prefix of the per-benchmark index items (§9.2); the suffix is the entity.
 pub const INDEX_PREFIX: &str = "derived:index:";
 
@@ -59,6 +69,13 @@ pub fn calendar_scope() -> String {
     json!(["market", CALENDAR, "calendar"]).to_string()
 }
 
+/// Occupancy key of one M2 whole-market dataset item. It owns no security
+/// series, so it declares its own scope instead of borrowing an entity's (the
+/// same rule the calendar item follows).
+pub fn dataset_scope(item_id: &str) -> String {
+    json!(["m2", item_id, "market"]).to_string()
+}
+
 /// Occupancy key of one benchmark index item — the same key the index series
 /// commit checks (`Scope { symbol, period: Day }`), so a derived index item
 /// can only write the series it declares.
@@ -68,6 +85,8 @@ pub fn index_scope(entity: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -95,5 +114,15 @@ mod tests {
         // binds a derived index item to the index it declares.
         assert_eq!(index_scope("sz.399001"), r#"["market","sz.399001","day"]"#);
         assert_ne!(calendar_scope(), index_scope("sh.000001"));
+    }
+
+    #[test]
+    fn m2_dataset_items_own_distinct_whole_market_scopes() {
+        assert!(is_derived(SECURITY_MASTER));
+        assert_eq!(DATASETS.len(), 4);
+        let scopes: BTreeSet<String> = DATASETS.iter().map(|id| dataset_scope(*id)).collect();
+        assert_eq!(scopes.len(), DATASETS.len());
+        assert!(!scopes.contains(&calendar_scope()));
+        assert_eq!(target(SUSPENSIONS), json!({"dataset": SUSPENSIONS}));
     }
 }

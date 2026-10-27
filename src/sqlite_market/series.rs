@@ -1943,5 +1943,72 @@ pub(crate) fn insert_lineage(c: &Connection, l: &SeriesLineage) -> Result<(), Er
     Ok(())
 }
 
+/// Every stored A-share raw daily series' span, ordered by entity
+/// (issue-391 §4.1). The M2 assembly uses these only as *candidate* migration
+/// leads: the span is a fact about the bars, never proof that a code was
+/// reused.
+pub(crate) fn read_raw_bar_spans(
+    c: &Connection,
+) -> Result<Vec<crate::security_master::assembly::BarSpan>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT entity,first_day,last_day FROM market_series \
+             WHERE period=1 AND adjustment=0 AND instrument_class=0 ORDER BY entity",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(storage)?;
+    let mut spans = Vec::new();
+    for row in rows {
+        let (entity, first_day, last_day) = row.map_err(storage)?;
+        let (exchange, code) = entity.split_once('.').ok_or_else(|| {
+            integrity(format!(
+                "market_series entity {entity:?} is not exchange.code"
+            ))
+        })?;
+        let exchange = crate::security_master::Exchange::parse(exchange)
+            .ok_or_else(|| integrity(format!("market_series entity {entity:?} has no exchange")))?;
+        spans.push(crate::security_master::assembly::BarSpan {
+            exchange,
+            code: code.to_string(),
+            first_day: compact_market::epoch_date(first_day).map_err(integrity)?,
+            last_day: compact_market::epoch_date(last_day).map_err(integrity)?,
+        });
+    }
+    Ok(spans)
+}
+
+/// Every stored A-share raw daily bar day, grouped by entity in ascending
+/// order. The suspension derivation needs "which days have a bar", not any
+/// price, so this reads the day column alone (issue-391 §6.3, PR-6/PR-8).
+pub(crate) fn read_raw_bar_days(c: &Connection) -> Result<BTreeMap<String, Vec<NaiveDate>>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT m.entity,b.trade_day FROM series_bars b \
+             JOIN market_series m ON m.series_key=b.series_key \
+             WHERE m.period=1 AND m.adjustment=0 AND m.instrument_class=0 \
+             ORDER BY m.entity,b.trade_day",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .map_err(storage)?;
+    let mut days: BTreeMap<String, Vec<NaiveDate>> = BTreeMap::new();
+    for row in rows {
+        let (entity, trade_day) = row.map_err(storage)?;
+        days.entry(entity)
+            .or_default()
+            .push(compact_market::epoch_date(trade_day).map_err(integrity)?);
+    }
+    Ok(days)
+}
+
 #[cfg(test)]
 mod tests;

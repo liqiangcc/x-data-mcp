@@ -145,6 +145,41 @@ impl SqliteCompactMarket {
         self.tx(|c| super::calendar::commit_calendar(c, write))
     }
 
+    /// Replace the assembled M2 `security_master` dataset and register its
+    /// version in one transaction (issue-391 §12.1). The daily
+    /// `derived:security_master` item drives this.
+    pub(crate) fn commit_security_master(
+        &self,
+        write: &super::security::SecurityMasterWrite<'_>,
+    ) -> Result<super::derived::DerivedVersionRow, Error> {
+        self.tx(|c| super::security::commit_security_master(c, write))
+    }
+
+    /// Replace the derived suspension dataset and register its version in one
+    /// transaction (issue-391 §12.1). The daily `derived:suspensions` item
+    /// drives this; it verifies the main table's generation binding first.
+    pub(crate) fn commit_suspensions(
+        &self,
+        write: &super::suspensions::SuspensionWrite<'_>,
+    ) -> Result<Option<super::derived::DerivedVersionRow>, Error> {
+        self.tx(|c| super::suspensions::commit_suspensions(c, write))
+    }
+
+    /// The stored raw-bar spans on a read connection (issue-391 §4.1), as
+    /// candidate migration leads for the main table.
+    pub(crate) fn raw_bar_spans(
+        &self,
+    ) -> Result<Vec<crate::security_master::assembly::BarSpan>, Error> {
+        self.read(super::series::read_raw_bar_spans)
+    }
+
+    /// The four suspension inputs on one read connection (issue-391 §12.1),
+    /// so the intervals and the bars they bracket against cannot come from
+    /// different commits.
+    pub(crate) fn suspension_inputs(&self) -> Result<super::suspensions::SuspensionInputs, Error> {
+        self.read(super::suspensions::read_inputs)
+    }
+
     /// The coverage self-check of §5.2 against the stored 不复权 series, on a
     /// read connection so the full scan never holds the write lock.
     pub(crate) fn measure_calendar_coverage(

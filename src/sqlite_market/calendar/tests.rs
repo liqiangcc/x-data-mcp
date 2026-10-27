@@ -177,6 +177,7 @@ fn commit_raw_series(repo: &SqliteCompactMarket, request: &str, entity: &str, da
             bars.clone(),
             AdjustmentEvidence::confirmed("raw", "fixture"),
             AdjustmentEventSet::empty(entity),
+            crate::security_master::CapitalEventSet::empty(entity),
         );
         series_commit::commit_item_tx(
             c,

@@ -2,6 +2,8 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
+use crate::security_master::CapitalEventSet;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Period {
     Day,
@@ -371,6 +373,11 @@ pub struct RawBatch {
     /// transaction. Every production daily path fills it from the same gbbq
     /// decode that produced the forward prices.
     pub factors: AdjustmentEventSet,
+    /// The entity's capital-event set, replaced wholesale in the same
+    /// transaction from the same gbbq decode (issue-391 §12.1). It is a
+    /// separate fact set from `factors`: capital events explain share counts,
+    /// never a price ratio.
+    pub capital: CapitalEventSet,
 }
 
 impl RawBatch {
@@ -378,16 +385,22 @@ impl RawBatch {
         bars: Vec<Bar>,
         adjustment_evidence: AdjustmentEvidence,
         factors: AdjustmentEventSet,
+        capital: CapitalEventSet,
     ) -> Self {
         Self {
             bars,
             adjustment_evidence,
             factors,
+            capital,
         }
     }
 
-    pub fn no_change(adjustment_evidence: AdjustmentEvidence, factors: AdjustmentEventSet) -> Self {
-        Self::new(Vec::new(), adjustment_evidence, factors)
+    pub fn no_change(
+        adjustment_evidence: AdjustmentEvidence,
+        factors: AdjustmentEventSet,
+        capital: CapitalEventSet,
+    ) -> Self {
+        Self::new(Vec::new(), adjustment_evidence, factors, capital)
     }
 }
 

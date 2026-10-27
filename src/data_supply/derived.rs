@@ -25,6 +25,7 @@
 
 use chrono::Utc;
 use serde_json::{Value, json};
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use crate::{
@@ -32,7 +33,11 @@ use crate::{
     index_registry,
     market_storage::{Error, MarketRepository},
     official_market::MaterializeSession,
-    sqlite_market::{backend::MarketBackend, calendar::CalendarWrite, index::IndexWrite},
+    security_master::assembly::{self, PendingSource},
+    sqlite_market::{
+        backend::MarketBackend, calendar::CalendarWrite, index::IndexWrite,
+        security::SecurityMasterWrite, suspensions::SuspensionWrite,
+    },
     task_control::{self, Change, ItemOutcome, ItemSpec, Stage, Status, TaskItem},
     trading_calendar::TradingCalendar,
 };
@@ -42,10 +47,14 @@ use crate::{
 pub const PROGRESS_UNIT: &str = "derived_dataset";
 
 /// The internal items a daily plan-run task maintains, in execution order:
-/// the nine benchmark indices first, the calendar last (its inputs are index
-/// members, §9.2).
+/// the nine benchmark indices first, the calendar next (its inputs are index
+/// members, §9.2), then the four M2 whole-market datasets (issue-391 §12.1).
+/// `derived:security_master` runs before `derived:suspensions` because the gap
+/// derivation reads the main table this run assembled.
 pub fn item_specs(generation: &Value) -> Vec<ItemSpec> {
-    let mut items = Vec::with_capacity(index_registry::INDEX_SERIES.len() + 1);
+    let mut items = Vec::with_capacity(
+        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len(),
+    );
     for registration in &index_registry::INDEX_SERIES {
         let item_id = task_control::derived::index(registration.entity);
         items.push(ItemSpec {
@@ -64,6 +73,15 @@ pub fn item_specs(generation: &Value) -> Vec<ItemSpec> {
         scope_keys: BTreeSet::from([task_control::derived::calendar_scope()]),
         item_id: calendar,
     });
+    for dataset in task_control::derived::DATASETS {
+        items.push(ItemSpec {
+            target: task_control::derived::target(dataset),
+            progress_unit: PROGRESS_UNIT.into(),
+            frozen_inputs: json!({SOURCE_GENERATION_KEY: generation.clone()}),
+            scope_keys: BTreeSet::from([task_control::derived::dataset_scope(dataset)]),
+            item_id: dataset.to_string(),
+        });
+    }
     items
 }
 
@@ -82,6 +100,10 @@ pub fn run(
     run_id: &str,
     items: &[ItemSpec],
 ) -> Result<(), Error> {
+    // `security_facts` reads and parses `base.dbf`; the main table and the
+    // suspension binding both need the same member facts, so one worker turn
+    // parses them at most once (issue-391 §12.1).
+    let source_cache: RefCell<Option<DatasetSource>> = RefCell::new(None);
     for item in items {
         let Some(mut binding) = market.task_item_binding(task_id, &item.item_id)? else {
             continue;
@@ -118,6 +140,7 @@ pub fn run(
                 run_id,
                 item,
                 revision,
+                &source_cache,
             ),
             None => Err(Error::Invalid(format!(
                 "{} needs a verified official source; none is installed for this run",
@@ -190,6 +213,7 @@ fn execute(
     run_id: &str,
     item: &ItemSpec,
     expected_task_revision: u64,
+    source_cache: &RefCell<Option<DatasetSource>>,
 ) -> Result<Value, Error> {
     if let Some(entity) = task_control::derived::index_entity(&item.item_id) {
         let index = session
@@ -256,6 +280,141 @@ fn execute(
                 "ratio": coverage.ratio_text(),
             },
         }));
+    }
+    if item.item_id == task_control::derived::SECURITY_MASTER {
+        let started = std::time::Instant::now();
+        let snapshot = session
+            .security_facts()
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+        let source = DatasetSource::from_snapshot(&snapshot);
+        *source_cache.borrow_mut() = Some(source.clone());
+        // Bar spans are evidence only: they propose candidate code
+        // migrations, never dedup truth (§4.1).
+        let spans = market.raw_bar_spans()?;
+        let candidates = assembly::detect_candidate_migrations(&spans);
+        let assembled = assembly::assemble_security_master(
+            &snapshot.facts.lifecycle,
+            &snapshot.facts.arrangements,
+            // A-1/A-2 are not admitted: the exchange branch stays
+            // `pending_source` and the TDX facts are what gets written.
+            assembly::exchange_source(None),
+            &candidates,
+        )
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+        // The item's write set is 主表 + 简称 + 上市/退市 + 迁移 (§12.1). The
+        // first three inputs are the TDX files assembled above; the name
+        // history and the exchange listing/delisting branches stay
+        // `pending_source` (#308 S-6, A-1/A-2), so no name row is written and
+        // no "current name" is invented from an unadmitted interval.
+        let mut pending = assembled.pending_sources.clone();
+        match crate::security_master::names::name_history_source(None) {
+            crate::security_master::names::NameSource::Pending(source) => pending.push(source),
+            crate::security_master::names::NameSource::Admitted(rows) if rows.is_empty() => {}
+            crate::security_master::names::NameSource::Admitted(_) => {
+                return Err(Error::Integrity(
+                    "an admitted name history has no storage writer yet; refusing to drop it"
+                        .into(),
+                ));
+            }
+        }
+        let generation_evidence = source.generation_evidence(generation_manifest_sha256);
+        let registration = market.commit_security_master(&SecurityMasterWrite {
+            assembled: &assembled,
+            task_id,
+            item_id: &item.item_id,
+            generation_id,
+            generation_manifest_sha256,
+            member_sha256: &source.base_member_sha256,
+            security_event_sha256: &source.security_event_sha256,
+            generation_evidence: &generation_evidence,
+        })?;
+        return Ok(json!({
+            "dataset": item.item_id,
+            "version_id": registration.version_id,
+            "row_count": registration.record_count,
+            "migration_count": assembled.migrations.len(),
+            "name_rows": 0,
+            "pending_sources": pending_json(&pending),
+            "elapsed_ms": elapsed_ms(started),
+        }));
+    }
+    if item.item_id == task_control::derived::RISK_WARNINGS {
+        let started = std::time::Instant::now();
+        let source = crate::security_master::risk_warnings::risk_warning_source(None);
+        let pending: Vec<PendingSource> = match &source {
+            crate::security_master::risk_warnings::RiskWarningSource::Pending(pending) => {
+                vec![*pending]
+            }
+            crate::security_master::risk_warnings::RiskWarningSource::Admitted(rows) => {
+                if rows.is_empty() {
+                    Vec::new()
+                } else {
+                    // No write path exists until #308 admits the source; an
+                    // admitted row set must not be silently dropped.
+                    return Err(Error::Integrity(
+                        "an admitted risk-warning set has no storage writer yet".into(),
+                    ));
+                }
+            }
+        };
+        return Ok(json!({
+            "dataset": item.item_id,
+            "version_id": Value::Null,
+            "row_count": 0,
+            "pending_sources": pending_json(&pending),
+            "elapsed_ms": elapsed_ms(started),
+        }));
+    }
+    if item.item_id == task_control::derived::SUSPENSIONS {
+        let started = std::time::Instant::now();
+        let source = dataset_source(session, source_cache)?;
+        let inputs = market.suspension_inputs()?;
+        let set = crate::security_master::suspensions::assemble_suspensions(
+            // A-3 is not admitted: no confirmed row is claimed, only gaps.
+            &crate::security_master::suspensions::suspension_source(None),
+            &inputs.intervals,
+            &inputs.calendar,
+            &inputs.bar_days,
+        )
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+        let generation_evidence = source.generation_evidence(generation_manifest_sha256);
+        let registration = market.commit_suspensions(&SuspensionWrite {
+            set: &set,
+            master: &inputs.master,
+            task_id,
+            item_id: &item.item_id,
+            generation_id,
+            generation_manifest_sha256,
+            member_sha256: &source.base_member_sha256,
+            security_event_sha256: &source.security_event_sha256,
+            generation_evidence: &generation_evidence,
+        })?;
+        return Ok(json!({
+            "dataset": item.item_id,
+            "version_id": registration.map(|row| row.version_id),
+            "row_count": set.rows.len(),
+            "gap_rows": set.gap_rows,
+            "confirmed_rows": set.confirmed_rows,
+            "missing_days": set.missing_days(),
+            "pending_sources": pending_json(&set.pending_sources),
+            "elapsed_ms": elapsed_ms(started),
+        }));
+    }
+    if item.item_id == task_control::derived::TRADING_RULES {
+        let started = std::time::Instant::now();
+        let source = crate::trading_rules::rule_source(None);
+        return match source {
+            crate::trading_rules::RuleSource::Pending(pending) => Ok(json!({
+                "dataset": item.item_id,
+                "version_id": Value::Null,
+                "row_count": 0,
+                "pending_sources": pending_json(&[pending]),
+                "elapsed_ms": elapsed_ms(started),
+            })),
+            crate::trading_rules::RuleSource::Admitted(_) => Err(Error::Integrity(
+                "an admitted rule book has no daily write path yet; refusing to ignore it".into(),
+            )),
+        };
     }
     Err(Error::Integrity(format!(
         "{} is not a known derived dataset item",
@@ -335,6 +494,84 @@ fn uncertain(error: &Error) -> bool {
                 task_control::Error::StorageUnavailable(_) | task_control::Error::OutcomeUnknown(_)
             )
     )
+}
+
+/// The member facts shared by every M2 dataset of one worker turn: which
+/// `base.dbf` member and which gbbq event set the generation froze
+/// (issue-391 §12.1). The main table and the suspensions must bind the *same*
+/// inputs; caching the values keeps the two items from re-reading the archive
+/// while still failing closed when the member is unreadable.
+#[derive(Debug, Clone)]
+struct DatasetSource {
+    base_member_sha256: String,
+    security_event_sha256: String,
+    base_member: String,
+    gbbq_member: String,
+    gbbq_member_sha256: String,
+}
+
+impl DatasetSource {
+    fn from_snapshot(facts: &crate::official_market::SecuritySnapshotFacts) -> Self {
+        Self {
+            base_member_sha256: facts.base_member_sha256.clone(),
+            security_event_sha256: facts.security_event_sha256.clone(),
+            base_member: facts.base_member.clone(),
+            gbbq_member: facts.gbbq_member.clone(),
+            gbbq_member_sha256: facts.gbbq_member_sha256.clone(),
+        }
+    }
+
+    /// The generation evidence the source binding stores: member names *and*
+    /// digests, so a later audit can tell which files the dataset read.
+    fn generation_evidence(&self, manifest_sha256: &str) -> Value {
+        json!({
+            "manifest_sha256": manifest_sha256,
+            "base_member": &self.base_member,
+            "base_member_sha256": &self.base_member_sha256,
+            "gbbq_member": &self.gbbq_member,
+            "gbbq_member_sha256": &self.gbbq_member_sha256,
+            "security_event_sha256": &self.security_event_sha256,
+        })
+    }
+}
+
+/// The turn's [`DatasetSource`], parsed on first use. A dataset whose item
+/// runs before the main table (never the order this module emits) pays the
+/// parse itself instead of reading another generation's facts.
+fn dataset_source(
+    session: &MaterializeSession<'_>,
+    cache: &RefCell<Option<DatasetSource>>,
+) -> Result<DatasetSource, Error> {
+    if let Some(source) = cache.borrow().as_ref() {
+        return Ok(source.clone());
+    }
+    let snapshot = session
+        .security_facts()
+        .map_err(|e| Error::Invalid(e.to_string()))?;
+    let source = DatasetSource::from_snapshot(&snapshot);
+    *cache.borrow_mut() = Some(source.clone());
+    Ok(source)
+}
+
+/// `pending_source` as the item evidence reports it (the same object the
+/// dataset evidence stores, so a run and its stored version agree).
+fn pending_json(pending: &[PendingSource]) -> Vec<Value> {
+    pending
+        .iter()
+        .map(|source| {
+            json!({
+                "dataset": source.dataset,
+                "source": source.source,
+                "reason": source.reason,
+            })
+        })
+        .collect()
+}
+
+/// Whole milliseconds an internal item spent acquiring and committing. It is
+/// evidence for the SLO measurement (§12.1 "耗时记录"), never a task timeout.
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

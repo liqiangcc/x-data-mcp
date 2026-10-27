@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use super::derived::{self, DerivedVersionRow};
-use super::{evidence_store, integrity, storage};
+use super::{evidence_store, integrity, series_commit, storage};
 use crate::compact_market::{self, Digest, EvidenceKind};
 use crate::market_storage::Error;
 use crate::security_master::assembly::{
@@ -597,6 +597,41 @@ pub(crate) fn replace_security_master(
     .map_err(storage)?;
     derived::read_version(c, assembly::DATASET_KIND, assembly::DATASET_KEY)?
         .ok_or_else(|| integrity("security-master registration vanished after its insert"))
+}
+
+/// One whole-market `security_master` commit driven by the daily
+/// `derived:security_master` item (issue-391 §12.1).
+///
+/// The generation binding is written in the same transaction as the rows, so a
+/// dataset can never claim a generation whose members it did not read. The
+/// member it names is `base.dbf` (the fact file), and the event digest is the
+/// gbbq capital/pricing set the assembly consumed.
+pub(crate) struct SecurityMasterWrite<'a> {
+    pub assembled: &'a Assembly,
+    pub task_id: &'a str,
+    pub item_id: &'a str,
+    pub generation_id: &'a str,
+    pub generation_manifest_sha256: &'a str,
+    pub member_sha256: &'a str,
+    pub security_event_sha256: &'a str,
+    pub generation_evidence: &'a Value,
+}
+
+/// Write the binding, then replace the whole assembled dataset, in the
+/// caller's transaction.
+pub(crate) fn commit_security_master(
+    c: &Connection,
+    write: &SecurityMasterWrite<'_>,
+) -> Result<DerivedVersionRow, Error> {
+    let binding = series_commit::put_generation_binding(
+        c,
+        write.generation_id,
+        write.generation_manifest_sha256,
+        write.member_sha256,
+        write.security_event_sha256,
+        write.generation_evidence,
+    )?;
+    replace_security_master(c, write.assembled, binding, write.task_id, write.item_id)
 }
 
 /// All stored `security_master` intervals, ordered by the row identity.

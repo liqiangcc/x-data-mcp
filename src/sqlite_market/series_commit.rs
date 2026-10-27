@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use sha2::Digest as _;
 
 use super::compact_repo::period_code;
-use super::{derived, evidence_store, integrity, series, storage};
+use super::{derived, evidence_store, integrity, security, series, storage};
 use crate::compact_market::{
     self, CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence,
 };
@@ -481,6 +481,20 @@ fn commit_factor_set(
     let _ = derived::replace_adjustment_events(
         c,
         &raw.factors,
+        head.source_binding_digest,
+        forward.task_id,
+        forward.item_id,
+    )?;
+    // §12.1: the same gbbq decode also carries the entity's capital facts, and
+    // they are written in the same transaction as the prices they belong to.
+    // The set's entity must be this series' — a mismatched batch is a wiring
+    // bug, never a silent cross-entity write.
+    if raw.capital.entity != forward.entity {
+        return Err(integrity("capital set belongs to another entity"));
+    }
+    let _ = security::replace_capital_events(
+        c,
+        &raw.capital,
         head.source_binding_digest,
         forward.task_id,
         forward.item_id,

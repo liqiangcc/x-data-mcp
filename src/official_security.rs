@@ -757,7 +757,11 @@ pub fn parse_security_facts(
     })
 }
 
-fn capital_set(entity: &str, events: &[&gbbq::Event]) -> Result<CapitalEventSet, Error> {
+/// One entity's capital-event set from that entity's gbbq records (decode
+/// order). [`parse_security_facts`] uses it for every `base.dbf` row; the
+/// daily per-entity item (PR-8) uses it for the same entity from the same
+/// session decode, so both paths produce byte-identical sets.
+pub(crate) fn capital_set(entity: &str, events: &[&gbbq::Event]) -> Result<CapitalEventSet, Error> {
     let mut set = CapitalEventSet::empty(entity);
     for (index, event) in events.iter().enumerate() {
         if !is_admitted_category(event.category) {
