@@ -369,9 +369,7 @@ pub enum Filter {
     Daily {
         start_date: NaiveDate,
         end_date: NaiveDate,
-        /// M2 only: the interval/point must be effective at this day. It is
-        /// rejected (not ignored) for every dataset whose `temporal.as_of` is
-        /// false (issue-391 §12.2).
+        /// M2 record-set day.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         as_of: Option<NaiveDate>,
     },
@@ -429,9 +427,7 @@ pub struct Query {
     // v2 only: column projection (omitted = the dataset's core fields).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<String>>,
-    /// M2 only: restrict the whole information set to rows known by this day
-    /// (issue-391 §12.2). Rejected for datasets whose `temporal.known_at` is
-    /// false, and only accepted by the query tools.
+    /// M2 info cutoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub known_at: Option<NaiveDate>,
 }
