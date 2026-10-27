@@ -311,10 +311,28 @@ pub struct BaseDbfRow {
     pub ltag: Option<i64>,
 }
 
+/// One `(market, code)` repeated in `base.dbf` with **byte-identical**
+/// records. The parser keeps the first record and names every collapsed
+/// record index, so the main table's evidence can show what was dropped
+/// (XDM-70 acceptance, #391).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollapsedDuplicate {
+    /// `SC` as stored (0=SZ, 1=SH, 2=BJ, 9=anomaly).
+    pub market: u8,
+    pub code: String,
+    /// 0-based record indices in the file, ascending; the first one is the
+    /// record that was kept. Deleted records keep their physical index, so
+    /// these numbers match the file's own record numbering.
+    pub records: Vec<usize>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseDbf {
     pub rows: Vec<BaseDbfRow>,
     pub deleted: usize,
+    /// Byte-identical duplicates that were collapsed, in `(market, code)`
+    /// order. A conflicting duplicate is still a hard error, never a row.
+    pub duplicates_collapsed: Vec<CollapsedDuplicate>,
 }
 
 /// One `infoharbor_spec.cfg` row. `start`/`end` are the delisting-arrangement
@@ -358,6 +376,10 @@ pub struct SecurityFacts {
     pub capital: Vec<CapitalEventSet>,
     pub current_shares: Vec<CurrentShareSnapshot>,
     pub skipped: SkipCounts,
+    /// Byte-identical `base.dbf` repeats the parser collapsed (XDM-70
+    /// acceptance, #391). Carried through so the first writer of the main
+    /// table can report them in its item evidence.
+    pub duplicates_collapsed: Vec<CollapsedDuplicate>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -379,8 +401,15 @@ pub enum Error {
         expected: String,
         found: String,
     },
-    #[error("base.dbf duplicates market {market} code {code}")]
-    BaseDuplicate { market: u8, code: String },
+    #[error(
+        "base.dbf duplicates market {market} code {code} at records {first} and {second} with different bytes"
+    )]
+    BaseDuplicate {
+        market: u8,
+        code: String,
+        first: usize,
+        second: usize,
+    },
     #[error("base.dbf record {record} field {field} is missing")]
     MissingField { record: usize, field: &'static str },
     #[error("base.dbf record {record} field {field} is not ASCII")]
@@ -452,7 +481,11 @@ impl BaseDbf {
 
         let mut rows = Vec::with_capacity(file.records.len());
         let mut deleted = 0;
-        let mut seen = BTreeSet::new();
+        // The key maps to the kept record's index and raw bytes: a repeat is
+        // only collapsed when the bytes are identical, otherwise it fails
+        // closed with both record numbers (never "take first/last").
+        let mut seen: BTreeMap<(u8, String), (usize, &[u8])> = BTreeMap::new();
+        let mut collapsed: BTreeMap<(u8, String), CollapsedDuplicate> = BTreeMap::new();
         for (record_index, record) in file.records.iter().enumerate() {
             if record.deleted {
                 deleted += 1;
@@ -466,8 +499,33 @@ impl BaseDbf {
                 field_text(record, &file.fields, GPDM_INDEX, record_index)?,
                 record_index,
             )?;
-            if !seen.insert((market, code.clone())) {
-                return Err(Error::BaseDuplicate { market, code });
+            let key = (market, code.clone());
+            // `copied` keeps the map borrow out of the arms so the insert
+            // compiles without a second lookup.
+            match seen.get(&key).copied() {
+                Some((first, raw)) if raw == record.raw.as_slice() => {
+                    collapsed
+                        .entry(key)
+                        .or_insert_with(|| CollapsedDuplicate {
+                            market,
+                            code: code.clone(),
+                            records: vec![first],
+                        })
+                        .records
+                        .push(record_index);
+                    continue;
+                }
+                Some((first, _)) => {
+                    return Err(Error::BaseDuplicate {
+                        market,
+                        code,
+                        first,
+                        second: record_index,
+                    });
+                }
+                None => {
+                    seen.insert(key, (record_index, record.raw.as_slice()));
+                }
             }
             let ssdate = parse_ssdate(
                 field_text(record, &file.fields, SSDATE_INDEX, record_index)?,
@@ -503,7 +561,11 @@ impl BaseDbf {
                 ltag,
             });
         }
-        Ok(Self { rows, deleted })
+        Ok(Self {
+            rows,
+            deleted,
+            duplicates_collapsed: collapsed.into_values().collect(),
+        })
     }
 }
 
@@ -754,6 +816,7 @@ pub fn parse_security_facts(
         capital,
         current_shares,
         skipped,
+        duplicates_collapsed: base.duplicates_collapsed.clone(),
     })
 }
 

@@ -184,13 +184,60 @@ fn base_dbf_schema_drift_fails_closed() {
 }
 
 #[test]
-fn duplicate_base_rows_fail_closed() {
+fn byte_identical_duplicate_rows_collapse_and_are_counted() {
+    // The official `base.dbf` ships byte-identical repeat records (深市
+    // `000020` records 19/20; XDM-70 acceptance). Identical bytes are one
+    // row plus an audit trail, not a parse failure.
+    let unique = dbf(&[
+        row("0", "000001", "19910403", "1.00", "1.00"),
+        row("0", "000002", "19920403", "2.00", "2.00"),
+    ]);
+    let repeated = dbf(&[
+        row("0", "000001", "19910403", "1.00", "1.00"),
+        row("0", "000002", "19920403", "2.00", "2.00"),
+        row("0", "000001", "19910403", "1.00", "1.00"),
+    ]);
+    let plain = BaseDbf::parse(&unique).unwrap();
+    assert!(plain.duplicates_collapsed.is_empty());
+    assert_eq!(plain.rows.len(), 2);
+
+    let base = BaseDbf::parse(&repeated).unwrap();
+    // Collapsing keeps exactly the rows of the duplicate-free file, so every
+    // downstream digest over the parsed facts is unchanged.
+    assert_eq!(base.rows, plain.rows);
+    assert_eq!(base.deleted, plain.deleted);
+    assert_eq!(
+        base.duplicates_collapsed,
+        vec![CollapsedDuplicate {
+            market: 0,
+            code: "000001".into(),
+            records: vec![0, 2],
+        }]
+    );
+    // The facts the main table is assembled from carry the same audit trail.
+    let facts = parse_security_facts(&base, &[], &[]).unwrap();
+    assert_eq!(facts.duplicates_collapsed, base.duplicates_collapsed);
+}
+
+#[test]
+fn conflicting_duplicate_rows_still_fail_closed() {
+    // Same `(market, code)`, different bytes: never pick "first" or "last".
     let error = BaseDbf::parse(&dbf(&[
         row("0", "000001", "19910403", "1.00", "1.00"),
-        row("0", "000001", "19910403", "1.00", "1.00"),
+        row("0", "000001", "19910403", "2.00", "2.00"),
     ]))
     .unwrap_err();
-    assert!(matches!(error, Error::BaseDuplicate { .. }), "{error}");
+    match error {
+        Error::BaseDuplicate {
+            market,
+            code,
+            first,
+            second,
+        } => {
+            assert_eq!((market, code.as_str(), first, second), (0, "000001", 0, 1));
+        }
+        other => panic!("unexpected error: {other}"),
+    }
 }
 
 #[test]
