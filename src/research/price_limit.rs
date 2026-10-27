@@ -337,6 +337,7 @@ pub fn price_limit(
     };
     let phase_result = listing_phase(&calendar, listing, temporal.as_of);
     let phase = phase_result.ok();
+    answer.listing_phase = phase;
 
     let status = match status_class(board, member.status) {
         Ok(status) => status,
