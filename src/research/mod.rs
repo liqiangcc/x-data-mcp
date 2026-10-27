@@ -687,7 +687,11 @@ pub fn file_plans(request: &ExportRequest) -> Vec<FilePlan> {
                 CAPITAL_EVENTS_FILE,
                 CAPITAL_EVENTS_COLUMNS,
                 "market.capital_events",
-                TemporalDecl::NONE,
+                // `effective_day` is usable as-of, but `known_at` is always
+                // NULL (gbbq has no announcement day), so the file cannot
+                // honour an information-set filter — the same pair v8 declares
+                // for `market.capital_events`.
+                TemporalDecl::AS_OF_ONLY,
             ),
             (
                 RISK_WARNINGS_FILE,
@@ -711,7 +715,10 @@ pub fn file_plans(request: &ExportRequest) -> Vec<FilePlan> {
                 UNIVERSE_INTERVALS_FILE,
                 UNIVERSE_INTERVALS_COLUMNS,
                 "market.universe",
-                TemporalDecl::PARTIAL,
+                // The skeleton rows carry only the effective bounds; the file
+                // has no `known_at` column, so declaring `known_at` coverage
+                // here would promise a filter it cannot implement.
+                TemporalDecl::AS_OF_ONLY,
             ),
         ] {
             files.push(FilePlan {

@@ -1611,7 +1611,7 @@ mod with_export {
                 super::super::CAPITAL_EVENTS_FILE,
                 2,
                 "market.capital_events",
-                (false, false, "none"),
+                (true, false, "none"),
             ),
             (
                 super::super::RISK_WARNINGS_FILE,
@@ -1635,7 +1635,7 @@ mod with_export {
                 super::super::UNIVERSE_INTERVALS_FILE,
                 2,
                 "market.universe",
-                (true, true, "partial"),
+                (true, false, "none"),
             ),
         ] {
             let entry = by_path(name);
