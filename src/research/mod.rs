@@ -296,6 +296,10 @@ pub struct IndexBinding {
     pub aliases: String,
     pub aggregate_scope: String,
     pub member_count: Option<i64>,
+    /// Bars the index commit dropped for impossible OHLC ordering (#383 owner
+    /// ruling 2026-10-27). Read from the series' version evidence, so the
+    /// manifest reports the same number the MCP metadata does.
+    pub excluded_bar_count: usize,
 }
 
 /// One exported bar series (layer 2 of the binding).

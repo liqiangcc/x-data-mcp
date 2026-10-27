@@ -64,6 +64,7 @@ fn version_evidence() -> Value {
             "CNY", "share", "share", "CNY", "yuan", "bound",
         ),
         adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        excluded_bars: None,
     })
     .unwrap()
 }

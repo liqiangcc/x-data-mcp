@@ -136,6 +136,7 @@ fn version_evidence() -> VersionEvidence {
             amount_unit: EvidenceValue::confirmed("yuan", "bound"),
         },
         adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        excluded_bars: None,
     }
 }
 

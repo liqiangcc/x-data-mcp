@@ -485,6 +485,7 @@ CREATE TABLE index_series_meta(
 - `r7_raw` 原样保留、永不解释（调研报告① 实测 `sh.000001` 的 r7 在 2026-10-23 为 28,641,085，不是除权基准价）。
 - **MCP 不可见**：MCP 读路径按 `instrument_class=0 AND adjustment=1` 解析序列（§9.2），所以 `query_data` 取不到指数；导出读模型显式读全部类别。这是 AC-M1-10 的可测边界。
 - 证据：`evidence_bundles.evidence_kind='derived'` 的一条包，内容是"单位/口径的取证方式与结果"（对哪个接口、多少点、比值区间），`source_binding_digest` 指向该指数 `.day` 成员的来源绑定。
+- **坏 bar 剔除（#383 owner 2026-10-27 裁决，方案 a）**：官方 `.day` 中指数早期存在 OHLC 自相矛盾的 bar（实测 `sh.000001` 1991–1995 年 16 根、`sz.399001` 9 根；例 `sh.000001 19910509 close 10929 > high 11012`）。判定只看该 bar 自身四价：`low <= min(open, close)`、`max(open, close) <= high`、`low <= high`，任一不满足即整根剔除——不修补、不夹逼、不估算，其余 bar 照常入库。被剔除 bar 的日期与原始 OHLC 写进该序列的 `version` 证据包（`excluded_bars`，OHLC 为十进制值），因此确定、可复现；`market.index` 元数据暴露 `excluded_bar_count`，导出清单同样携带该计数。**只适用于指数**：个股序列遇 OHLC 违例仍然 fail-closed。
 
 ---
 

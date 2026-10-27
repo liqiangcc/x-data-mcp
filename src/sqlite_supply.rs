@@ -1164,6 +1164,9 @@ fn metadata(
                 volume_unit: m.volume_unit,
                 amount_unit: m.amount_unit,
                 aliases: m.aliases,
+                // The legacy (pre-`market_series`) read path has no index
+                // series and no version evidence to inspect.
+                excluded_bar_count: 0,
             })
     } else {
         None
@@ -2561,6 +2564,7 @@ fn series_metadata(
     }
     let evidence: crate::compact_market::VersionEvidence =
         serde_json::from_str(&canonical).map_err(|e| Error::Integrity(e.to_string()))?;
+    let excluded_bar_count = evidence.excluded_bars.as_ref().map_or(0, Vec::len);
     let lineage = if series.period == crate::market_data::Period::Year {
         crate::sqlite_market::series::yearly_lineage(c, series.series_key)?
             .map(|l| {
@@ -2588,6 +2592,7 @@ fn series_metadata(
                 volume_unit: m.volume_unit,
                 amount_unit: m.amount_unit,
                 aliases: m.aliases,
+                excluded_bar_count,
             }
         })
     } else {

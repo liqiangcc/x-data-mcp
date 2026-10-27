@@ -205,6 +205,7 @@ fn stage_tx(c: &Connection, raw: &Value) -> Result<(), Error> {
             coverage_reason: record.batch.coverage.reason.clone(),
             unit_currency: record.batch.unit_currency.clone(),
             adjustment_evidence: record.batch.adjustment_evidence.clone(),
+            excluded_bars: None,
         }),
     )?;
     match period {
@@ -619,6 +620,7 @@ fn metadata_fields(
             coverage_reason: metadata.coverage.reason.clone(),
             unit_currency: metadata.unit_currency.clone(),
             adjustment_evidence: metadata.adjustment_evidence.clone(),
+            excluded_bars: None,
         }),
     )?;
     Ok((
@@ -848,6 +850,7 @@ fn commit_plan(
             coverage_reason: record.batch.coverage.reason.clone(),
             unit_currency: record.batch.unit_currency.clone(),
             adjustment_evidence: record.batch.adjustment_evidence.clone(),
+            excluded_bars: None,
         }),
     )?;
     // The binding always derives from the CANDIDATE's compact_source —
@@ -2072,6 +2075,7 @@ fn collection_item_commit(
             coverage_reason: item.coverage.reason.clone(),
             unit_currency: item.unit_currency.clone(),
             adjustment_evidence: item.adjustment_evidence.clone(),
+            excluded_bars: None,
         }),
     )?;
     let scope = Scope {
@@ -2178,6 +2182,7 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
                     coverage_reason: plan.publication.record.batch.coverage.reason.clone(),
                     unit_currency: plan.publication.record.batch.unit_currency.clone(),
                     adjustment_evidence: plan.publication.record.batch.adjustment_evidence.clone(),
+                    excluded_bars: None,
                 }),
             )?;
             let event_evidence = evidence_store::put_evidence(

@@ -63,6 +63,8 @@ fn series_value(entry: &SeriesEntry) -> Value {
         "last_day": entry.last_day.to_string(),
         "source_binding_digest": entry.source_binding_digest,
         "coverage": entry.coverage_name(),
+        // Index-only in effect: a stock series is never filtered and reports 0.
+        "excluded_bar_count": entry.index.as_ref().map_or(0, |i| i.excluded_bar_count),
     })
 }
 
