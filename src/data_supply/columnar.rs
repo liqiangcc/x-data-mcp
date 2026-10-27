@@ -44,6 +44,11 @@ pub const CATALOG_FIELDS: &[&str] = &[
     "industry_reason",
 ];
 pub const CATALOG_DEFAULT: &[&str] = &["name", "industry_code", "industry_name"];
+/// `market.adjustment_events`: the row key `effective_day` is implicit and
+/// `known_at` is never emitted (M1 stores NULL, v8 §4.6).
+pub const EVENT_FIELDS: &[&str] = &["category", "c1", "c2", "c3", "c4"];
+/// `market.calendar`: the row key is the only column (v8 §4.2).
+pub const CALENDAR_FIELDS: &[&str] = &["trade_day"];
 /// `get_data_availability` columns (v8 §4.1): per-entity facts plus the
 /// related-task ids; the task objects themselves are shared once under
 /// `tasks`.
@@ -65,6 +70,7 @@ pub const AVAILABILITY_FIELDS: &[&str] = &[
     "related_tasks",
     "related_tasks_total",
     "related_tasks_truncated",
+    "universe",
 ];
 
 pub fn query_fields(dataset: Dataset) -> (&'static [&'static str], &'static [&'static str]) {
@@ -72,6 +78,9 @@ pub fn query_fields(dataset: Dataset) -> (&'static [&'static str], &'static [&'s
         Dataset::Catalog => (CATALOG_FIELDS, CATALOG_DEFAULT),
         Dataset::Daily => (DAILY_FIELDS, DAILY_FIELDS),
         Dataset::Yearly => (YEARLY_FIELDS, YEARLY_FIELDS),
+        Dataset::Index => (DAILY_FIELDS, DAILY_FIELDS),
+        Dataset::AdjustmentEvents => (EVENT_FIELDS, EVENT_FIELDS),
+        Dataset::Calendar => (CALENDAR_FIELDS, CALENDAR_FIELDS),
     }
 }
 
@@ -311,6 +320,38 @@ fn market_cell(row: &Row, field: &str) -> Value {
     }
 }
 
+fn event_cell(row: &Row, field: &str) -> Value {
+    let Row::AdjustmentEvent {
+        category,
+        c1,
+        c2,
+        c3,
+        c4,
+        ..
+    } = row
+    else {
+        return Value::Null;
+    };
+    match field {
+        "category" => json!(category),
+        "c1" => json!(c1),
+        "c2" => json!(c2),
+        "c3" => json!(c3),
+        "c4" => json!(c4),
+        _ => Value::Null,
+    }
+}
+
+fn calendar_cell(row: &Row, field: &str) -> Value {
+    let Row::Calendar { trade_day } = row else {
+        return Value::Null;
+    };
+    match field {
+        "trade_day" => json!(trade_day.to_string()),
+        _ => Value::Null,
+    }
+}
+
 fn catalog_cell(row: &Row, field: &str) -> Value {
     let Row::Catalog { name, industry, .. } = row else {
         return Value::Null;
@@ -462,6 +503,55 @@ pub fn catalog_table(
 
 /// `layout:"table"` for `list_data_versions`: one row per version, no
 /// `integrity_sha256` (it equals `version_id`).
+/// `layout:"table"` for `market.adjustment_events` and `market.calendar`.
+/// Events keep one `entities` entry per row (a batch spans several symbols);
+/// the calendar is market-level and has none.
+pub fn row_table(
+    dataset: Dataset,
+    manifest: &[ManifestEntry],
+    rows: &[Row],
+    fields: &[String],
+    meta: &PageMeta,
+) -> Value {
+    let (shared, overrides) = split_metadata(manifest);
+    let entity_bound = dataset == Dataset::AdjustmentEvents;
+    let mut entities = Vec::new();
+    let mut cells: Cells<'_> = fields
+        .iter()
+        .map(|field| (field.as_str(), Vec::new()))
+        .collect();
+    for row in rows {
+        if entity_bound {
+            let Row::AdjustmentEvent { entity, .. } = row else {
+                continue;
+            };
+            entities.push(json!(entity.symbol()));
+        }
+        for field in fields {
+            let cell = match dataset {
+                Dataset::AdjustmentEvents => event_cell(row, field),
+                Dataset::Calendar => calendar_cell(row, field),
+                _ => Value::Null,
+            };
+            cells.get_mut(field.as_str()).unwrap().push(cell);
+        }
+    }
+    let mut out = envelope("table", dataset, meta);
+    if entity_bound {
+        out.insert("entities".to_owned(), Value::Array(entities));
+    }
+    out.insert(
+        "versions".to_owned(),
+        Value::Array(version_rows(manifest, &overrides)),
+    );
+    if !shared.is_empty() {
+        out.insert("metadata".to_owned(), Value::Object(shared));
+    }
+    out.insert("columns".to_owned(), Value::Object(columns(fields, &cells)));
+    out.insert("row_count".to_owned(), json!(rows.len()));
+    Value::Object(out)
+}
+
 pub fn versions_table(dataset: Dataset, items: &[VersionInfo], meta: &PageMeta) -> Value {
     let versions = items
         .iter()
@@ -522,6 +612,10 @@ fn availability_cell(item: &AvailabilityItem, field: &str) -> Value {
         ),
         "related_tasks_total" => json!(item.related_tasks_total),
         "related_tasks_truncated" => json!(item.related_tasks_truncated),
+        "universe" => item
+            .universe
+            .as_ref()
+            .map_or(Value::Null, |summary| json!(summary)),
         _ => Value::Null,
     }
 }

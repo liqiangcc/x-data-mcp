@@ -400,6 +400,26 @@ pub(crate) fn read_public_series(
     entity: &str,
     period: Period,
 ) -> Result<Option<SeriesRow>, Error> {
+    read_visible_series(
+        c,
+        entity,
+        period,
+        Adjustment::Forward,
+        INSTRUMENT_CLASS_STOCK,
+    )
+}
+
+/// The dataset-parameterised visibility predicate (v8 PR-4, #387 §4.2): the
+/// read surface names the 口径 and 品种 it serves instead of relying on a
+/// single hard-coded `instrument_class=0` row. `market.daily`/`market.yearly`
+/// keep the stock 前复权 shape; `market.index` asks for the raw index shape.
+pub(crate) fn read_visible_series(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+    adjustment: Adjustment,
+    instrument_class: i64,
+) -> Result<Option<SeriesRow>, Error> {
     read_series_row(
         c,
         &format!(
@@ -409,8 +429,8 @@ pub(crate) fn read_public_series(
         params![
             entity,
             super::compact_repo::period_code(period),
-            Adjustment::Forward.code(),
-            INSTRUMENT_CLASS_STOCK
+            adjustment.code(),
+            instrument_class
         ],
     )
 }
@@ -419,8 +439,23 @@ pub(crate) fn read_public_series(
 /// not expose (issue-383 §6.3): an explicitly pinned version id is still
 /// subject to the same `instrument_class=0` boundary as head resolution.
 pub(crate) fn is_public_invisible_version(c: &Connection, version_id: &str) -> Result<bool, Error> {
-    Ok(read_series_by_version_id(c, version_id)?
-        .is_some_and(|row| row.instrument_class != INSTRUMENT_CLASS_STOCK))
+    is_invisible_version(c, version_id, Adjustment::Forward, INSTRUMENT_CLASS_STOCK)
+}
+
+/// True when `version_id` names a series whose 口径/品种 is not the one the
+/// requested dataset serves (v8 PR-4). A pinned raw stock id is as invisible
+/// to `market.daily` as an index id is.
+pub(crate) fn is_invisible_version(
+    c: &Connection,
+    version_id: &str,
+    adjustment: Adjustment,
+    instrument_class: i64,
+) -> Result<bool, Error> {
+    Ok(
+        read_series_by_version_id(c, version_id)?.is_some_and(|row| {
+            row.adjustment != adjustment || row.instrument_class != instrument_class
+        }),
+    )
 }
 
 pub(crate) fn read_series_by_version_id(

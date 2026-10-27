@@ -14,13 +14,26 @@ pub enum Dataset {
     Daily,
     #[serde(rename = "market.yearly")]
     Yearly,
+    /// M1 PR-5 benchmark series (issue-383 §6.3): a raw, 0.01-point bar
+    /// series kept apart from `market.daily` so an index never changes the
+    /// stock query's semantics (v8 #387 §4.2 constraint 3).
+    #[serde(rename = "market.index")]
+    Index,
+    /// M1 PR-4 parsed corporate-action facts (issue-383 §3.6): effective-day
+    /// rows, no versioned price series.
+    #[serde(rename = "market.adjustment_events")]
+    AdjustmentEvents,
+    /// M1 PR-6 derived trading calendar (issue-383 §3.8): market-level, no
+    /// entity and no security price.
+    #[serde(rename = "market.calendar")]
+    Calendar,
 }
 impl Dataset {
     pub fn period(self) -> Option<Period> {
         match self {
-            Self::Daily => Some(Period::Day),
+            Self::Daily | Self::Index => Some(Period::Day),
             Self::Yearly => Some(Period::Year),
-            Self::Catalog => None,
+            Self::Catalog | Self::AdjustmentEvents | Self::Calendar => None,
         }
     }
     /// Wire spelling; used by v2 error messages (v8 PR-3, #387 §5).
@@ -29,7 +42,15 @@ impl Dataset {
             Self::Catalog => "securities.catalog",
             Self::Daily => "market.daily",
             Self::Yearly => "market.yearly",
+            Self::Index => "market.index",
+            Self::AdjustmentEvents => "market.adjustment_events",
+            Self::Calendar => "market.calendar",
         }
+    }
+    /// The three datasets added after v7 have no v1 row shape: their requests
+    /// require `contract_version: "v2"` (v8 PR-4, #387 §14).
+    pub fn is_v2_only(self) -> bool {
+        matches!(self, Self::Index | Self::AdjustmentEvents | Self::Calendar)
     }
 }
 // Write surfaces accept `v1` only; read surfaces use `ReadContractVersion`,
@@ -116,9 +137,25 @@ impl Security {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Selection {
-    Single { entity: Security },
-    Batch { entities: Vec<Security> },
-    Catalog { scope: CatalogScope },
+    Single {
+        entity: Security,
+    },
+    Batch {
+        entities: Vec<Security>,
+    },
+    Catalog {
+        scope: CatalogScope,
+    },
+    /// A frozen catalog version's whole member set (v8 #387 §4.3). The
+    /// server resolves `"latest"` and echoes the concrete version id.
+    /// `market.index` resolves its members from the static benchmark
+    /// registry instead, so it omits `catalog_version`.
+    Universe {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        catalog_version: Option<String>,
+    },
+    /// A market-level dataset with no security entity (`market.calendar`).
+    Market,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum CatalogScope {
@@ -140,6 +177,12 @@ pub enum Filter {
         code: Option<String>,
         name_query: Option<String>,
         industry_code: Option<String>,
+    },
+    /// At most five trading days (v8 #387 §4.3): a cross-section is not a
+    /// panel. The repository resolves the trading days from the calendar.
+    CrossSection {
+        start_date: NaiveDate,
+        end_date: NaiveDate,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -245,6 +288,20 @@ pub enum Row {
         name: String,
         industry: Industry,
     },
+    /// One derived calendar day (`market.calendar`): market-level, no entity.
+    Calendar { trade_day: NaiveDate },
+    /// One parsed factor event (`market.adjustment_events`). `known_at` is
+    /// deliberately absent: M1 stores NULL and the design forbids inventing a
+    /// point-in-time value (v8 #387 §4.6, separation point 3).
+    AdjustmentEvent {
+        entity: Security,
+        effective_day: NaiveDate,
+        category: u8,
+        c1: String,
+        c2: String,
+        c3: String,
+        c4: String,
+    },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -314,6 +371,20 @@ pub struct Metadata {
     pub units: Vec<Evidence>,
     pub adjustment: Option<Evidence>,
     pub lineage: Option<Lineage>,
+    /// Per-index unit/aggregation facts (issue-383 §3.9). Present only for
+    /// `market.index`; an index's volume unit is 手, not 股.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<IndexMetadata>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IndexMetadata {
+    pub aggregate_scope: String,
+    pub member_count: Option<i64>,
+    pub price_unit: String,
+    pub volume_unit: String,
+    pub amount_unit: String,
+    pub aliases: String,
 }
 
 fn presence_min_year() -> i32 {
@@ -684,6 +755,10 @@ pub struct AvailabilityItem {
     pub related_tasks: Vec<TaskSummary>,
     pub related_tasks_total: usize,
     pub related_tasks_truncated: bool,
+    /// One aggregate row replacing the per-entity rows for
+    /// `selection.kind=universe` (v8 #387 §4.1/§8.2 T3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub universe: Option<UniverseSummary>,
     /// Yearly rows trailing the live daily base: `"behind"` + the daily
     /// base day the row is correct as of (RULINGS A1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -695,6 +770,15 @@ pub struct AvailabilityItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<AbsentReason>,
     pub limitations: Vec<String>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UniverseSummary {
+    pub entities: usize,
+    pub present: usize,
+    pub absent: usize,
+    pub stale: usize,
+    pub unavailable: usize,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

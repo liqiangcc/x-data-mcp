@@ -68,6 +68,9 @@ pub struct AvailabilityFacts {
     pub related_tasks: Vec<std::rc::Rc<TaskHeadFacts>>,
     /// Related tasks before the in-flight + latest-N cut (XP-025 D-b).
     pub related_tasks_total: usize,
+    /// Set only for a collapsed `selection.kind=universe` result; the
+    /// per-entity facts above are then the aggregate of the member set.
+    pub summary: Option<UniverseSummary>,
 }
 /// Domain classification: storage reports facts, never decides availability policy.
 fn availability_item(
@@ -77,7 +80,15 @@ fn availability_item(
     range: &Filter,
 ) -> Result<AvailabilityItem, Error> {
     let unavailable = f.integrity_failure.is_some();
-    let availability = if unavailable {
+    let availability = if let Some(summary) = &f.summary {
+        if summary.entities == 0 || summary.present == 0 {
+            Availability::Absent
+        } else if summary.absent > 0 || summary.stale > 0 {
+            Availability::Partial
+        } else {
+            Availability::Available
+        }
+    } else if unavailable {
         Availability::Unavailable
     } else if f
         .manifest
@@ -85,18 +96,24 @@ fn availability_item(
         .is_some_and(|m| m.status == ManifestStatus::Absent)
     {
         Availability::Absent
-    } else if dataset == Dataset::Catalog {
+    } else if dataset == Dataset::Catalog || dataset == Dataset::Calendar {
         Availability::Available
     } else {
         Availability::Unknown
     };
-    let coverage_evidence = f.integrity_failure.unwrap_or_else(|| {
-        f.manifest
-            .as_ref()
-            .and_then(|m| m.metadata.as_ref())
-            .map(|m| m.coverage_reason.clone())
-            .unwrap_or_else(|| "no published version".into())
-    });
+    let coverage_evidence = match &f.summary {
+        Some(summary) => format!(
+            "{} entities: {} present, {} absent, {} stale, {} unavailable",
+            summary.entities, summary.present, summary.absent, summary.stale, summary.unavailable
+        ),
+        None => f.integrity_failure.clone().unwrap_or_else(|| {
+            f.manifest
+                .as_ref()
+                .and_then(|m| m.metadata.as_ref())
+                .map(|m| m.coverage_reason.clone())
+                .unwrap_or_else(|| "no published version".into())
+        }),
+    };
     let (stale, as_of_day, reason) = f
         .manifest
         .as_ref()
@@ -107,7 +124,49 @@ fn availability_item(
         .iter()
         .map(confirmed_gap)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(AvailabilityItem{entity:f.entity,version_ref:f.manifest.and_then(|m|m.version_ref),integrity:if unavailable{"failed"}else if availability==Availability::Absent{"not_applicable"}else{"verified"}.into(),confirmed_gaps,unresolved_ranges:if availability==Availability::Unknown{vec![range.clone()]}else{vec![]},availability,coverage_evidence,first_record:f.first_record,last_record:f.last_record,record_count:f.record_count,freshness:"unknown".into(),related_tasks_total:f.related_tasks_total,related_tasks_truncated:f.related_tasks_total>f.related_tasks.len(),related_tasks:f.related_tasks.iter().map(|f|summary_head(f,run)).collect(),stale,as_of_day,reason,limitations:vec!["range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".into()]})
+    let limitations = if f.summary.is_some() {
+        vec!["universe summary; use single/batch for per-entity facts".to_string()]
+    } else {
+        vec![
+            "range completeness is not inferred from dates or version coverage alone; no implicit collection or repair".to_string(),
+        ]
+    };
+    Ok(AvailabilityItem {
+        entity: f.entity,
+        version_ref: f.manifest.and_then(|m| m.version_ref),
+        integrity: if unavailable {
+            "failed"
+        } else if availability == Availability::Absent {
+            "not_applicable"
+        } else {
+            "verified"
+        }
+        .into(),
+        confirmed_gaps,
+        unresolved_ranges: if availability == Availability::Unknown {
+            vec![range.clone()]
+        } else {
+            vec![]
+        },
+        availability,
+        coverage_evidence,
+        first_record: f.first_record,
+        last_record: f.last_record,
+        record_count: f.record_count,
+        freshness: "unknown".into(),
+        related_tasks_total: f.related_tasks_total,
+        related_tasks_truncated: f.related_tasks_total > f.related_tasks.len(),
+        related_tasks: f
+            .related_tasks
+            .iter()
+            .map(|f| summary_head(f, run))
+            .collect(),
+        universe: f.summary,
+        stale,
+        as_of_day,
+        reason,
+        limitations,
+    })
 }
 /// Canonical wire projection of a stored proven gap: the evidence string only
 /// references durable evidence identity (kind/id/sha256, fixed order) and never
@@ -1177,12 +1236,14 @@ impl<R: ObservationRepository> Observer<R> {
             page_complete: page.page_complete,
             limitations: &[],
         };
-        Ok(super::columnar::availability_table(
-            plan.args.dataset,
-            &page.items,
-            &fields,
-            &meta,
-        ))
+        let mut out =
+            super::columnar::availability_table(plan.args.dataset, &page.items, &fields, &meta);
+        if let Some(catalog_version) = &plan.catalog_version
+            && let Some(object) = out.as_object_mut()
+        {
+            object.insert("catalog_version".into(), serde_json::json!(catalog_version));
+        }
+        Ok(out)
     }
     fn availability_page(
         &self,
@@ -1190,7 +1251,8 @@ impl<R: ObservationRepository> Observer<R> {
         access: &Access,
     ) -> Result<(AvailabilityPage, super::query::QueryPlan), Error> {
         let cursor = args.cursor.take();
-        let plan = super::query::QueryPlan::new(args, access)?;
+        let mut plan = super::query::QueryPlan::new(args, access)?;
+        plan.resolve(&self.repository, access)?;
         let key = format!(
             "availability:{}",
             serde_json::to_string(&plan.args).unwrap()

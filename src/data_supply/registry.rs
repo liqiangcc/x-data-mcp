@@ -189,7 +189,12 @@ impl Entry {
                 .then_some(Some(Dataset::Catalog))
                 .into_iter()
                 .collect(),
-            Handler::Query | Handler::Versions | Handler::Availability | Handler::Collection => {
+            Handler::Collection => [Dataset::Catalog, Dataset::Daily, Dataset::Yearly]
+                .into_iter()
+                .filter(|d| access.allows(*d, None))
+                .map(Some)
+                .collect(),
+            Handler::Query | Handler::Versions | Handler::Availability => {
                 access.datasets.iter().copied().map(Some).collect()
             }
             _ => vec![None],

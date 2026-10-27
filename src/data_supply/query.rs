@@ -15,6 +15,11 @@ const CACHE_BYTES: usize = 64 * 1024 * 1024;
 pub struct QueryPlan {
     pub args: Query,
     pub entities: Vec<Security>,
+    /// Concrete catalog version a `universe` selection resolved to; `None`
+    /// for entity selections and for `market.index` (static registry).
+    pub catalog_version: Option<String>,
+    /// Trading days of a `cross_section` filter, resolved from the calendar.
+    pub trade_days: Vec<NaiveDate>,
 }
 impl QueryPlan {
     pub fn new(mut args: Query, access: &Access) -> Result<Self, Error> {
@@ -22,8 +27,27 @@ impl QueryPlan {
         page_size(args.page_size)?;
         // v2 shape only (v8 PR-3, #387 §4.3): `fields` projects columns, so a
         // v1 request carrying it is rejected rather than silently ignored.
-        if args.contract_version == ReadContractVersion::V1 && args.fields.is_some() {
-            return Err(invalid("fields requires contract_version v2"));
+        if args.contract_version == ReadContractVersion::V1 {
+            if args.fields.is_some() {
+                return Err(invalid("fields requires contract_version v2"));
+            }
+            if args.dataset.is_v2_only() {
+                return Err(invalid(&format!(
+                    "{} requires contract_version v2",
+                    args.dataset.name()
+                )));
+            }
+            if matches!(
+                args.selection,
+                Selection::Universe { .. } | Selection::Market
+            ) {
+                return Err(invalid("selection kind requires contract_version v2"));
+            }
+            if matches!(args.filter, Filter::CrossSection { .. }) {
+                return Err(invalid(
+                    "filter.kind=cross_section requires contract_version v2",
+                ));
+            }
         }
         let entities = entities(args.dataset, &args.selection, access)?;
         match (&args.filter, args.dataset) {
@@ -32,10 +56,18 @@ impl QueryPlan {
                     start_date,
                     end_date,
                 },
-                Dataset::Daily,
-            ) if start_date <= end_date
-                && *start_date >= NaiveDate::from_ymd_opt(1, 1, 1).unwrap()
-                && *end_date <= NaiveDate::from_ymd_opt(9999, 12, 31).unwrap() => {}
+                dataset,
+            ) if matches!(
+                dataset,
+                Dataset::Daily | Dataset::Index | Dataset::AdjustmentEvents | Dataset::Calendar
+            ) && valid_range(*start_date, *end_date) => {}
+            (
+                Filter::CrossSection {
+                    start_date,
+                    end_date,
+                },
+                Dataset::Daily | Dataset::Index,
+            ) if valid_range(*start_date, *end_date) => {}
             (
                 Filter::Yearly {
                     start_year,
@@ -50,7 +82,12 @@ impl QueryPlan {
             VersionChoice::LatestPerEntity => {}
             VersionChoice::CatalogVersion { version_id }
                 if args.dataset == Dataset::Catalog && !version_id.is_empty() => {}
-            VersionChoice::ExplicitVersionMap { versions } if args.dataset != Dataset::Catalog => {
+            VersionChoice::ExplicitVersionMap { versions }
+                if matches!(
+                    args.dataset,
+                    Dataset::Daily | Dataset::Yearly | Dataset::Index | Dataset::AdjustmentEvents
+                ) && !matches!(args.selection, Selection::Universe { .. }) =>
+            {
                 versions.sort_by(|a, b| a.entity.cmp(&b.entity));
                 if versions
                     .iter()
@@ -67,8 +104,62 @@ impl QueryPlan {
         if let Selection::Batch { entities: e } = &mut args.selection {
             *e = entities.clone();
         }
-        Ok(Self { args, entities })
+        Ok(Self {
+            args,
+            entities,
+            catalog_version: None,
+            trade_days: Vec::new(),
+        })
     }
+    /// Resolve the parts that need storage: a universe's members and the
+    /// trading days of a cross-section. Runs before the cursor key is built so
+    /// the key contains the concrete catalog version.
+    pub fn resolve<R: ReadRepository>(&mut self, repo: &R, access: &Access) -> Result<(), Error> {
+        if let Selection::Universe { catalog_version } = &mut self.args.selection {
+            let (resolved, members) =
+                repo.universe_members(self.args.dataset, catalog_version.as_deref())?;
+            let resolved = (!resolved.is_empty()).then_some(resolved);
+            self.catalog_version = resolved.clone();
+            *catalog_version = resolved;
+            self.entities = checked_members(self.args.dataset, members, access)?;
+        }
+        if let Filter::CrossSection {
+            start_date,
+            end_date,
+        } = self.args.filter
+        {
+            let days = repo.calendar_days(start_date, end_date)?;
+            if days.len() > 5 {
+                return Err(invalid(&format!(
+                    "cross_section window is {} trading days; at most 5 are allowed. \
+                     Use filter.kind=daily with selection.kind=batch for a longer panel",
+                    days.len()
+                )));
+            }
+            self.trade_days = days;
+        }
+        Ok(())
+    }
+}
+fn valid_range(start_date: NaiveDate, end_date: NaiveDate) -> bool {
+    start_date <= end_date
+        && start_date >= NaiveDate::from_ymd_opt(1, 1, 1).unwrap()
+        && end_date <= NaiveDate::from_ymd_opt(9999, 12, 31).unwrap()
+}
+fn checked_members(
+    dataset: Dataset,
+    mut members: Vec<Security>,
+    access: &Access,
+) -> Result<Vec<Security>, Error> {
+    members.sort();
+    if members.windows(2).any(|w| w[0] == w[1]) {
+        return Err(invalid("duplicate universe entity"));
+    }
+    for entity in &members {
+        entity.validate().map_err(Error::Invalid)?;
+        access.require(dataset, Some(entity))?;
+    }
+    Ok(members)
 }
 pub fn invalid(s: &str) -> Error {
     Error::Invalid(s.into())
@@ -83,11 +174,25 @@ pub fn page_size(n: usize) -> Result<(), Error> {
 pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<Security>, Error> {
     let mut e = match (dataset, s) {
         (Dataset::Catalog, Selection::Catalog { .. }) => vec![],
-        (Dataset::Daily | Dataset::Yearly, Selection::Single { entity }) => vec![entity.clone()],
-        (Dataset::Daily | Dataset::Yearly, Selection::Batch { entities }) => entities.clone(),
+        (Dataset::Calendar, Selection::Market) => vec![],
+        (_, Selection::Universe { .. }) => vec![],
+        (
+            Dataset::Daily | Dataset::Yearly | Dataset::Index | Dataset::AdjustmentEvents,
+            Selection::Single { entity },
+        ) => vec![entity.clone()],
+        (
+            Dataset::Daily | Dataset::Yearly | Dataset::Index | Dataset::AdjustmentEvents,
+            Selection::Batch { entities },
+        ) => entities.clone(),
         _ => return Err(invalid("invalid selection for dataset")),
     };
-    if dataset != Dataset::Catalog && (e.is_empty() || e.len() > 100) {
+    if !matches!(
+        (dataset, s),
+        (Dataset::Catalog, Selection::Catalog { .. })
+            | (Dataset::Calendar, Selection::Market)
+            | (_, Selection::Universe { .. })
+    ) && (e.is_empty() || e.len() > 100)
+    {
         return Err(invalid("selection must contain 1..100 entities"));
     }
     e.sort();
@@ -109,6 +214,16 @@ pub trait ReadRepository {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error>;
     fn verify(&self, versions: &[VersionRef]) -> Result<(), Error>;
     fn versions(&self, args: &VersionsQuery, access: &Access) -> Result<Vec<VersionInfo>, Error>;
+    /// Members of `selection.kind=universe`, plus the concrete catalog
+    /// version echoed back. `market.index` returns its static registry and an
+    /// empty label (no catalog is involved).
+    fn universe_members(
+        &self,
+        dataset: Dataset,
+        catalog_version: Option<&str>,
+    ) -> Result<(String, Vec<Security>), Error>;
+    /// Trading days in `[start, end]`, from the derived calendar.
+    fn calendar_days(&self, start: NaiveDate, end: NaiveDate) -> Result<Vec<NaiveDate>, Error>;
 }
 #[derive(Clone)]
 struct Saved {
@@ -267,13 +382,33 @@ impl<R: ReadRepository> Queries<R> {
             page_complete: page.page_complete,
             limitations: &page.limitations,
         };
-        Ok(match plan.args.dataset {
+        let mut page = match plan.args.dataset {
             Dataset::Catalog => super::columnar::catalog_table(
                 &page.version_manifest,
                 &page.records,
                 &fields,
                 &meta,
             ),
+            Dataset::AdjustmentEvents | Dataset::Calendar => super::columnar::row_table(
+                plan.args.dataset,
+                &page.version_manifest,
+                &page.records,
+                &fields,
+                &meta,
+            ),
+            Dataset::Daily | Dataset::Index
+                if matches!(&plan.args.filter, Filter::CrossSection { .. }) =>
+            {
+                super::columnar::cross_section(
+                    plan.args.dataset,
+                    &page.version_manifest,
+                    &plan.trade_days,
+                    &plan.entities,
+                    &page.records,
+                    &fields,
+                    &meta,
+                )
+            }
             dataset => super::columnar::panel(
                 dataset,
                 &page.version_manifest,
@@ -282,10 +417,17 @@ impl<R: ReadRepository> Queries<R> {
                 &fields,
                 &meta,
             ),
-        })
+        };
+        if let Some(catalog_version) = &plan.catalog_version
+            && let Some(object) = page.as_object_mut()
+        {
+            object.insert("catalog_version".into(), serde_json::json!(catalog_version));
+        }
+        Ok(page)
     }
     fn query_page(&self, args: Query, access: &Access) -> Result<(DataPage, QueryPlan), Error> {
-        let plan = QueryPlan::new(args, access)?;
+        let mut plan = QueryPlan::new(args, access)?;
+        plan.resolve(&self.repository, access)?;
         let cursor = plan.args.cursor.clone();
         let mut keyargs = plan.args.clone();
         keyargs.cursor = None;
@@ -365,11 +507,15 @@ impl<R: ReadRepository> Queries<R> {
             page_complete: page.page_complete,
             limitations: &[],
         };
-        Ok(super::columnar::versions_table(
-            args.dataset,
-            &page.items,
-            &meta,
-        ))
+        let mut out = super::columnar::versions_table(args.dataset, &page.items, &meta);
+        if let Selection::Universe {
+            catalog_version: Some(catalog_version),
+        } = &args.selection
+            && let Some(object) = out.as_object_mut()
+        {
+            object.insert("catalog_version".into(), serde_json::json!(catalog_version));
+        }
+        Ok(out)
     }
     fn versions_page(
         &self,
@@ -378,7 +524,21 @@ impl<R: ReadRepository> Queries<R> {
     ) -> Result<(VersionPage, VersionsQuery), Error> {
         access.require(args.dataset, None)?;
         page_size(args.page_size)?;
-        entities(args.dataset, &args.selection, access)?;
+        if args.contract_version == ReadContractVersion::V1 && args.dataset.is_v2_only() {
+            return Err(invalid(&format!(
+                "{} requires contract_version v2",
+                args.dataset.name()
+            )));
+        }
+        if let Selection::Universe { catalog_version } = &mut args.selection {
+            let (resolved, members) = self
+                .repository
+                .universe_members(args.dataset, catalog_version.as_deref())?;
+            *catalog_version = (!resolved.is_empty()).then_some(resolved);
+            checked_members(args.dataset, members, access)?;
+        } else {
+            entities(args.dataset, &args.selection, access)?;
+        }
         let cursor = args.cursor.take();
         let key = format!("versions:{}", serde_json::to_string(&args).unwrap());
         let mut saved = if let Some(cursor) = cursor {
