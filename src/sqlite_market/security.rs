@@ -31,7 +31,8 @@ use crate::security_master::assembly::{
 };
 use crate::security_master::{
     ADMITTED_CATEGORIES, CapitalEvent, CapitalEventSet, DelistingReason, DelistingSource, Exchange,
-    IssuerResolution, ListingSource, SecurityLifecycleFact, is_admitted_category, is_suspicious,
+    IssuerResolution, ListingSource, RiskStatus, RiskWarningInterval, SecurityLifecycleFact,
+    SuspensionCertainty, SuspensionInterval, SuspensionReason, is_admitted_category, is_suspicious,
 };
 
 /// `derived_dataset_versions.dataset_kind` of the capital-event set.
@@ -158,13 +159,7 @@ pub(crate) fn read_capital_events(
                 "stored capital_events flags disagree with the frozen gate",
             ));
         }
-        event.known_at = match raw.11 {
-            Some(text) => Some(
-                NaiveDate::parse_from_str(&text, "%Y-%m-%d")
-                    .map_err(|_| integrity("known_at is not a date"))?,
-            ),
-            None => None,
-        };
+        event.known_at = read_text_day(raw.11, "capital_events.known_at")?;
         events.push(event);
     }
     Ok(events)
@@ -427,7 +422,7 @@ fn insert_fact(
          listing_conflict,delisting_conflict,known_at,source_binding_digest,\
          evidence_digest) \
          VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,\
-         NULL,?20,?21) \
+         ?20,?21,?22) \
          ON CONFLICT(exchange,code,effective_from) DO UPDATE SET \
          effective_to=excluded.effective_to,instrument_class=excluded.instrument_class,\
          issuer_key=excluded.issuer_key,issuer_resolution=excluded.issuer_resolution,\
@@ -462,6 +457,7 @@ fn insert_fact(
             fact.arrangement_end.map(compact_market::epoch_day),
             fact.listing_conflict as i64,
             fact.delisting_conflict as i64,
+            fact.known_at.map(|day| day.to_string()),
             source_binding_digest.as_slice(),
             evidence_digest.as_slice(),
         ],
@@ -611,8 +607,8 @@ pub(crate) fn read_security_master(c: &Connection) -> Result<Vec<SecurityLifecyc
             "SELECT exchange,code,effective_from,effective_to,instrument_class,issuer_key,\
              issuer_resolution,listing_date,listing_date_tdx,listing_source,b_listing_date,\
              delisting_date,delisting_date_tdx,delisting_source,delisting_reason_class,\
-             arrangement_start,arrangement_end,listing_conflict,delisting_conflict \
-             FROM security_master ORDER BY exchange,code,effective_from",
+             arrangement_start,arrangement_end,listing_conflict,delisting_conflict,\
+             known_at FROM security_master ORDER BY exchange,code,effective_from",
         )
         .map_err(storage)?;
     let rows = statement
@@ -637,6 +633,7 @@ pub(crate) fn read_security_master(c: &Connection) -> Result<Vec<SecurityLifecyc
                 arrangement_end: r.get(16)?,
                 listing_conflict: r.get(17)?,
                 delisting_conflict: r.get(18)?,
+                known_at: r.get(19)?,
             })
         })
         .map_err(storage)?;
@@ -667,6 +664,7 @@ struct RawMasterRow {
     arrangement_end: Option<i64>,
     listing_conflict: i64,
     delisting_conflict: i64,
+    known_at: Option<String>,
 }
 
 impl RawMasterRow {
@@ -703,6 +701,7 @@ impl RawMasterRow {
             arrangement_end: read_opt_day(self.arrangement_end)?,
             listing_conflict: self.listing_conflict != 0,
             delisting_conflict: self.delisting_conflict != 0,
+            known_at: read_text_day(self.known_at, "security_master.known_at")?,
         })
     }
 }
@@ -765,6 +764,130 @@ pub(crate) fn read_code_migrations(c: &Connection) -> Result<Vec<CodeMigrationFa
     Ok(migrations)
 }
 
+/// All stored `risk_warning_intervals` rows, ordered by the row identity.
+/// The table has no writer in M2 until #308 admits the production source; the
+/// read model still has to see rows so the fail-closed "no interval = unknown"
+/// rule is exercised by fixtures (§6.3).
+pub(crate) fn read_risk_warning_intervals(
+    c: &Connection,
+) -> Result<Vec<RiskWarningInterval>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT exchange,code,effective_from,effective_to,raw_status_code,\
+             normalized_status,announced_at,known_at,source_kind FROM risk_warning_intervals \
+             ORDER BY exchange,code,effective_from",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, String>(8)?,
+            ))
+        })
+        .map_err(storage)?;
+    let mut intervals = Vec::new();
+    for row in rows {
+        let (
+            exchange,
+            code,
+            effective_from,
+            effective_to,
+            raw_status_code,
+            normalized_status,
+            announced_at,
+            known_at,
+            source_kind,
+        ) = row.map_err(storage)?;
+        let exchange = Exchange::parse(&exchange)
+            .ok_or_else(|| integrity("risk_warning_intervals exchange is unregistered"))?;
+        let status = RiskStatus::parse(&normalized_status)
+            .ok_or_else(|| integrity("risk_warning_intervals status is unregistered"))?;
+        intervals.push(RiskWarningInterval {
+            exchange,
+            code,
+            effective_from: read_day(effective_from)?,
+            effective_to: read_opt_day(effective_to)?,
+            raw_status_code,
+            status,
+            announced_at,
+            known_at: read_text_day(known_at, "risk_warning_intervals.known_at")?,
+            source_kind,
+        });
+    }
+    Ok(intervals)
+}
+
+/// All stored `suspension_intervals` rows, ordered by the row identity. PR-4
+/// only reads them; deriving `unresolved_gap` rows and writing `confirmed`
+/// rows is PR-6 (§16).
+pub(crate) fn read_suspension_intervals(c: &Connection) -> Result<Vec<SuspensionInterval>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT exchange,code,start_day,end_day,certainty,missing_days,reason,\
+             known_at,source_kind,source_record_id FROM suspension_intervals \
+             ORDER BY exchange,code,start_day",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
+            ))
+        })
+        .map_err(storage)?;
+    let mut intervals = Vec::new();
+    for row in rows {
+        let (
+            exchange,
+            code,
+            start_day,
+            end_day,
+            certainty,
+            missing_days,
+            reason,
+            known_at,
+            source_kind,
+            source_record_id,
+        ) = row.map_err(storage)?;
+        let exchange = Exchange::parse(&exchange)
+            .ok_or_else(|| integrity("suspension_intervals exchange is unregistered"))?;
+        let certainty = SuspensionCertainty::parse(&certainty)
+            .ok_or_else(|| integrity("suspension_intervals certainty is unregistered"))?;
+        let reason = SuspensionReason::parse(&reason)
+            .ok_or_else(|| integrity("suspension_intervals reason is unregistered"))?;
+        intervals.push(SuspensionInterval {
+            exchange,
+            code,
+            start_day: read_day(start_day)?,
+            end_day: read_day(end_day)?,
+            certainty,
+            missing_days,
+            reason,
+            known_at: read_text_day(known_at, "suspension_intervals.known_at")?,
+            source_kind,
+            source_record_id,
+        });
+    }
+    Ok(intervals)
+}
+
 fn read_day(value: i64) -> Result<NaiveDate, Error> {
     compact_market::epoch_date(value).map_err(integrity)
 }
@@ -773,11 +896,16 @@ fn read_opt_day(value: Option<i64>) -> Result<Option<NaiveDate>, Error> {
     value.map(read_day).transpose()
 }
 
+/// A `known_at`/`announced_at` TEXT column read at day granularity. The column
+/// keeps the source's ISO8601 text (the DDL stores seconds when a source has
+/// them); the M2 read model promises day granularity only (§6.2), so the date
+/// prefix is what bounds a point-in-time query.
 fn read_text_day(value: Option<String>, field: &str) -> Result<Option<NaiveDate>, Error> {
     value
         .map(|text| {
-            NaiveDate::parse_from_str(&text, "%Y-%m-%d")
-                .map_err(|_| integrity(format!("code_migrations {field} {text:?} is not a date")))
+            let day = text.get(..10).unwrap_or(&text);
+            NaiveDate::parse_from_str(day, "%Y-%m-%d")
+                .map_err(|_| integrity(format!("{field} {text:?} is not a date")))
         })
         .transpose()
 }
@@ -858,7 +986,7 @@ fn assembled_master_evidence(
         "conflicts": conflicts,
         "pending_sources": pending_sources,
         "unresolved": unresolved,
-        "known_at": "unknown",
+        "known_at": known_at_coverage(assembled),
         "known_at_reason": ASSEMBLED_KNOWN_AT_REASON,
         "limitations": [
             "listing_conflict=1 rows keep both the exchange (code-level) and TDX (subject-level) listing dates; listing_date follows §4.2 and the disagreement is enumerated in conflicts",
@@ -869,7 +997,25 @@ fn assembled_master_evidence(
     }))
 }
 
-const ASSEMBLED_KNOWN_AT_REASON: &str = "the exchange list and the TDX files carry no announcement timestamp; a code change's known_at is stored only when the announcement gives one, and the main-table known_at stays NULL rather than proxying the effective day";
+const ASSEMBLED_KNOWN_AT_REASON: &str = "the exchange list and the TDX files carry no announcement timestamp; a row's known_at is stored only when a source provides one and stays NULL otherwise, never proxied by the effective day";
+
+/// How much of the assembled main table carries a 知晓时间. Reported in the
+/// evidence bundle so a reader cannot mistake "the sources give none today" for
+/// "the column is unused" (§12.3).
+fn known_at_coverage(assembled: &Assembly) -> &'static str {
+    let dated = assembled
+        .rows
+        .iter()
+        .filter(|row| row.known_at.is_some())
+        .count();
+    if dated == 0 {
+        "unknown"
+    } else if dated == assembled.rows.len() {
+        "complete"
+    } else {
+        "partial"
+    }
+}
 
 fn counts<'a>(values: impl Iterator<Item = &'a str>) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();

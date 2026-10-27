@@ -602,6 +602,7 @@ fn exchange_row(listing: &ExchangeListingFact, listing_date: NaiveDate) -> Secur
         arrangement_end: None,
         listing_conflict: false,
         delisting_conflict: false,
+        known_at: None,
     }
 }
 
@@ -956,6 +957,7 @@ pub fn assembly_digest(
         push_opt_day(&mut payload, row.arrangement_end);
         payload.push(row.listing_conflict as u8);
         payload.push(row.delisting_conflict as u8);
+        push_opt_day(&mut payload, row.known_at);
     }
     payload.extend_from_slice(&(migrations.len() as u64).to_be_bytes());
     for migration in migrations {

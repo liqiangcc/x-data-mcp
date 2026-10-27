@@ -698,6 +698,7 @@ pub fn parse_security_facts(
                 issuer_resolution: IssuerResolution::CodeDate,
                 listing_conflict: false,
                 delisting_conflict: false,
+                known_at: None,
             });
         } else {
             skipped.missing_listing_base_rows += 1;

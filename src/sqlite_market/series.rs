@@ -17,6 +17,8 @@
 //! was superseded resolves to `Error::Stale`, one that never existed to
 //! `Error::NotFound` (SPEC §6.1).
 
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
@@ -543,6 +545,95 @@ pub(crate) fn bars_in_range(
         ),
         params![series_key, start_day, end_day],
     )
+}
+
+/// One entity's 不复权 daily series span. The research read model needs three
+/// things from the series row and nothing else: whether a series exists, the
+/// bar span, and the price scale for the integer market-cap product.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RawDailySpan {
+    pub series_key: i64,
+    pub first_day: NaiveDate,
+    pub last_day: NaiveDate,
+    pub price_scale: u32,
+}
+
+/// Every stock 不复权 daily series, keyed by entity. One row per series, so the
+/// result is bounded by the entity count (thousands), never by the bar count.
+pub(crate) fn raw_daily_spans(c: &Connection) -> Result<BTreeMap<String, RawDailySpan>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT entity,series_key,first_day,last_day,price_scale FROM market_series \
+             WHERE period=?1 AND adjustment=?2 AND instrument_class=?3 ORDER BY entity",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(
+            params![
+                super::compact_repo::period_code(Period::Day),
+                Adjustment::Raw.code(),
+                INSTRUMENT_CLASS_STOCK
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .map_err(storage)?;
+    let mut spans = BTreeMap::new();
+    for row in rows {
+        let (entity, series_key, first_day, last_day, price_scale) = row.map_err(storage)?;
+        spans.insert(
+            entity,
+            RawDailySpan {
+                series_key,
+                first_day: crate::compact_market::epoch_date(first_day)
+                    .map_err(|error| invalid(error.to_string()))?,
+                last_day: crate::compact_market::epoch_date(last_day)
+                    .map_err(|error| invalid(error.to_string()))?,
+                price_scale: u32::try_from(price_scale)
+                    .map_err(|_| invalid("negative price_scale"))?,
+            },
+        );
+    }
+    Ok(spans)
+}
+
+/// The 不复权 close of one entity on exactly `day`, with the series' price
+/// scale; `None` when the series has no bar that day (a gap, a holiday, or a
+/// day outside the span). One indexed lookup, no bar materialization.
+pub(crate) fn raw_daily_close_at(
+    c: &Connection,
+    entity: &str,
+    day: NaiveDate,
+) -> Result<Option<(i64, u32)>, Error> {
+    c.query_row(
+        "SELECT b.close_units,s.price_scale FROM market_series s \
+         JOIN series_bars b ON b.series_key=s.series_key \
+         WHERE s.entity=?1 AND s.period=?2 AND s.adjustment=?3 AND s.instrument_class=?4 \
+         AND b.trade_day=?5",
+        params![
+            entity,
+            super::compact_repo::period_code(Period::Day),
+            Adjustment::Raw.code(),
+            INSTRUMENT_CLASS_STOCK,
+            crate::compact_market::epoch_day(day)
+        ],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+    )
+    .optional()
+    .map_err(storage)?
+    .map(|(close, scale)| {
+        u32::try_from(scale)
+            .map(|scale| (close, scale))
+            .map_err(|_| invalid("negative price_scale"))
+    })
+    .transpose()
 }
 
 /// Trade days inside [start_day, end_day] — the presence/year-set probe.
