@@ -402,6 +402,31 @@ pub(crate) fn calendar_version(c: &Connection) -> Result<DerivedEntry, Error> {
     })
 }
 
+/// The registration of one whole-market M2 dataset (§12.4), or `None` when the
+/// dataset was never written (the file is then exported with 0 rows and the
+/// identity carries no version for it — an unwritten dataset is not a version).
+pub(crate) fn panel_version(
+    c: &Connection,
+    dataset: DerivedDataset,
+    kind: &str,
+    key: &str,
+) -> Result<Option<DerivedEntry>, Error> {
+    let Some(row) = derived::read_version(c, kind, key).map_err(Error::from)? else {
+        return Ok(None);
+    };
+    Ok(Some(DerivedEntry {
+        dataset,
+        key: row.dataset_key,
+        version_id: row.version_id,
+        record_count: row.record_count,
+        first_day: compact_market::epoch_date(row.first_day).map_err(integrity)?,
+        last_day: compact_market::epoch_date(row.last_day).map_err(integrity)?,
+        digest_format: row.digest_format,
+        algorithm_version: row.algorithm_version,
+        source_binding_digest: hex(row.source_binding_digest.as_slice()),
+    }))
+}
+
 /// Layer 3 of the four-layer binding (§7.3, BR-M1-7): every exported row must
 /// resolve to a source generation. The generations do **not** have to be the
 /// same: a daily run can leave one entity on generation N and another on N+1,
@@ -727,4 +752,151 @@ pub fn price_units(units: i64, price_scale: u32) -> Result<i64, Error> {
     units
         .checked_mul(factor)
         .ok_or_else(|| integrity("price does not fit DECIMAL(18,6)"))
+}
+
+// ---------------------------------------------------------------------------
+// M2 security-master rows (§12.4)
+// ---------------------------------------------------------------------------
+
+/// Interval rows are in range when the half-open interval `[from, to)`
+/// intersects the request's inclusive `[start, end]` day window.
+fn interval_in_range(
+    from: NaiveDate,
+    to: Option<NaiveDate>,
+    start: Option<NaiveDate>,
+    end: Option<NaiveDate>,
+) -> bool {
+    if end.is_some_and(|end| from > end) {
+        return false;
+    }
+    if start.is_some_and(|start| to.is_some_and(|to| to <= start)) {
+        return false;
+    }
+    true
+}
+
+/// Single-day rows (events, one-day intervals) use containment, the same
+/// inclusive rule the bar files already use for `--start/--end`.
+fn day_in_range(day: NaiveDate, start: Option<NaiveDate>, end: Option<NaiveDate>) -> bool {
+    start.is_none_or(|start| day >= start) && end.is_none_or(|end| day <= end)
+}
+
+/// The `security_master` intervals of `universe_intervals`/`security_master`
+/// (§12.4), ordered by row identity.
+pub(crate) fn security_master_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<crate::security_master::SecurityLifecycleFact>, Error> {
+    let rows = crate::sqlite_market::security::read_security_master(c).map_err(Error::from)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            interval_in_range(
+                row.effective_from,
+                row.effective_to,
+                request.start,
+                request.end,
+            )
+        })
+        .collect())
+}
+
+/// One `security_names` row (§12.4). The table has no writer yet, so the fields
+/// stay in the stored vocabulary (see the storage decoder).
+pub fn security_name_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<crate::sqlite_market::security::SecurityNameRow>, Error> {
+    let rows = crate::sqlite_market::security::read_security_names(c).map_err(Error::from)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            interval_in_range(
+                row.effective_from,
+                row.effective_to,
+                request.start,
+                request.end,
+            )
+        })
+        .collect())
+}
+
+/// One capital event with the entity it belongs to (§12.4 `capital_events`).
+pub fn capital_event_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<(String, crate::security_master::CapitalEvent)>, Error> {
+    let rows = crate::sqlite_market::security::read_all_capital_events(c).map_err(Error::from)?;
+    Ok(rows
+        .into_iter()
+        .filter(|(_, event)| day_in_range(event.effective_day, request.start, request.end))
+        .collect())
+}
+
+/// The risk-warning intervals (§12.4 `risk_warnings`).
+pub fn risk_warning_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<crate::security_master::RiskWarningInterval>, Error> {
+    let rows =
+        crate::sqlite_market::security::read_risk_warning_intervals(c).map_err(Error::from)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            interval_in_range(
+                row.effective_from,
+                row.effective_to,
+                request.start,
+                request.end,
+            )
+        })
+        .collect())
+}
+
+/// The suspension intervals (§12.4 `suspensions`), confirmed and derived.
+pub fn suspension_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<crate::security_master::SuspensionInterval>, Error> {
+    let rows = crate::sqlite_market::suspensions::read_suspensions(c).map_err(Error::from)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            interval_in_range(row.start_day, Some(row.end_day), request.start, request.end)
+        })
+        .collect())
+}
+
+/// The admitted and pending rule rows (§12.4 `price_limit_rules`). Both are
+/// exported: `basis_status` is what tells a consumer which ones selected a
+/// limit and which are provenance only (§8.1).
+pub fn price_limit_rule_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<crate::trading_rules::PriceLimitRule>, Error> {
+    let book = crate::sqlite_market::rules::read_trading_rules(c).map_err(Error::from)?;
+    Ok(book
+        .price_limits
+        .into_iter()
+        .filter(|rule| {
+            interval_in_range(
+                rule.effective_from,
+                rule.effective_to,
+                request.start,
+                request.end,
+            )
+        })
+        .collect())
+}
+
+/// The member interval skeleton (§12.4 `universe_intervals`).
+pub fn universe_interval_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<super::universe::MemberInterval>, Error> {
+    let rows = super::universe::member_intervals(c)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| interval_in_range(row.member_from, row.member_to, request.start, request.end))
+        .collect())
 }

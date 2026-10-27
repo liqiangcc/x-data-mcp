@@ -267,7 +267,7 @@ def export_smoke(binaries):
         summary = json.loads(run.stdout)
         directory = pathlib.Path(summary["directory"])
         manifest = json.loads((directory / "manifest.json").read_text())
-        assert manifest["schema"] == "x-data-mcp.research-snapshot.v1", manifest["schema"]
+        assert manifest["schema"] == "x-data-mcp.research-snapshot.v2", manifest["schema"]
         assert manifest["snapshot_id"] == summary["snapshot_id"] == directory.name, summary
         files = {entry["path"]: entry for entry in manifest["files"]}
         assert set(files) == {"daily_raw.parquet", "daily_qfq.parquet"}, files

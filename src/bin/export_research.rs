@@ -21,7 +21,7 @@ use x_data_mcp::research::{
 };
 
 const USAGE: &str = "usage: export_research --db <sqlite-path> [--out <dir>] \
-[--dataset all|daily|index|calendar|factors] [--adjustment both|raw|qfq] \
+[--dataset all|daily|index|calendar|factors|security] [--adjustment both|raw|qfq] \
 [--start YYYY-MM-DD] [--end YYYY-MM-DD] \
 [--entities sh.600000,sz.000001 | --catalog-version <id>] \
 [--compression snappy|none] [--row-group-rows N] [--dry-run] [--quiet]";

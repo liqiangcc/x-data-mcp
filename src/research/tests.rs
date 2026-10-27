@@ -25,15 +25,17 @@ use super::{
     AdjustmentSelection, DatasetSelection, EntitySelection, ExportRequest, plan, verify_unchanged,
 };
 use crate::compact_market::{
-    CompactBar, EvidenceKind, ExcludedBar, SourceBinding, VersionEvidence,
+    CompactBar, Digest, EvidenceKind, ExcludedBar, SourceBinding, VersionEvidence,
 };
 use crate::market_data::{
     Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, CalendarBatch,
     CalendarInputDates, CoverageStatus, EvidenceValue, Period, UnitCurrencyEvidence,
 };
+use crate::security_master::SecurityLifecycleFact;
+use crate::security_master::suspensions::SuspensionSet;
 use crate::sqlite_market::calendar::{self, CalendarWrite};
 use crate::sqlite_market::series::NewSeries;
-use crate::sqlite_market::{derived, evidence_store, series};
+use crate::sqlite_market::{derived, evidence_store, security, series};
 use crate::sqlite_tasks::SqliteTasks;
 use crate::trading_calendar::TradingCalendar;
 
@@ -339,6 +341,213 @@ impl Fixture {
             [],
         )
         .unwrap();
+
+        Self::populate_security_master(c, binding);
+    }
+
+    /// The M2 parsed-fact rows the export's security files carry (§12.4).
+    ///
+    /// Everything goes through the production writers, so the fixture cannot
+    /// describe a shape the writers do not produce. `risk_warnings` is the one
+    /// exception: it has no writer yet (#308 owns that path), so the rows are
+    /// inserted directly — the export only needs rows to prove the file, and
+    /// the DDL CHECKs are the contract until the writer exists.
+    fn populate_security_master(c: &Connection, binding: Digest) {
+        use crate::security_master::assembly::Assembly;
+        use crate::security_master::{
+            CapitalEvent, CapitalEventSet, Exchange, IssuerResolution, ListingSource,
+            SuspensionCertainty, SuspensionInterval, SuspensionReason,
+        };
+        let window = days();
+        let rows = ["sh.600000", "sz.000001"]
+            .into_iter()
+            .map(|entity| {
+                let (exchange, code) = entity.split_once('.').unwrap();
+                SecurityLifecycleFact {
+                    exchange: if exchange == "sh" {
+                        Exchange::Sh
+                    } else {
+                        Exchange::Sz
+                    },
+                    code: code.into(),
+                    effective_from: window[0],
+                    effective_to: None,
+                    instrument_class: 0,
+                    issuer_key: Some(format!("issuer-{code}")),
+                    issuer_resolution: IssuerResolution::IssuerKey,
+                    listing_date: Some(window[0]),
+                    listing_date_tdx: Some(window[0]),
+                    listing_source: ListingSource::ExchangeList,
+                    b_listing_date: None,
+                    delisting_date: None,
+                    delisting_date_tdx: None,
+                    delisting_source: crate::security_master::DelistingSource::Unknown,
+                    delisting_reason_class: crate::security_master::DelistingReason::Unknown,
+                    arrangement_start: None,
+                    arrangement_end: None,
+                    listing_conflict: false,
+                    delisting_conflict: false,
+                    known_at: Some(window[0]),
+                }
+            })
+            .collect();
+        security::replace_security_master(
+            c,
+            &Assembly {
+                rows,
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(window[0]),
+            },
+            binding,
+            "task-master",
+            "derived:security_master",
+        )
+        .unwrap();
+
+        security::replace_capital_events(
+            c,
+            &CapitalEventSet {
+                entity: "sh.600000".into(),
+                events: vec![
+                    CapitalEvent::from_raw(
+                        0,
+                        window[0],
+                        9,
+                        [
+                            f32::to_bits(0.0),
+                            f32::to_bits(0.0),
+                            f32::to_bits(100_000.0),
+                            f32::to_bits(120_000.0),
+                        ],
+                    )
+                    .unwrap(),
+                    CapitalEvent::from_raw(
+                        1,
+                        window[1],
+                        2,
+                        [
+                            f32::to_bits(100_000.0),
+                            f32::to_bits(120_000.0),
+                            f32::to_bits(100_000.0),
+                            f32::to_bits(120_000.0),
+                        ],
+                    )
+                    .unwrap(),
+                ],
+                excluded: 0,
+                excluded_by_category: std::collections::BTreeMap::new(),
+            },
+            binding,
+            "task-capital",
+            "derived:capital_events",
+        )
+        .unwrap();
+
+        // `risk_warning_intervals.evidence_digest` is an FK to
+        // `evidence_bundles`, so the fixture has to mint one even though no
+        // production writer exists yet.
+        let risk_evidence = crate::sqlite_market::evidence_store::put_evidence(
+            c,
+            EvidenceKind::Derived,
+            &serde_json::json!({
+                "dataset": "risk_warnings",
+                "note": "fixture only: the source has no writer yet, the bundle \
+                         exists so the foreign key holds",
+            }),
+        )
+        .unwrap();
+        for (code, status, raw) in [
+            ("600000", crate::security_master::RiskStatus::Normal, "N"),
+            (
+                "000001",
+                crate::security_master::RiskStatus::OtherRiskWarning,
+                "ST",
+            ),
+        ] {
+            c.execute(
+                "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
+                 raw_status_code,normalized_status,announced_at,known_at,source_kind,\
+                 source_record_id,source_document_sha256,source_generation_id,evidence_digest) \
+                 VALUES(?1,?2,?3,NULL,?4,?5,NULL,NULL,'szse_name_history',NULL,NULL,NULL,?6)",
+                params![
+                    if code.starts_with('6') { "sh" } else { "sz" },
+                    code,
+                    crate::compact_market::epoch_day(window[0]),
+                    raw,
+                    status.as_str(),
+                    risk_evidence.as_slice()
+                ],
+            )
+            .unwrap();
+        }
+
+        let set = SuspensionSet {
+            rows: vec![SuspensionInterval {
+                exchange: Exchange::Sz,
+                code: "000001".into(),
+                start_day: window[1],
+                end_day: window[1],
+                certainty: SuspensionCertainty::UnresolvedGap,
+                missing_days: 1,
+                reason: SuspensionReason::MissingBarNoEvent,
+                known_at: None,
+                source_kind: "bar_evidence".into(),
+                source_record_id: None,
+            }],
+            // The writer recomputes these and refuses a set that disagrees,
+            // so the fixture states them instead of leaving them zero.
+            confirmed_rows: 0,
+            gap_rows: 1,
+            single_day_gap_rows: 1,
+            multi_day_gap_rows: 0,
+            pending_sources: Vec::new(),
+        };
+        crate::sqlite_market::suspensions::replace_suspensions(
+            c,
+            &set,
+            binding,
+            "task-suspensions",
+            "derived:suspensions",
+        )
+        .unwrap();
+
+        crate::sqlite_market::rules::replace_trading_rules(
+            c,
+            &crate::trading_rules::RuleBook {
+                price_limits: vec![crate::trading_rules::PriceLimitRule {
+                    rule_id: "fixture-main-board-10pct".into(),
+                    market: crate::trading_rules::RuleMarket::All,
+                    board: crate::trading_rules::RuleBoard::Main,
+                    status_class: crate::trading_rules::StatusClass::Normal,
+                    listing_phase: crate::trading_rules::ListingPhase::Seasoned,
+                    band_bp: Some(1000),
+                    band_side: crate::trading_rules::BandSide::Both,
+                    rounding: crate::trading_rules::Rounding::HalfUp,
+                    effective_from: window[0],
+                    effective_to: None,
+                    basis_ref: "fixture: main board 10%".into(),
+                    basis_status: crate::trading_rules::BasisStatus::Verified,
+                }],
+                min_ticks: vec![crate::trading_rules::MinTickRule {
+                    rule_id: "fixture-main-board-tick".into(),
+                    market: crate::trading_rules::RuleMarket::All,
+                    board: crate::trading_rules::RuleBoard::Main,
+                    effective_from: window[0],
+                    effective_to: None,
+                    tick_units: 1,
+                    price_scale: 2,
+                    basis_ref: "fixture: 0.01 yuan".into(),
+                    basis_status: crate::trading_rules::BasisStatus::Verified,
+                }],
+            },
+            binding,
+            "task-rules",
+            "derived:trading_rules",
+        )
+        .unwrap();
     }
 
     fn read(&self) -> Connection {
@@ -522,8 +731,12 @@ fn plan_binds_the_four_layers_and_is_deterministic() {
         &first.generations[0]
     );
     assert_eq!(first.series.len(), 5, "2 stocks × 2 口径 + 1 index");
-    assert_eq!(first.derived.len(), 3, "2 factor sets + 1 calendar");
-    assert_eq!(first.files.len(), 5);
+    assert_eq!(
+        first.derived.len(),
+        6,
+        "2 factor sets + 1 calendar + 3 whole-market M2 registrations"
+    );
+    assert_eq!(first.files.len(), 12, "5 M1 files + 7 M2 files");
 
     // The identity excludes the output facts and the timestamp.
     assert!(first.identity.get("created_at").is_none());
@@ -564,6 +777,29 @@ fn plan_binds_the_four_layers_and_is_deterministic() {
     assert_eq!(first.derived[0].dataset.as_str(), "adjustment_events");
     assert_eq!(first.derived[2].dataset.as_str(), "trading_calendar");
     assert_eq!(first.derived[2].algorithm_version, "cal-union-v1");
+    // AC-M2-11: the exported M2 files name the registration they were
+    // recomputed from.
+    let datasets: Vec<&str> = first
+        .derived
+        .iter()
+        .skip(3)
+        .map(|entry| entry.dataset.as_str())
+        .collect();
+    assert_eq!(
+        datasets,
+        vec!["security_master", "suspensions", "price_limit_rules"]
+    );
+    for (entry, expected_key) in
+        first
+            .derived
+            .iter()
+            .skip(3)
+            .zip(["a_share", "a_share", "price_limit_rules"])
+    {
+        assert_eq!(entry.key, expected_key);
+        assert!(!entry.version_id.is_empty());
+        assert!(first.generation_of(&entry.source_binding_digest).is_some());
+    }
 }
 
 /// #383 owner ruling 2026-10-27: the export manifest carries how many index
@@ -968,6 +1204,13 @@ mod with_export {
             super::super::FACTORS_FILE,
             super::super::CALENDAR_FILE,
             super::super::INDEX_FILE,
+            super::super::SECURITY_MASTER_FILE,
+            super::super::SECURITY_NAMES_FILE,
+            super::super::CAPITAL_EVENTS_FILE,
+            super::super::RISK_WARNINGS_FILE,
+            super::super::SUSPENSIONS_FILE,
+            super::super::PRICE_LIMIT_RULES_FILE,
+            super::super::UNIVERSE_INTERVALS_FILE,
         ] {
             assert!(directory.join(name).is_file(), "missing {name}");
         }
@@ -1001,7 +1244,7 @@ mod with_export {
         // Layer 4: every recorded sha256 is the file's sha256, and the row
         // count is what the export streamed.
         let files = manifest["files"].as_array().unwrap();
-        assert_eq!(files.len(), 5);
+        assert_eq!(files.len(), 12);
         let mut total_rows = 0i64;
         for file in files {
             let path = directory.join(file["path"].as_str().unwrap());
@@ -1016,8 +1259,10 @@ mod with_export {
             total_rows += file["rows"].as_i64().unwrap();
         }
         // 2 stocks × 3 bars × 2 口径 + 2 factors + 3 calendar days + 3 index bars
-        assert_eq!(total_rows, 12 + 2 + 3 + 3);
-        assert_eq!(outcome.files.len(), 5);
+        // + 2 master intervals + 0 names + 2 capital events + 2 risk warnings
+        // + 1 suspension + 1 price-limit rule + 2 universe intervals
+        assert_eq!(total_rows, 12 + 2 + 3 + 3 + 2 + 2 + 2 + 1 + 1 + 2);
+        assert_eq!(outcome.files.len(), 12);
     }
 
     #[test]
@@ -1162,14 +1407,14 @@ mod with_export {
         )
         .unwrap();
         assert_eq!(manifest["snapshot_id"], snapshot.snapshot_id);
-        assert_eq!(manifest["files"].as_array().unwrap().len(), 5);
+        assert_eq!(manifest["files"].as_array().unwrap().len(), 12);
         assert!(manifest["files"][0]["sha256"].is_null());
         assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
     }
 
     #[test]
     fn parquet_files_read_back_with_the_expected_schema() {
-        use parquet::file::reader::{FileReader, SerializedFileReader};
+        use parquet::file::reader::{FileReader as _, SerializedFileReader};
 
         let fixture = Fixture::new();
         let out = tempdir();
@@ -1216,6 +1461,44 @@ mod with_export {
             3,
         );
         check(super::super::INDEX_FILE, super::super::INDEX_COLUMNS, 3);
+        // The M2 files parse back with the columns the manifest lists (§12.4,
+        // AC-M2-11). `security_names` has no writer yet, so its file is real
+        // and empty rather than absent.
+        check(
+            super::super::SECURITY_MASTER_FILE,
+            super::super::SECURITY_MASTER_COLUMNS,
+            2,
+        );
+        check(
+            super::super::SECURITY_NAMES_FILE,
+            super::super::SECURITY_NAMES_COLUMNS,
+            0,
+        );
+        check(
+            super::super::CAPITAL_EVENTS_FILE,
+            super::super::CAPITAL_EVENTS_COLUMNS,
+            2,
+        );
+        check(
+            super::super::RISK_WARNINGS_FILE,
+            super::super::RISK_WARNINGS_COLUMNS,
+            2,
+        );
+        check(
+            super::super::SUSPENSIONS_FILE,
+            super::super::SUSPENSIONS_COLUMNS,
+            1,
+        );
+        check(
+            super::super::PRICE_LIMIT_RULES_FILE,
+            super::super::PRICE_LIMIT_RULES_COLUMNS,
+            1,
+        );
+        check(
+            super::super::UNIVERSE_INTERVALS_FILE,
+            super::super::UNIVERSE_INTERVALS_COLUMNS,
+            2,
+        );
 
         // One row of the raw file, read back through the record API: the price
         // is the 2dp integer widened to 6dp, and volume_quantum survives.
@@ -1287,6 +1570,180 @@ mod with_export {
     /// CI hook: when `X_DATA_EXPORT_SMOKE_DIR` is set, leave a real export
     /// there so the job can read it with pyarrow/duckdb (a Rust-only test
     /// cannot prove a third-party reader accepts the files).
+    #[test]
+    fn the_m2_files_carry_dataset_temporal_and_their_rows() {
+        let fixture = Fixture::new();
+        let out = tempdir();
+        let outcome = export(
+            fixture.path(),
+            &ExportRequest::default(),
+            &options(out.path()),
+        )
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(outcome.directory.join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        let files = manifest["files"].as_array().unwrap();
+        let by_path = |name: &str| -> serde_json::Value {
+            files
+                .iter()
+                .find(|entry| entry["path"] == name)
+                .unwrap_or_else(|| panic!("{name} is not in the manifest"))
+                .clone()
+        };
+
+        // §12.4 row counts, straight from the fixture's writers.
+        for (name, rows, dataset, temporal) in [
+            (
+                super::super::SECURITY_MASTER_FILE,
+                2,
+                "market.security_master",
+                (true, true, "partial"),
+            ),
+            (
+                super::super::SECURITY_NAMES_FILE,
+                0,
+                "market.security_names",
+                (true, true, "partial"),
+            ),
+            (
+                super::super::CAPITAL_EVENTS_FILE,
+                2,
+                "market.capital_events",
+                (true, false, "none"),
+            ),
+            (
+                super::super::RISK_WARNINGS_FILE,
+                2,
+                "market.risk_warnings",
+                (true, true, "partial"),
+            ),
+            (
+                super::super::SUSPENSIONS_FILE,
+                1,
+                "market.suspensions",
+                (true, true, "partial"),
+            ),
+            (
+                super::super::PRICE_LIMIT_RULES_FILE,
+                1,
+                "market.price_limit_rules",
+                (true, false, "none"),
+            ),
+            (
+                super::super::UNIVERSE_INTERVALS_FILE,
+                2,
+                "market.universe",
+                (true, false, "none"),
+            ),
+        ] {
+            let entry = by_path(name);
+            assert_eq!(entry["rows"], json!(rows), "{name} rows");
+            assert_eq!(entry["dataset"], dataset, "{name} dataset");
+            assert_eq!(
+                entry["temporal"]["as_of"],
+                json!(temporal.0),
+                "{name} as_of"
+            );
+            assert_eq!(
+                entry["temporal"]["known_at"],
+                json!(temporal.1),
+                "{name} known_at"
+            );
+            assert_eq!(
+                entry["temporal"]["known_at_coverage"], temporal.2,
+                "{name} known_at_coverage"
+            );
+        }
+
+        // The M1 files also name their dataset, and none of them claims a
+        // temporal parameter it cannot honour.
+        for (name, dataset) in [
+            (super::super::DAILY_RAW_FILE, "market.daily"),
+            (super::super::DAILY_QFQ_FILE, "market.daily"),
+            (super::super::FACTORS_FILE, "market.daily_factors"),
+            (super::super::CALENDAR_FILE, "market.calendar"),
+            (super::super::INDEX_FILE, "market.index_daily"),
+        ] {
+            let entry = by_path(name);
+            assert_eq!(entry["dataset"], dataset, "{name} dataset");
+            assert_eq!(entry["temporal"]["as_of"], json!(false), "{name}");
+            assert_eq!(entry["temporal"]["known_at"], json!(false), "{name}");
+            assert_eq!(entry["temporal"]["known_at_coverage"], "none", "{name}");
+        }
+
+        // The three new limitations travel with the files (§12.4).
+        let limitations = manifest["limitations"].as_array().unwrap();
+        assert_eq!(limitations.len(), super::super::LIMITATIONS.len());
+        assert!(limitations.iter().any(|text| {
+            text.as_str()
+                .unwrap()
+                .starts_with("risk_warnings is incomplete by source")
+        }));
+        assert!(limitations.iter().any(|text| {
+            text.as_str()
+                .unwrap()
+                .starts_with("capital_events.known_at is always NULL")
+        }));
+        assert!(limitations.iter().any(|text| {
+            text.as_str()
+                .unwrap()
+                .starts_with("price_limit_rules rows with basis_status='pending'")
+        }));
+    }
+
+    /// §12.4: `daily_raw` is the parsed fact, so it must not carry the derived
+    /// limit columns. A consumer that wants a limit reads `price_limit_rules`
+    /// and derives it, so the same `version_id` of the daily file cannot change
+    /// when a rule changes (AC-M2-11).
+    #[test]
+    fn daily_raw_keeps_no_derived_columns() {
+        for derived_column in ["limit_up", "limit_down", "limit_state", "rule_id"] {
+            assert!(
+                !super::super::DAILY_COLUMNS.contains(&derived_column),
+                "daily_raw must not carry the derived column {derived_column}"
+            );
+        }
+        let fixture = Fixture::new();
+        let planned = plan(&fixture.read(), &ExportRequest::default()).unwrap();
+        let raw = planned
+            .files
+            .iter()
+            .find(|file| file.path == super::super::DAILY_RAW_FILE)
+            .unwrap();
+        assert_eq!(raw.columns, super::super::DAILY_COLUMNS);
+        assert_eq!(raw.dataset, "market.daily");
+        assert_eq!(raw.temporal, super::super::TemporalDecl::NONE);
+    }
+
+    /// `--dataset daily` stays exactly the two M1 bar files: the release smoke
+    /// asserts that set, and the M2 files belong to their own selection.
+    #[test]
+    fn a_daily_only_snapshot_writes_no_m2_file() {
+        let fixture = Fixture::new();
+        let out = tempdir();
+        let outcome = export(
+            fixture.path(),
+            &ExportRequest {
+                dataset: DatasetSelection::Daily,
+                ..ExportRequest::default()
+            },
+            &options(out.path()),
+        )
+        .unwrap();
+        let mut paths: Vec<&str> = outcome
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        paths.sort_unstable();
+        assert_eq!(
+            paths,
+            vec![super::super::DAILY_QFQ_FILE, super::super::DAILY_RAW_FILE]
+        );
+    }
+
     #[test]
     fn smoke_export_for_external_readers() {
         let Some(target) = std::env::var_os("X_DATA_EXPORT_SMOKE_DIR") else {

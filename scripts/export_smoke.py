@@ -112,10 +112,104 @@ CONTRACT = {
         "aggregate_scope": pa.string(),
         "member_count": pa.int32(),
     },
+    # M2 security-master files (§12.4). `flags` is a comma-separated list in
+    # one STRING column: the M2 vocabulary is small, closed and per-row, and a
+    # list column would make the file unreadable for the SQL-first consumers
+    # this snapshot targets.
+    "security_master.parquet": {
+        "exchange": pa.string(),
+        "code": pa.string(),
+        "effective_from": pa.date32(),
+        "effective_to": pa.date32(),
+        "instrument_class": pa.int8(),
+        "issuer_key": pa.string(),
+        "issuer_resolution": pa.string(),
+        "listing_date": pa.date32(),
+        "listing_source": pa.string(),
+        "delisting_date": pa.date32(),
+        "delisting_source": pa.string(),
+        "arrangement_start": pa.date32(),
+        "arrangement_end": pa.date32(),
+        "known_at": pa.date32(),
+        "flags": pa.string(),
+    },
+    "security_names.parquet": {
+        "exchange": pa.string(),
+        "code": pa.string(),
+        "effective_from": pa.date32(),
+        "effective_to": pa.date32(),
+        "name": pa.string(),
+        "certainty": pa.string(),
+        "known_at": pa.date32(),
+        "source_kind": pa.string(),
+    },
+    "capital_events.parquet": {
+        "exchange": pa.string(),
+        "code": pa.string(),
+        "ordinal": pa.int64(),
+        "effective_day": pa.date32(),
+        "category": pa.int8(),
+        "float_after": pa.int64(),
+        "total_after": pa.int64(),
+        "known_at": pa.date32(),
+        "suspicious": pa.bool_(),
+    },
+    "risk_warnings.parquet": {
+        "exchange": pa.string(),
+        "code": pa.string(),
+        "effective_from": pa.date32(),
+        "effective_to": pa.date32(),
+        "normalized_status": pa.string(),
+        "raw_status_code": pa.string(),
+        "announced_at": pa.string(),
+        "known_at": pa.date32(),
+        "source_kind": pa.string(),
+    },
+    "suspensions.parquet": {
+        "exchange": pa.string(),
+        "code": pa.string(),
+        "start_day": pa.date32(),
+        "end_day": pa.date32(),
+        "certainty": pa.string(),
+        "missing_days": pa.int32(),
+        "reason": pa.string(),
+        "known_at": pa.date32(),
+    },
+    "price_limit_rules.parquet": {
+        "rule_id": pa.string(),
+        "market": pa.string(),
+        "board": pa.string(),
+        "status_class": pa.string(),
+        "listing_phase": pa.string(),
+        "band_bp": pa.int64(),
+        "band_side": pa.string(),
+        "rounding": pa.string(),
+        "effective_from": pa.date32(),
+        "effective_to": pa.date32(),
+        "basis_ref": pa.string(),
+        "basis_status": pa.string(),
+    },
+    "universe_intervals.parquet": {
+        "entity": pa.string(),
+        "member_from": pa.date32(),
+        "member_to": pa.date32(),
+        "basis": pa.string(),
+        "flags": pa.string(),
+    },
 }
 
-# The day column each file orders by; factors use the 生效日 (§7.4).
-DAY_COLUMN = {"factors.parquet": "effective_day"}
+# The day column each file orders by; the M2 files are intervals, so their
+# first day is the lower bound (§12.4).
+DAY_COLUMN = {
+    "factors.parquet": "effective_day",
+    "security_master.parquet": "effective_from",
+    "security_names.parquet": "effective_from",
+    "capital_events.parquet": "effective_day",
+    "risk_warnings.parquet": "effective_from",
+    "suspensions.parquet": "start_day",
+    "price_limit_rules.parquet": "effective_from",
+    "universe_intervals.parquet": "member_from",
+}
 
 failures: list[str] = []
 
@@ -140,6 +234,8 @@ def physical_of(dtype: pa.DataType) -> tuple[str, int | None]:
         return ("INT64", None)
     if dtype in (pa.int32(), pa.int8(), pa.uint32(), pa.date32()):
         return ("INT32", None)
+    if dtype == pa.bool_():
+        return ("BOOLEAN", None)
     if pa.types.is_string(dtype):
         return ("BYTE_ARRAY", None)
     raise AssertionError(f"no physical mapping for {dtype}")
@@ -209,10 +305,11 @@ def check_with_duckdb(name: str, path: pathlib.Path, rows: int) -> None:
             f"SELECT count(*), min({day}), max({day}) FROM read_parquet({sql_path(path)})"
         ).fetchone()
         check(count == rows, f"{name}: duckdb counted {count} rows, manifest says {rows}")
-        check(
-            first is not None and last is not None and first <= last,
-            f"{name}: duckdb day range {first}..{last} is empty or reversed",
-        )
+        if rows:
+            check(
+                first is not None and last is not None and first <= last,
+                f"{name}: duckdb day range {first}..{last} is empty or reversed",
+            )
         print(f"ok   {name}: {count} rows, {first}..{last} (duckdb)")
     finally:
         connection.close()
@@ -225,7 +322,7 @@ def check_snapshot(directory: pathlib.Path) -> None:
         return
     manifest = json.loads(manifest_path.read_text())
     check(
-        manifest.get("schema") == "x-data-mcp.research-snapshot.v1",
+        manifest.get("schema") == "x-data-mcp.research-snapshot.v2",
         f"manifest schema {manifest.get('schema')!r}",
     )
     check(
@@ -288,6 +385,8 @@ def self_check() -> None:
                     )
                 elif pa.types.is_string(dtype):
                     columns[column] = pa.array(["sh.600000", None], type=dtype)
+                elif dtype == pa.bool_():
+                    columns[column] = pa.array([True, None], type=dtype)
                 else:
                     columns[column] = pa.array([1, None], type=dtype)
             table = pa.table(columns)
