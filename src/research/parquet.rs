@@ -1278,7 +1278,6 @@ fn write_column(
             .write_batch(&bools, levels, None)
             .map_err(parquet_error)?,
     };
-    column.close().map_err(parquet_error)?;
     Ok(())
 }
 
@@ -1307,6 +1306,9 @@ fn write_table(
                 .ok_or_else(|| Error::Parquet(format!("{}: missing {name}", spec.path)))?;
             let cells: Vec<Option<Cell>> = chunk.iter().map(|row| row[index].clone()).collect();
             write_column(&mut column, spec.types[index], &cells, name)?;
+            // `close` consumes the writer, so it happens here where the
+            // column is owned, not in `write_column`.
+            column.close().map_err(parquet_error)?;
         }
         group.close().map_err(parquet_error)?;
     }
@@ -1588,7 +1590,7 @@ mod tests {
 
     /// The logical type each column kind must declare. `INTEGER(8,true)` is
     /// the only width the M2 files use (`instrument_class`, `category`).
-    fn assert_logical(kind: ColumnType, logical: Option<LogicalType>, column: &str) {
+    fn assert_logical(kind: ColumnType, logical: Option<&LogicalType>, column: &str) {
         match kind {
             ColumnType::Text | ColumnType::TextOpt => assert!(
                 matches!(logical, Some(LogicalType::String)),
@@ -1649,7 +1651,7 @@ mod tests {
                 );
                 assert_logical(
                     kind,
-                    field.get_basic_info().logical_type(),
+                    field.get_basic_info().logical_type_ref(),
                     &format!("{}: {}", spec.path, spec.columns[index]),
                 );
             }
