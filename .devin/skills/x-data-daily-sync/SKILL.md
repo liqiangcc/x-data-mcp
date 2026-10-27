@@ -166,14 +166,31 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 `status`/计数/`next_cursor`，**不期待逐 item 结果数组**。终态为
 `succeeded`/`partially_failed`/`failed`；全市场日更 `partially_failed` 是正常收尾。
 
-本任务除 plan 的实体 item 外，worker 还会追加 10 个**服务器内部派生 item**
-（`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历，见
-`docs/contracts/generic-data-v8.md` §3）。受理响应与
-`plan_counts` 的 `item_count` 仍是 plan 的 `eligible`；`get_task_progress` 的
-`total` 会比它多 10。内部 item 在 `unfinished` 里 `entity`/`period` 为 `null`、
-`item_id` 以 `derived:` 开头，失败只记 item 级结果并使 run 收尾
-`partially_failed`——**不属于 catalog 实体，不进入 §3.3 的补漏清单**，按 `error`
-原样报告即可（不 `retry_task`、不用 `update_data` 补）。
+本任务除 plan 的实体 item 外，worker 还会追加 **14** 个**服务器内部派生 item**
+（`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历 + 4 个 M2
+全市场数据集：`derived:security_master`、`derived:risk_warnings`、
+`derived:suspensions`、`derived:trading_rules`；定义见 `src/task_control/derived.rs`，
+任务面说明见 `docs/daily-sync.md` §3）。受理响应与 `plan_counts` 的 `item_count`
+仍是 plan 的 `eligible`；`get_task_progress` 的 `total` 会比它多 **14**。
+内部 item 在 `unfinished` 里 `entity`/`period` 为 `null`、`item_id` 以 `derived:`
+开头，失败只记 item 级结果并使 run 收尾 `partially_failed`——**不属于 catalog
+实体，不进入 §3.3 的补漏清单**，按 `error` 原样报告即可（不 `retry_task`、不用
+`update_data` 补）。
+
+四个 M2 item 的判定与指数/日历略有不同，别把「未接入来源」当失败：
+
+- **`evidence.pending_sources` 非空但 `error` 为空 = 成功**。
+  `derived:risk_warnings`（#308 未准入）与 `derived:trading_rules`（A-7 未准入）
+  正常就是 `row_count:0`、`version_id:null` 加一个 `pending_sources` 条目；
+  `derived:security_master` 会写主表并把交易所名单/简称历史列为 pending；
+  `derived:suspensions` 只出 `unresolved_gap`（`confirmed` 需公告准入）。
+- 只有 item 的 `error` 非空（或 `status=failed`）才算失败。`security_master`
+  失败时，`derived:suspensions` 可能因缺主表或主表绑定属于另一代而 fail-closed
+  （也可能用本代已有的主表继续成功）；两个 item 都按各自 `error` 原样报告，
+  不要只报一个，也不要重试。
+- **没有规则时涨跌停派生是 `unknown`，这是正确结果**，不要用 `price_limit_rules`
+  的空结果去推断涨跌停价，也不要自行按 10% 计算。
+- M2 item 失败**不影响**已提交的实体 item（不回滚），所以实体补漏仍按 §3.3 走。
 
 ### 3.3 日线失败路由（按 `failed_by_reason` 补漏，不可省略）
 
@@ -188,7 +205,8 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 - `OTHER`：读 `error`，必要时报告。
 
 清单取法：`unfinished` 分页里 `reason_code=REVISION_UNVERIFIED` **且带 `entity`** 的项
-即实体；`entity` 为 `null` 的 `derived:` 内部项（指数/日历）只报告，不列入补漏。
+即实体；`entity` 为 `null` 的 `derived:` 内部项（指数、日历、4 个 M2 数据集）只报告，
+不列入补漏。
 显式 `update_data`（market.daily）请求每项形状：
 `{"entity":{"exchange","code"},"base_version_id":<当前 head version_id>,
 "start_date":<last_record+1>,"end_date":<target_day>}`；`base_version_id` 取提交时当前 head，
@@ -325,6 +343,10 @@ request_id。**推荐每个子批用新的唯一 request_id**，事后才能按 
 - 复用 §3.0/§3.1 的 catalog `version_id` 与实体枚举；对 market.daily 继续按 ≤100 实体分批调用 `get_data_availability`
   （`selection:{"kind":"batch","entities":[…]}`），确认 coverage/freshness/gap 事实。
 - `query_data` 抽样若干实体最新交易日数据（`selection:{"kind":"single"|"batch"}`，`filter:{"kind":"daily",...}`，`version:{"kind":"latest_per_entity"}`）。
+- M2 数据集随日更 run 更新，不单独跑任务：从 run 的 14 个内部 item evidence 里报告
+  `derived:security_master`/`derived:suspensions` 的 `row_count` 与 `version_id`，
+  以及 `derived:risk_warnings`/`derived:trading_rules` 的 `pending_sources`（只报告，
+  不当失败）。
 - 汇报：active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。
 
 可选：派生 `market.yearly` — 走 §3.4/§3.5/§3.6（plan/run + 显式重推），
