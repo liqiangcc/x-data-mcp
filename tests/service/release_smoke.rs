@@ -52,7 +52,20 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
                 .any(|v| v == required)
         );
     }
-    assert_eq!(value["checks"].as_array().unwrap().len(), 12);
+    // `cargo nextest --features export` also builds `export_research`, so the
+    // smoke's export section runs there; the default build skips it.
+    let mut expected_checks = 12;
+    if cfg!(feature = "export") {
+        expected_checks += 1;
+        assert!(
+            value["checks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v == "export_research_synthetic_snapshot_manifest_and_file_sha256")
+        );
+    }
+    assert_eq!(value["checks"].as_array().unwrap().len(), expected_checks);
     assert!(
         value["checks"]
             .as_array()

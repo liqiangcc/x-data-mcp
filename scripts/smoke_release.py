@@ -437,10 +437,20 @@ def main():
     checks.append("same_proxy_idle_over_30_seconds_then_calls_again")
     acquire_smoke(binaries)
     checks.append("acquire_service_socket_discovery_and_capabilities")
-    export_readers = export_smoke(binaries)
-    checks.append("export_research_synthetic_snapshot_manifest_and_file_sha256")
-    if package_manifest_smoke(binaries):
-        checks.append("package_manifest_records_export_feature_and_binary_bytes")
+    # `export_research` exists only when the package was built with
+    # `--features export` (scripts/build_release.sh). A default `target/debug`
+    # build has no such binary, so the repo-side smoke skips this section;
+    # the package CI job always runs it.
+    if (binaries / "export_research").is_file():
+        export_readers = export_smoke(binaries)
+        checks.append("export_research_synthetic_snapshot_manifest_and_file_sha256")
+        if package_manifest_smoke(binaries):
+            checks.append("package_manifest_records_export_feature_and_binary_bytes")
+    else:
+        export_readers = (
+            "NOT_RUN (export_research is not built; the release package enables "
+            "--features export)"
+        )
     report = dict(status="PASS", version=version, binary_sha256=hashlib.sha256((binaries / "mcp_data").read_bytes()).hexdigest(), checks=checks, export_readers=export_readers, live_source="NOT_RUN", production="NOT_PRODUCTION_READY", data="SYNTHETIC_FIXTURE_ONLY")
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report, ensure_ascii=False))
