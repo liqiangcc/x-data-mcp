@@ -792,13 +792,24 @@ pub(crate) fn query(
                 }
             }
             let r = read_market(c, ctx, plan.args.dataset, entity, &id)?;
+            // Schema 21+ has no legacy envelope: build the metadata from the
+            // same series row (and version evidence) that `stats` uses, so
+            // fields such as the index exclusion count cannot drift between
+            // the two read surfaces.
+            let meta = if latest_only {
+                let series = crate::sqlite_market::series::read_series_by_version_id(c, &id)?
+                    .ok_or_else(|| Error::Integrity("version id names no current series".into()))?;
+                series_metadata(c, &series)?
+            } else {
+                metadata(c, &r, plan.args.dataset)
+            };
             let mut meta_scan = YearlyMetaScan::new();
             let reference = market_ref(plan.args.dataset, entity, &r);
             result.manifest.push(ManifestEntry {
                 entity: Some(entity.clone()),
                 version_ref: Some(reference.clone()),
                 status: ManifestStatus::Present,
-                metadata: Some(metadata(c, &r, plan.args.dataset)),
+                metadata: Some(meta),
                 stale: stale_mark.as_ref().map(|m| m.0.clone()),
                 as_of_day: stale_mark.as_ref().map(|m| m.1),
                 reason: None,
