@@ -454,10 +454,22 @@ impl Fixture {
                     .wrapping_mul(6_364_136_223_846_793_005)
                     .wrapping_add(1_442_695_040_888_963_407);
                 let close = 1_000_000 + ((state >> 16) % 900_000_000) as i64;
+                let volume = 100 + ((state >> 8) % 100_000) as i64;
+                let amount_cents = (close as i128 * volume as i128 / 10_000) as i64;
+                let amount = format!("{}.{:02}", amount_cents / 100, amount_cents % 100);
                 c.execute(
                     "UPDATE series_bars SET open_units=?1,high_units=?2,low_units=?3,\
-                     close_units=?4 WHERE series_key=?5 AND trade_day=?6",
-                    params![close - 10, close + 10, close - 20, close, key, trade_day],
+                     close_units=?4,volume=?7,amount=?8 WHERE series_key=?5 AND trade_day=?6",
+                    params![
+                        close - 10,
+                        close + 10,
+                        close - 20,
+                        close,
+                        key,
+                        trade_day,
+                        volume,
+                        amount
+                    ],
                 )
                 .unwrap();
             }
@@ -1260,12 +1272,14 @@ mod with_export {
             "daily_raw {raw_per_row:.1} B/row is outside the measured range"
         );
         assert!(
-            (45.0..=90.0).contains(&qfq_per_row),
+            (30.0..=90.0).contains(&qfq_per_row),
             "daily_qfq {qfq_per_row:.1} B/row is outside the measured range"
         );
-        // 340MB / 16,749,060 rows / 2 files ≈ 10 B/row per file.
+        // 340MB / 16,749,060 rows / 2 files ≈ 10 B/row per file. This fixture
+        // has two entities and constant raw volume/amount, so it sits below
+        // the production-shaped 55.9 B/row, but still far above 10.
         assert!(
-            qfq_per_row > 40.0,
+            qfq_per_row > 25.0,
             "the qfq fixed-width floor should make 10 B/row impossible"
         );
     }
