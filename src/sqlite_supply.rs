@@ -235,10 +235,52 @@ impl ReadRepository for SqliteSupply {
         })
     }
     fn versions(&self, args: &VersionsQuery, access: &Access) -> Result<Vec<VersionInfo>, Error> {
-        let entities = entities(args.dataset, &args.selection, access)?;
+        if args.dataset == Dataset::Calendar {
+            return self.market.read(|c| {
+                let Some(registration) = crate::sqlite_market::derived::read_version(
+                    c,
+                    crate::trading_calendar::DATASET_KIND,
+                    crate::trading_calendar::DATASET_KEY,
+                )?
+                else {
+                    return Ok(vec![]);
+                };
+                Ok(vec![VersionInfo {
+                    version_ref: derived_reference(Dataset::Calendar, None, &registration),
+                    published_at: series_timestamp(&registration.updated_at)?,
+                }])
+            });
+        }
+        let entities = if let Selection::Universe { catalog_version } = &args.selection {
+            self.universe_members(args.dataset, catalog_version.as_deref())?
+                .1
+        } else {
+            entities(args.dataset, &args.selection, access)?
+        };
         self.market.read(|c|{
             let mut ctx = VerifyCtx;
             let mut result=vec![];
+            if args.dataset==Dataset::AdjustmentEvents {
+                for entity in entities {
+                    let Some(registration) = crate::sqlite_market::derived::read_version(
+                        c,
+                        crate::sqlite_market::derived::ADJUSTMENT_EVENTS_KIND,
+                        &entity.symbol(),
+                    )? else {
+                        continue;
+                    };
+                    result.push(VersionInfo {
+                        version_ref: derived_reference(
+                            Dataset::AdjustmentEvents,
+                            Some(&entity),
+                            &registration,
+                        ),
+                        published_at: series_timestamp(&registration.updated_at)?,
+                    });
+                }
+                result.sort_by(|a,b|b.published_at.cmp(&a.published_at).then(a.version_ref.version_id.cmp(&b.version_ref.version_id)));
+                return Ok(result);
+            }
             if args.dataset==Dataset::Catalog {
                 let mut s=c.prepare("SELECT version_id FROM catalog_versions ORDER BY published_at DESC,version_id ASC").map_err(storage)?;
                 let ids=s.query_map([],|r|r.get::<_,String>(0)).map_err(storage)?.collect::<Result<Vec<_>,_>>().map_err(storage)?;
@@ -253,7 +295,15 @@ impl ReadRepository for SqliteSupply {
                         // (current) entry per entity.
                         // AC-M1-10: the public version list resolves stock
                         // 前复权 series only (index/ETF are export-only).
-                        if let Some(row)=crate::sqlite_market::series::read_public_series(c,&entity.symbol(),if args.dataset==Dataset::Daily{crate::market_data::Period::Day}else{crate::market_data::Period::Year})? {
+                        let (adjustment, instrument_class) = dataset_shape(args.dataset)
+                            .ok_or_else(|| invalid("dataset has no price series"))?;
+                        if let Some(row)=crate::sqlite_market::series::read_visible_series(
+                            c,
+                            &entity.symbol(),
+                            args.dataset.period().unwrap(),
+                            adjustment,
+                            instrument_class,
+                        )? {
                             result.push(VersionInfo{version_ref:series_version_ref(args.dataset,&entity,&row),published_at:series_timestamp(&row.updated_at)?});
                         }
                         continue;
@@ -266,7 +316,292 @@ impl ReadRepository for SqliteSupply {
             result.sort_by(|a,b|b.published_at.cmp(&a.published_at).then(a.version_ref.version_id.cmp(&b.version_ref.version_id)));Ok(result)
         })
     }
+    fn universe_members(
+        &self,
+        dataset: Dataset,
+        catalog_version: Option<&str>,
+    ) -> Result<(String, Vec<Security>), Error> {
+        match dataset {
+            Dataset::Index => {
+                let members = crate::index_registry::INDEX_SERIES
+                    .iter()
+                    .map(|registration| {
+                        Security::parse(registration.entity).map_err(Error::Integrity)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((String::new(), members))
+            }
+            Dataset::Daily | Dataset::AdjustmentEvents => self.market.read(|c| {
+                let id = match catalog_version {
+                    None | Some("latest") => sqlite_catalog::head(c)?.ok_or_else(|| {
+                        invalid(
+                            "selection.kind=universe requires a published catalog; none is available",
+                        )
+                    })?,
+                    Some(id) => id.to_owned(),
+                };
+                let version = sqlite_catalog::read(c, &id)?;
+                let members = version
+                    .records
+                    .into_iter()
+                    .map(|record| {
+                        let exchange = match record.exchange {
+                            crate::catalog::Exchange::Shanghai => Exchange::Sh,
+                            crate::catalog::Exchange::Shenzhen => Exchange::Sz,
+                            _ => return Err(Error::Integrity("catalog exchange".into())),
+                        };
+                        Ok(Security {
+                            exchange,
+                            code: record.symbol,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Error>>()?;
+                Ok((id, members))
+            }),
+            _ => Err(invalid(
+                "selection.kind=universe is not supported for this dataset",
+            )),
+        }
+    }
+    fn calendar_days(
+        &self,
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    ) -> Result<Vec<chrono::NaiveDate>, Error> {
+        self.market.read(|c| {
+            let registered = crate::sqlite_market::derived::read_version(
+                c,
+                crate::trading_calendar::DATASET_KIND,
+                crate::trading_calendar::DATASET_KEY,
+            )?;
+            if registered.is_none() {
+                return Err(invalid(
+                    "trading calendar unavailable; run the daily update that derives it",
+                ));
+            }
+            let mut statement = c
+                .prepare(
+                    "SELECT trade_day FROM trading_days WHERE trade_day BETWEEN ?1 AND ?2 \
+                     ORDER BY trade_day",
+                )
+                .map_err(storage)?;
+            let rows = statement
+                .query_map(
+                    params![
+                        crate::compact_market::epoch_day(start),
+                        crate::compact_market::epoch_day(end)
+                    ],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(storage)?;
+            let mut days = Vec::new();
+            for row in rows {
+                days.push(
+                    crate::compact_market::epoch_date(row.map_err(storage)?)
+                        .map_err(|e| Error::Integrity(e.to_string()))?,
+                );
+            }
+            Ok(days)
+        })
+    }
 }
+/// The 口径/品种 pair a versioned price dataset serves (v8 PR-4, #387 §4.2).
+/// `market.index` is raw/point; `market.daily`/`market.yearly` keep the stock
+/// 前复权 shape. Datasets without a price series return `None`.
+fn dataset_shape(dataset: Dataset) -> Option<(crate::market_data::Adjustment, i64)> {
+    match dataset {
+        Dataset::Daily | Dataset::Yearly => Some((
+            crate::market_data::Adjustment::Forward,
+            crate::market_data::INSTRUMENT_CLASS_STOCK,
+        )),
+        Dataset::Index => Some((
+            crate::market_data::Adjustment::Raw,
+            crate::market_data::INSTRUMENT_CLASS_INDEX,
+        )),
+        Dataset::Catalog | Dataset::AdjustmentEvents | Dataset::Calendar => None,
+    }
+}
+
+/// Head resolution for one dataset: schema 22 asks the dataset's own shape;
+/// the legacy schema keeps its `data_versions` head (and has no index series).
+fn dataset_head(
+    c: &Connection,
+    dataset: Dataset,
+    entity: &Security,
+) -> Result<Option<String>, Error> {
+    let period = dataset
+        .period()
+        .ok_or_else(|| invalid("dataset has no price series"))?;
+    if !crate::sqlite_market::is_latest_only_schema(c)? {
+        return crate::sqlite_market::head(
+            c,
+            &Scope {
+                symbol: entity.symbol(),
+                period,
+            },
+        );
+    }
+    let (adjustment, instrument_class) =
+        dataset_shape(dataset).ok_or_else(|| invalid("dataset has no price series"))?;
+    Ok(crate::sqlite_market::series::read_visible_series(
+        c,
+        &entity.symbol(),
+        period,
+        adjustment,
+        instrument_class,
+    )?
+    .map(|row| row.version_id))
+}
+
+/// True when a pinned id belongs to another dataset's shape. Replaces the
+/// single `instrument_class=0` check (M1 PR-5) with the same dataset-aware
+/// predicate head resolution uses.
+fn dataset_invisible(c: &Connection, dataset: Dataset, id: &str) -> Result<bool, Error> {
+    if !crate::sqlite_market::is_latest_only_schema(c)? {
+        return Ok(false);
+    }
+    let Some((adjustment, instrument_class)) = dataset_shape(dataset) else {
+        return Ok(false);
+    };
+    crate::sqlite_market::series::is_invisible_version(c, id, adjustment, instrument_class)
+}
+
+fn derived_reference(
+    dataset: Dataset,
+    entity: Option<&Security>,
+    registration: &crate::sqlite_market::derived::DerivedVersionRow,
+) -> VersionRef {
+    VersionRef {
+        dataset,
+        contract_version: ContractVersion::V1,
+        entity: entity.cloned(),
+        version_id: registration.version_id.clone(),
+        integrity_sha256: registration.version_id.clone(),
+    }
+}
+
+fn derived_manifest(
+    dataset: Dataset,
+    entity: Option<&Security>,
+    registration: &crate::sqlite_market::derived::DerivedVersionRow,
+    coverage_reason: &str,
+) -> Result<ManifestEntry, Error> {
+    Ok(ManifestEntry {
+        entity: entity.cloned(),
+        version_ref: Some(derived_reference(dataset, entity, registration)),
+        status: ManifestStatus::Present,
+        metadata: Some(Metadata {
+            source: format!("derived:{}", registration.dataset_kind),
+            published_at: series_timestamp(&registration.updated_at)?,
+            coverage_status: "complete".into(),
+            coverage_reason: coverage_reason.into(),
+            units: vec![],
+            adjustment: None,
+            lineage: None,
+            index: None,
+        }),
+        stale: None,
+        as_of_day: None,
+        reason: None,
+    })
+}
+
+fn absent(entity: Option<&Security>) -> ManifestEntry {
+    ManifestEntry {
+        entity: entity.cloned(),
+        version_ref: None,
+        status: ManifestStatus::Absent,
+        metadata: None,
+        stale: None,
+        as_of_day: None,
+        reason: None,
+    }
+}
+
+/// `market.calendar`: market-level rows, one version registration, no entity.
+fn calendar_query(
+    c: &Connection,
+    plan: &QueryPlan,
+    result: &mut QuerySnapshot,
+) -> Result<(), Error> {
+    let Some(registration) = crate::sqlite_market::derived::read_version(
+        c,
+        crate::trading_calendar::DATASET_KIND,
+        crate::trading_calendar::DATASET_KEY,
+    )?
+    else {
+        result.manifest.push(absent(None));
+        return Ok(());
+    };
+    result.manifest.push(derived_manifest(
+        Dataset::Calendar,
+        None,
+        &registration,
+        "derived from the registered calendar inputs; a row means at least one input index printed a bar",
+    )?);
+    let (start, end) = market_range(plan)?;
+    for day in crate::sqlite_market::calendar::read_days(c)? {
+        if day.day < start || day.day > end {
+            continue;
+        }
+        result.rows.push(Row::Calendar { trade_day: day.day });
+        if result.rows.len() > MAX_ROWS {
+            return Err(invalid("snapshot row budget exceeded"));
+        }
+    }
+    Ok(())
+}
+
+/// `market.adjustment_events`: one derived registration per entity, rows are
+/// effective-day facts. `known_at` stays out of the row because M1 stores NULL.
+fn events_query(c: &Connection, plan: &QueryPlan, result: &mut QuerySnapshot) -> Result<(), Error> {
+    let (start, end) = market_range(plan)?;
+    for entity in &plan.entities {
+        let Some(registration) = crate::sqlite_market::derived::read_version(
+            c,
+            crate::sqlite_market::derived::ADJUSTMENT_EVENTS_KIND,
+            &entity.symbol(),
+        )?
+        else {
+            result.manifest.push(absent(Some(entity)));
+            continue;
+        };
+        if let VersionChoice::ExplicitVersionMap { versions } = &plan.args.version {
+            let pinned = versions
+                .iter()
+                .find(|v| &v.entity == entity)
+                .map(|v| v.version_id.as_str());
+            if pinned != Some(registration.version_id.as_str()) {
+                return Err(Error::Stale("adjustment-event set changed".into()));
+            }
+        }
+        result.manifest.push(derived_manifest(
+            Dataset::AdjustmentEvents,
+            Some(entity),
+            &registration,
+            "parsed from the published daily factor set; 知晓时间 is unknown",
+        )?);
+        for event in crate::sqlite_market::derived::read_adjustment_events(c, &entity.symbol())? {
+            if event.effective_day < start || event.effective_day > end {
+                continue;
+            }
+            result.rows.push(Row::AdjustmentEvent {
+                entity: entity.clone(),
+                effective_day: event.effective_day,
+                category: event.category,
+                c1: event.factors[0].to_string(),
+                c2: event.factors[1].to_string(),
+                c3: event.factors[2].to_string(),
+                c4: event.factors[3].to_string(),
+            });
+            if result.rows.len() > MAX_ROWS {
+                return Err(invalid("snapshot row budget exceeded"));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn query(
     c: &Connection,
     ctx: &mut VerifyCtx,
@@ -277,6 +612,14 @@ pub(crate) fn query(
         manifest: vec![],
         rows: vec![],
     };
+    if plan.args.dataset == Dataset::Calendar {
+        calendar_query(c, plan, &mut result)?;
+        return Ok(result);
+    }
+    if plan.args.dataset == Dataset::AdjustmentEvents {
+        events_query(c, plan, &mut result)?;
+        return Ok(result);
+    }
     if plan.args.dataset == Dataset::Catalog {
         let id = match &plan.args.version {
             VersionChoice::CatalogVersion { version_id } => Some(version_id.clone()),
@@ -309,6 +652,7 @@ pub(crate) fn query(
                 units: vec![],
                 adjustment: None,
                 lineage: None,
+                index: None,
             }),
 
             stale: None,
@@ -369,13 +713,7 @@ pub(crate) fn query(
                     .iter()
                     .find(|v| &v.entity == entity)
                     .map(|v| v.version_id.clone()),
-                _ => crate::sqlite_market::head(
-                    c,
-                    &Scope {
-                        symbol: entity.symbol(),
-                        period: plan.args.dataset.period().unwrap(),
-                    },
-                )?,
+                _ => dataset_head(c, plan.args.dataset, entity)?,
             };
             let Some(id) = id else {
                 result.manifest.push(ManifestEntry {
@@ -395,7 +733,7 @@ pub(crate) fn query(
             // readable just because its id is known.
             if latest_only
                 && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
-                && crate::sqlite_market::series::is_public_invisible_version(c, &id)?
+                && dataset_invisible(c, plan.args.dataset, &id)?
             {
                 result.manifest.push(ManifestEntry {
                     entity: Some(entity.clone()),
@@ -460,13 +798,17 @@ pub(crate) fn query(
                 entity: Some(entity.clone()),
                 version_ref: Some(reference.clone()),
                 status: ManifestStatus::Present,
-                metadata: Some(metadata(&r)),
+                metadata: Some(metadata(c, &r, plan.args.dataset)),
                 stale: stale_mark.as_ref().map(|m| m.0.clone()),
                 as_of_day: stale_mark.as_ref().map(|m| m.1),
                 reason: None,
             });
             let (start, end) = match plan.args.filter {
                 Filter::Daily {
+                    start_date,
+                    end_date,
+                } => (start_date, end_date),
+                Filter::CrossSection {
                     start_date,
                     end_date,
                 } => (start_date, end_date),
@@ -479,6 +821,9 @@ pub(crate) fn query(
                 ),
                 _ => return Err(invalid("market filter")),
             };
+            let cross_days: Option<std::collections::BTreeSet<chrono::NaiveDate>> =
+                matches!(&plan.args.filter, Filter::CrossSection { .. })
+                    .then(|| plan.trade_days.iter().copied().collect());
             let range = crate::market_storage::Range {
                 start,
                 end,
@@ -491,6 +836,12 @@ pub(crate) fn query(
                 plan.args.dataset.period().unwrap(),
                 &range,
             )? {
+                if cross_days
+                    .as_ref()
+                    .is_some_and(|days| !days.contains(&b.date))
+                {
+                    continue;
+                }
                 let (first_trading_date, last_trading_date, year_unfinished) =
                     if plan.args.dataset == Dataset::Yearly {
                         meta_scan.meta(c, &r, b.date)?
@@ -547,6 +898,7 @@ fn availability_stats(
             .iter()
             .filter_map(|r| match r {
                 Row::Market { date, .. } => Some(*date),
+                Row::Calendar { trade_day } => Some(*trade_day),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -557,18 +909,15 @@ fn availability_stats(
             s.rows.len(),
         ));
     };
+    if plan.args.dataset == Dataset::AdjustmentEvents {
+        return event_stats(c, plan, entity);
+    }
     let id = match &plan.args.version {
         VersionChoice::ExplicitVersionMap { versions } => versions
             .iter()
             .find(|v| &v.entity == entity)
             .map(|v| v.version_id.clone()),
-        _ => crate::sqlite_market::head(
-            c,
-            &Scope {
-                symbol: entity.symbol(),
-                period: plan.args.dataset.period().unwrap(),
-            },
-        )?,
+        _ => dataset_head(c, plan.args.dataset, entity)?,
     };
     let Some(id) = id else {
         return Ok((
@@ -590,7 +939,7 @@ fn availability_stats(
     // AC-M1-10: same visibility boundary as `query`, including explicit pins.
     if crate::sqlite_market::is_latest_only_schema(c)?
         && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
-        && crate::sqlite_market::series::is_public_invisible_version(c, &id)?
+        && dataset_invisible(c, plan.args.dataset, &id)?
     {
         return Ok((
             Some(ManifestEntry {
@@ -615,7 +964,7 @@ fn availability_stats(
         entity: Some(entity.clone()),
         version_ref: Some(market_ref(plan.args.dataset, entity, &r)),
         status: ManifestStatus::Present,
-        metadata: Some(metadata(&r)),
+        metadata: Some(metadata(c, &r, plan.args.dataset)),
 
         stale: None,
         as_of_day: None,
@@ -647,9 +996,63 @@ fn availability_stats(
     Ok((Some(manifest), first, last, count))
 }
 
+fn event_stats(
+    c: &Connection,
+    plan: &QueryPlan,
+    entity: &Security,
+) -> Result<AvailabilityStats, Error> {
+    let Some(registration) = crate::sqlite_market::derived::read_version(
+        c,
+        crate::sqlite_market::derived::ADJUSTMENT_EVENTS_KIND,
+        &entity.symbol(),
+    )?
+    else {
+        return Ok((Some(absent(Some(entity))), None, None, 0));
+    };
+    if let VersionChoice::ExplicitVersionMap { versions } = &plan.args.version {
+        let pinned = versions
+            .iter()
+            .find(|v| &v.entity == entity)
+            .map(|v| v.version_id.as_str());
+        if pinned != Some(registration.version_id.as_str()) {
+            return Err(Error::Stale("adjustment-event set changed".into()));
+        }
+    }
+    let (start, end) = market_range(plan)?;
+    let mut count = 0usize;
+    let mut first = None;
+    let mut last = None;
+    for event in crate::sqlite_market::derived::read_adjustment_events(c, &entity.symbol())? {
+        if event.effective_day < start || event.effective_day > end {
+            continue;
+        }
+        count += 1;
+        if count > MAX_ROWS {
+            return Err(invalid("snapshot row budget exceeded"));
+        }
+        first.get_or_insert(event.effective_day);
+        last = Some(event.effective_day);
+    }
+    Ok((
+        Some(derived_manifest(
+            Dataset::AdjustmentEvents,
+            Some(entity),
+            &registration,
+            "parsed from the published daily factor set; 知晓时间 is unknown",
+        )?),
+        first,
+        last,
+        count,
+    ))
+}
+
 fn market_range(plan: &QueryPlan) -> Result<(chrono::NaiveDate, chrono::NaiveDate), Error> {
     match plan.args.filter {
         Filter::Daily {
+            start_date,
+            end_date,
+        } => Ok((start_date, end_date)),
+        Filter::CrossSection {
             start_date,
             end_date,
         } => Ok((start_date, end_date)),
@@ -744,8 +1147,27 @@ fn adjustment_evidence(a: &crate::market_data::AdjustmentEvidence) -> Evidence {
         reason: a.reason.clone(),
     }
 }
-fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
+fn metadata(
+    c: &Connection,
+    r: &crate::market_storage::compat::CheckedRecord,
+    dataset: Dataset,
+) -> Metadata {
     let v = r.version();
+    let index = if dataset == Dataset::Index {
+        crate::sqlite_market::index::read_meta_by_entity(c, &v.symbol)
+            .ok()
+            .flatten()
+            .map(|m| IndexMetadata {
+                aggregate_scope: m.aggregate_scope,
+                member_count: m.member_count,
+                price_unit: m.price_unit,
+                volume_unit: m.volume_unit,
+                amount_unit: m.amount_unit,
+                aliases: m.aliases,
+            })
+    } else {
+        None
+    };
     Metadata {
         source: v.source.clone(),
         published_at: v.published_at,
@@ -765,6 +1187,7 @@ fn metadata(r: &crate::market_storage::compat::CheckedRecord) -> Metadata {
             first_trading_date: l.first_trading_date,
             last_trading_date: l.last_trading_date,
         }),
+        index,
     }
 }
 
@@ -1474,6 +1897,26 @@ fn verify_versions_conn(
     for r in unique_refs(refs) {
         let actual = if r.dataset == Dataset::Catalog {
             catalog_ref(&sqlite_catalog::read(c, &r.version_id)?)?
+        } else if r.dataset == Dataset::AdjustmentEvents {
+            let entity = r
+                .entity
+                .as_ref()
+                .ok_or_else(|| invalid("missing version entity"))?;
+            let registration = crate::sqlite_market::derived::read_version(
+                c,
+                crate::sqlite_market::derived::ADJUSTMENT_EVENTS_KIND,
+                &entity.symbol(),
+            )?
+            .ok_or_else(|| Error::Integrity("adjustment-event set vanished".into()))?;
+            derived_reference(r.dataset, Some(entity), &registration)
+        } else if r.dataset == Dataset::Calendar {
+            let registration = crate::sqlite_market::derived::read_version(
+                c,
+                crate::trading_calendar::DATASET_KIND,
+                crate::trading_calendar::DATASET_KEY,
+            )?
+            .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
+            derived_reference(r.dataset, None, &registration)
         } else {
             let entity = r
                 .entity
@@ -1541,6 +1984,26 @@ fn verify_versions_meta_conn(
         for r in unique_refs(refs) {
             let actual = if r.dataset == Dataset::Catalog {
                 catalog_ref(&sqlite_catalog::read(c, &r.version_id)?)?
+            } else if r.dataset == Dataset::AdjustmentEvents {
+                let entity = r
+                    .entity
+                    .as_ref()
+                    .ok_or_else(|| invalid("missing version entity"))?;
+                let registration = crate::sqlite_market::derived::read_version(
+                    c,
+                    crate::sqlite_market::derived::ADJUSTMENT_EVENTS_KIND,
+                    &entity.symbol(),
+                )?
+                .ok_or_else(|| Error::Integrity("adjustment-event set vanished".into()))?;
+                derived_reference(r.dataset, Some(entity), &registration)
+            } else if r.dataset == Dataset::Calendar {
+                let registration = crate::sqlite_market::derived::read_version(
+                    c,
+                    crate::trading_calendar::DATASET_KIND,
+                    crate::trading_calendar::DATASET_KEY,
+                )?
+                .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
+                derived_reference(r.dataset, None, &registration)
             } else {
                 let entity = r
                     .entity
@@ -1549,6 +2012,11 @@ fn verify_versions_meta_conn(
                 let row = crate::sqlite_market::series::require_series(c, &r.version_id)?;
                 if row.entity != entity.symbol() || Some(row.period) != r.dataset.period() {
                     return Err(Error::Integrity("version entity/dataset mismatch".into()));
+                }
+                if let Some((adjustment, instrument_class)) = dataset_shape(r.dataset)
+                    && (row.adjustment != adjustment || row.instrument_class != instrument_class)
+                {
+                    return Err(Error::Integrity("version dataset shape mismatch".into()));
                 }
                 series_version_ref(r.dataset, entity, &row)
             };
@@ -1863,17 +2331,27 @@ impl ObservationRepository for SqliteSupply {
         let _total = crate::stage_trace::span("availability.total");
         self.market.read(|c| {
             let mut ctx = VerifyCtx;
-            let entities: Vec<Option<Security>> = if plan.args.dataset == Dataset::Catalog {
-                vec![None]
-            } else {
-                plan.entities.iter().cloned().map(Some).collect()
-            };
+            let universe = matches!(plan.args.selection, Selection::Universe { .. });
+            let entities: Vec<Option<Security>> =
+                if matches!(plan.args.dataset, Dataset::Catalog | Dataset::Calendar) {
+                    vec![None]
+                } else {
+                    plan.entities.iter().cloned().map(Some).collect()
+                };
             // Related tasks come from the requested entities only (XP-025 D):
             // one narrow task_scopes pass, facts for the matching tasks.
             let task_span = crate::stage_trace::span("availability.related_tasks");
-            let symbols: Vec<String> = entities.iter().flatten().map(|e| e.symbol()).collect();
-            let (related, catalog_related) =
-                related_tasks_for(c, &symbols, entities.iter().any(Option::is_none), access)?;
+            let symbols: Vec<String> = if universe {
+                Vec::new()
+            } else {
+                entities.iter().flatten().map(|e| e.symbol()).collect()
+            };
+            let (related, catalog_related) = related_tasks_for(
+                c,
+                &symbols,
+                !universe && entities.iter().any(Option::is_none),
+                access,
+            )?;
             crate::stage_trace::note(
                 "availability.related_tasks_size",
                 &[(
@@ -1907,6 +2385,7 @@ impl ObservationRepository for SqliteSupply {
                             proven_gaps,
                             related_tasks,
                             related_tasks_total,
+                            summary: None,
                         });
                     }
                     Err(Error::Integrity(reason) | Error::Base(reason)) => {
@@ -1920,10 +2399,61 @@ impl ObservationRepository for SqliteSupply {
                             proven_gaps,
                             related_tasks,
                             related_tasks_total,
+                            summary: None,
                         })
                     }
                     Err(e) => return Err(e),
                 }
+            }
+            if universe {
+                let present = out
+                    .iter()
+                    .filter(|f| {
+                        f.manifest
+                            .as_ref()
+                            .is_some_and(|m| m.status == ManifestStatus::Present)
+                    })
+                    .count();
+                let absent = out
+                    .iter()
+                    .filter(|f| {
+                        f.manifest
+                            .as_ref()
+                            .is_some_and(|m| m.status == ManifestStatus::Absent)
+                    })
+                    .count();
+                let stale = out
+                    .iter()
+                    .filter(|f| f.manifest.as_ref().is_some_and(|m| m.stale.is_some()))
+                    .count();
+                let unavailable = out.iter().filter(|f| f.integrity_failure.is_some()).count();
+                let summary = UniverseSummary {
+                    entities: out.len(),
+                    present,
+                    absent,
+                    stale,
+                    unavailable,
+                };
+                let first_record = out.iter().filter_map(|f| f.first_record).min();
+                let last_record = out.iter().filter_map(|f| f.last_record).max();
+                let record_count = out.iter().map(|f| f.record_count).sum();
+                return Ok(vec![AvailabilityFacts {
+                    entity: None,
+                    manifest: None,
+                    first_record,
+                    last_record,
+                    record_count,
+                    integrity_failure: (unavailable > 0).then(|| {
+                        format!(
+                            "{unavailable} of {} universe entities failed integrity",
+                            summary.entities
+                        )
+                    }),
+                    proven_gaps: vec![],
+                    related_tasks: vec![],
+                    related_tasks_total: 0,
+                    summary: Some(summary),
+                }]);
             }
             Ok(out)
         })
@@ -2049,6 +2579,20 @@ fn series_metadata(
     } else {
         None
     };
+    let index = if series.instrument_class == crate::market_data::INSTRUMENT_CLASS_INDEX {
+        crate::sqlite_market::index::read_meta_by_entity(c, &series.entity)?.map(|m| {
+            IndexMetadata {
+                aggregate_scope: m.aggregate_scope,
+                member_count: m.member_count,
+                price_unit: m.price_unit,
+                volume_unit: m.volume_unit,
+                amount_unit: m.amount_unit,
+                aliases: m.aliases,
+            }
+        })
+    } else {
+        None
+    };
     Ok(Metadata {
         source: evidence.source,
         published_at: series_timestamp(&series.updated_at)?,
@@ -2061,6 +2605,7 @@ fn series_metadata(
         units: unit_evidence(&evidence.unit_currency),
         adjustment: Some(adjustment_evidence(&evidence.adjustment_evidence)),
         lineage,
+        index,
     })
 }
 
@@ -2077,6 +2622,11 @@ fn series_stats(
     let series = crate::sqlite_market::series::require_series(c, id)?;
     if series.entity != entity.symbol() || Some(series.period) != plan.args.dataset.period() {
         return Err(Error::Integrity("version entity/dataset mismatch".into()));
+    }
+    if let Some((adjustment, instrument_class)) = dataset_shape(plan.args.dataset)
+        && (series.adjustment != adjustment || series.instrument_class != instrument_class)
+    {
+        return Err(Error::Integrity("version dataset shape mismatch".into()));
     }
     let mut stale_mark: Option<(String, chrono::NaiveDate)> = None;
     if plan.args.dataset == Dataset::Yearly {

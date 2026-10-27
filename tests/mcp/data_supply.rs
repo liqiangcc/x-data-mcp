@@ -857,7 +857,7 @@ mod default_selection_wire {
         // Serde level: the variant exists and override fields fail decode.
         assert_eq!(
             serde_json::from_value::<WriteSelection>(json!({"kind":"default"})).unwrap(),
-            WriteSelection::Default
+            WriteSelection::Default {}
         );
         for field in ["base_version_id", "start_date", "end_date", "gap_ids"] {
             let mut v = json!({"kind":"default"});
