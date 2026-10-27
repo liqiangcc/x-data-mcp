@@ -2,9 +2,11 @@
 """Exercise installed binaries against an explicitly synthetic NEW database."""
 import argparse
 import hashlib
+import importlib.util
 import json
 import pathlib
 import subprocess
+import sys
 import tempfile
 import socket
 import time
@@ -139,6 +141,178 @@ def acquire_smoke(binaries):
                 service.wait()
 
 
+def export_fixture(db):
+    """Minimal schema-23 database the packaged exporter can read.
+
+    Only the rows the export plan needs: one source generation, one stock
+    daily series in both 口径, and three bars. The fixture is synthetic and
+    lives in the smoke's temporary directory; it is never a real market
+    database. The schema itself comes from the packaged `task_sqlite init21`,
+    so the smoke exercises the schema the release actually ships.
+    """
+    import sqlite3
+    from datetime import date
+
+    epoch = date(1970, 1, 1)
+    days = [(date(2026, 10, 20) - epoch).days + offset for offset in range(3)]
+    generation_evidence = bytes([0x21]) * 32
+    version_evidence = bytes([0x22]) * 32
+    binding = bytes([0x23]) * 32
+    raw_digest, qfq_digest = bytes([0x25]) * 32, bytes([0x26]) * 32
+    created_at = "2026-10-26T00:00:00Z"
+    connection = sqlite3.connect(db)
+    try:
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute(
+            "INSERT INTO evidence_bundles(evidence_digest,evidence_kind,canonical_json) VALUES(?,?,?)",
+            (generation_evidence, "generation", '{"generation_id":"smoke-generation"}'),
+        )
+        connection.execute(
+            "INSERT INTO evidence_bundles(evidence_digest,evidence_kind,canonical_json) VALUES(?,?,?)",
+            (version_evidence, "version", "{}"),
+        )
+        connection.execute(
+            "INSERT INTO source_bindings(source_binding_digest,generation_id,"
+            "generation_manifest_sha256,day_member_sha256,security_event_sha256,"
+            "evidence_digest) VALUES(?,?,?,?,?,?)",
+            (
+                binding,
+                "smoke-generation",
+                bytes([0x24]) * 32,
+                bytes([0x27]) * 32,
+                bytes([0x28]) * 32,
+                generation_evidence,
+            ),
+        )
+        # adjustment 0 = raw (2dp), 1 = qfq (6dp); both are stock daily series.
+        for series_key, adjustment, price_scale, digest in (
+            (1, 0, 2, raw_digest),
+            (2, 1, 6, qfq_digest),
+        ):
+            connection.execute(
+                "INSERT INTO market_series(series_key,entity,period,adjustment,"
+                "instrument_class,price_scale,version_id,content_digest,digest_format,"
+                "record_count,first_day,last_day,coverage_status,source_binding_digest,"
+                "evidence_digest,last_event_seq,created_at,updated_at) "
+                "VALUES(?,?,1,?,0,?,?,?,'series-fold-v2',3,?,?,1,?,?,1,?,?)",
+                (
+                    series_key,
+                    "sh.600000",
+                    adjustment,
+                    price_scale,
+                    digest.hex(),
+                    digest,
+                    days[0],
+                    days[-1],
+                    binding,
+                    version_evidence,
+                    created_at,
+                    created_at,
+                ),
+            )
+            for index, trade_day in enumerate(days):
+                close = 1000 + index
+                connection.execute(
+                    "INSERT INTO series_bars(series_key,trade_day,open_units,high_units,"
+                    "low_units,close_units,volume,amount,r7_raw,volume_quantum) "
+                    "VALUES(?,?,?,?,?,?,100,'100500.00',7,NULL)",
+                    (series_key, trade_day, close - 10, close + 10, close - 20, close),
+                )
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        connection.close()
+
+
+def packaged_script(name):
+    """Locate a Python helper both in the repo and in the unpacked package."""
+    here = pathlib.Path(__file__).resolve()
+    for candidate in (
+        here.parent / name,
+        here.parent / "scripts" / name,
+        here.parent.parent / "scripts" / name,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def export_smoke(binaries):
+    """Run the packaged exporter on a synthetic schema-23 database.
+
+    Verifies the parts a package can verify offline with the standard library:
+    the command exists, it produces a snapshot directory, and every file's
+    size and sha256 match `manifest.json`. The pyarrow/duckdb read-back needs
+    third-party wheels, which the package CI job does not install; when they
+    are importable this runs `scripts/export_smoke.py --snapshot-dir` too and
+    reports it, otherwise the caller records it as NOT_RUN.
+    """
+    with tempfile.TemporaryDirectory(prefix="x-data-mcp-export-smoke-") as tmp:
+        root = pathlib.Path(tmp)
+        db, out = root / "export.sqlite", root / "exports"
+        subprocess.run([binaries / "task_sqlite", "init21", db], check=True, capture_output=True, text=True)
+        export_fixture(db)
+        run = subprocess.run(
+            [
+                binaries / "export_research",
+                "--db", db,
+                "--out", out,
+                "--dataset", "daily",
+                "--entities", "sh.600000",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        summary = json.loads(run.stdout)
+        directory = pathlib.Path(summary["directory"])
+        manifest = json.loads((directory / "manifest.json").read_text())
+        assert manifest["schema"] == "x-data-mcp.research-snapshot.v1", manifest["schema"]
+        assert manifest["snapshot_id"] == summary["snapshot_id"] == directory.name, summary
+        files = {entry["path"]: entry for entry in manifest["files"]}
+        assert set(files) == {"daily_raw.parquet", "daily_qfq.parquet"}, files
+        total = 0
+        for name, entry in files.items():
+            data = (directory / name).read_bytes()
+            assert entry["rows"] == 3 and entry["bytes"] == len(data), (name, entry, len(data))
+            assert entry["sha256"] == hashlib.sha256(data).hexdigest(), name
+            total += len(data)
+        assert total == summary["total_bytes"], (total, summary["total_bytes"])
+        assert {entry["path"]: entry["sha256"] for entry in summary["files"]} == {
+            name: entry["sha256"] for name, entry in files.items()
+        }
+        readers = "NOT_RUN (pyarrow/duckdb are installed only in the export CI job; " \
+                  "scripts/export_smoke.py --snapshot-dir covers the read-back there)"
+        if importlib.util.find_spec("pyarrow") and importlib.util.find_spec("duckdb"):
+            script = packaged_script("export_smoke.py")
+            if script is not None:
+                subprocess.run(
+                    [sys.executable, script, "--snapshot-dir", directory],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                readers = "pyarrow+duckdb"
+        return readers
+
+
+def package_manifest_smoke(binaries):
+    """The package manifest must say the export feature is on.
+
+    Only runs when `manifest.json` sits next to the bin directory (the
+    unpacked package); the repo's `target/release` has none.
+    """
+    manifest_path = binaries.parent / "manifest.json"
+    if not manifest_path.is_file():
+        return False
+    manifest = json.loads(manifest_path.read_text())
+    assert "export" in manifest.get("features", []), manifest.get("features")
+    assert manifest["binaries"]["export_research"]["bytes"] == (
+        binaries / "export_research"
+    ).stat().st_size, manifest["binaries"]["export_research"]
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--bin-dir", type=pathlib.Path, required=True)
@@ -263,7 +437,21 @@ def main():
     checks.append("same_proxy_idle_over_30_seconds_then_calls_again")
     acquire_smoke(binaries)
     checks.append("acquire_service_socket_discovery_and_capabilities")
-    report = dict(status="PASS", version=version, binary_sha256=hashlib.sha256((binaries / "mcp_data").read_bytes()).hexdigest(), checks=checks, live_source="NOT_RUN", production="NOT_PRODUCTION_READY", data="SYNTHETIC_FIXTURE_ONLY")
+    # `export_research` exists only when the package was built with
+    # `--features export` (scripts/build_release.sh). A default `target/debug`
+    # build has no such binary, so the repo-side smoke skips this section;
+    # the package CI job always runs it.
+    if (binaries / "export_research").is_file():
+        export_readers = export_smoke(binaries)
+        checks.append("export_research_synthetic_snapshot_manifest_and_file_sha256")
+        if package_manifest_smoke(binaries):
+            checks.append("package_manifest_records_export_feature_and_binary_bytes")
+    else:
+        export_readers = (
+            "NOT_RUN (export_research is not built; the release package enables "
+            "--features export)"
+        )
+    report = dict(status="PASS", version=version, binary_sha256=hashlib.sha256((binaries / "mcp_data").read_bytes()).hexdigest(), checks=checks, export_readers=export_readers, live_source="NOT_RUN", production="NOT_PRODUCTION_READY", data="SYNTHETIC_FIXTURE_ONLY")
     args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(report, ensure_ascii=False))
 
