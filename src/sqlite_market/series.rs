@@ -435,13 +435,6 @@ pub(crate) fn read_visible_series(
     )
 }
 
-/// True when `version_id` names an existing series the public surface must
-/// not expose (issue-383 §6.3): an explicitly pinned version id is still
-/// subject to the same `instrument_class=0` boundary as head resolution.
-pub(crate) fn is_public_invisible_version(c: &Connection, version_id: &str) -> Result<bool, Error> {
-    is_invisible_version(c, version_id, Adjustment::Forward, INSTRUMENT_CLASS_STOCK)
-}
-
 /// True when `version_id` names a series whose 口径/品种 is not the one the
 /// requested dataset serves (v8 PR-4). A pinned raw stock id is as invisible
 /// to `market.daily` as an index id is.
