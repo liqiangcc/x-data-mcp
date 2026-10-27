@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-EXPECTED_PACKAGE_VERSION = "0.2.0-preview.35"
+EXPECTED_PACKAGE_VERSION = "0.2.0-preview.36"
 EXPECTED_LEGACY_SCHEMA = 18
 # Fresh `init` output schema (code constant). The DEPLOYED schema is a
 # deployment fact and is read from docs/STATUS.md (see DEPLOYED_SCHEMA_ROW):
@@ -20,15 +20,15 @@ EXPECTED_DATA_TOOLS = 24
 # checks compare against the deployed constants, not the code constants. A
 # sentence that explicitly says it is stating the code fact (代码/未部署) is
 # checked against the registry instead.
-EXPECTED_DEPLOYED_DATA_TOOLS = 23
+EXPECTED_DEPLOYED_DATA_TOOLS = 15
 EXPECTED_ACQUIRE_TOOLS = 10
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v7"
-# The strict Skills describe the DEPLOYED contract (v7 after the switch).
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v8"
+# The strict Skills describe the DEPLOYED contract (v8 after the minimal switch).
 # The same deployed revision keys the strict-Skill checks and the
 # stale-deployment-claim check below: the "current" regions describe the
 # deployed instance, not the code on main. Flip this constant together with
 # the Skills in the same commit at the next contract switch.
-EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v7"
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v8"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
@@ -90,7 +90,13 @@ def required_facts(deployed_schema: int) -> list[tuple[str, re.Pattern]]:
             f"schema {deployed_schema}",
             re.compile(rf"schema[\s:=v]*{deployed_schema}(?!\d)", re.IGNORECASE),
         ),
-        ("23 data tools", re.compile(r"\b23\s+data\s+tools?\b", re.IGNORECASE)),
+        (
+            f"{EXPECTED_DEPLOYED_DATA_TOOLS} data tools",
+            re.compile(
+                rf"\b{EXPECTED_DEPLOYED_DATA_TOOLS}\s+data\s+tools?\b",
+                re.IGNORECASE,
+            ),
+        ),
         (
             "10 acquisition tools",
             re.compile(r"\b10\s+acquisition\s+tools?\b", re.IGNORECASE),

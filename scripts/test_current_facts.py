@@ -113,11 +113,12 @@ class RealDocs(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-REGION_SCHEMA = 21
-REGION_REVISION = "generic-data-v7"
+REGION_SCHEMA = 24
+REGION_REVISION = "generic-data-v8"
 # Current regions and STATUS state DEPLOYED facts; the registry may be ahead
-# (v8 PR-2 builds 24 data tools while preview.35 still serves 23).
-REGION_DATA_TOOLS = 23
+# (the v8 minimal switch deploys the ops entry's 15 tools while the code
+# registers 24 across three entries).
+REGION_DATA_TOOLS = 15
 REGION_CODE_DATA_TOOLS = 24
 REGION_ACQUIRE_TOOLS = 10
 
@@ -143,16 +144,16 @@ class StaleCurrentRegions(unittest.TestCase):
 
     def test_deployed_schema_is_accepted(self):
         self.assertEqual(
-            region_claims("当前部署的是 schema 21 的单版本存储。\n"), []
+            region_claims("当前部署的是 schema 24 的单版本存储。\n"), []
         )
 
     def test_old_schema_written_as_deployed_is_flagged(self):
         # design.md before the P1-1 correction (item 7d).
         old = (
             "本文中「版本」等表述描述的是**版本链模型**：它是已部署的\n"
-            "schema 20（v0.2.0-preview.31）的行为，但**不再被视为目标模型**。"
+            "schema 21（v0.2.0-preview.32）的行为，但**不再被视为目标模型**。"
             "两者并列：线上仍是\n"
-            "schema 20，schema 21 合并并部署之前不能当作已部署事实。\n"
+            "schema 21，schema 24 合并并部署之前不能当作已部署事实。\n"
         )
         found = region_claims(old)
         self.assertEqual(rules(found), ["stale-schema", "stale-schema"], found)
@@ -163,14 +164,14 @@ class StaleCurrentRegions(unittest.TestCase):
         text = (
             "它是\n"
             "schema 20（v0.2.0-preview.31 及更早）的行为，**已被 schema 21 取代**（历史，不再被视为目标模型）。\n"
-            "当前部署的是 schema 21 的单版本存储：每 `(实体, 周期)` 只存当前序列。\n"
-            "schema 21 自 preview.32 起部署（旧 v20 库归档）。\n"
+            "当前部署的是 schema 24 的单版本存储：每 `(实体, 周期)` 只存当前序列。\n"
+            "schema 21 自 preview.32 起部署（旧 v20 库归档，历史）。\n"
         )
         self.assertEqual(region_claims(text), [])
 
     def test_old_revision_written_as_deployed_is_flagged(self):
         # generic-data-v7.md before the P1-1 correction (item 7d #9).
-        old = "**状态**：尚未部署；当前部署仍为 `generic-data-v6` / compact schema 21。\n"
+        old = "**状态**：尚未部署；当前部署仍为 `generic-data-v6` / compact schema 24。\n"
         found = region_claims(old)
         self.assertEqual(rules(found), ["stale-revision"], found)
         self.assertIn("generic-data-v6", found[0][2])
@@ -179,7 +180,7 @@ class StaleCurrentRegions(unittest.TestCase):
         text = (
             "`capability_revision`：`generic-data-v6` → `generic-data-v7`。\n"
             "`related_tasks` 有界；capability 升到 `generic-data-v5`，Skill 同步更新。\n"
-            "当前部署已是 `generic-data-v7`（自 preview.33 起）。\n"
+            "当前部署已是 `generic-data-v8`（自 preview.36 起）。\n"
         )
         self.assertEqual(region_claims(text), [])
 
@@ -187,17 +188,18 @@ class StaleCurrentRegions(unittest.TestCase):
         # design.md:69 before the P1-1 correction said 21 data tools (item 7d #2).
         old = "| MCP | data socket 21 data tools、acquisition socket 10 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(old)), ["data-tool-count"])
-        good = "| MCP | data socket 23 data tools、acquisition socket 10 acquisition tools | x |\n"
+        good = "| MCP | data socket 15 data tools、acquisition socket 10 acquisition tools | x |\n"
         self.assertEqual(region_claims(good), [])
-        bad_acquire = "| MCP | data socket 23 data tools、acquisition socket 8 acquisition tools | x |\n"
+        bad_acquire = "| MCP | data socket 15 data tools、acquisition socket 8 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(bad_acquire)), ["acquire-tool-count"])
 
     def test_code_tool_count_may_be_ahead_of_the_deployed_one(self):
-        # v8 PR-2 builds 24 data tools while preview.35 still serves 23: a
-        # sentence explicitly marked as the code fact is checked against the
-        # registry, and the deployed count stays valid.
+        # The code registers 24 data tools across three entries while the
+        # deployed ops entry serves 15: a sentence explicitly marked as the
+        # code fact is checked against the registry, and the deployed count
+        # stays valid.
         self.assertEqual(
-            region_claims("已部署实例仍为 23 data tools。\n"), []
+            region_claims("已部署实例仍为 15 data tools。\n"), []
         )
         self.assertEqual(
             region_claims("代码（main）为 24 data tools（未部署）。\n"), []
@@ -208,7 +210,7 @@ class StaleCurrentRegions(unittest.TestCase):
     def test_bare_tool_count_must_be_one_of_the_registries(self):
         # The v6 switch checklist header said "21 tools" (stale current fact).
         self.assertEqual(rules(region_claims("对齐到 preview.31 / 21 tools / v5。\n")), ["tool-count"])
-        self.assertEqual(region_claims("双 server 共 23 tools。\n"), [])
+        self.assertEqual(region_claims("双 server 共 15 tools。\n"), [])
 
     def test_data_history_word_is_not_a_history_marker(self):
         # verified-reads.md before the P1-1 correction (item 7d #5): "某个历史版本" is a data
@@ -235,7 +237,7 @@ class StaleCurrentRegions(unittest.TestCase):
 
     def test_wrapped_prose_lines_are_joined(self):
         # The assertion and the schema number sit on different source lines.
-        text = "两者并列：线上仍是\nschema 20，schema 21 不能当作已部署事实。\n"
+        text = "两者并列：线上仍是\nschema 21，schema 24 不能当作已部署事实。\n"
         found = region_claims(text)
         self.assertEqual(rules(found), ["stale-schema"], found)
 
@@ -264,11 +266,11 @@ class DeployedSchemaRow(unittest.TestCase):
         # M1 PR-1 builds schema 22 while the deployed instance stays on 21:
         # the current region states the deployed number, and the code number
         # is explicitly marked as not deployed.
-        text = "已部署实例为 compact schema 21；代码（main）为 schema 22（M1 PR-1，未部署）。\n"
+        text = "已部署实例为 compact schema 24；代码（main）为 schema 25（M2，未部署）。\n"
         self.assertEqual(region_claims(text), [])
 
     def test_deployed_claim_ahead_of_status_is_flagged(self):
-        text = "当前部署的是 schema 22 的单版本存储。\n"
+        text = "当前部署的是 schema 25 的单版本存储。\n"
         found = region_claims(text)
         self.assertEqual(rules(found), ["stale-schema"], found)
 
@@ -405,19 +407,19 @@ class DecisionsStatus(unittest.TestCase):
 
 STATUS_OK = """# 当前状态（STATUS）
 
-最后核实：2026-10-24。
+最后核实：2026-10-27。
 
 ## 部署
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 部署版本 | v0.2.0-preview.35 @ `23edeaf` | manifest |
+| 部署版本 | v0.2.0-preview.36 @ `23edeaf` | manifest |
 
 ## 服务
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 23 | capability `generic-data-v7` |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 15 | capability `generic-data-v8` |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | — |
 
 ## 数据
@@ -426,10 +428,10 @@ STATUS_OK = """# 当前状态（STATUS）
 |---|---|---|
 | 热 generation | **5/6**：1 active + 4 superseded；下一次 acquire 可直接受理 | acquire.sqlite |
 
-preview.35 部署后 capability 仍为 `generic-data-v7`，23/10 工具不变。
+preview.36 部署后 capability 仍为 `generic-data-v8`，15/10 工具不变。
 
-工具数与能力版本为 live 只读复核：data socket `tools/list` 返回 23 个工具、
-acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.version` 均为 `0.2.0-preview.35`。
+工具数与能力版本为 live 只读复核：data socket `tools/list` 返回 15 个工具、
+acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.version` 均为 `0.2.0-preview.36`。
 """
 
 
@@ -484,27 +486,27 @@ class StatusConsistency(unittest.TestCase):
 
     def test_deployed_version_contradiction_is_flagged(self):
         text = STATUS_OK.replace(
-            "`serverInfo.version` 均为 `0.2.0-preview.35`",
+            "`serverInfo.version` 均为 `0.2.0-preview.36`",
             "`serverInfo.version` 均为 `0.2.0-preview.34`",
         )
         self.assertEqual(rules(status_claims(text)), ["status-deployed-version"])
 
     def test_service_table_tool_count_is_checked(self):
         text = STATUS_OK.replace(
-            "| `run/mcp.sock` | 23 |", "| `run/mcp.sock` | 21 |"
+            "| `run/mcp.sock` | 15 |", "| `run/mcp.sock` | 21 |"
         )
         self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
 
     def test_prose_tool_count_is_checked(self):
         text = STATUS_OK.replace(
-            "data socket `tools/list` 返回 23 个工具",
+            "data socket `tools/list` 返回 15 个工具",
             "data socket `tools/list` 返回 21 个工具",
         )
         self.assertEqual(rules(status_claims(text)), ["status-tool-count"])
 
     def test_code_tool_count_in_status_may_be_ahead(self):
         text = STATUS_OK + (
-            "\n代码（main）为 24 data tools（未部署）；已部署实例仍为 23 data tools。\n"
+            "\n代码（main）为 24 data tools（未部署）；已部署实例仍为 15 data tools。\n"
         )
         self.assertEqual(status_claims(text), [])
         wrong = STATUS_OK + "\n代码（main）为 25 data tools（未部署）。\n"

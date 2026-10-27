@@ -326,7 +326,7 @@ s6_start() {
 # --- S7. operator next steps -------------------------------------------------
 s7_next_steps() {
     begin_step S7 "next steps (operator, read-only via MCP, BEFORE any write task)"
-    echo "   capability revisions generic-data-v7/x-data-acquire-v1; tools 23/10;"
+    echo "   capability revisions generic-data-v8/x-data-acquire-v1; tools 15/10;"
     echo "   sync_status idle and active generation unchanged; pending_roles present;"
     echo "   head counts equal baseline; sample query_data reads unchanged."
     say "ROLLBACK plan on any mismatch (S2 failure aborts before touching prod; S6/S7 failure):"
