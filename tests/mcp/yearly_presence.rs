@@ -361,7 +361,7 @@ fn batch_is_sorted_and_discovery_exposes_the_tool_at_v4() {
     assert_eq!(items[0]["entity"]["exchange"], "sh");
     assert_eq!(items[1]["entity"]["exchange"], "sz");
     // Discovery: tools/list carries the tool and its schema validates the
-    // registered example; capability revision is generic-data-v7.
+    // registered example; capability revision is generic-data-v8.
     let tools = api.tools();
     let tool = tools
         .as_array()
@@ -378,7 +378,7 @@ fn batch_is_sorted_and_discovery_exposes_the_tool_at_v4() {
         .validate(&json!({"contract_version":"v1","items":[{"entity":{"exchange":"sh","code":"600006"},"base_daily_version_id":"published-daily-id","start_year":2020,"end_year":2026}]}))
         .unwrap();
     let caps = api.call("get_data_capabilities", json!({})).unwrap();
-    assert_eq!(caps["capability_revision"], "generic-data-v7");
+    assert_eq!(caps["capability_revision"], "generic-data-v8");
     assert!(
         caps["items"]
             .as_array()
