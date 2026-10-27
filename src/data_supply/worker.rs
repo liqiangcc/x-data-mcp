@@ -263,7 +263,7 @@ pub fn run_once(
         .map(|item| item.spec.item_id.clone())
         .collect();
     if runner
-        .run_items(&candidate.task.task_id, &item_ids, provider)?
+        .run_items_parallel(&candidate.task.task_id, &item_ids, provider)?
         .is_none()
     {
         for item in &entity_items {

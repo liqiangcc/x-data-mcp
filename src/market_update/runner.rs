@@ -25,6 +25,56 @@ pub struct CombinedCandidate {
 /// materializing the whole batch (private-stack run peaked ~969MB
 /// during `prepare_batch.base_reads` before this).
 pub(crate) const EXEC_CHUNK: usize = 100;
+/// Parallel preparation worker override (XDM-64 review). `1` is the
+/// operator rollback switch: `run_items_parallel` then takes the original
+/// sequential `run_items` path. Unset keeps the CPU-derived clamp below.
+pub const PREPARE_WORKERS_ENV: &str = "X_DATA_MCP_RUN_PREPARE_WORKERS";
+/// Upper bound for the override. Four is the largest pool whose conservative
+/// full-history bound (see `prepare_workers_from_env`) is 1.8 GiB on the
+/// 1.9 GiB host, so larger values are a wiring error instead of an accepted
+/// unbounded memory risk; the production 2-vCPU host defaults to 2 workers.
+const PREPARE_WORKERS_MAX: usize = 4;
+fn default_prepare_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(2, PREPARE_WORKERS_MAX)
+}
+/// Parse the operator override once per process. The service binary calls
+/// this at startup so a bad value refuses to boot; the runner re-reads it so
+/// library/test callers fail closed instead of silently using a default.
+///
+/// Memory bound for the default pool (conservative, full-history case):
+/// a `Bar` is ~128 B (four `Decimal`s plus two `Option<Decimal>`s), one
+/// entity's two materialized sequences (不复权 + 前复权) are
+/// `8,000 * 2 * 128 B ≈ 2.0 MiB`, and one `EXEC_CHUNK = 100` chunk is
+/// `≈ 200 MiB`. `run_items_parallel` keeps at most one chunk queued per
+/// worker (`sync_channel(1)`), one being prepared per worker, and one being
+/// committed by the caller: `2*workers + 1` chunks. On the 2-vCPU production
+/// host the default is 2 workers → `5 * 200 MiB ≈ 1.0 GiB`; the 4-worker
+/// ceiling is `9 * 200 MiB ≈ 1.8 GiB`. That is the conservative worst case:
+/// prepared `UpdateBatchItem`s normally retain only the range/tail rather
+/// than both full sequences, and the override lets an operator lower the
+/// pool (or set `1`) on a memory-constrained host.
+pub fn prepare_workers_from_env() -> Result<usize, String> {
+    match std::env::var(PREPARE_WORKERS_ENV) {
+        Ok(value) => {
+            let workers: usize = value.parse().map_err(|_| {
+                format!("{PREPARE_WORKERS_ENV} must be an integer in 1..={PREPARE_WORKERS_MAX}")
+            })?;
+            if !(1..=PREPARE_WORKERS_MAX).contains(&workers) {
+                return Err(format!(
+                    "{PREPARE_WORKERS_ENV} must be an integer in 1..={PREPARE_WORKERS_MAX}"
+                ));
+            }
+            Ok(workers)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(default_prepare_workers()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "{PREPARE_WORKERS_ENV} must be an integer in 1..={PREPARE_WORKERS_MAX}"
+        )),
+    }
+}
 pub struct Acquisition {
     pub batch: MarketDataBatch,
     pub evidence: Evidence,
@@ -76,6 +126,14 @@ pub trait RangeProvider {
     ) -> Result<Option<TypedAcquisition>, SourceError> {
         Ok(None)
     }
+    /// An independent provider for one parallel preparation worker. A
+    /// provider that owns no per-run cache (the official blocked provider)
+    /// may share itself; a snapshot provider returns a fork with its own
+    /// materialization session so worker threads never share `RefCell`
+    /// state. `None` keeps the caller on the sequential chunk loop.
+    fn fork(&self) -> Option<Box<dyn RangeProvider + Send + '_>> {
+        None
+    }
 }
 pub struct OfficialRangeProvider;
 impl RangeProvider for OfficialRangeProvider {
@@ -106,6 +164,14 @@ struct PlannedItem {
     range: DateRange,
     default_contract: bool,
 }
+/// One chunk's read/acquisition product, before the caller's single write
+/// path commits it.
+struct PreparedChunk {
+    items: Vec<crate::market_update::UpdateBatchItem>,
+    coverings: Vec<(String, Value)>,
+    fallback: Vec<String>,
+}
+
 impl<R: RangeRepository + Clone> RangeRunner<R> {
     pub fn run_item(
         &self,
@@ -293,56 +359,12 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 break;
             }
             let chunk = &item_ids[offset..(offset + EXEC_CHUNK).min(item_ids.len())];
-            let mut items = Vec::new();
-            // Frozen inputs of prepared default-contract items: their gap
-            // coverings append after the batch commit, per receipt.
-            let mut coverings: Vec<(String, Value)> = Vec::new();
-            let (prepared, mut fallback) = self.prepare_batch(task_id, chunk, provider);
-            for (item, frozen) in prepared {
-                if let Some(frozen) = frozen {
-                    coverings.push((item.item_id.clone(), frozen));
-                }
-                items.push(item);
-            }
-            if !items.is_empty() {
-                let commit_span = crate::stage_trace::span("daily.commit_batch");
-                let committed = self.repository.commit_update_batch(task_id, &items);
-                drop(commit_span);
-                let results = match committed {
-                    Ok(Some(results)) => Some(results),
-                    // The first chunk's `None` keeps the documented
-                    // contract — the repository lacks the batch surface
-                    // and the caller runs the whole task per item.
-                    Ok(None) if offset == 0 => return Ok(None),
-                    // A mid-task `None`/structural error rolled the chunk
-                    // back: those items keep the per-item path.
-                    Ok(None) | Err(_) => {
-                        fallback.extend(items.iter().map(|item| item.item_id.clone()));
-                        None
-                    }
-                };
-                if let Some(results) = results {
-                    if results.len() != items.len() {
-                        return Err(Error::Integrity(
-                            "update batch result count does not match items".into(),
-                        ));
-                    }
-                    for (item, result) in items.iter().zip(results) {
-                        match result {
-                            Ok(receipt) => {
-                                if let Some((_, frozen)) =
-                                    coverings.iter().find(|(id, _)| *id == item.item_id)
-                                {
-                                    self.ensure_default_coverings(frozen, &receipt.version_id)?;
-                                }
-                            }
-                            Err(_) => fallback.push(item.item_id.clone()),
-                        }
-                    }
-                }
-            }
-            for item_id in fallback {
-                self.run_item(task_id, &item_id, provider)?;
+            let prepared = self.prepare_chunk(task_id, chunk, provider);
+            // The first chunk's `None` keeps the documented contract —
+            // the repository lacks the batch surface and the caller runs
+            // the whole task per item.
+            if !self.commit_prepared_chunk(task_id, prepared, offset == 0, provider)? {
+                return Ok(None);
             }
             offset += EXEC_CHUNK;
         }
@@ -352,6 +374,197 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             self.run_item(task_id, item_id, provider)?;
         }
         Ok(Some(()))
+    }
+    /// Chunked execution with parallel preparation (XDM-64): entity items
+    /// are read/acquired by a bounded pool while the caller thread keeps the
+    /// single writer path. Preparation is read-only, so workers may overlap
+    /// with the commit of an earlier chunk; commits (and every fallback
+    /// `run_item`) stay on the caller thread and therefore keep one task
+    /// head revision stream. The first chunk is prepared and committed
+    /// sequentially so its `Ok(None)` still means "no batch surface, run the
+    /// whole task per item"; derived items are owned by the caller and run
+    /// only after this returns.
+    ///
+    /// A provider that cannot `fork` keeps the sequential `run_items` path.
+    pub fn run_items_parallel(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+        provider: &dyn RangeProvider,
+    ) -> Result<Option<()>, Error>
+    where
+        R: Send,
+    {
+        let _total = crate::stage_trace::span("daily.run_items.total.parallel");
+        let workers = prepare_workers_from_env().map_err(Error::Invalid)?;
+        // `1` is the operationally documented rollback to the exact
+        // pre-XDM-64 sequential path: no fork, no worker threads.
+        if workers == 1 {
+            return self.run_items(task_id, item_ids, provider);
+        }
+        if item_ids.is_empty() {
+            return Ok(Some(()));
+        }
+        let chunk_count = item_ids.len().div_ceil(EXEC_CHUNK);
+        if chunk_count == 1 {
+            return self.run_items(task_id, item_ids, provider);
+        }
+        let workers = workers.min(chunk_count - 1);
+        let mut forks = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let Some(fork) = provider.fork() else {
+                return self.run_items(task_id, item_ids, provider);
+            };
+            forks.push(fork);
+        }
+        let first = &item_ids[..EXEC_CHUNK.min(item_ids.len())];
+        let prepared = self.prepare_chunk(task_id, first, provider);
+        if !self.commit_prepared_chunk(task_id, prepared, true, provider)? {
+            return Ok(None);
+        }
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        // One bounded queue per worker. Chunks are assigned round-robin and
+        // the caller consumes them strictly in index order, so the task
+        // head still sees the same chunk boundaries (and cancellation
+        // points) as `run_items`; a worker can run at most one chunk ahead
+        // of the chunk it is blocked sending.
+        let mut senders = Vec::with_capacity(workers);
+        let mut receivers = Vec::with_capacity(workers);
+        for _ in 0..workers {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            senders.push(tx);
+            receivers.push(rx);
+        }
+        let mut processed = vec![false; chunk_count];
+        processed[0] = true;
+        let outcome = std::thread::scope(|scope| -> Result<(), Error> {
+            for (worker, (fork, tx)) in forks.into_iter().zip(senders).enumerate() {
+                let runner = RangeRunner {
+                    repository: self.repository.clone(),
+                    run_id: self.run_id.clone(),
+                };
+                let stop = &stop;
+                scope.spawn(move || {
+                    for index in (worker + 1..chunk_count).step_by(workers) {
+                        if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
+                        let start = index * EXEC_CHUNK;
+                        let end = (start + EXEC_CHUNK).min(item_ids.len());
+                        let prepared =
+                            runner.prepare_chunk(task_id, &item_ids[start..end], fork.as_ref());
+                        if tx.send((index, prepared)).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            let mut next = 1;
+            while next < chunk_count {
+                if self.repository.task_head(task_id)?.status == Status::CancelRequested {
+                    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    break;
+                }
+                let worker = (next - 1) % workers;
+                let Ok((index, prepared)) = receivers[worker].recv() else {
+                    break;
+                };
+                debug_assert_eq!(index, next);
+                self.commit_prepared_chunk(task_id, prepared, false, provider)?;
+                processed[index] = true;
+                next += 1;
+            }
+            drop(receivers);
+            Ok(())
+        });
+        outcome?;
+        // Cancellation may leave prepared-but-uncommitted chunks; like the
+        // sequential loop, every unprocessed item keeps the per-item path.
+        for (index, chunk) in item_ids.chunks(EXEC_CHUNK).enumerate().skip(1) {
+            if !processed[index] {
+                for item_id in chunk {
+                    self.run_item(task_id, item_id, provider)?;
+                }
+            }
+        }
+        Ok(Some(()))
+    }
+    /// Read/acquisition half of one chunk. Never writes; the caller decides
+    /// whether the prepared items commit as a batch or fall back per item.
+    fn prepare_chunk(
+        &self,
+        task_id: &str,
+        chunk: &[String],
+        provider: &dyn RangeProvider,
+    ) -> PreparedChunk {
+        let mut items = Vec::new();
+        let mut coverings: Vec<(String, Value)> = Vec::new();
+        let (prepared, fallback) = self.prepare_batch(task_id, chunk, provider);
+        for (item, frozen) in prepared {
+            if let Some(frozen) = frozen {
+                coverings.push((item.item_id.clone(), frozen));
+            }
+            items.push(item);
+        }
+        PreparedChunk {
+            items,
+            coverings,
+            fallback,
+        }
+    }
+    /// Commit one prepared chunk and run its per-item fallback. `Ok(false)`
+    /// means the repository lacks the batch surface on the first chunk; the
+    /// caller then runs the whole task per item.
+    fn commit_prepared_chunk(
+        &self,
+        task_id: &str,
+        prepared: PreparedChunk,
+        first: bool,
+        provider: &dyn RangeProvider,
+    ) -> Result<bool, Error> {
+        let PreparedChunk {
+            items,
+            coverings,
+            mut fallback,
+        } = prepared;
+        if !items.is_empty() {
+            let commit_span = crate::stage_trace::span("daily.commit_batch");
+            let committed = self.repository.commit_update_batch(task_id, &items);
+            drop(commit_span);
+            let results = match committed {
+                Ok(Some(results)) => Some(results),
+                Ok(None) if first => return Ok(false),
+                // A mid-task `None`/structural error rolled the chunk
+                // back: those items keep the per-item path.
+                Ok(None) | Err(_) => {
+                    fallback.extend(items.iter().map(|item| item.item_id.clone()));
+                    None
+                }
+            };
+            if let Some(results) = results {
+                if results.len() != items.len() {
+                    return Err(Error::Integrity(
+                        "update batch result count does not match items".into(),
+                    ));
+                }
+                for (item, result) in items.iter().zip(results) {
+                    match result {
+                        Ok(receipt) => {
+                            if let Some((_, frozen)) =
+                                coverings.iter().find(|(id, _)| *id == item.item_id)
+                            {
+                                self.ensure_default_coverings(frozen, &receipt.version_id)?;
+                            }
+                        }
+                        Err(_) => fallback.push(item.item_id.clone()),
+                    }
+                }
+            }
+        }
+        for item_id in fallback {
+            self.run_item(task_id, &item_id, provider)?;
+        }
+        Ok(true)
     }
     /// Batch preparation for one update item (#259 S5G-6): the same
     /// pre-acquisition checks `run_item` performs, plus the typed

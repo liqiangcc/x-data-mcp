@@ -468,6 +468,14 @@ impl MaterializeSession<'_> {
         self.source
     }
 
+    /// Read the archive members through a fresh session over the same
+    /// inspected source. Used by parallel preparation workers: each thread
+    /// gets its own `RefCell`-backed index cache and gbbq decode instead of
+    /// sharing one session across threads.
+    pub fn fork(&self) -> MaterializeSession<'_> {
+        self.source.materialize_session()
+    }
+
     /// Read exactly one archive member through the session's shared
     /// central-directory index: the archive is opened and its names scanned
     /// at most once per session, and member lookup is O(1). Absent or
@@ -1934,6 +1942,13 @@ impl RangeProvider for TdxRangeProvider<'_> {
     ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
         TdxRangeProvider::acquire_typed(self, facts, base_window, range)
     }
+    fn fork(&self) -> Option<Box<dyn RangeProvider + Send + '_>> {
+        Some(Box::new(SessionRangeProvider::Update {
+            session: Box::new(self.session.fork()),
+            generation_id: self.generation_id.clone(),
+            published_at: self.published_at,
+        }))
+    }
 }
 
 /// Overlay in-range segment bars onto the fixed base's records. Same rule
@@ -2242,6 +2257,12 @@ impl RangeProvider for TdxBackfillProvider<'_> {
             )),
         )
     }
+    fn fork(&self) -> Option<Box<dyn RangeProvider + Send + '_>> {
+        Some(Box::new(SessionRangeProvider::Backfill {
+            session: Box::new(self.session.fork()),
+            published_at: self.published_at,
+        }))
+    }
 }
 
 /// #247 provider for `republish_data` under the explicit republish
@@ -2275,6 +2296,130 @@ impl RangeProvider for TdxRepublishProvider<'_> {
             self.published_at,
             None,
         )
+    }
+    fn fork(&self) -> Option<Box<dyn RangeProvider + Send + '_>> {
+        Some(Box::new(SessionRangeProvider::Republish {
+            session: Box::new(self.session.fork()),
+            published_at: self.published_at,
+        }))
+    }
+}
+
+/// A forked snapshot provider: owns the session so a preparation worker
+/// thread can use the provider without sharing the caller's `RefCell`
+/// caches. Each method reborrows the owned session into the existing
+/// borrow-based provider.
+enum SessionRangeProvider<'a> {
+    Update {
+        session: Box<MaterializeSession<'a>>,
+        generation_id: String,
+        published_at: DateTime<Utc>,
+    },
+    Backfill {
+        session: Box<MaterializeSession<'a>>,
+        published_at: DateTime<Utc>,
+    },
+    Republish {
+        session: Box<MaterializeSession<'a>>,
+        published_at: DateTime<Utc>,
+    },
+}
+
+impl RangeProvider for SessionRangeProvider<'_> {
+    fn acquire(
+        &self,
+        base: &CheckedRecord,
+        range: &DateRange,
+        candidate_id: &str,
+    ) -> Result<Acquisition, SourceError> {
+        match self {
+            Self::Update {
+                session,
+                generation_id,
+                published_at,
+            } => RangeProvider::acquire(
+                &TdxRangeProvider {
+                    session,
+                    generation_id: generation_id.clone(),
+                    published_at: *published_at,
+                },
+                base,
+                range,
+                candidate_id,
+            ),
+            Self::Backfill {
+                session,
+                published_at,
+            } => RangeProvider::acquire(
+                &TdxBackfillProvider {
+                    session,
+                    published_at: *published_at,
+                },
+                base,
+                range,
+                candidate_id,
+            ),
+            Self::Republish {
+                session,
+                published_at,
+            } => RangeProvider::acquire(
+                &TdxRepublishProvider {
+                    session,
+                    published_at: *published_at,
+                },
+                base,
+                range,
+                candidate_id,
+            ),
+        }
+    }
+
+    fn acquire_typed(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
+        match self {
+            Self::Update {
+                session,
+                generation_id,
+                published_at,
+            } => RangeProvider::acquire_typed(
+                &TdxRangeProvider {
+                    session,
+                    generation_id: generation_id.clone(),
+                    published_at: *published_at,
+                },
+                facts,
+                base_window,
+                range,
+            ),
+            Self::Backfill {
+                session,
+                published_at,
+            } => RangeProvider::acquire_typed(
+                &TdxBackfillProvider {
+                    session,
+                    published_at: *published_at,
+                },
+                facts,
+                base_window,
+                range,
+            ),
+            Self::Republish {
+                session,
+                published_at,
+            } => RangeProvider::acquire_typed(
+                &TdxRepublishProvider {
+                    session,
+                    published_at: *published_at,
+                },
+                facts,
+                base_window,
+                range,
+            ),
+        }
     }
 }
 
