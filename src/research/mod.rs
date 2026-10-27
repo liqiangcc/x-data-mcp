@@ -33,6 +33,7 @@ pub mod parquet;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::NaiveDate;
@@ -54,9 +55,11 @@ pub enum Error {
     /// The requested range/selection selects no row (§7.1 "范围为空").
     #[error("EXPORT_EMPTY: {0}")]
     Empty(String),
-    /// The selected rows do not all resolve to one source generation.
-    #[error("EXPORT_MIXED_GENERATION: {0}")]
-    MixedGeneration(String),
+    /// A selected row's source binding does not resolve to a generation, so
+    /// its lineage cannot be proven. Cross-generation exports are allowed;
+    /// an unprovable row is not.
+    #[error("EXPORT_LINEAGE: {0}")]
+    UnprovenLineage(String),
     /// The bound inputs changed between planning and the manifest write.
     #[error("EXPORT_DRIFT: {0}")]
     Drift(String),
@@ -281,8 +284,10 @@ pub struct CatalogBinding {
     pub member_count: usize,
 }
 
-/// Layer 3 of the binding: the one source generation every selected row came
-/// from. Two generations in one export is a half-updated snapshot.
+/// Layer 3 of the binding: the source generation one selected row came from.
+/// A daily run may leave different rows on different generations; each row
+/// carries its own binding, so the mix is explicit and traceable instead of a
+/// rejection (§7.3 as revised by M1 fix B).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationBinding {
     pub generation_id: String,
@@ -486,13 +491,26 @@ pub struct SnapshotPlan {
     pub request: ExportRequest,
     pub snapshot_id: String,
     pub catalog: CatalogBinding,
-    pub generation: GenerationBinding,
+    /// Every distinct source generation the selection touches, sorted. More
+    /// than one is a normal cross-generation export, not a failure.
+    pub generations: Vec<GenerationBinding>,
+    /// Layer 3 per row: `source_binding_digest` → generation. The manifest
+    /// writes the entry for every series and derived dataset, so a consumer
+    /// can trace each dataset to its own generation and manifest sha256.
+    pub lineage: BTreeMap<String, GenerationBinding>,
     pub series: Vec<SeriesEntry>,
     pub derived: Vec<DerivedEntry>,
     pub files: Vec<FilePlan>,
     /// The canonical identity document the `snapshot_id` hashes. Printed by
     /// `--dry-run`; also the base of `manifest.json`.
     pub identity: Value,
+}
+
+impl SnapshotPlan {
+    /// The generation a selected series/derived row came from.
+    pub fn generation_of(&self, source_binding_digest: &str) -> Option<&GenerationBinding> {
+        self.lineage.get(source_binding_digest)
+    }
 }
 
 /// Open the export database read-only (§7.1: forced `mode=ro` + `query_only`).
@@ -508,9 +526,11 @@ pub fn open_read_only(path: &Path) -> Result<Connection, Error> {
 /// Build the snapshot plan: a pure read, no side effects (§11 separation 5).
 ///
 /// Rejections, in order: invalid request → missing catalog/entity/dataset →
-/// empty selection → mixed source generation. The returned `snapshot_id` is a
-/// function of the bound inputs only (§7.3), so two runs over the same state
-/// produce the same id (AC-M1-7).
+/// empty selection → unprovable lineage. A selection spanning several source
+/// generations is allowed as long as every row's binding resolves to a
+/// generation (M1 fix B). The returned `snapshot_id` is a function of the
+/// bound inputs only (§7.3), so two runs over the same state produce the same
+/// id (AC-M1-7).
 pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Error> {
     let request = request.clone().validate()?;
     let catalog = read::catalog(c, &request.entities)?;
@@ -549,14 +569,22 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
         derived.push(read::calendar_version(c)?);
     }
 
-    let generation = read::unique_generation(c, &series, &derived)?;
-    let identity = manifest::identity(&request, &catalog.binding, &generation, &series, &derived);
+    let lineage = read::resolve_lineage(c, &series, &derived)?;
+    let identity = manifest::identity(
+        &request,
+        &catalog.binding,
+        &lineage.generations,
+        &lineage.by_digest,
+        &series,
+        &derived,
+    )?;
     let snapshot_id = manifest::snapshot_id(&identity)?;
     Ok(SnapshotPlan {
         request: request.clone(),
         snapshot_id,
         catalog: catalog.binding,
-        generation,
+        generations: lineage.generations,
+        lineage: lineage.by_digest,
         series,
         derived,
         files: file_plans(&request),

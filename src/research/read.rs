@@ -402,51 +402,60 @@ pub(crate) fn calendar_version(c: &Connection) -> Result<DerivedEntry, Error> {
     })
 }
 
-fn read_source_binding(c: &Connection, digest: &str) -> Result<(String, String), Error> {
-    let raw: Vec<u8> = decode_hex(digest).ok_or_else(|| integrity("binding digest is not hex"))?;
-    let (generation_id, manifest): (String, Vec<u8>) = c
-        .query_row(
-            "SELECT generation_id,generation_manifest_sha256 FROM source_bindings \
-             WHERE source_binding_digest=?1",
-            params![raw],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => {
-                Error::Integrity(format!("source binding {digest} is missing"))
-            }
-            other => db(other),
-        })?;
-    Ok((generation_id, digest_hex(manifest)?))
-}
-
-pub(crate) fn decode_hex(text: &str) -> Option<Vec<u8>> {
-    if !text.len().is_multiple_of(2) {
-        return None;
-    }
-    let mut out = Vec::with_capacity(text.len() / 2);
-    for index in (0..text.len()).step_by(2) {
-        out.push(u8::from_str_radix(&text[index..index + 2], 16).ok()?);
-    }
-    Some(out)
-}
-
 /// Layer 3 of the four-layer binding (§7.3, BR-M1-7): every exported row must
-/// resolve to exactly one source generation. Two generations means the export
-/// straddles a daily update — a half-new / half-old snapshot — so it fails
-/// closed instead of writing one.
-pub(crate) fn unique_generation(
+/// resolve to a source generation. The generations do **not** have to be the
+/// same: a daily run can leave one entity on generation N and another on N+1,
+/// and the manifest records the binding of each row, so the mix is traceable.
+/// Only a row whose binding has no `source_bindings` row is rejected — then
+/// its lineage cannot be proven at all (M1 fix B).
+///
+/// The resolved per-row lineage plus the distinct generations (sorted).
+pub(crate) struct Lineage {
+    pub by_digest: BTreeMap<String, GenerationBinding>,
+    pub generations: Vec<GenerationBinding>,
+}
+
+pub(crate) fn resolve_lineage(
     c: &Connection,
     series: &[SeriesEntry],
     derived: &[DerivedEntry],
-) -> Result<GenerationBinding, Error> {
-    let mut bindings: BTreeMap<String, (String, String)> = BTreeMap::new();
-    let mut collect = |digest: &str| -> Result<(), Error> {
-        let (generation_id, manifest_sha256) = read_source_binding(c, digest)?;
-        bindings.insert(
-            format!("{generation_id}/{manifest_sha256}"),
-            (generation_id, manifest_sha256),
+) -> Result<Lineage, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT source_binding_digest,generation_id,generation_manifest_sha256 \
+             FROM source_bindings",
+        )
+        .map_err(db)?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, Vec<u8>>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+            ))
+        })
+        .map_err(db)?;
+    let mut known: BTreeMap<String, GenerationBinding> = BTreeMap::new();
+    for row in rows {
+        let (digest, generation_id, manifest) = row.map_err(db)?;
+        known.insert(
+            digest_hex(digest)?,
+            GenerationBinding {
+                generation_id,
+                manifest_sha256: digest_hex(manifest)?,
+            },
         );
+    }
+
+    let mut referenced: BTreeMap<String, GenerationBinding> = BTreeMap::new();
+    let mut collect = |digest: &str| -> Result<(), Error> {
+        let generation = known.get(digest).ok_or_else(|| {
+            Error::UnprovenLineage(format!(
+                "source binding {digest} has no source_bindings row; \
+                 the row's source generation cannot be proven"
+            ))
+        })?;
+        referenced.insert(digest.to_string(), generation.clone());
         Ok(())
     };
     for entry in series {
@@ -455,28 +464,23 @@ pub(crate) fn unique_generation(
     for entry in derived {
         collect(&entry.source_binding_digest)?;
     }
-    match bindings.len() {
-        0 => Err(Error::Integrity(
+    if referenced.is_empty() {
+        return Err(Error::Integrity(
             "the snapshot binds no source generation".into(),
-        )),
-        1 => {
-            let (generation_id, manifest_sha256) =
-                bindings.into_values().next().expect("one binding");
-            Ok(GenerationBinding {
-                generation_id,
-                manifest_sha256,
-            })
-        }
-        _ => {
-            let list: Vec<&str> = bindings.keys().map(String::as_str).collect();
-            Err(Error::MixedGeneration(format!(
-                "the selection spans {} source generations ({}); \
-                 export one generation at a time",
-                list.len(),
-                list.join(",")
-            )))
-        }
+        ));
     }
+
+    let mut generations: Vec<GenerationBinding> = referenced.values().cloned().collect();
+    generations.sort_by(|a, b| {
+        a.generation_id
+            .cmp(&b.generation_id)
+            .then_with(|| a.manifest_sha256.cmp(&b.manifest_sha256))
+    });
+    generations.dedup();
+    Ok(Lineage {
+        by_digest: referenced,
+        generations,
+    })
 }
 
 /// One `series_bars` row, decoded for export.

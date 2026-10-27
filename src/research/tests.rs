@@ -4,15 +4,16 @@
 //! (`series::insert_series`/`insert_bars`, `derived::replace_adjustment_events`,
 //! `calendar::commit_calendar`, `evidence_store`), not hand-written SQL, so the
 //! rows the read model sees carry the same encoding the daily run produces.
-//! Only two things are poked with SQL on purpose: `volume_quantum` (M1 writes
-//! NULL everywhere, so the column has to be proven wired with a non-NULL value)
-//! and the drift/mixed-generation mutations, which simulate a concurrent daily
-//! run without driving the whole task machinery.
+//! Only a few things are poked with SQL on purpose: `volume_quantum` (M1 writes
+//! NULL everywhere, so the column has to be proven wired with a non-NULL value),
+//! the drift/cross-generation mutations, which simulate a concurrent daily run
+//! without driving the whole task machinery, and one orphaned binding that
+//! proves unprovable lineage is still rejected.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use rusqlite::{Connection, params};
 use rust_decimal::Decimal;
 use serde_json::json;
@@ -51,6 +52,15 @@ fn day(year: i32, month: u32, day: u32) -> NaiveDate {
 
 fn days() -> Vec<NaiveDate> {
     vec![day(2026, 10, 20), day(2026, 10, 21), day(2026, 10, 22)]
+}
+
+/// Consecutive days starting at the fixture's first day. `count == 3` is the
+/// `days()` window every non-size test uses.
+fn history_days(count: usize) -> Vec<NaiveDate> {
+    let first = day(2026, 10, 20);
+    (0..count)
+        .map(|offset| first + Duration::days(offset as i64))
+        .collect()
 }
 
 fn bar(day: NaiveDate, close_units: i64) -> CompactBar {
@@ -97,6 +107,13 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_days(3)
+    }
+
+    /// A fixture whose stock series have `stock_day_count` bars. The index
+    /// keeps the three-day `days()` window; the calendar follows the stock
+    /// window so every stock bar is inside it.
+    fn with_days(stock_day_count: usize) -> Self {
         let dir = tempdir();
         let path = dir.path().join("market.db");
         SqliteTasks::new(&path).initialize_compact().unwrap();
@@ -104,12 +121,14 @@ impl Fixture {
         let mut c = Connection::open(&path).unwrap();
         c.pragma_update(None, "foreign_keys", true).unwrap();
         let tx = c.transaction().unwrap();
-        Self::populate(&tx);
+        Self::populate(&tx, stock_day_count);
         tx.commit().unwrap();
         Self { _dir: dir, path }
     }
 
-    fn populate(c: &Connection) {
+    fn populate(c: &Connection, stock_day_count: usize) {
+        let stock_days = history_days(stock_day_count);
+        let calendar_days = stock_days.clone();
         let generation_evidence = evidence_store::put_evidence(
             c,
             EvidenceKind::Generation,
@@ -139,8 +158,9 @@ impl Fixture {
                     Adjustment::Raw => 2,
                     Adjustment::Forward => 6,
                 };
-                let bars: Vec<CompactBar> = days()
-                    .into_iter()
+                let bars: Vec<CompactBar> = stock_days
+                    .iter()
+                    .copied()
                     .enumerate()
                     .map(|(index, day)| bar(day, base + index as i64))
                     .collect();
@@ -270,13 +290,13 @@ impl Fixture {
                     entity: "sh.000001".into(),
                     member: "sh\\lday\\sh000001.day".into(),
                     day_member_sha256: "aa".repeat(32),
-                    days: days(),
+                    days: calendar_days.clone(),
                 },
                 CalendarInputDates {
                     entity: "sz.399001".into(),
                     member: "sz\\lday\\sz399001.day".into(),
                     day_member_sha256: "bb".repeat(32),
-                    days: days(),
+                    days: calendar_days.clone(),
                 },
             ],
             security_event_sha256: crate::hash::sha256(&0u64.to_le_bytes()),
@@ -390,6 +410,72 @@ impl Fixture {
         assert_eq!(changed, 1);
     }
 
+    /// Point one series at a digest with no `source_bindings` row, as a
+    /// corrupted/legacy row would look. Turn the FK check off explicitly:
+    /// the build may default it on, and the point is to simulate a row the
+    /// planner must reject rather than to exercise SQLite's constraint.
+    fn orphan_series_binding(&self, entity: &str, adjustment: Adjustment) {
+        let c = Connection::open(&self.path).unwrap();
+        c.pragma_update(None, "foreign_keys", false).unwrap();
+        let orphan = [0xeeu8; 32];
+        let changed = c
+            .execute(
+                "UPDATE market_series SET source_binding_digest=?1 \
+                 WHERE entity=?2 AND adjustment=?3",
+                params![orphan.as_slice(), entity, adjustment.code()],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+    }
+
+    /// Give the 前复权 bars 6dp values whose low digits vary, so the size test
+    /// measures a qfq file shaped like production instead of a run of small
+    /// integers that compresses unrealistically well.
+    fn scramble_forward_prices(&self) {
+        let c = self.write();
+        let keys: Vec<i64> = c
+            .prepare("SELECT series_key FROM market_series WHERE adjustment=?1")
+            .unwrap()
+            .query_map(params![Adjustment::Forward.code()], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for key in keys {
+            let days: Vec<i64> = c
+                .prepare("SELECT trade_day FROM series_bars WHERE series_key=?1 ORDER BY trade_day")
+                .unwrap()
+                .query_map(params![key], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            let mut state = 0x9e37_79b9_7f4a_7c15u64 ^ key as u64;
+            for trade_day in days {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let close = 1_000_000 + ((state >> 16) % 900_000_000) as i64;
+                let volume = 100 + ((state >> 8) % 100_000) as i64;
+                let amount_cents = (close as i128 * volume as i128 / 10_000) as i64;
+                let amount = format!("{}.{:02}", amount_cents / 100, amount_cents % 100);
+                c.execute(
+                    "UPDATE series_bars SET open_units=?1,high_units=?2,low_units=?3,\
+                     close_units=?4,volume=?7,amount=?8 WHERE series_key=?5 AND trade_day=?6",
+                    params![
+                        close - 10,
+                        close + 10,
+                        close - 20,
+                        close,
+                        key,
+                        trade_day,
+                        volume,
+                        amount
+                    ],
+                )
+                .unwrap();
+            }
+        }
+    }
+
     fn path(&self) -> &Path {
         &self.path
     }
@@ -423,8 +509,18 @@ fn plan_binds_the_four_layers_and_is_deterministic() {
     assert_eq!(first.catalog.selection, "catalog");
     assert_eq!(first.catalog.version_id.as_deref(), Some("catalog-1"));
     assert_eq!(first.catalog.member_count, 2);
-    assert_eq!(first.generation.generation_id, GEN1);
-    assert_eq!(first.generation.manifest_sha256, MANIFEST_SHA);
+    assert_eq!(first.generations.len(), 1);
+    assert_eq!(first.generations[0].generation_id, GEN1);
+    assert_eq!(first.generations[0].manifest_sha256, MANIFEST_SHA);
+    let raw = first
+        .series
+        .iter()
+        .find(|entry| entry.entity == "sh.600000" && entry.adjustment == Adjustment::Raw)
+        .unwrap();
+    assert_eq!(
+        first.generation_of(&raw.source_binding_digest).unwrap(),
+        &first.generations[0]
+    );
     assert_eq!(first.series.len(), 5, "2 stocks × 2 口径 + 1 index");
     assert_eq!(first.derived.len(), 3, "2 factor sets + 1 calendar");
     assert_eq!(first.files.len(), 5);
@@ -433,6 +529,10 @@ fn plan_binds_the_four_layers_and_is_deterministic() {
     assert!(first.identity.get("created_at").is_none());
     assert!(first.identity.get("files").is_none());
     assert_eq!(first.identity["schema"], super::manifest::SCHEMA);
+    assert_eq!(first.identity["generations"].as_array().unwrap().len(), 1);
+    for entry in first.identity["series"].as_array().unwrap() {
+        assert_eq!(entry["source_generation"]["generation_id"], GEN1);
+    }
 
     // Deterministic ordering: stocks by entity then 口径, index last.
     let order: Vec<(&str, &str)> = first
@@ -518,15 +618,66 @@ fn snapshot_id_changes_when_a_series_version_changes() {
 }
 
 #[test]
-fn mixed_generation_is_rejected() {
+fn cross_generation_export_records_each_series_generation() {
     let fixture = Fixture::new();
     fixture.move_series_to_generation_two("sz.000001", Adjustment::Forward);
+    let snapshot = plan(&fixture.read(), &ExportRequest::default()).unwrap();
+
+    // A daily run that crosses a generation boundary is exportable ...
+    let ids: Vec<&str> = snapshot
+        .generations
+        .iter()
+        .map(|generation| generation.generation_id.as_str())
+        .collect();
+    assert_eq!(ids, vec![GEN1, GEN2]);
+
+    // ... and every series names the generation it came from.
+    let series = snapshot.identity["series"].as_array().unwrap();
+    let generation_of = |entity: &str, adjustment: &str| {
+        series
+            .iter()
+            .find(|entry| {
+                entry["entity"].as_str() == Some(entity)
+                    && entry["adjustment"].as_str() == Some(adjustment)
+            })
+            .unwrap()["source_generation"]["generation_id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(generation_of("sh.600000", "raw"), GEN1);
+    assert_eq!(generation_of("sh.600000", "qfq"), GEN1);
+    assert_eq!(generation_of("sz.000001", "raw"), GEN1);
+    assert_eq!(generation_of("sz.000001", "qfq"), GEN2);
+
+    let moved = snapshot
+        .series
+        .iter()
+        .find(|entry| entry.entity == "sz.000001" && entry.adjustment == Adjustment::Forward)
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .generation_of(&moved.source_binding_digest)
+            .unwrap()
+            .generation_id,
+        GEN2
+    );
+    // Derived datasets carry their own generation too.
+    for entry in snapshot.identity["derived"].as_array().unwrap() {
+        assert!(entry["source_generation"]["generation_id"].is_string());
+    }
+}
+
+#[test]
+fn unproven_lineage_is_rejected() {
+    let fixture = Fixture::new();
+    fixture.orphan_series_binding("sz.000001", Adjustment::Forward);
     let error = plan(&fixture.read(), &ExportRequest::default()).unwrap_err();
     assert!(
-        error.to_string().contains("EXPORT_MIXED_GENERATION"),
+        error.to_string().contains("EXPORT_LINEAGE"),
         "unexpected error: {error}"
     );
-    assert!(error.to_string().contains("2 source generations"));
+    assert!(error.to_string().contains("cannot be proven"));
 }
 
 #[test]
@@ -833,8 +984,16 @@ mod with_export {
         assert_eq!(manifest["snapshot_id"], outcome.snapshot_id);
         assert_eq!(manifest["schema"], super::super::manifest::SCHEMA);
         assert_eq!(manifest["catalog"]["member_count"], 2);
-        assert_eq!(manifest["generation"]["generation_id"], GEN1);
+        assert_eq!(manifest["generations"][0]["generation_id"], GEN1);
         assert_eq!(manifest["export"]["row_group_rows"], 2);
+        // Run-dependent facts never enter the snapshot file (AC-M1-7).
+        assert!(manifest.get("created_at").is_none());
+        assert!(manifest["export"].get("started_at").is_none());
+        assert!(manifest["export"].get("finished_at").is_none());
+        assert!(manifest["export"].get("wal_bytes_delta").is_none());
+        for entry in manifest["series"].as_array().unwrap() {
+            assert_eq!(entry["source_generation"]["generation_id"], GEN1);
+        }
         assert_eq!(
             manifest["limitations"].as_array().unwrap().len(),
             super::super::LIMITATIONS.len()
@@ -862,7 +1021,7 @@ mod with_export {
     }
 
     #[test]
-    fn export_is_reproducible() {
+    fn export_is_byte_reproducible() {
         let fixture = Fixture::new();
         let first_root = tempdir();
         let second_root = tempdir();
@@ -881,6 +1040,50 @@ mod with_export {
         assert_eq!(first.snapshot_id, second.snapshot_id);
         assert_eq!(first.files, second.files);
         assert!(!first.created_at.is_empty());
+
+        // AC-M1-7: not just the id — every snapshot file, manifest included,
+        // is byte-for-byte the same on a second export of the same database.
+        for file in &first.files {
+            let a = std::fs::read(first.directory.join(&file.path)).unwrap();
+            let b = std::fs::read(second.directory.join(&file.path)).unwrap();
+            assert_eq!(a, b, "{} differs between two exports", file.path);
+        }
+        let first_manifest = std::fs::read(first.directory.join("manifest.json")).unwrap();
+        let second_manifest = std::fs::read(second.directory.join("manifest.json")).unwrap();
+        assert_eq!(first_manifest, second_manifest, "manifest.json differs");
+    }
+
+    #[test]
+    fn cross_generation_snapshot_writes_each_series_generation() {
+        let fixture = Fixture::new();
+        fixture.move_series_to_generation_two("sz.000001", Adjustment::Forward);
+        let out = tempdir();
+        let outcome = export(
+            fixture.path(),
+            &ExportRequest::default(),
+            &options(out.path()),
+        )
+        .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(outcome.directory.join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["generations"].as_array().unwrap().len(), 2);
+        let series = manifest["series"].as_array().unwrap();
+        let generation_of = |entity: &str, adjustment: &str| {
+            series
+                .iter()
+                .find(|entry| {
+                    entry["entity"].as_str() == Some(entity)
+                        && entry["adjustment"].as_str() == Some(adjustment)
+                })
+                .unwrap()["source_generation"]["generation_id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(generation_of("sh.600000", "raw"), GEN1);
+        assert_eq!(generation_of("sz.000001", "qfq"), GEN2);
     }
 
     #[test]
@@ -984,6 +1187,18 @@ mod with_export {
                     .unwrap();
             let metadata = reader.metadata();
             assert_eq!(metadata.file_metadata().num_rows(), rows, "{name} rows");
+            // §7.6: snappy + format 1.0, the settings the size estimate in
+            // §7.7 assumed. Lock them so a silent encoding change shows up.
+            assert_eq!(metadata.file_metadata().version(), 1, "{name} format");
+            for row_group in metadata.row_groups() {
+                for column in row_group.columns() {
+                    assert_eq!(
+                        column.compression(),
+                        parquet::basic::Compression::SNAPPY,
+                        "{name} column compression"
+                    );
+                }
+            }
             let schema = metadata.file_metadata().schema_descr();
             let names: Vec<&str> = schema
                 .columns()
@@ -1025,6 +1240,47 @@ mod with_export {
             &parquet::record::Field::Decimal(parquet::data_type::Decimal::from_i64(
                 9_900_000, 18, 6
             ))
+        );
+    }
+
+    /// §7.7 (as corrected by M1 fix B): measure the daily files on a fixture
+    /// with production-shaped 6dp prices. The design's 340MB assumed about
+    /// 10 B/row for each file; the fixed-width qfq columns alone are more than
+    /// 40 B/row, so the estimate was below the physical floor.
+    #[test]
+    fn daily_parquet_bytes_per_row_match_the_measured_fixture() {
+        let fixture = Fixture::with_days(4000);
+        fixture.scramble_forward_prices();
+        let out = tempdir();
+        let mut options = options(out.path());
+        options.row_group_rows = 65_536;
+        let outcome = export(fixture.path(), &ExportRequest::default(), &options).unwrap();
+        let stat = |name: &str| outcome.files.iter().find(|file| file.path == name).unwrap();
+        let raw = stat(super::super::DAILY_RAW_FILE);
+        let qfq = stat(super::super::DAILY_QFQ_FILE);
+        assert_eq!(raw.rows, 8_000, "2 stocks × 4000 bars");
+        assert_eq!(qfq.rows, 8_000);
+        let raw_per_row = raw.bytes as f64 / raw.rows as f64;
+        let qfq_per_row = qfq.bytes as f64 / qfq.rows as f64;
+        println!(
+            "daily_raw {raw_per_row:.1} B/row, daily_qfq {qfq_per_row:.1} B/row \
+             ({} / {} bytes)",
+            raw.bytes, qfq.bytes
+        );
+        assert!(
+            (20.0..=50.0).contains(&raw_per_row),
+            "daily_raw {raw_per_row:.1} B/row is outside the measured range"
+        );
+        assert!(
+            (30.0..=90.0).contains(&qfq_per_row),
+            "daily_qfq {qfq_per_row:.1} B/row is outside the measured range"
+        );
+        // 340MB / 16,749,060 rows / 2 files ≈ 10 B/row per file. This fixture
+        // has two entities and constant raw volume/amount, so it sits below
+        // the production-shaped 55.9 B/row, but still far above 10.
+        assert!(
+            qfq_per_row > 25.0,
+            "the qfq fixed-width floor should make 10 B/row impossible"
         );
     }
 

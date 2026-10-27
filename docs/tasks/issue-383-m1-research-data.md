@@ -514,7 +514,7 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 | `--row-group-rows` | 行组大小（内存与列统计的平衡） | 65536 |
 | `--dry-run` | 只算 `snapshot_id` 与清单，不写文件 | 关 |
 
-失败语义：任一 AC 不满足（版本漂移、混合 generation、目录版本不存在、范围为空）→ 非零退出码 + 一行结构化原因，**不写半成品**。
+失败语义：任一 AC 不满足（版本漂移、血缘无法证明、目录版本不存在、范围为空）→ 非零退出码 + 一行结构化原因，**不写半成品**。跨来源代**不是**失败条件（见 §7.3 的 M1 修复 B）。
 
 `--entities`/`--catalog-version` 只约束个股日线与因子集；指数与日历由登记表（`index_registry` + `trading_days`）决定，不受 `--entities` 影响——否则"导出 100 只股票"会连带丢掉基准。
 
@@ -540,21 +540,27 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 {
   "schema": "x-data-mcp.research-snapshot.v1",
   "snapshot_id": "snapshot-<32 hex>",
-  "created_at": "2026-10-26T12:34:56Z",
   "request": {"dataset":"all","adjustment":"both","start":"1990-12-19","end":"2026-10-23","entities":"catalog"},
   "catalog": {"version_id":"catalog-1791873196258239513","member_count":5228},
-  "generation": {"generation_id":"<hex>","manifest_sha256":"<hex>"},
+  "generations": [
+    {"generation_id":"<hex>","manifest_sha256":"<hex>"},
+    {"generation_id":"<hex>","manifest_sha256":"<hex>"}
+  ],
   "algorithms": {"series_digest":"series-fold-v2","qfq":"qfq-exact-v1",
                  "factor_normalize":"gbbq-cat1-2dp-v1","calendar":"cal-union-v1"},
   "series": [
     {"entity":"sh.600000","period":"day","adjustment":"raw","instrument_class":"stock",
      "price_scale":2,"version_id":"<hex>","record_count":8000,"first_day":"1999-11-10",
-     "last_day":"2026-10-23","source_binding_digest":"<hex>","coverage":"complete"}
+     "last_day":"2026-10-23","source_binding_digest":"<hex>",
+     "source_generation":{"generation_id":"<hex>","manifest_sha256":"<hex>"},
+     "coverage":"complete","excluded_bar_count":0}
   ],
   "derived": [
     {"dataset":"trading_calendar","version_id":"<hex>","record_count":8793,
-     "first_day":"1990-12-19","last_day":"2026-10-23","algorithm_version":"cal-union-v1"},
-    {"dataset":"adjustment_events","entity":"sh.600000","version_id":"<hex>","record_count":18}
+     "first_day":"1990-12-19","last_day":"2026-10-23","algorithm_version":"cal-union-v1",
+     "source_generation":{"generation_id":"<hex>","manifest_sha256":"<hex>"}},
+    {"dataset":"adjustment_events","entity":"sh.600000","version_id":"<hex>","record_count":18,
+     "source_generation":{"generation_id":"<hex>","manifest_sha256":"<hex>"}}
   ],
   "files": [
     {"path":"daily_raw.parquet","rows":16749060,"bytes":123456789,"sha256":"<hex>",
@@ -569,10 +575,12 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 }
 ```
 
-- **`snapshot_id` 的定义**：`snapshot-` + `sha256(canonical_json({schema, request, catalog, generation, algorithms, series, derived}))` 的前 32 个 hex 字符。规范 JSON 用已有的 `serde_json_canonicalizer`（`Cargo.toml` 里已在）。**排除 `created_at` 与 `files`**，所以同一输入两次导出得到同一个 id（AC-M1-7），而文件字节数/压缩参数不影响身份。
-- **四层绑定**（BR-M1-7）：目录版本（`catalog_head`）、每条序列的 `version_id` 与摘要格式、来源 generation（从 `source_bindings` 反查，必须**唯一**；出现两个 generation → 混合导出，失败）、每个文件的 sha256。
+- **`snapshot_id` 的定义**：`snapshot-` + `sha256(canonical_json({schema, request, catalog, generations, algorithms, series, derived}))` 的前 32 个 hex 字符。规范 JSON 用已有的 `serde_json_canonicalizer`（`Cargo.toml` 里已在）。**排除 `files` 与任何运行信息**，所以同一输入两次导出得到同一个 id（AC-M1-7），而文件字节数/压缩参数不影响身份。
+- **四层绑定**（BR-M1-7）：目录版本（`catalog_head`）、每条序列的 `version_id` 与摘要格式、每条序列/派生数据集的来源 generation（从 `source_bindings` 反查，逐条写入 `source_generation`）、每个文件的 sha256。
+- **跨代导出（M1 修复 B）**：一条日更可能跨过一次 generation 切换，留下“部分实体在旧代、部分在新代”的库。此时**允许**一次全量导出：`generations` 列出全部来源代，`series`/`derived` 的每一项各自带 `source_generation` 与 `version_id`，所以混合状态是显式、可追溯的，而不是被拒绝。只有某一行的 `source_binding_digest` 在 `source_bindings` 里查不到（血缘无法证明）才失败（`EXPORT_LINEAGE`）。设计原意是“不能产出无法追溯来源的半新半旧快照”，逐行记录来源代满足这一点，同时不再让生产每天跨代时全量导出不可用。
+- **可复现**：`manifest.json` 里不写 `created_at`/`started_at`/`finished_at`/WAL 增量等运行信息；它们只出现在 CLI 的一行摘要（`ExportOutcome`）里。因此同一库、同一输出选项的两次导出，`snapshot_id`、`manifest.json` 和全部 Parquet 文件的 sha256 都逐字节相同（AC-M1-7）。
 - 清单里 `coverage` 只放 `complete/incomplete/unknown` 三值，理由串留在库里（`market_series.coverage_status` 的 reason 在证据包中），避免清单变成第二个事实源。
-- 一致性：导出在**单个只读事务**里完成（SQLite 给一致视图），因此 `series` 与 bar 内容天然对齐；`--dry-run` 也走同一事务。长事务期间 WAL 会增长（日更仍在写），因此导出要记录起止时间与 WAL 增量，超过阈值时提示（不阻塞）。
+- 一致性：导出在**单个只读事务**里完成（SQLite 给一致视图），因此 `series` 与 bar 内容天然对齐；`--dry-run` 也走同一事务。长事务期间 WAL 会增长（日更仍在写），CLI 摘要报告起止时间与 WAL 增量（不写进快照，不阻塞）。
 
 ### 7.4 Parquet 列结构
 
@@ -681,18 +689,32 @@ required-features = ["export"]
 - **发布管线要改**：`scripts/build_release.sh` 需要带 `--features export`，否则发布包里没有导出命令。这是 owner 批准项（§10.3）。
 - 压缩选 `snap`（纯 Rust，无 C 依赖）：`zstd` 体积更小但引入 C 代码与更大的二进制；M1 的导出体积不是门禁项（§7.7），先用 snappy。
 
-### 7.7 体积（估算，未实测）
+### 7.7 体积（M1 修复 B 已实测每行字节数）
 
-| 范围 | 行数（调研报告① 实测基准） | Parquet 估算 |
-|---|---|---|
-| 全历史不复权 | 16,749,060 | ~170MB |
-| 全历史 6dp 前复权 | 16,749,060 | ~170MB（6dp 不改变 i64 宽度，压缩率略差） |
-| 因子事件 | 69,283 | <2MB |
-| 日历 | 8,793 | <0.5MB |
-| 指数 | ~40,000 | ~1MB |
-| 合计 | — | **约 340MB**（估算；CSV+gzip 同口径为 347MB 实测，Parquet 的估计区间 170–350MB 未实测） |
+原估算是 **340MB**，依据是“CSV+gzip 同口径 347MB”和“6dp 不改变 i64 宽度，压缩率略差”。
+M1 修复 B 用夹具实测后，这个估算低于物理下限，已修正：
 
-放 `/root/x-data-exports`（不在 `/opt` 部署树里），因此**不挤占 SLO 第 5 行的部署体积门禁**；但会占根文件系统（当前可用约 28GB，调研报告① §1.1 实测），每次全历史导出约 340MB，保留策略需要 owner 定（本次不定）。
+| 范围 | 行数（调研报告① 实测基准） | 实测 B/行 | 外推 |
+|---|---|---|---|
+| 全历史不复权 | 16,749,060 | 32.3 | ~541MB |
+| 全历史 6dp 前复权 | 16,749,060 | 55.9 | ~937MB |
+| 因子事件 | 69,283 | — | <2MB |
+| 日历 | 8,793 | — | <0.5MB |
+| 指数 | ~40,000 | — | ~1MB |
+| 合计 | — | — | **约 1.5GB**（私有栈按 24 个实体外推为 1.9GB，同一量级） |
+
+实测方法：`scripts/export_smoke.py --measure`（pyarrow 26.0.0，100,000 行确定性夹具，snappy +
+字典编码 + format 1.0 + 65,536 行/组，与 §7.6/§7.8 的实现设置一致）。Rust 侧的同一夹具由
+`src/research/tests.rs` 的 `daily_parquet_bytes_per_row_match_the_measured_fixture` 锁住上界。
+
+**为什么和 340MB 对不上**：340MB / 16,749,060 行 / 2 个文件 ≈ 10 B/行/文件，低于列宽下限。
+前复权文件每行至少有 4 个 `INT64` 价格（32B）+ `INT64` volume（8B）+ 9B `amount` +
+4B `DATE` + `price_scale`/`r7_raw`，即约 55B，且 6dp 的低位接近随机，snappy 压不动；
+实测 55.9 B/行与这个下限一致。不复权的 2dp 值有结构，能压到 32.3 B/行，但仍远高于 10 B/行。
+旧的 347MB CSV+gzip 数字不是“两个日线文件”的同口径实测，不能作为 Parquet 估算的依据。
+压缩方式仍按 §7.6 选 snappy（纯 Rust、无 C 依赖）；换 zstd 会改设计取舍，不在本修复里做。
+
+放 `/root/x-data-exports`（不在 `/opt` 部署树里），因此**不挤占 SLO 第 5 行的部署体积门禁**；但会占根文件系统（当前可用约 28GB，调研报告① §1.1 实测），每次全历史导出约 1.5GB，保留策略需要 owner 定（本次不定）。
 
 ### 7.8 PR-8 实现落点与偏差
 
@@ -701,21 +723,22 @@ required-features = ["export"]
 | 文件 | 职责 | 编译门槛 |
 |---|---|---|
 | `src/research/mod.rs` | 请求/选择、绑定类型（catalog/generation/index/序列/派生/文件计划）、`open_read_only`、`plan()`（= §11 的 `research::build_snapshot`）、`verify_unchanged()`、列与文件常量、`LIMITATIONS` | 恒编译 |
-| `src/research/read.rs` | 只读连接（`SQLITE_OPEN_READ_ONLY` + `query_only=1` + schema 22 校验）、catalog/序列/因子集/日历读模型、流式行迭代 `for_each_*`、十进制定标换算 | 恒编译 |
+| `src/research/read.rs` | 只读连接（`SQLITE_OPEN_READ_ONLY` + `query_only=1` + schema 22 校验）、catalog/序列/因子集/日历读模型、逐行来源代解析 `resolve_lineage`、流式行迭代 `for_each_*`、十进制定标换算 | 恒编译 |
 | `src/research/manifest.rs` | `algorithms()`、`identity()`（canonical JSON → `snapshot_id`）、`files_value()`、`document()` | 恒编译 |
 | `src/research/parquet.rs` | 五份文件的 Parquet 编码（低层 `SerializedFileWriter`） | `export` |
 | `src/research/export.rs` | `ExportOptions`、三步式 `SnapshotWriter`（规划 → 落临时目录 → 复验 + 写清单 + rename）、`export()`、`dry_run()` | `export` |
 | `src/bin/export_research.rs` | 参数解析与一行 JSON 摘要 | `export` + `required-features` |
-| `scripts/export_smoke.py` | 第三方 reader 冒烟（§7.5） | — |
+| `scripts/export_smoke.py` | 第三方 reader 冒烟（§7.5）与 `--measure` 体积夹具（§7.7） | — |
 
 与设计文本的偏差（都是落地时发现的必要调整，逐条记录）：
 
 1. **命名**：§11 分离点 5 写的是 `research::build_snapshot` / `SnapshotRequest` / `Snapshot`；实现用 `plan()` / `ExportRequest` / `SnapshotPlan`。语义一致（纯读、无副作用、入口只做参数解析），改名是为了让"这一步只做规划、真正写文件是 `export()`"在类型名上就看得出来。读模型对外仍是一处：入口与未来的 MCP 研究入口都调 `plan()`。
 2. **`DECIMAL` 的物理类型**：§7.4 只规定逻辑类型。`INT64` 的 `DECIMAL` 精度上限是 18，所以 `DECIMAL(20,2)` 的 `amount` 写成 `FIXED_LEN_BYTE_ARRAY(9)`、`DECIMAL(28,18)` 的因子仿射写成 `FIXED_LEN_BYTE_ARRAY(16)`（Parquet 的十进制定长编码，大端补码）；`DECIMAL(18,6)` 的价格仍是 `INT64`。两种写法都已用 pyarrow 26.0.0 与 duckdb 2.0.0 实测读回。
 3. **`volume_quantum`**：§7.4 原表没有这一列，按 D-34 方案 1 补上（`INT32`，NULL = 未知）。M1 生产写路径恒写 NULL，所以测试里用一条 SQL 单独置 100 来证明该列已接线——这也说明它是"留给 M2/M3 的位置"，不是当下的数据。
-4. **可复现性**：`WriterProperties` 不设 `set_writer_version`（用默认的 1.0，兼容性最好），`set_created_by` 写固定串而不是 crate 版本，文件里不写时间戳；`identity` 排除 `created_at`/`files`/压缩参数/行组大小，因此同输入两次导出 `snapshot_id` 与每个文件的 sha256 都相同（AC-M1-7 的测试断言到 `files` 相等，不只是 id 相等）。
+4. **可复现性（M1 修复 B 补强）**：`WriterProperties` 不设 `set_writer_version`（用默认的 1.0，兼容性最好），`set_created_by` 写固定串而不是 crate 版本，文件里不写时间戳；`manifest.json` 也不写 `created_at`/`started_at`/`finished_at`/WAL 增量（这些只在 CLI 摘要里），`identity` 排除 `files`/压缩参数/行组大小。因此同输入两次导出 `snapshot_id`、`manifest.json` 与每个 Parquet 文件的 sha256 都逐字节相同（AC-M1-7 的测试比较全部文件字节，不只是 id）。
 5. **一致性（AC-M1-8）**：`SnapshotWriter` 分三步，`finalize()` 在**新连接**上重新 `plan()` 并与写文件时的计划逐字段比对（`verify_unchanged`），通过后才写 `manifest.json` 再 `rename`。因此"日更在导出期间提交"只会得到 `EXPORT_DRIFT` 且目录为空，不会留下半新半旧的快照；`--dry-run` 也在单一只读事务内规划。
 6. **只读（AC-M1-9）**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`；测试直接对读连接执行 `UPDATE` 断言失败，并断言导出前后主库文件字节完全相同。
+7. **跨代导出（M1 修复 B）**：§7.3 原写“来源 generation 必须唯一，出现两个 → 混合导出，失败”。实现改为逐行解析 `source_bindings`：`series`/`derived` 每项写 `source_generation`，清单顶部写去重排序后的 `generations`；只有某一行的 binding 查不到时才 `EXPORT_LINEAGE`。这样跨代日更后仍能做全量导出，且每个数据集都能追溯到自己的来源代与 manifest sha256，不违背“不能有无法追溯的半新半旧快照”的设计意图。
 
 验证状态（本机禁止 Rust 编译，按 §15）：本机只跑了 `cargo fmt --check`（通过）与 `scripts/export_smoke.py --self-check`（通过）；Rust 侧全部由 PR #408 的 CI 证明，三个 job（`rust`/`export`/`package`）在 run `40336874624` 这一轮全绿：
 
@@ -902,7 +925,7 @@ required-features = ["export"]
 | **PR-5** 指数序列 | `src/index_registry.rs`（9 条登记）+ `index_series_meta`；指数物化（`instrument_class=1`、scale 2、`adjustment=0`）；指数证据包（`evidence_kind='derived'`）；MCP 读路径过滤 `instrument_class=0` | AC-M1-6；AC-M1-10（指数部分） | 登记与库内行一致；单位/口径证据必填（缺证据拒绝）；`query_data(sh.000001)` 返回 absent；`r7_raw` 原样；`aliases` 往返 | PR-1 |
 | **PR-6** 交易日历 | `trading_days` + `cal-union-v1`；覆盖率自检（bar 落在日历外的比例与清单）；`derived_dataset_versions` 行 | AC-M1-4；AC-M1-5 | 用 16 个 `.day` 夹具（含 1991 周六）验证并集；单指数缺 bar 不误判；阈值超限失败；日历 `last_day` = 输入最后 bar | PR-5（输入来自指数成员） |
 | **PR-7** 日更集成 | 逐实体 item 写集扩展（§9.1）；`derived:calendar` + `derived:index:*` 内部 item（§9.2）；失败语义；耗时/冷启动实测记录 | AC-M1-11 | 全量 run 的 item 计数与结果；内部 item 失败 → `partially_failed`；进度查询形状不变（golden test）；冷启动探测计数 | PR-2、PR-4、PR-5、PR-6 |
-| **PR-8** 导出 | `src/research/`（读模型 + 清单 + 流式行迭代）、`src/research/parquet.rs`（feature `export`）、`src/bin/export_research.rs`、`[[bin]] required-features`、CI 新 job（`--features export` 的测试 + release 构建 + 体积/编译时间记录）、venv 文档 | AC-M1-7；AC-M1-8；AC-M1-9；AC-M1-10 | 清单确定性（同输入同 `snapshot_id`）；文件 sha256 自洽；版本漂移拒绝；混合 generation 拒绝；只读（`mode=ro`，写库则测试失败）；小夹具 Parquet 用 pyarrow/duckdb 读回（CI 里用 duckdb CLI 或 Python，需在 PR 里确认 runner 有） | PR-3、PR-4、PR-5、PR-6 |
+| **PR-8** 导出 | `src/research/`（读模型 + 清单 + 流式行迭代）、`src/research/parquet.rs`（feature `export`）、`src/bin/export_research.rs`、`[[bin]] required-features`、CI 新 job（`--features export` 的测试 + release 构建 + 体积/编译时间记录）、venv 文档 | AC-M1-7；AC-M1-8；AC-M1-9；AC-M1-10 | 清单确定性（同输入同 `snapshot_id`）；文件 sha256 自洽；版本漂移拒绝；跨来源代允许且逐序列记录来源代，血缘无法证明时拒绝（M1 修复 B）；只读（`mode=ro`，写库则测试失败）；小夹具 Parquet 用 pyarrow/duckdb 读回（CI 里用 duckdb CLI 或 Python，需在 PR 里确认 runner 有） | PR-3、PR-4、PR-5、PR-6 |
 | **PR-9**（可选，可与 PR-8 合并）文档与运维收口 | §8.4 的文档同步、`docs/tasks/` 实现记录、发布说明草稿、部署前实测清单（冷启动、write-loop、体积） | — | `check_current_facts` / `check_deploy_facts` / hygiene | 其余全部 |
 
 拆分原则：PR-1 只做"结构 + 参数化"，不改任何数值行为，也不新增序列——PR-1 之后库里仍只有 `adjustment=1` 一条序列（价格仍是 2dp），因此它可以单独合并、单独回滚；PR-2 才写第二条序列；PR-3 才把前复权从 2dp 换成 6dp。也就是说，"变贵"（PR-2 的存储）与"变准"（PR-3 的算法）是两个可分别回滚的步骤。
