@@ -488,7 +488,7 @@ pub(crate) fn replace_security_master(
 ) -> Result<DerivedVersionRow, Error> {
     if assembled.rows.is_empty() {
         return Err(integrity(
-            "security_master assembly produced no interval; refusing to publish an empty dataset",
+            "security_master assembled produced no interval; refusing to publish an empty dataset",
         ));
     }
     let mut seen = BTreeSet::new();
@@ -500,7 +500,7 @@ pub(crate) fn replace_security_master(
             fact.effective_from,
         )) {
             return Err(integrity(
-                "duplicate security_master interval in one assembly",
+                "duplicate security_master interval in one assembled",
             ));
         }
     }
@@ -512,7 +512,7 @@ pub(crate) fn replace_security_master(
             migration.from_code.as_str(),
             migration.effective_from,
         )) {
-            return Err(integrity("duplicate code_migrations row in one assembly"));
+            return Err(integrity("duplicate code_migrations row in one assembled"));
         }
     }
 
@@ -550,20 +550,20 @@ pub(crate) fn replace_security_master(
         .map_err(storage)?;
     }
 
-    let first_day = assembly
+    let first_day = assembled
         .rows
         .iter()
         .map(|fact| compact_market::epoch_day(fact.effective_from))
         .min()
-        .ok_or_else(|| integrity("non-empty assembly checked above"))?;
+        .ok_or_else(|| integrity("non-empty assembled checked above"))?;
     // An open interval has no end yet; the latest known day is its start. The
     // registration's CHECK requires first_day <= last_day.
-    let last_day = assembly
+    let last_day = assembled
         .rows
         .iter()
         .map(|fact| compact_market::epoch_day(fact.effective_to.unwrap_or(fact.effective_from)))
         .max()
-        .ok_or_else(|| integrity("non-empty assembly checked above"))?
+        .ok_or_else(|| integrity("non-empty assembled checked above"))?
         .max(first_day);
     let record_count = i64::try_from(assembled.rows.len())
         .map_err(|_| integrity("security_master row count overflow"))?;
@@ -791,7 +791,7 @@ fn assembled_master_evidence(
     item_id: &str,
 ) -> Result<Value, Error> {
     let conflicts: Vec<Value> = assembled.conflicts.iter().map(conflict_json).collect();
-    let pending_sources: Vec<Value> = assembly
+    let pending_sources: Vec<Value> = assembled
         .pending_sources
         .iter()
         .map(|pending| {
@@ -803,18 +803,18 @@ fn assembled_master_evidence(
         })
         .collect();
     let unresolved: Vec<Value> = assembled.unresolved.iter().map(unresolved_json).collect();
-    let first_day = assembly
+    let first_day = assembled
         .rows
         .iter()
         .map(|fact| fact.effective_from)
         .min()
-        .ok_or_else(|| integrity("evidence requires a non-empty assembly"))?;
-    let last_day = assembly
+        .ok_or_else(|| integrity("evidence requires a non-empty assembled"))?;
+    let last_day = assembled
         .rows
         .iter()
         .map(|fact| fact.effective_to.unwrap_or(fact.effective_from))
         .max()
-        .ok_or_else(|| integrity("evidence requires a non-empty assembly"))?;
+        .ok_or_else(|| integrity("evidence requires a non-empty assembled"))?;
     Ok(json!({
         "dataset": assembly::DATASET_KIND,
         "dataset_key": assembly::DATASET_KEY,
@@ -826,23 +826,23 @@ fn assembled_master_evidence(
         "item_id": item_id,
         "row_count": assembled.rows.len(),
         "migration_count": assembled.migrations.len(),
-        "confirmed_migration_count": assembly
+        "confirmed_migration_count": assembled
             .migrations
             .iter()
             .filter(|migration| migration.certainty == MigrationCertainty::Confirmed)
             .count(),
-        "candidate_migration_count": assembly
+        "candidate_migration_count": assembled
             .migrations
             .iter()
             .filter(|migration| migration.certainty == MigrationCertainty::Candidate)
             .count(),
         "ambiguous_code_reuse_count": assembled.ambiguous_code_reuse_count(),
-        "listing_conflict_count": assembly
+        "listing_conflict_count": assembled
             .rows
             .iter()
             .filter(|fact| fact.listing_conflict)
             .count(),
-        "delisting_conflict_count": assembly
+        "delisting_conflict_count": assembled
             .rows
             .iter()
             .filter(|fact| fact.delisting_conflict)

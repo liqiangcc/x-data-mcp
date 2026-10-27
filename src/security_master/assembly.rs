@@ -647,11 +647,7 @@ fn split_subject_change(
         });
     }
     let exchange_is_earlier = listing_date < tdx_row.effective_from;
-    let (earlier_date, later_date) = if exchange_is_earlier {
-        (listing_date, tdx_row.effective_from)
-    } else {
-        (tdx_row.effective_from, listing_date)
-    };
+    let later_date = listing_date.max(tdx_row.effective_from);
     if let Some(delisting) = tdx_row.delisting_date
         && delisting <= later_date
         && !exchange_is_earlier
