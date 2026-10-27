@@ -133,6 +133,7 @@ const METADATA_KEYS: &[&str] = &[
     "units",
     "adjustment",
     "lineage",
+    "index",
 ];
 
 fn metadata_value(metadata: &Metadata, key: &str) -> Value {
@@ -154,6 +155,11 @@ fn metadata_value(metadata: &Metadata, key: &str) -> Value {
             .unwrap_or(Value::Null),
         "lineage" => metadata
             .lineage
+            .as_ref()
+            .map(|value| serde_json::to_value(value).unwrap())
+            .unwrap_or(Value::Null),
+        "index" => metadata
+            .index
             .as_ref()
             .map(|value| serde_json::to_value(value).unwrap())
             .unwrap_or(Value::Null),

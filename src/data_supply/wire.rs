@@ -134,8 +134,35 @@ impl Security {
         }
     }
 }
+/// `deny_unknown_fields` already rejects extras at runtime; dropping the
+/// redundant schema keyword keeps `tools/list` inside its byte budget.
+fn strip_additional_properties(schema: &mut schemars::Schema) {
+    fn walk(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("additionalProperties");
+                for value in map.values_mut() {
+                    walk(value);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for value in items {
+                    walk(value);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(map) = schema.as_object_mut() {
+        map.remove("additionalProperties");
+        for value in map.values_mut() {
+            walk(value);
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[schemars(transform = strip_additional_properties)]
 pub enum Selection {
     Single {
         entity: Security,
@@ -164,6 +191,7 @@ pub enum CatalogScope {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[schemars(transform = strip_additional_properties)]
 pub enum Filter {
     Daily {
         start_date: NaiveDate,
