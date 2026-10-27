@@ -96,13 +96,13 @@ fn the_rule_set_round_trips_and_registers_one_dataset_version() {
     pending.basis_status = BasisStatus::Pending;
     let book = RuleBook {
         price_limits: vec![
-            rule("sz-normal", RuleMarket::Sz, 1_000),
             rule("sh-normal", RuleMarket::Sh, 1_000),
+            rule("sz-normal", RuleMarket::Sz, 1_000),
             pending,
         ],
         min_ticks: vec![
-            tick("sz-tick", RuleMarket::Sz),
             tick("sh-tick", RuleMarket::Sh),
+            tick("sz-tick", RuleMarket::Sz),
         ],
     };
     let row = replace_trading_rules(
