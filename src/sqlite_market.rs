@@ -1110,6 +1110,10 @@ pub(crate) mod index;
 pub(crate) mod manifest;
 #[allow(dead_code)]
 pub(crate) mod security;
+// The rule writer is consumed by the future derived-rules item (PR-7); until
+// then only its tests and the read model's reader drive this module.
+#[allow(dead_code)]
+pub(crate) mod rules;
 pub(crate) mod series;
 pub(crate) mod series_commit;
 pub(crate) mod update;
