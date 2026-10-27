@@ -371,6 +371,7 @@ pub enum Filter {
         end_date: NaiveDate,
         /// M2 record-set day.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(schema_with = "date_or_null")]
         as_of: Option<NaiveDate>,
     },
     Yearly {
@@ -429,8 +430,15 @@ pub struct Query {
     pub fields: Option<Vec<String>>,
     /// M2 info cutoff.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "date_or_null")]
     pub known_at: Option<NaiveDate>,
 }
+/// The compact schema for an optional M2 day: `type`/`format` only, no
+/// `anyOf` wrapper. `tools/list` is byte-budgeted (v8 #387 §6.3).
+fn date_or_null(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": ["string", "null"], "format": "date"})
+}
+
 pub fn default_page() -> usize {
     100
 }
