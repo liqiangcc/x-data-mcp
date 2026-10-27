@@ -497,7 +497,13 @@ impl Fixture {
                 source_kind: "bar_evidence".into(),
                 source_record_id: None,
             }],
-            ..SuspensionSet::default()
+            // The writer recomputes these and refuses a set that disagrees,
+            // so the fixture states them instead of leaving them zero.
+            confirmed_rows: 0,
+            gap_rows: 1,
+            single_day_gap_rows: 1,
+            multi_day_gap_rows: 0,
+            pending_sources: Vec::new(),
         };
         crate::sqlite_market::suspensions::replace_suspensions(
             c,
