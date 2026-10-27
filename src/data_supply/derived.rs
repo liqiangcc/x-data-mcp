@@ -334,6 +334,10 @@ fn execute(
             "row_count": registration.record_count,
             "migration_count": assembled.migrations.len(),
             "name_rows": 0,
+            // Official `base.dbf` ships byte-identical repeat records; the
+            // parser collapses them and names the record indices here, so a
+            // later audit can tell a dedupe from a missing row (XDM-70, #391).
+            "duplicates_collapsed": collapsed_duplicates_json(&snapshot.facts.duplicates_collapsed),
             "pending_sources": pending_json(&pending),
             "elapsed_ms": elapsed_ms(started),
         }));
@@ -551,6 +555,23 @@ fn dataset_source(
     let source = DatasetSource::from_snapshot(&snapshot);
     *cache.borrow_mut() = Some(source.clone());
     Ok(source)
+}
+
+/// Byte-identical `base.dbf` repeats collapsed by the parser, as the main
+/// table's item evidence reports them (`{market, code, records}`).
+fn collapsed_duplicates_json(
+    duplicates: &[crate::official_security::CollapsedDuplicate],
+) -> Vec<Value> {
+    duplicates
+        .iter()
+        .map(|duplicate| {
+            json!({
+                "market": duplicate.market,
+                "code": duplicate.code,
+                "records": duplicate.records,
+            })
+        })
+        .collect()
 }
 
 /// `pending_source` as the item evidence reports it (the same object the

@@ -53,6 +53,22 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
 }
 
 #[test]
+fn collapsed_base_duplicates_keep_their_audit_shape() {
+    // The main table's evidence must name the market, code and file record
+    // indices of every byte-identical repeat the parser folded (XDM-70).
+    let duplicates = [crate::official_security::CollapsedDuplicate {
+        market: 0,
+        code: "000020".into(),
+        records: vec![19, 20],
+    }];
+    assert_eq!(
+        collapsed_duplicates_json(&duplicates),
+        vec![json!({"market": 0, "code": "000020", "records": [19, 20]})]
+    );
+    assert!(collapsed_duplicates_json(&[]).is_empty());
+}
+
+#[test]
 fn item_ids_are_unique_and_never_collide_with_security_items() {
     let items = item_specs(&Value::Null);
     let ids: BTreeSet<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
