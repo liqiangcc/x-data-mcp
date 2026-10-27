@@ -21,6 +21,7 @@ use crate::task_control::{self, CommandKey, ItemSpec, TaskRepository};
 use crate::yearly_publication::results::YearlyRepository;
 use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::Connection;
+use rust_decimal::Decimal;
 
 fn tempdir() -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt;
@@ -82,6 +83,7 @@ fn version_evidence() -> Value {
         coverage_reason: "full history verified".into(),
         unit_currency: units(),
         adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+        excluded_bars: None,
     })
     .unwrap()
 }
@@ -318,6 +320,25 @@ fn first_publish_creates_series_and_replays() {
         vec![bar(0, 100), bar(1, 110)],
     );
     assert_eq!(replay.version_id, receipt.version_id);
+}
+
+/// #383 owner ruling 2026-10-27: the bad-bar drop is index-only. A stock
+/// series still goes through the shared strict conversion, which rejects an
+/// impossible OHLC ordering (the publish validator rejects it even earlier).
+#[test]
+fn stock_series_with_bad_ohlc_still_fails_closed() {
+    let mut bad = bar(0, 100);
+    bad.high = bad.close - Decimal::new(1, 2); // close > high
+    let error = to_compact_bars(
+        &[bad],
+        Period::Day,
+        crate::compact_market::PRICE_SCALE_CENTS,
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("OHLC ordering violated"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -2584,6 +2605,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     coverage_reason: "full history verified".into(),
                     unit_currency: drifted_units.clone(),
                     adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+                    excluded_bars: None,
                 }),
             )?;
             let continuity = evidence_store::put_evidence(
@@ -2692,6 +2714,7 @@ fn daily_semantics_change_invalidates_yearly_but_metadata_does_not() {
                     coverage_reason: "full history verified".into(),
                     unit_currency: drifted2.clone(),
                     adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+                    excluded_bars: None,
                 }),
             )?;
             let continuity = evidence_store::put_evidence(

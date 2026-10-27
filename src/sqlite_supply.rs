@@ -792,13 +792,24 @@ pub(crate) fn query(
                 }
             }
             let r = read_market(c, ctx, plan.args.dataset, entity, &id)?;
+            // Schema 21+ has no legacy envelope: build the metadata from the
+            // same series row (and version evidence) that `stats` uses, so
+            // fields such as the index exclusion count cannot drift between
+            // the two read surfaces.
+            let meta = if latest_only {
+                let series = crate::sqlite_market::series::read_series_by_version_id(c, &id)?
+                    .ok_or_else(|| Error::Integrity("version id names no current series".into()))?;
+                series_metadata(c, &series)?
+            } else {
+                metadata(c, &r, plan.args.dataset)
+            };
             let mut meta_scan = YearlyMetaScan::new();
             let reference = market_ref(plan.args.dataset, entity, &r);
             result.manifest.push(ManifestEntry {
                 entity: Some(entity.clone()),
                 version_ref: Some(reference.clone()),
                 status: ManifestStatus::Present,
-                metadata: Some(metadata(c, &r, plan.args.dataset)),
+                metadata: Some(meta),
                 stale: stale_mark.as_ref().map(|m| m.0.clone()),
                 as_of_day: stale_mark.as_ref().map(|m| m.1),
                 reason: None,
@@ -1164,6 +1175,9 @@ fn metadata(
                 volume_unit: m.volume_unit,
                 amount_unit: m.amount_unit,
                 aliases: m.aliases,
+                // The legacy (pre-`market_series`) read path has no index
+                // series and no version evidence to inspect.
+                excluded_bar_count: 0,
             })
     } else {
         None
@@ -2561,6 +2575,7 @@ fn series_metadata(
     }
     let evidence: crate::compact_market::VersionEvidence =
         serde_json::from_str(&canonical).map_err(|e| Error::Integrity(e.to_string()))?;
+    let excluded_bar_count = evidence.excluded_bars.as_ref().map_or(0, Vec::len);
     let lineage = if series.period == crate::market_data::Period::Year {
         crate::sqlite_market::series::yearly_lineage(c, series.series_key)?
             .map(|l| {
@@ -2588,6 +2603,7 @@ fn series_metadata(
                 volume_unit: m.volume_unit,
                 amount_unit: m.amount_unit,
                 aliases: m.aliases,
+                excluded_bar_count,
             }
         })
     } else {

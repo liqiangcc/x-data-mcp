@@ -1454,6 +1454,7 @@ fn seed_daily_pair(fixture: &Fixture) {
                 coverage_reason: "full history verified".into(),
                 unit_currency: units(),
                 adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),
+                excluded_bars: None,
             })
             .unwrap(),
         )?;
@@ -1969,6 +1970,37 @@ fn index_is_visible_only_through_its_own_dataset() {
     assert_eq!(metadata["index"]["price_unit"], "index_point");
     assert_eq!(metadata["index"]["volume_unit"], "hand");
     assert_eq!(metadata["index"]["aggregate_scope"], "whole_market");
+}
+
+/// #383 owner ruling 2026-10-27: the index commit drops an impossible-OHLC
+/// bar, and `market.index` metadata exposes how many were dropped.
+#[test]
+fn index_metadata_reports_excluded_bad_bars() {
+    let f = fixture();
+    let task_id = task(&f, "sh.000001", 1, "day", "req-index-bad");
+    let mut bad = bar(day_epoch(2020, 1, 7), 3000);
+    bad.high = bad.close - rust_decimal::Decimal::new(1, 2); // close > high
+    commit_index(
+        &f,
+        &task_id,
+        "item-1",
+        "sh.000001",
+        vec![bar(day_epoch(2020, 1, 6), 3000), bad],
+    );
+    let page = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.index",
+                "contract_version": "v2",
+                "selection": {"kind": "single", "entity": "sh.000001"},
+                "filter": {"kind": "daily", "start_date": "2020-01-06", "end_date": "2020-01-07"},
+                "version": {"kind": "latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(page["metadata"]["index"]["excluded_bar_count"], json!(1));
 }
 
 /// AC-V8-6/AC-V8-8: the calendar has no entity, its rows are `trade_day`, and

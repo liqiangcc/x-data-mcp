@@ -263,7 +263,7 @@ pub(crate) fn stock_series(
 pub(crate) fn index_series(c: &Connection) -> Result<Vec<SeriesEntry>, Error> {
     let mut statement = c
         .prepare(&format!(
-            "SELECT {SERIES_COLUMNS},m.aliases,m.aggregate_scope,m.member_count \
+            "SELECT {SERIES_COLUMNS},m.aliases,m.aggregate_scope,m.member_count,s.evidence_digest \
              FROM market_series s JOIN index_series_meta m ON m.series_key=s.series_key \
              WHERE s.period=?1 AND s.instrument_class=?2 AND s.adjustment=?3 \
              ORDER BY s.entity"
@@ -288,6 +288,7 @@ pub(crate) fn index_series(c: &Connection) -> Result<Vec<SeriesEntry>, Error> {
                     r.get::<_, String>(11)?,
                     r.get::<_, String>(12)?,
                     r.get::<_, Option<i64>>(13)?,
+                    r.get::<_, Vec<u8>>(14)?,
                 ))
             },
         )
@@ -298,10 +299,22 @@ pub(crate) fn index_series(c: &Connection) -> Result<Vec<SeriesEntry>, Error> {
         let mut entry = series_entry((
             raw.0, raw.1, raw.2, raw.3, raw.4, raw.5, raw.6, raw.7, raw.8, raw.9, raw.10,
         ))?;
+        let digest: [u8; 32] = raw
+            .14
+            .as_slice()
+            .try_into()
+            .map_err(|_| integrity("series evidence_digest is not 32 bytes"))?;
+        let (kind, canonical) = crate::sqlite_market::evidence_store::read_evidence(c, &digest)?;
+        if kind != crate::compact_market::EvidenceKind::Version {
+            return Err(integrity("index series evidence kind mismatch"));
+        }
+        let evidence: crate::compact_market::VersionEvidence =
+            serde_json::from_str(&canonical).map_err(integrity)?;
         entry.index = Some(IndexBinding {
             aliases: raw.11,
             aggregate_scope: raw.12,
             member_count: raw.13,
+            excluded_bar_count: evidence.excluded_bars.as_ref().map_or(0, Vec::len),
         });
         entries.push(entry);
     }

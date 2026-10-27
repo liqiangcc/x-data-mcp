@@ -295,6 +295,25 @@ pub struct VersionEvidence {
     pub coverage_reason: String,
     pub unit_currency: UnitCurrencyEvidence,
     pub adjustment_evidence: AdjustmentEvidence,
+    /// Index-only: the bars dropped because their own OHLC ordering was
+    /// impossible (#383 owner ruling 2026-10-27). `None` for every stock
+    /// series and for an index whose source had no such bar, so adding this
+    /// field does not change an existing evidence digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excluded_bars: Option<Vec<ExcludedBar>>,
+}
+
+/// One index bar excluded from the stored series, recorded verbatim (the
+/// decimal values the adapter handed over) so the decision is reproducible
+/// from the evidence alone.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExcludedBar {
+    pub date: NaiveDate,
+    pub open: Decimal,
+    pub high: Decimal,
+    pub low: Decimal,
+    pub close: Decimal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

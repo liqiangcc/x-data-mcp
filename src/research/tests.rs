@@ -23,7 +23,9 @@ use super::read::{
 use super::{
     AdjustmentSelection, DatasetSelection, EntitySelection, ExportRequest, plan, verify_unchanged,
 };
-use crate::compact_market::{CompactBar, EvidenceKind, SourceBinding, VersionEvidence};
+use crate::compact_market::{
+    CompactBar, EvidenceKind, ExcludedBar, SourceBinding, VersionEvidence,
+};
 use crate::market_data::{
     Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, CalendarBatch,
     CalendarInputDates, CoverageStatus, EvidenceValue, Period, UnitCurrencyEvidence,
@@ -82,6 +84,7 @@ fn version_evidence() -> serde_json::Value {
             amount_unit: EvidenceValue::confirmed("yuan", "bound"),
         },
         adjustment_evidence: AdjustmentEvidence::confirmed("raw", "bound"),
+        excluded_bars: None,
     })
     .unwrap()
 }
@@ -453,9 +456,50 @@ fn plan_binds_the_four_layers_and_is_deterministic() {
         index.index.as_ref().unwrap().aggregate_scope,
         "constituents"
     );
+    assert_eq!(index.index.as_ref().unwrap().excluded_bar_count, 0);
+    assert_eq!(
+        first.identity["series"].as_array().unwrap().last().unwrap()["excluded_bar_count"],
+        json!(0)
+    );
     assert_eq!(first.derived[0].dataset.as_str(), "adjustment_events");
     assert_eq!(first.derived[2].dataset.as_str(), "trading_calendar");
     assert_eq!(first.derived[2].algorithm_version, "cal-union-v1");
+}
+
+/// #383 owner ruling 2026-10-27: the export manifest carries how many index
+/// bars the commit dropped, read from the same version evidence the MCP
+/// metadata uses.
+#[test]
+fn manifest_reports_excluded_index_bars() {
+    let fixture = Fixture::new();
+    let c = fixture.write();
+    let mut evidence = version_evidence();
+    evidence["excluded_bars"] = serde_json::to_value(vec![ExcludedBar {
+        date: day(2026, 10, 21),
+        open: Decimal::new(400_000, 2),
+        high: Decimal::new(399_000, 2),
+        low: Decimal::new(399_000, 2),
+        close: Decimal::new(401_000, 2),
+    }])
+    .unwrap();
+    let digest = evidence_store::put_evidence(&c, EvidenceKind::Version, &evidence).unwrap();
+    c.execute(
+        "UPDATE market_series SET evidence_digest=?1 WHERE entity='sh.000300'",
+        params![digest.as_slice()],
+    )
+    .unwrap();
+
+    let planned = plan(&fixture.read(), &ExportRequest::default()).unwrap();
+    let index = planned.series.last().unwrap();
+    assert_eq!(index.index.as_ref().unwrap().excluded_bar_count, 1);
+    assert_eq!(
+        planned.identity["series"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()["excluded_bar_count"],
+        json!(1)
+    );
 }
 
 #[test]
