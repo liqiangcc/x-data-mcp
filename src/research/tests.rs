@@ -110,9 +110,9 @@ impl Fixture {
         Self::with_days(3)
     }
 
-    /// A fixture whose stock series have `stock_day_count` bars. The index and
-    /// calendar keep the three-day `days()` window: they are registry-driven
-    /// and their row count must not depend on a size-measurement test.
+    /// A fixture whose stock series have `stock_day_count` bars. The index
+    /// keeps the three-day `days()` window; the calendar follows the stock
+    /// window so every stock bar is inside it.
     fn with_days(stock_day_count: usize) -> Self {
         let dir = tempdir();
         let path = dir.path().join("market.db");
@@ -128,6 +128,7 @@ impl Fixture {
 
     fn populate(c: &Connection, stock_day_count: usize) {
         let stock_days = history_days(stock_day_count);
+        let calendar_days = stock_days.clone();
         let generation_evidence = evidence_store::put_evidence(
             c,
             EvidenceKind::Generation,
@@ -289,13 +290,13 @@ impl Fixture {
                     entity: "sh.000001".into(),
                     member: "sh\\lday\\sh000001.day".into(),
                     day_member_sha256: "aa".repeat(32),
-                    days: days(),
+                    days: calendar_days.clone(),
                 },
                 CalendarInputDates {
                     entity: "sz.399001".into(),
                     member: "sz\\lday\\sz399001.day".into(),
                     day_member_sha256: "bb".repeat(32),
-                    days: days(),
+                    days: calendar_days.clone(),
                 },
             ],
             security_event_sha256: crate::hash::sha256(&0u64.to_le_bytes()),
@@ -410,10 +411,12 @@ impl Fixture {
     }
 
     /// Point one series at a digest with no `source_bindings` row, as a
-    /// corrupted/legacy row would look. A fresh SQLite connection has
-    /// `foreign_keys=OFF`, so the FK on `market_series` does not block it.
+    /// corrupted/legacy row would look. Turn the FK check off explicitly:
+    /// the build may default it on, and the point is to simulate a row the
+    /// planner must reject rather than to exercise SQLite's constraint.
     fn orphan_series_binding(&self, entity: &str, adjustment: Adjustment) {
         let c = Connection::open(&self.path).unwrap();
+        c.pragma_update(None, "foreign_keys", false).unwrap();
         let orphan = [0xeeu8; 32];
         let changed = c
             .execute(
