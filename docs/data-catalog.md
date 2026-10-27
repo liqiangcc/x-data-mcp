@@ -46,8 +46,11 @@
 （`src/data_supply/wire.rs:9-20`）。三者都用同一个实体身份。
 
 M2 的 6 个解析事实数据集（`market.security_master`、`security_names`、`capital_events`、
-`risk_warnings`、`suspensions`、`price_limit_rules`）已在 v8 代码接线，但**未部署**；生产数据要等
-M2 部署（见 §3.1「M2 接线状态」）。
+`risk_warnings`、`suspensions`、`price_limit_rules`）随 preview.37 **已部署**（v8 的
+`contract_version:"v2"` 面上可读）。其中 `security_master`/`capital_events`/`suspensions`
+有写入路径，交易所名单、历史 ST（#308）、停复牌公告与涨跌停规则原文未接入的部分按
+`pending_source` 记录；`security_names` 尚无写入器。未登记版本返回 `absent` 与 0 行
+（见 §3.1「M2 部署状态」）。
 
 **实体身份**：`{exchange, code}`，`exchange ∈ {sh, sz}`，`code` 为 6 位数字，展示形式
 `sh.600000`（`src/data_supply/wire.rs:34-56`）。非规范实体在写入侧 fail-closed
@@ -98,14 +101,13 @@ scope 固定为当前沪深 A 股。
 和维护使用」；本项目按 owner 个人本地研究使用，风险由 owner 接受，**不得对外再分发**。这条同时
 覆盖由 `base.zip` 派生的名称、行业与上市/退市等字段，也适用于现有生产链路里的 `base.zip`。
 
-**是否满足严谨回测级**：**否**。时点股票池与证券主表在 M2（§3.1）。
+**是否满足严谨回测级**：**否**。时点股票池与证券主表随 preview.37 部署（§3.1、§3.2 #6–#7），但退市股行情在 M3，跨年回测仍有幸存者偏差。
 
 ### 2.2 `market.daily`
 
-**身份**：`{exchange, code}` + `period=1` + `adjustment=1`（已部署实例只有前复权一个口径，
-`src/market_data.rs:11-13`；DDL `migrations/tasks/021_latest_only.sql:11`）。代码（schema 24，未部署）
-同一实体同一周期有 `adjustment=0` 不复权与 `adjustment=1` 前复权两条序列，见
-[latest-only-storage](latest-only-storage.md) §13。
+**身份**：`{exchange, code}` + `period=1` + `adjustment=1`（`src/market_data.rs:11-13`；DDL `migrations/tasks/021_latest_only.sql:11`）。preview.36 起
+部署实例同一实体同一周期有 `adjustment=0` 不复权与 `adjustment=1` 前复权两条序列，
+`query_data` 只读前复权，见 [latest-only-storage](latest-only-storage.md) §13。
 
 **覆盖范围**：
 
@@ -140,7 +142,7 @@ scope 固定为当前沪深 A 股。
 
 - 前复权，**基准是最新事件**：每根 bar 叠加所有 `event_date > bar_date` 的 cat1 事件的仿射链，
   oldest→newest、无中间舍入，末次 2dp HALF_UP（`src/qfq.rs:7-11,101-127`）。
-  代码（schema 24，未部署）改为**精确有理数链 + 末次一次舍入到序列精度**（`qfq-exact-v1`，
+  preview.36 起部署的代码是**精确有理数链 + 末次一次舍入到序列精度**（`qfq-exact-v1`，
   `src/qfq.rs:204`；前复权 `price_scale=6`）；2dp 实现保留为历史 oracle，不再写库。
 - 因此**新的分红送转会改写该实体整段历史**，提交为一次 `replace` 事件
   （[latest-only-storage](latest-only-storage.md) §4、§6）。
@@ -170,21 +172,21 @@ scope 固定为当前沪深 A 股。
    bar 的日收益误差（2dp 取整引入，单位 pp，中位）：<0.1 元 2.9、0.1–0.5 元 1.05、0.5–1 元 0.42、
    1–2 元 0.24、2–5 元 0.14、5–10 元 0.079、≥10 元 0.060；>1pp 的占比分别为
    75%/46%/7.7%/0/0/0/0。→ **价格类因子在 ≥ 2 元区间基本可用，收益类与净值类在低价段不可用。**
-   **代码（未部署）**已新增一条不复权序列，并把前复权改成最多 6 位小数（`qfq-exact-v1`，
-   PR #390/#394）；部署前读到的仍是上面这些 2dp 值。
+   preview.36 起部署的实例另有一条不复权序列，前复权是 `qfq-exact-v1`（最多 6 位小数，
+   PR #390/#394）；上面那些 2dp 样本测于部署前，只作历史对照。
 2. **前复权序列含未来事件**：以最新事件为基准，除权会改写全历史。它适合「固定快照内做研究」，
    不适合「按时点复现 T 日当时看到的价格」。
 3. **只有当前成员**：退市股行情不在库内，跨年回测有幸存者偏差（§4.3）。
-4. **没有可交易性输入**：无停牌标记、无 ST 状态、无股本（§3.2）；前一日不复权收盘在 M1 代码里
-   已有（未部署）。
+4. **可交易性输入不全**：preview.36 起有不复权收盘（前一日收盘可算），preview.37 起有
+   停牌 `unresolved_gap` 区间与股本事件；ST 状态（#308）与涨跌停规则原文仍未准入（§3.2）。
 5. **已发布数据里有少量「手日」bar 的 volume 少记 100 倍**：`.day` 在成交量接近 u32 上限时改写
    为「手」并置 `r7_raw=0xC36400xx`。发布路径已修（#381/#382：标记与 VWAP 校验同时成立才换算，
    否则 volume 发布为未知；手日只精确到 100 股），但**当前库内已发布的 bar 仍是修复前的值**——
    只读实测（2026-10-26）19 根、7 只证券，要等这些实体重新采集/重写后才会更新。
 6. `r7_raw` 不入查询契约，只能直读存储。
 
-**是否满足严谨回测级**：**否**。不复权序列与复权因子在 M1（代码已合并，未部署）；时点主表与可交易性在 M2；
-退市股在 M3（§3.1）。
+**是否满足严谨回测级**：**否**。不复权序列与复权因子已随 preview.36 部署，证券主表与部分可交易性
+随 preview.37 部署（来源缺口见 §3.2）；退市股在 M3（§3.1）。
 
 ### 2.3 `market.yearly`
 
@@ -262,15 +264,22 @@ AC-M1-1…12 是实现验收依据，见 [实现记录](tasks/issue-383-m1-imple
 历史 ST（依赖 #308）、停牌标记（`unresolved_gap` + 候选来源）、按生效日期管理的涨跌停规则表、
 T 日股票池 `universe(as_of=T)`。
 
-**M2 接线状态（2026-10-27）**：M2 已接线，生产数据要等 M2 部署。六个数据集
+**M2 部署状态（preview.37，2026-10-27）**：六个数据集
 `market.security_master` / `market.security_names` / `market.capital_events` /
-`market.risk_warnings` / `market.suspensions` / `market.price_limit_rules` 已进入 v8 代码的
-dataset 分支与 detailed capabilities `temporal` 声明（PR #425，未部署）；`as_of`/`known_at` 只在
+`market.risk_warnings` / `market.suspensions` / `market.price_limit_rules` 已随 preview.37 部署
+（PR #425 的 dataset 分支与 detailed capabilities `temporal` 声明）；`as_of`/`known_at` 只在
 声明为 `true` 的数据集上接受，`known_at_coverage` 为 `partial` 或 `none`
 （`src/data_supply/wire.rs:127-146`）。未登记版本返回 `manifest.status=absent` 与 0 行，不服务
-无版本数据（`src/sqlite_supply/m2.rs:73-82,498-506`）。**#308 未准入时历史 ST 不出行**：
-`market.risk_warnings` 不用当前名称推断历史，`unresolved` 也不伪装成已知区间。这些数据集目前
-没有生产数据，读取结果不能当作 M2 已交付。验收标准建议：
+无版本数据（`src/sqlite_supply/m2.rs:73-82,498-506`）。
+
+写入路径：`market.security_master`、`market.risk_warnings`、`market.suspensions`、
+`market.price_limit_rules` 由日更 run 的 4 个内部 item 维护，`market.capital_events` 随每条日线
+提交同事务写入，`market.security_names` 尚无写入器。**未接入的来源**：交易所上市/退市名单、
+日期化简称历史（#308）、停复牌公告、涨跌停规则原文；这些在 item 结果里记为 `pending_source`，
+对应数据集写 0 行、不登记版本（读取仍是 `absent`），不把未取证来源伪造成数据。
+**#308 未准入时历史 ST 不出行**：`market.risk_warnings` 不用当前名称推断历史，`unresolved`
+也不伪装成已知区间；没有规则时涨跌停派生一律 `unknown`。数据量见 [STATUS](STATUS.md)
+（本文件不写部署数字）。验收标准建议：
 
 - AC-M2-1：主表覆盖目录成员与官方包内的退市代码，每个代码的上市日有来源或 `unknown`，
   缺失率与来源一并披露。
@@ -294,32 +303,34 @@ dataset 分支与 detailed capabilities `temporal` 声明（PR #425，未部署�
 ### 3.2 缺口表
 
 状态取值固定为：**已提供 / 部分提供 / 缺失·计划中 / 缺失·阻塞 / 待取证 / 不在范围**。
-未部署的代码交付写成 **已提供（代码已合并，未部署）**：代码在 main 且 CI 绿，生产实例还没有这个能力；
-只有部署并验收后才去掉括号里的限定。
+代码已合并但生产实例还没有的交付写成 **已提供（代码已合并，未部署）**；部署后写成
+**已提供（已部署）** 并在备注里指明部署版本；来源未接入的部分按 `partial`/`pending_source`
+如实写，不把「表存在」当作「数据可用」。
 「里程碑」是首期内的期；「严谨级」= 该项是否已满足严谨回测级。
 
 | # | 项 | 状态 | 原因 / 阻塞点 | 对应 Issue | 里程碑 | 严谨级 |
 |---|---|---|---|---|---|---|
-| 1 | 不复权价 + 复权因子 | 已提供（代码已合并，未部署） | 官方 `.day` 的 OHLC 本身就是不复权原始价（分），前复权是本地产物（`qfq.rs:68-74`；`official_market.rs:9-12`）；cat1 语义已由 #54 冻结。**不需要新来源**。M1 已交付不复权序列（PR #390）、因子事件集（PR #397）与 6dp 前复权（PR #394），未部署 | #1 | M1 | 代码已交付，未验收（部署前在私有栈上实测） |
-| 2 | 交易日历 | 已提供（代码已合并，未部署） | 没有官方日历文件；只能由指数 `.day` 的日期并集推导，必须标 derived 并带算法版本与输入清单。完整性未验证（一手证据是交易所休市公告）。M1 已交付 `trading_days` + `cal-union-v1` 与覆盖率自检（PR #402），未部署 | #1 | M1 | 代码已交付，未验收（完整性仍需交易所公告） |
-| 3 | 指数基准 | 已提供（代码已合并，未部署） | 官方 `.day` 有交易所/中证宽基；OHLC 缩放（0.01 点）、`volume`=手、`amount`=元、量额口径（全市场/全板块 vs 成分股）已取证。owner 已把指数基准纳入首期范围（2026-10-26），且**只用交易所发布的指数**，通达信自编 880/887 不作基准（D-27）；中证系 4 条宽基算作交易所体系指数，基准取 **9 条序列**（D-31）。M1 已交付 9 条登记与 `index_series_meta`（PR #400），未部署；MCP 读不到（AC-M1-10），只经导出读取 | #246 | M1 | 代码已交付，未验收 |
-| 4 | 股本历史 | 待取证 | `gbbq` 有 cat 2/3/5/7/8/9/10 记录，但只有内部一致性 + 3 个人工 oracle，**没有 #54 级官方证据**；需按 #308 的「离线输入准入」模式过门禁，取证前**不作为生产语义**（D-22） | 无（待建） | M2 | 未满足 → M2 |
-| 5 | 市值（总/流通） | 缺失·阻塞 | 派生自「不复权收盘 × 当时股本」；两个输入都缺（#1、#4）。用前复权价乘当时股本会得到错误市值 | #1 | M2 | 未满足 → M2 |
-| 6 | 上市日 | 缺失·阻塞 | 采用 `base.dbf` 的 `SSDATE`：与 `.day` 首根 bar 有 15 例不一致（含代码复用，同一代码先后属于两个上市主体），退市代码有 62 只缺值，缺失部分由交易所名单补、走新来源准入（D-23）；交易所名单待准入 | 无（待建） | M2 | 未满足 → M2 |
-| 7 | 退市日 | 缺失·阻塞 | 采用 `base.zip!infoharbor_spec.cfg`（退市整理期区间表，169 行、2013 年起），不含 2013 年前摘牌与吸收合并类；TDX 私有文件要按 D-20 的准入模式过证据门禁（D-24），门禁未过 | 无（待建） | M2 | 未满足 → M2 |
+| 1 | 不复权价 + 复权因子 | 已提供（preview.36 部署） | 官方 `.day` 的 OHLC 本身就是不复权原始价（分），前复权是本地产物（`qfq.rs:68-74`；`official_market.rs:9-12`）；cat1 语义已由 #54 冻结。**不需要新来源**。M1 已交付不复权序列（PR #390）、因子事件集（PR #397）与 6dp 前复权（PR #394），随 preview.36 部署 | #1 | M1 | 已部署；数值验收见 [STATUS](STATUS.md) |
+| 2 | 交易日历 | 已提供（preview.36 部署） | 没有官方日历文件；只能由指数 `.day` 的日期并集推导，必须标 derived 并带算法版本与输入清单。完整性未验证（一手证据是交易所休市公告）。M1 已交付 `trading_days` + `cal-union-v1` 与覆盖率自检（PR #402），随 preview.36 部署 | #1 | M1 | 已部署（完整性仍需交易所公告） |
+| 3 | 指数基准 | 已提供（preview.36 部署） | 官方 `.day` 有交易所/中证宽基；OHLC 缩放（0.01 点）、`volume`=手、`amount`=元、量额口径（全市场/全板块 vs 成分股）已取证。owner 已把指数基准纳入首期范围（2026-10-26），且**只用交易所发布的指数**，通达信自编 880/887 不作基准（D-27）；中证系 4 条宽基算作交易所体系指数，基准取 **9 条序列**（D-31）。M1 已交付 9 条登记与 `index_series_meta`（PR #400），随 preview.36 部署；`market.index` 在 v2 可读，导出里也有 | #246 | M1 | 已部署 |
+| 4 | 股本历史 | 部分提供（preview.37 部署） | `gbbq` 的 cat 2/3/5/7/8/9/10 已按 D-41/D-50 准入（档位 `OWNER_RISK_ACCEPTED`）并随 `market.capital_events` 部署：只采用**后值**与事件日，前值不用；`known_at` 全 NULL（事件没有知晓时间），因此只能 as-of 回看、不能做信息集严格回测。剩余偏差：京市 1,479 条无官方对照 | 无（D-41/D-50） | M2 | 部分满足（后值口径） |
+| 5 | 市值（总/流通） | 部分提供（可派生，preview.37） | 两个输入都已部署：不复权收盘（preview.36）+ 股本事件后值（preview.37），可用 `float_after`/`total_after` × 不复权收盘自行派生；**没有服务端市值数据集**。A 股总市值对 A+H 公司仍是 `unknown`（`total_after` 是公司总股本，§3.3 偏差 4），用前复权价乘当时股本会得到错误市值 | #1 | M2 | 部分满足（需标注口径） |
+| 6 | 上市日 | 部分提供（preview.37 部署） | `market.security_master` 用 `base.dbf` 的 `SSDATE` + `infoharbor_spec.cfg` 组装（preview.37 部署），交易所名单未接入时是 `pending_source`，缺值按 `unknown` 返回（2 个代码既无 `SSDATE` 也无交易所上市日）。与 `.day` 首根 bar 有 15 例不一致（含代码复用），差异逐条可查 | 无（交易所名单待准入） | M2 | 部分满足（`unknown` 如实披露） |
+| 7 | 退市日 | 部分提供（preview.37 部署） | `infoharbor_spec.cfg` 的退市整理期区间（169 行、2013 年起）随主表部署；**2013 年前普通摘牌与吸收合并类缺值**，返回 `unknown`。交易所名单仍未接入（`pending_source`） | 无（交易所名单待准入） | M2 | 部分满足（2013 起） |
 | 8 | 退市股行情 | 缺失·计划中 | 官方 `hsjday.zip` 保留了目录之外 A 股代码的完整历史（2026-10-26 快照：335 个代码，其中 251 个末根 bar 在 2015 年及以后），跨代不消失；阻塞只在目录 scope（`CatalogScope` 只有 `current_sh_sz_a`，`wire.rs:73-77`）与证券主表 | #246（范围） | M3 | 未满足 → M3 |
-| 9 | 历史 ST / \*ST | 缺失·阻塞 | #308 的 Final Gate 是 `OWNER_RISK_ACCEPTED`，不是 `APPROVED_SOURCE`；SH 缺 dated name-history 是硬缺口。首期只能对无公告事件 fail-closed 为 `unresolved` | #308 | M2（SH 完整性见 §3.3） | 未满足 → M2；SH 部分首期无法达成 |
+| 9 | 历史 ST / \*ST | 缺失·阻塞 | #308 的 Final Gate 是 `OWNER_RISK_ACCEPTED`，不是 `APPROVED_SOURCE`；SH 缺 dated name-history 是硬缺口。`market.risk_warnings` 随 preview.37 部署但**写 0 行**（只记 `pending_source`），读取是 `absent`；首期只能对无公告事件 fail-closed 为 `unresolved` | #308 | M2（SH 完整性见 §3.3） | 未满足（表就绪、数据未准入） |
 | 10 | 历史行业 | 部分提供 | 当前行业已提供（catalog 的 TDX 研究行业二级）；**历史区间不可回补**，只能从今天起逐代积累（每代 `tdxhy.cfg` 落变更集，不能靠留 generation 目录）。替代来源（证监会行业分类）需取证 | #1 | M3 | 未满足 → M3；历史部分首期无法达成 |
-| 11 | 停牌 | 缺失·阻塞 | 官方文件没有停牌标记，`.day` 也没有占位行；数据层只能给「缺 bar + `unresolved_gap`」，不能给 `suspended`。唯一在手候选是 TDX `GP29`（需准入） | #308 | M2（标记）/ M3（闭合） | 未满足 → M2 |
-| 12 | 涨跌停 | 缺失·阻塞 | 缺 3 项输入：前一日不复权收盘、按生效日期的 ST 状态、按生效日期的板块规则。取整规则已实测（四舍五入到 0.01 的命中率最高）。规则必须做成按生效日期管理的数据，不能写死 | 无（待建） | M2 | 未满足 → M2 |
+| 11 | 停牌 | 部分提供（preview.37 部署） | 官方文件没有停牌标记，`.day` 也没有占位行；`market.suspensions` 只给「缺 bar + `unresolved_gap`」，`confirmed` 行数为 0（A-3 公告未准入）。所以能标记「可能停牌」，不能断言「停牌」 | #308（A-3 公告） | M2（标记）/ M3（闭合） | 部分满足（缺口可查） |
+| 12 | 涨跌停 | 缺失·阻塞 | 结构已就绪（`market.price_limit_rules` 随 preview.37 部署，按生效日期管理、每行带 `basis_ref`/`basis_status`），但规则原文未准入（A-7），写入 0 行 → 涨跌停派生一律 `unknown`。规则准入后仍需按生效日期的 ST 状态 | 无（A-7 待准入） | M2 | 未满足（表就绪、规则未准入） |
 | 13 | ETF | 缺失·计划中 | 身份只能由交易所名单锚定（新来源待准入，D-25）；`.day` 对 ETF 的价格单位是**厘**（3 位小数）、`volume` 是**份**（≥4.29e9 份时改写为手）、gbbq 还有 cat11（份额折算）未进 QFQ；现有 `cents()` 要求恰好 2dp，3dp 会被**直接拒绝**（`compact_market.rs:812-822`）。owner 2026-10-26 裁决：作为 `market.daily` 的证券类型、按序列记精度、提供不复权 + cat1/cat11 因子，放 M3（D-28） | #246 | M3 | 未满足 → M3 |
 | 14 | 财务数据 | 不在范围 | 首期范围是价量 + 股本/市值，不含财务 | #1 | 不在首期 | — |
 | 15 | 分钟线 | 不在范围 | 首期只做日线；`series_bars.trade_day` 是日序号，分钟线要改主键 | #1 | 不在首期 | — |
 | 16 | 北交所 | 不在范围 | 暂不纳入；规则 S 已把 `f0=2` 显式排除（`scope.rs:10-24`） | #1、#246 | 不在首期 | — |
 
 > M2 相关项（#4 股本、#5 市值、#6 上市日、#7 退市日、#9 历史 ST、#11 停牌、#12 涨跌停）对应的
-> 6 个 dataset 已接线，但**生产数据要等 M2 部署**；未登记版本返回 `absent`，`risk_warnings` 在
-> #308 未准入时历史 ST 不出行。详见 §3.1「M2 接线状态」。
+> 6 个 dataset 随 preview.37 **已部署**；未登记版本返回 `absent`/0 行，`risk_warnings` 与
+> `price_limit_rules` 在来源未准入时写 0 行（只记 `pending_source`），`suspensions` 只有
+> `unresolved_gap`。详见 §3.1「M2 部署状态」。
 
 **ETF 的取证结论**（2026-10-26）：
 
@@ -373,20 +384,25 @@ dataset 分支与 detailed capabilities `temporal` 声明（PR #425，未部署�
 - 用当前目录 + 当前行业做**当期**筛选（按代码、名称、行业码）：前提是结论只对「当期」成立，
   不能当作历史时点的在册集合（catalog 无生效区间，§2.1）。
 - 用日线成交额/成交量做流动性排序：前提是只看近年样本，并剔除已知的「手日」bar（#381）。
+- **时点股票池**（`market.universe`，`selection.kind=universe` + `filter.as_of=T`）：
+  前提是退市股行情不在库内（M3），成员有 `has_series=false` 时按「在册但无序列」理解，
+  不能当作「不存在」（§3.2 #6–#8）。
+- **市值筛选**：用 `market.capital_events` 的 `float_after`（或 `total_after`）× 不复权收盘；
+  前提是 `total_after` 是公司总股本（含 B/H），A 股总市值对 A+H 公司是 `unknown`，
+  结果必须标注口径（§3.3 偏差 4）。
 
 **结果不可靠**
 
 - **按股价绝对值筛选**（如「股价 < 5 元」）：只有前复权价，除权后价格与当时价格不同；且 2dp 取整
   在低价段误差大（§2.2 已知限制 1）。
-- **判断涨跌停**：缺前一日不复权收盘、ST 状态与按生效日期的规则（§3.2 #12）。前一项在 M1 代码里
-  已交付（未部署），另两项仍在 M2。
-- **市值筛选**：缺股本历史与不复权收盘（§3.2 #4、#5）。
-
+- **判断涨跌停**：前一日不复权收盘已随 preview.36 部署，`price_limit_rules` 随 preview.37
+  上线但规则原文未准入（写 0 行）；ST 状态仍未准入（§3.2 #9、#12）。三者不全时涨跌停派生
+  返回 `unknown`，不能按 10% 自行推算。
 **做不了**
 
-- 时点股票池（「T 日在册」）：没有上市日/退市日/证券主表（§3.2 #6、#7）。
-- 剔除当时处于风险警示的证券：`#308` 未准入（§3.2 #9）。
-- 剔除 T 日停牌/无法交易的证券：没有停牌标记（§3.2 #11）。
+- 剔除当时处于风险警示的证券：`#308` 未准入，`market.risk_warnings` 写 0 行（§3.2 #9）。
+- 确认 T 日停牌：没有公告来源，只有 `market.suspensions` 的 `unresolved_gap`（缺 bar 的候选
+  区间）；可以据此**标记**「可能停牌」，不能断言「停牌」（§3.2 #11）。
 - 按 T 日行业做中性筛选：只有当前行业（§3.2 #10）。
 
 ### 4.2 因子挖掘
@@ -430,10 +446,11 @@ dataset 分支与 detailed capabilities `temporal` 声明（PR #425，未部署�
 
 - **没有幸存者偏差的回测**：缺退市股行情与时点主表（§3.2 #6–#8）。
 - **严格可交易性回测**：缺停牌、ST、涨跌停三类输入。
-- **逐位可复现的回测**：没有导出/清单机制（§5.3）；直读路径也不绑定版本（§5.2）。导出与清单已在
-  代码里（未部署），部署后这条降为“需自己保留导出目录”。
-- **参数/口径敏感性**：已部署实例只有前复权一种口径，没有不复权价可直接对照；代码（未部署）另
-  有一条不复权序列（§5.3）。
+- **逐位可复现的回测**：`export_research` 自 preview.36 起随发布包部署（`research-snapshot.v2`
+  自 preview.37），但它是**离线命令**、不在 MCP 上（D-39）：要复现必须自己保留导出目录与
+  `manifest.json`；直读路径（§5.2）仍不绑定版本。
+- **参数/口径敏感性**：已部署实例有不复权与前复权两条序列（preview.36 起），但 `query_data`
+  只读前复权；不复权要经导出或直读（§5.3）。
 
 ## 5. 现在的访问方式和限制
 
@@ -461,18 +478,23 @@ dataset 分支与 detailed capabilities `temporal` 声明（PR #425，未部署�
 - 脚本只读、无写，不是服务/MCP/契约的一部分，也没有稳定性承诺。
 - 需要可复现结论时，必须自己记录 `market_series.version_id` 与目录版本（§5.3 的清单形状）。
 
-### 5.3 研究快照导出（代码已合并，未部署）
+### 5.3 研究快照导出（preview.36 起部署，preview.37 起 `research-snapshot.v2`）
 
-- **代码在 main**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
-  它），产物是 5 个 Parquet 文件 + `manifest.json`（`src/research/export.rs:266`），默认落
-  `/root/x-data-exports/`（`src/research/mod.rs:611`；D-29）。发布包还没有这个命令
-  （`scripts/build_release.sh` 未加 `--features export`，属 owner 批准项）。
+- **随发布包部署**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
+  它；`scripts/build_release.sh` 自 #413 固定 `--features export` 并在打包后断言该命令存在），
+  产物是 Parquet 文件 + `manifest.json`（`src/research/export.rs:266`），默认落
+  `/root/x-data-exports/`（`src/research/mod.rs:894`；D-29）。
 - **MCP 仍没有 `export_data`**：v8 只设计、不实现（D-39）；工具数与 `capability_revision` 不因此变化。
 - **只读**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`，并要求库的 `user_version` 等于
   代码的 `COMPACT_SCHEMA_VERSION`（当前 24，即 D-08 的全新 init；`src/research/read.rs:69-78`）。
-- **导出范围**：目录 + 日线（`daily_raw` / `daily_qfq`）+ 因子（`factors`）+ 日历（`calendar`）
-  + 指数（`index_daily`），文件名固定、顺序固定（`src/research/mod.rs:436-476`）。不复权、因子、
-  日历与指数在 MCP 读不到，但在导出里可见（AC-M1-10）。
+- **导出范围**（`research-snapshot.v2`，preview.37）：M1 的 5 个文件（目录 + 日线
+  `daily_raw`/`daily_qfq` + 因子 `factors` + 日历 `calendar` + 指数 `index_daily`）加 M2 的 7 个
+  文件（`security_master`、`security_names`、`capital_events`、`risk_warnings`、`suspensions`、
+  `price_limit_rules`、`universe_intervals`），文件名固定、顺序固定
+  （`src/research/mod.rs:630`；`src/research/manifest.rs:42`）。不复权、因子、日历、指数与 M2
+  数据集在主线读取面上不都可读，但在导出里可见（AC-M1-10、AC-M2-11）。`files[]` 每项带
+  `dataset` 与 `temporal`（`as_of`/`known_at`/`known_at_coverage`），所以导出的时序能力跟着
+  文件走。
 - **清单必须同时带**：目录版本、每序列 `version_id`、每条序列/派生数据集的来源 generation
   （manifest 与成员 sha256，逐项 `source_generation`；顶部 `generations` 是去重列表）、文件
   sha256，以及已知偏差说明（`src/research/manifest.rs`；`src/research/mod.rs` 的
@@ -481,8 +503,9 @@ dataset 分支与 detailed capabilities `temporal` 声明（PR #425，未部署�
 - **跨代导出（M1 修复 B）**：日更跨过 generation 切换后仍可全量导出；每一项记录自己的来源代，
   只有 binding 查不到（血缘无法证明）才拒绝。`manifest.json` 不写运行时间/WAL，两次同输入导出
   逐字节相同。
-- **未验证**：真实全量导出的耗时。体积已按夹具实测修正为约 1.5GB（设计 §7.7；旧估算 340MB
-  低于 6dp 定宽列的下限）；本机读取用 `/root` 下的独立 venv（`scripts/export_smoke.py`）。
+- **实测**：preview.36 部署后全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行，见
+  [STATUS](STATUS.md)）；含 M2 文件的 v2 导出耗时在 preview.37 部署后回填。本机校验用
+  `/root` 下的独立 venv（`scripts/export_smoke.py`，CI 里由 `export` job 跑）。
 
 ## 6. 维护规则
 

@@ -2,6 +2,10 @@
 
 **状态**：已部署（2026-10-27，v8 最小切换）。当前部署为 `generic-data-v8` /
 15 data tools（`mcp.sock` 的 `ops` 入口）/ compact schema 24（见 [STATUS](../STATUS.md)）。
+M2 的 6 个解析事实数据集（§4.6 矩阵，`market.security_master` 等）随 preview.37
+（2026-10-27 部署窗口）在**同一 `capability_revision`** 下上线：M2 不加工具、不升
+revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
+[#391](../tasks/issue-391-m2-security-master.md) §12.5）。
 research/maint 入口、隧道切换与清单 §2.1/§2.2/§2.6 推迟到第二阶段，
 见 [v8-switch-checklist](v8-switch-checklist.md) §9。
 
@@ -10,7 +14,7 @@ research/maint 入口、隧道切换与清单 §2.1/§2.2/§2.6 推迟到第二�
 
 ## 1. 适用面与不变量
 
-| 项 | v7（已部署） | v8（代码，未部署） | 兼容性 |
+| 项 | v7（历史：preview.33–35） | v8（已部署：preview.36 起；preview.37 起含 M2 数据集） | 兼容性 |
 |---|---|---|---|
 | `capability_revision` | `generic-data-v7` | `generic-data-v8`（2026-10-27 部署日翻） | 客户端按 revision 握手，不匹配即停 |
 | data 工具数 | 23 | 代码 24（+ 只读 `list_catalog_facets`）；最小切换部署的 `ops` 入口 15 | 旧工具名全部保留，无重命名、无删除 |
@@ -18,8 +22,8 @@ research/maint 入口、隧道切换与清单 §2.1/§2.2/§2.6 推迟到第二�
 | `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支） | 缺省仍是 `v1`；v1 字节不变 |
 | `tools/list` | 含 `outputSchema` | **不含** `outputSchema`，描述 ≤240 B | 客户端失去内联校验；schema 从 capabilities 按需取 |
 | 入参 | 结构体实体、严格日期、必填契约版本 | 别名归一化 + 缺省值（§6） | 旧写法继续可用 |
-| 时点参数 | 无 | `as_of`/`known_at` 是**保留名**，v8 明确拒绝 | 新增错误，不是新语义 |
-| schema | 21（部署） | v8 自身**不改 schema**（§10） | 部署不需要因 v8 迁移 |
+| 时点参数 | 无 | `as_of`/`known_at` 只在 `temporal` 声明为 `true` 的 dataset 上接受（M2 的 6 个数据集，见 §4.6 矩阵）；其他 dataset/工具仍以 `unsupported_for_dataset:` 拒绝 | 声明式放宽，未声明的面仍是新增错误而不是新语义 |
+| schema | 21（v7 部署时） | v8 自身**不改 schema**（§10）；随 M1/M2 走到的代码 schema 是 24 | 部署按 D-08 全新 init，不做原地迁移 |
 | acquire server | 10 工具 | 不变 | — |
 
 不变量（v8 只改形状，不改语义）：
@@ -359,17 +363,21 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 ## 10. 部署与回滚
 
 - **v8 自身不改 schema、不加表**：PR-1…PR-6 没有 migration，也没有读写新的行情表。
-- 但 v8 与 M1（schema 22）、M2 PR-1（schema 23）在**同一个二进制**里：`COMPACT_SCHEMA_VERSION = 23`
-  （`src/sqlite_tasks.rs:43`），`check_schema`（服务启动时 `current=true`）只接受 legacy 18 或当前 compact 版本
-  （`src/sqlite_tasks.rs:12,43,450-465`）。所以**部署 v8 的发布二进制不能服务 schema 21 库**，
-  必须按 M1 的 D-08 归档旧库 + 全新 init（[M1 部署清单](../tasks/issue-383-m1-deploy-checklist.md)）。
+- 但 v8 与 M1（schema 22）、M2 PR-1（schema 23）、M2 PR-2（schema 24）在**同一个二进制**里：
+  `COMPACT_SCHEMA_VERSION = 24`（`src/sqlite_tasks.rs`），`check_schema`（服务启动时 `current=true`）
+  只接受 legacy 18 或当前 compact 版本。所以**部署 v8 的发布二进制不能服务 schema 21 库**，
+  必须按 M1 的 D-08 归档旧库 + 全新 init（[M1 部署清单](../tasks/issue-383-m1-deploy-checklist.md)）；
+  preview.37 的部署步骤见 [M2 部署清单](../tasks/m2-deploy-checklist.md)。
 - 回滚必须**二进制与数据库一起退**：上一版 release + 归档的 schema 21 库。只切回二进制会因
   schema 不匹配拒绝启动。v8 自己的入口/socket 回滚只需把隧道指回 `mcp.sock`。
 - 详细的部署日步骤、单元与隧道改动、常量翻转清单见 [v8-switch-checklist](v8-switch-checklist.md)。
 
 ## 11. 明确不做
 
-- 不实现 `as_of`/`known_at`（M2）；不实现证券主表、ST、停牌、涨跌停。
+- v8 自身不实现时点语义与 M2 的业务规则；M2 的 6 个解析事实数据集在**同一 revision**
+  内接线（PR #425，preview.37 部署），`as_of`/`known_at` 只在它们声明的面上生效。
+  未接入的来源（交易所名单、历史 ST #308、停复牌公告、涨跌停规则原文）不伪造：
+  写 0 行/不登记版本 → `absent`，或按 `pending_source` 记录。
 - 不做服务端筛选/排序/聚合（谓词、`order_by`、`limit`、top-N）——方向等 XDM-14 实测（D-19）。
 - 不新增 MCP 文件传输：`export_data` 只设计不做（D-39），导出仍是 M1 的 `export_research` bin。
 - 不删除任何现有工具：`compute_metrics` 只移到运维入口（D-38），下线在 v9 评估。
