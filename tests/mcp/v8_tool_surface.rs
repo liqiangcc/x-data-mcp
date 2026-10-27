@@ -103,9 +103,14 @@ fn entry_allowlists_cover_every_registered_tool_and_research_is_read_only() {
 
 #[test]
 fn tools_list_stays_within_entry_budgets_without_output_schema() {
+    // v8 §6.3 allocated 11_000 / 27_500 / 14_500 before M2. M2 PR-9 adds
+    // six datasets to the shared `Dataset` input enum, so the measured
+    // research/ops payloads grew to 11_511 / 28_220 B while maint (no
+    // dataset enum) stayed at 13_493 B. The budgets carry that documented
+    // surface growth; they are not relaxed for any other reason.
     let budgets = [
-        (EntryKind::Research, 5usize, 11_000usize),
-        (EntryKind::Ops, 15usize, 27_500usize),
+        (EntryKind::Research, 5usize, 11_700usize),
+        (EntryKind::Ops, 15usize, 28_400usize),
         (
             EntryKind::Maint,
             if cfg!(target_os = "linux") { 9 } else { 8 },
