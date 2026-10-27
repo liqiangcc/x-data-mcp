@@ -194,6 +194,50 @@ pub(crate) fn read_version(
     raw.map(version_row).transpose()
 }
 
+/// The single registration row of a dataset kind. The M2 design registers one
+/// row per dataset (issue-391 §9.3); `capital_events` is the documented
+/// exception and uses [`read_version`] with an entity key instead. A kind with
+/// more than one row fails closed rather than picking one silently.
+pub(crate) fn read_kind_version(
+    c: &Connection,
+    dataset_kind: &str,
+) -> Result<Option<DerivedVersionRow>, Error> {
+    let mut statement = c
+        .prepare(&format!(
+            "SELECT {VERSION_COLUMNS} FROM derived_dataset_versions \
+             WHERE dataset_kind=?1 ORDER BY dataset_key LIMIT 2"
+        ))
+        .map_err(storage)?;
+    let mut rows = statement
+        .query_map(params![dataset_kind], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+                r.get(9)?,
+                r.get(10)?,
+                r.get(11)?,
+                r.get(12)?,
+                r.get(13)?,
+            ))
+        })
+        .map_err(storage)?;
+    let first = rows.next().transpose().map_err(storage)?;
+    if rows.next().transpose().map_err(storage)?.is_some() {
+        return Err(integrity(format!(
+            "dataset kind {dataset_kind:?} has more than one registration; \
+             refusing to pick one"
+        )));
+    }
+    first.map(version_row).transpose()
+}
+
 /// Stored factor set of one entity, in ordinal order. This is the accessor the
 /// research read model (PR-8) consumes; `factors` is read back from the stored
 /// `c1..c4` so a recomputation from `c_bits` can be compared against it.

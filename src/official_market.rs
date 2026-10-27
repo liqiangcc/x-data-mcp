@@ -204,6 +204,11 @@ pub struct TdxMarketSource {
     manifest_sha256: String,
     day: FileInput,
     gbbq: FileInput,
+    /// The `base_industry` archive (`base.zip`). The M2 security-master
+    /// assembly reads `base.dbf`/`infoharbor_spec.cfg` from it; a generation
+    /// that carries the role always has it, and a source built without one
+    /// keeps the M2 dataset items fail-closed (issue-391 §12.1).
+    base: Option<FileInput>,
 }
 
 impl TdxMarketSource {
@@ -235,6 +240,11 @@ impl TdxMarketSource {
             manifest_sha256: inspection.manifest_sha256,
             day: take(FileRole::Day)?,
             gbbq: take(FileRole::Gbbq)?,
+            base: inspection
+                .files
+                .iter()
+                .find(|f| f.role == FileRole::BaseIndustry)
+                .cloned(),
         })
     }
 
@@ -261,6 +271,12 @@ impl TdxMarketSource {
             manifest_sha256: installed.manifest_sha256.clone(),
             day: take(FileRole::Day)?,
             gbbq: take(FileRole::Gbbq)?,
+            base: installed
+                .manifest
+                .files
+                .iter()
+                .find(|f| f.role == FileRole::BaseIndustry)
+                .cloned(),
         })
     }
     /// Service install hook: only when `X_DATA_MCP_OFFICIAL_MANIFEST`
@@ -365,6 +381,22 @@ pub struct MaterializedPair {
     pub forward: MarketDataBatch,
     /// The entity's parsed category-1 factor facts (§3.6).
     pub factors: AdjustmentEventSet,
+    /// The entity's capital facts from the same gbbq decode (§12.1).
+    pub capital: crate::security_master::CapitalEventSet,
+}
+
+/// The TDX facts of one whole-market M2 assembly plus the member digests the
+/// dataset's source binding names (issue-391 §12.1).
+#[derive(Debug, Clone)]
+pub struct SecuritySnapshotFacts {
+    pub facts: crate::official_security::SecurityFacts,
+    pub base_member: String,
+    pub base_member_sha256: String,
+    pub gbbq_member: String,
+    pub gbbq_member_sha256: String,
+    /// Digest of the whole decoded event list the facts were assembled from
+    /// (the `source_bindings.security_event_sha256` of the M2 datasets).
+    pub security_event_sha256: String,
 }
 
 /// `yyyymmdd` (the GBBQ date encoding) → calendar date; `None` when the
@@ -402,6 +434,13 @@ impl ArchiveIndex {
     }
 }
 
+/// `(market digit, code)` → every gbbq record for that security, in decode
+/// order. The category split is a *view* applied at lookup time: the daily
+/// item needs the category-1 slice for prices and the 2/3/5/7/8/9/10 slice
+/// for capital events, and both must come from one decode (issue-383 §9.1,
+/// issue-391 §12.1).
+type GbbqBySecurity = std::collections::HashMap<(u8, String), Vec<gbbq::Event>>;
+
 /// The one-time gbbq member decode shared by a `MaterializeSession`:
 /// member name and digest are kept for per-batch provenance binding, and
 /// events are indexed by `(market, code)` once so per-symbol lookup is
@@ -409,9 +448,7 @@ impl ArchiveIndex {
 struct DecodedGbbq {
     member: String,
     sha256: String,
-    /// `(market, code)` → (category-1 events, non-category-1 excluded
-    /// count); every record is partitioned exactly once at decode time.
-    by_security: std::collections::HashMap<(u8, String), (Vec<gbbq::Event>, usize)>,
+    by_security: GbbqBySecurity,
 }
 
 /// Lazily opened central-directory indexes keyed by canonical archive path.
@@ -482,21 +519,15 @@ impl MaterializeSession<'_> {
             let events = gbbq::decode_events(&raw).map_err(|e| {
                 SourceError::InvalidResponse(format!("gbbq record decode failed: {e}"))
             })?;
-            let mut by_security: std::collections::HashMap<
-                (u8, String),
-                (Vec<gbbq::Event>, usize),
-            > = std::collections::HashMap::new();
+            let mut by_security = GbbqBySecurity::new();
             for event in events {
-                // Only category 1 has verified QFQ semantics; other
-                // categories are never interpreted or applied to prices.
-                let entry = by_security
+                // Every record is indexed; the price path takes category 1
+                // and the capital path takes the admitted capital set, both
+                // from this one decode.
+                by_security
                     .entry((event.market, event.code.clone()))
-                    .or_default();
-                if event.category == 1 {
-                    entry.0.push(event);
-                } else {
-                    entry.1 += 1;
-                }
+                    .or_default()
+                    .push(event);
             }
             let _ = self.gbbq.set(DecodedGbbq {
                 member,
@@ -507,20 +538,104 @@ impl MaterializeSession<'_> {
         Ok(self.gbbq.get().expect("initialized above"))
     }
 
-    /// The security's interpreted event set: category-1 events in decode
-    /// order plus the count of excluded non-category-1 records.
-    fn security_events(
+    /// Every gbbq record of one security, in decode order, from the session's
+    /// one decode. The price path takes category 1 and the capital path takes
+    /// the admitted capital categories; both read this same slice
+    /// (issue-383 §9.1, issue-391 §12.1).
+    fn security_all_events(
         &self,
         market: &str,
         code: &str,
-    ) -> Result<(&[gbbq::Event], usize), SourceError> {
+    ) -> Result<Vec<gbbq::Event>, SourceError> {
         let gbbq = self.decoded_gbbq()?;
         let market_byte: u8 = if market == "sh" { 1 } else { 0 };
         Ok(gbbq
             .by_security
             .get(&(market_byte, code.to_string()))
-            .map(|(events, excluded)| (events.as_slice(), *excluded))
-            .unwrap_or((&[], 0)))
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// The security's interpreted price event set: category-1 events in decode
+    /// order plus the count of excluded non-category-1 records.
+    fn security_events(
+        &self,
+        market: &str,
+        code: &str,
+    ) -> Result<(Vec<gbbq::Event>, usize), SourceError> {
+        let mut admitted = Vec::new();
+        let mut excluded = 0usize;
+        for event in self.security_all_events(market, code)? {
+            if event.category == 1 {
+                admitted.push(event);
+            } else {
+                excluded += 1;
+            }
+        }
+        Ok((admitted, excluded))
+    }
+
+    /// One security's capital-event set (issue-391 §12.1): the gbbq records
+    /// whose categories are admitted as capital facts, decoded by the same
+    /// PR-2 function the whole-market parse uses, so the per-entity daily item
+    /// and the assembled main table cannot disagree about one entity.
+    pub fn capital_set(
+        &self,
+        symbol: &str,
+    ) -> Result<crate::security_master::CapitalEventSet, SourceError> {
+        let (market, code) = Self::split_symbol(symbol)?;
+        let all = self.security_all_events(market, code)?;
+        let refs: Vec<&gbbq::Event> = all.iter().collect();
+        crate::official_security::capital_set(symbol, &refs)
+            .map_err(|e| SourceError::InvalidResponse(format!("capital events of {symbol}: {e}")))
+    }
+
+    /// The whole-market TDX security facts the M2 main-table assembly needs
+    /// (issue-391 §12.1): `base.dbf` + `infoharbor_spec.cfg` from the
+    /// `base_industry` archive, plus the session's one gbbq decode. The member
+    /// names and digests travel with the facts so the dataset's source
+    /// binding can name exactly what it read.
+    ///
+    /// A generation without the `base_industry` role keeps the M2 derived
+    /// items fail-closed: this returns `NotVerified` instead of an empty
+    /// master, because "no base file" is not "no securities".
+    pub fn security_facts(&self) -> Result<SecuritySnapshotFacts, SourceError> {
+        let base_input = self.source.base.as_ref().ok_or_else(|| {
+            SourceError::NotVerified(
+                "the installed snapshot carries no base_industry role; the M2 security \
+                 master cannot be assembled"
+                    .into(),
+            )
+        })?;
+        let (base_member, base_bytes) =
+            self.member_bytes(base_input, &["base.dbf".into(), "BASE.DBF".into()])?;
+        let (_, infoharbor_bytes) =
+            self.member_bytes(base_input, &["infoharbor_spec.cfg".into()])?;
+        let base = crate::official_security::BaseDbf::parse(&base_bytes)
+            .map_err(|e| SourceError::InvalidResponse(format!("base.dbf: {e}")))?;
+        let infoharbor = crate::official_security::parse_infoharbor(&infoharbor_bytes)
+            .map_err(|e| SourceError::InvalidResponse(format!("infoharbor_spec.cfg: {e}")))?;
+        let decoded = self.decoded_gbbq()?;
+        // Per-code order is decode order inside every vector; codes are
+        // visited in sorted order so the flattened event list (and the digest
+        // taken over it) does not depend on hash-map iteration order.
+        let mut codes: Vec<&(u8, String)> = decoded.by_security.keys().collect();
+        codes.sort();
+        let mut events = Vec::new();
+        for code in codes {
+            events.extend(decoded.by_security[code].iter().cloned());
+        }
+        let security_event_sha256 = security_events_digest(&events, 0);
+        let facts = crate::official_security::parse_security_facts(&base, &infoharbor, &events)
+            .map_err(|e| SourceError::InvalidResponse(format!("security facts: {e}")))?;
+        Ok(SecuritySnapshotFacts {
+            facts,
+            base_member,
+            base_member_sha256: crate::hash::sha256(&base_bytes),
+            gbbq_member: decoded.member.clone(),
+            gbbq_member_sha256: decoded.sha256.clone(),
+            security_event_sha256,
+        })
     }
 
     /// Candidate member names for a security's `.day` file.
@@ -613,7 +728,7 @@ impl MaterializeSession<'_> {
             },
             Adjustment::Raw,
             Self::raw_bars(&raw_bars)?,
-            events,
+            &events,
             excluded,
         )?;
         let forward = self.assemble_daily(
@@ -623,14 +738,15 @@ impl MaterializeSession<'_> {
                 sha256: crate::hash::sha256(&day_bytes),
             },
             Adjustment::Forward,
-            Self::qfq_bars(&raw_bars, events)?,
-            events,
+            Self::qfq_bars(&raw_bars, &events)?,
+            &events,
             excluded,
         )?;
         Ok(MaterializedPair {
             raw,
             forward,
             factors: self.factor_set(symbol)?,
+            capital: self.capital_set(symbol)?,
         })
     }
 
@@ -787,7 +903,7 @@ impl MaterializeSession<'_> {
         let (events, excluded) = self.security_events(market, code)?;
         let bars = match adjustment {
             Adjustment::Raw => Self::raw_bars(&raw_bars)?,
-            Adjustment::Forward => Self::qfq_bars(&raw_bars, events)?,
+            Adjustment::Forward => Self::qfq_bars(&raw_bars, &events)?,
         };
         self.assemble_daily(
             symbol,
@@ -797,7 +913,7 @@ impl MaterializeSession<'_> {
             },
             adjustment,
             bars,
-            events,
+            &events,
             excluded,
         )
     }
@@ -1123,7 +1239,7 @@ impl TdxRangeProvider<'_> {
             .member_bytes(&source.day, &MaterializeSession::day_names(market, code))?;
         let day_member_sha256 = crate::hash::sha256(&day_bytes);
         let (events, excluded) = self.session.security_events(market, code)?;
-        let events_sha256 = security_events_digest(events, excluded);
+        let events_sha256 = security_events_digest(&events, excluded);
         let continuity = match (base_day_sha, base_events_sha) {
             (Some(day_sha), Some(ev_sha))
                 if ev_sha == events_sha256 && day_sha == day_member_sha256 =>
@@ -1353,7 +1469,7 @@ impl TdxRangeProvider<'_> {
                     },
                     Adjustment::Forward,
                     base_window.to_vec(),
-                    events,
+                    &events,
                     excluded,
                 )?;
                 // The member bytes and event set are byte-proven
@@ -1387,11 +1503,12 @@ impl TdxRangeProvider<'_> {
                     raw: Some(crate::market_data::RawBatch::no_change(
                         raw_adjustment_evidence(excluded),
                         self.session.factor_set(symbol)?,
+                        self.session.capital_set(symbol)?,
                     )),
                 }))
             }
             Continuity::Append { tail, .. } => {
-                let tail_bars = MaterializeSession::qfq_bars(&tail, events)?;
+                let tail_bars = MaterializeSession::qfq_bars(&tail, &events)?;
                 let raw_tail = MaterializeSession::raw_bars(&tail)?;
                 let all_tail_in_range = tail_bars
                     .iter()
@@ -1412,7 +1529,7 @@ impl TdxRangeProvider<'_> {
                     },
                     Adjustment::Forward,
                     segment_bars,
-                    events,
+                    &events,
                     excluded,
                 )?;
                 // Unit conflicts/enrichment and non-complete coverage
@@ -1473,6 +1590,7 @@ impl TdxRangeProvider<'_> {
                     raw_tail,
                     raw_adjustment_evidence(excluded),
                     self.session.factor_set(symbol)?,
+                    self.session.capital_set(symbol)?,
                 );
                 Ok(Some(crate::market_update::runner::TypedAcquisition {
                     decision: if upserts.is_empty() {
@@ -1627,7 +1745,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                     },
                     Adjustment::Forward,
                     base.batch.bars.clone(),
-                    events,
+                    &events,
                     excluded,
                 )?;
                 // The member bytes and event set are byte-proven identical
@@ -1673,12 +1791,13 @@ impl RangeProvider for TdxRangeProvider<'_> {
                     crate::market_data::RawBatch::no_change(
                         raw_adjustment_evidence(excluded),
                         self.session.factor_set(&symbol)?,
+                        self.session.capital_set(&symbol)?,
                     ),
                 )
             }
             Continuity::Append { tail, .. } => {
                 let mut bars = base.batch.bars.clone();
-                bars.extend(MaterializeSession::qfq_bars(&tail, events)?);
+                bars.extend(MaterializeSession::qfq_bars(&tail, &events)?);
                 let raw_tail = MaterializeSession::raw_bars(&tail)?;
                 let batch = self.session.assemble_daily(
                     &symbol,
@@ -1688,7 +1807,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                     },
                     Adjustment::Forward,
                     bars,
-                    events,
+                    &events,
                     excluded,
                 )?;
                 let mut segment = batch.clone();
@@ -1723,6 +1842,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                             raw_tail,
                             raw_adjustment_evidence(excluded),
                             self.session.factor_set(&symbol)?,
+                            self.session.capital_set(&symbol)?,
                         ),
                     )
                 } else {
@@ -1735,6 +1855,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                             raw_tail,
                             raw_adjustment_evidence(excluded),
                             self.session.factor_set(&symbol)?,
+                            self.session.capital_set(&symbol)?,
                         ),
                     )
                 }
@@ -1771,6 +1892,7 @@ impl RangeProvider for TdxRangeProvider<'_> {
                         pair.raw.bars,
                         pair.raw.adjustment_evidence,
                         pair.factors,
+                        pair.capital,
                     ),
                 )
             }
@@ -1972,6 +2094,7 @@ fn acquire_merged_segment(
     let pair = session.materialize_pair(&base.version().symbol)?;
     let (raw_batch, batch) = (pair.raw, pair.forward);
     let factors = pair.factors;
+    let capital = pair.capital;
     // Same pinned snapshot = same QFQ basis: the base's declared
     // snapshot inputs must equal the member/archive digests this
     // installed source actually read.
@@ -2056,6 +2179,7 @@ fn acquire_merged_segment(
             raw_batch.bars,
             raw_batch.adjustment_evidence,
             factors,
+            capital,
         )),
         combined: Some(CombinedCandidate {
             evidence: CombinedEvidence {
@@ -2498,7 +2622,8 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             None => self.source.materialize_session().materialize_pair(symbol),
         }
         .map_err(|e| Error::Invalid(e.to_string()))?;
-        let (raw_batch, batch, factors) = (pair.raw, pair.forward, pair.factors);
+        let (raw_batch, batch, factors, capital) =
+            (pair.raw, pair.forward, pair.factors, pair.capital);
         let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
         let (records, _) =
             publish::validate_and_deduplicate(&batch).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -2537,6 +2662,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 raw_batch.bars,
                 raw_batch.adjustment_evidence,
                 factors,
+                capital,
             )),
         }))
     }
@@ -2569,7 +2695,8 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             None => self.source.materialize_session().materialize_pair(symbol),
         }
         .map_err(|e| Error::Invalid(e.to_string()))?;
-        let (raw_batch, batch, factors) = (pair.raw, pair.forward, pair.factors);
+        let (raw_batch, batch, factors, capital) =
+            (pair.raw, pair.forward, pair.factors, pair.capital);
         let current = self.repository.task_head(&binding.head.task_id)?;
         if current.status != Status::Running
             || current.state_revision != binding.head.state_revision
@@ -2624,6 +2751,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             raw_batch.bars,
             raw_batch.adjustment_evidence,
             factors,
+            capital,
         ));
         self.repository.commit(&plan)
     }

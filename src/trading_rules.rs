@@ -423,6 +423,35 @@ pub struct RuleBook {
     pub min_ticks: Vec<MinTickRule>,
 }
 
+/// The rule-source adapter's answer for one generation (issue-391 §8.1,
+/// A-7). `None` is the `pending_source` state, not "no rules": while the
+/// regulation text is unadmitted the dataset keeps zero rows and every band
+/// derivation stays `unknown`/`rule_pending` (§10.1, AC-M2-9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuleSource {
+    Admitted(RuleBook),
+    /// No admitted rule text: the payload names the blocked source.
+    Pending(crate::security_master::assembly::PendingSource),
+}
+
+/// The adapter boundary (§16 PR-8): one function, no trait.
+///
+/// `Some(book)` is an admitted, generation-frozen rule snapshot. `None` is not
+/// an empty book: it is the `pending_source` state, and the daily item then
+/// writes nothing (there is no rule source to update from).
+pub fn rule_source(book: Option<RuleBook>) -> RuleSource {
+    match book {
+        Some(book) => RuleSource::Admitted(book),
+        None => RuleSource::Pending(crate::security_master::assembly::PendingSource {
+            dataset: DATASET_KIND,
+            source: "exchange_trading_rules",
+            reason: "no admitted rule text is frozen for this generation (S-9/A-7 pending); \
+                     zero rows are written and every band derivation stays unknown \
+                     (rule_pending)",
+        }),
+    }
+}
+
 /// The outcome of one rule lookup. `Pending` is not `Missing`: the second says
 /// "no rule exists", the first says "a rule exists but its text is not
 /// admitted", and the design requires different reason codes (§8.5).

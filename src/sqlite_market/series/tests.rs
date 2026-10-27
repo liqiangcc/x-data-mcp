@@ -868,11 +868,13 @@ fn supply_reads_on_schema21() {
             filter: Filter::Daily {
                 start_date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
                 end_date: NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+                as_of: None,
             },
             version: VersionChoice::LatestPerEntity {},
             page_size: 100,
             cursor: None,
             fields: None,
+            known_at: None,
         },
         &access,
     )
@@ -923,6 +925,7 @@ fn supply_reads_on_schema21() {
             page_size: 100,
             cursor: None,
             fields: None,
+            known_at: None,
         },
         &access,
     )

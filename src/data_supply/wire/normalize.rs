@@ -18,7 +18,11 @@
 //! | `filter` (catalog) | omitted | `{"kind":"catalog"}` |
 //!
 //! Everything else stays a rejection, with a message that names the field and
-//! the accepted values (`reserved_for_m2` for `as_of`/`known_at`).
+//! the accepted values. `as_of`/`known_at` are M2 parameters (issue-391
+//! §12.3): they are accepted only on a dataset whose `temporal` declaration
+//! says so, and rejected with `invalid_arguments` + `unsupported_for_dataset`
+//! everywhere else.
+use super::Dataset;
 use super::Security;
 use crate::mcp::ApiError;
 use chrono::NaiveDate;
@@ -58,8 +62,10 @@ const CONTRACT_TOOLS: &[&str] = &[
 const SELECTION_TOOLS: &[&str] = &["query_data", "list_data_versions", "get_data_availability"];
 /// Tools that take `version`/`filter` (design §7.1 rows 4 and 5).
 const RANGE_TOOLS: &[&str] = &["query_data", "get_data_availability"];
-/// Names reserved for M2 point-in-time semantics (design §4.6, AC-V8-11).
-const RESERVED: &[&str] = &["as_of", "known_at"];
+/// Tools that decode the M2 temporal parameters (issue-391 §12.3). The
+/// versions list is a reproducibility list, not a point-in-time answer, so it
+/// does not accept them.
+const TEMPORAL_TOOLS: &[&str] = &["query_data", "get_data_availability"];
 /// One decoded JSON object. Aliased so signatures carry no generic comma.
 type Fields = Map<String, Value>;
 
@@ -83,20 +89,61 @@ fn invalid(message: String) -> ApiError {
     ApiError::new("invalid_arguments", message)
 }
 
+/// `invalid_arguments` plus the machine-readable reason the v8 contract names
+/// (issue-391 §12.3). The reason travels in the message because the v8 error
+/// envelope has no separate `reason_code` field.
+fn unsupported(field: &str, dataset: Option<&str>) -> ApiError {
+    invalid(format!(
+        "unsupported_for_dataset: {field} is not declared for dataset {}; \
+         see get_data_capabilities with this dataset and operation=query_data \
+         for its temporal declaration",
+        dataset.unwrap_or("<missing>")
+    ))
+}
+
+/// Parse a wire dataset name without going through the typed decode, so the
+/// declared support can be read before the rest of the request is validated.
+fn dataset_named(name: &str) -> Option<Dataset> {
+    serde_json::from_value(Value::String(name.to_owned())).ok()
+}
+
 fn reserved(name: &str, input: &Value) -> Result<(), ApiError> {
     let Some(map) = input.as_object() else {
         return Ok(());
     };
-    let Some(field) = RESERVED.iter().find(|field| map.contains_key(**field)) else {
+    // `as_of` is a filter field (issue-387 §4.6): a top-level spelling is a
+    // wrong position, not an unsupported parameter.
+    if map.get("as_of").is_some_and(|value| !value.is_null()) {
+        if !TEMPORAL_TOOLS.contains(&name) {
+            return Err(invalid(format!(
+                "as_of is accepted only by {} (as filter.as_of); {name} has no point-in-time response",
+                TEMPORAL_TOOLS.join("/")
+            )));
+        }
+        return Err(invalid(
+            "as_of belongs in filter (for example filter.as_of), not at the top level".into(),
+        ));
+    }
+    let Some(value) = map.get("known_at") else {
         return Ok(());
     };
-    Err(ApiError::new(
-        "reserved_for_m2",
-        format!(
-            "{field} is reserved for M2 point-in-time semantics and is not implemented in v8; \
-             remove it from {name} (see docs/tasks/issue-391-m2-security-master.md)"
-        ),
-    ))
+    if value.is_null() {
+        return Ok(());
+    }
+    if !TEMPORAL_TOOLS.contains(&name) {
+        return Err(invalid(format!(
+            "known_at is accepted only by {}; {name} has no point-in-time response",
+            TEMPORAL_TOOLS.join("/")
+        )));
+    }
+    let dataset = map.get("dataset").and_then(Value::as_str);
+    if !dataset
+        .and_then(dataset_named)
+        .is_some_and(|dataset| dataset.temporal().known_at)
+    {
+        return Err(unsupported("known_at", dataset));
+    }
+    Ok(())
 }
 
 fn contract_version(name: &str, map: &mut Fields) {
@@ -124,7 +171,7 @@ fn shape(name: &str, input: &mut Value) -> Result<(), ApiError> {
     }
     if RANGE_TOOLS.contains(&name) {
         version(map);
-        filter(map, &dataset)?;
+        filter(name, map, &dataset)?;
     }
     Ok(())
 }
@@ -137,6 +184,14 @@ fn selection_kind(name: &str, map: &Fields, dataset: &str) -> Result<(), ApiErro
         }
         "market.yearly" => &["single", "batch"],
         "market.calendar" => &["market"],
+        // M2 facts (issue-391 §12.3): entity intervals accept the three entity
+        // selections; the whole-market rule set has no entity.
+        "market.price_limit_rules" => &["market"],
+        "market.security_master"
+        | "market.security_names"
+        | "market.capital_events"
+        | "market.risk_warnings"
+        | "market.suspensions" => &["single", "batch", "universe"],
         _ => return Ok(()),
     };
     let Some(kind) = map
@@ -167,12 +222,18 @@ fn version(map: &mut Fields) {
     }
 }
 
-fn filter(map: &mut Fields, dataset: &str) -> Result<(), ApiError> {
+fn filter(name: &str, map: &mut Fields, dataset: &str) -> Result<(), ApiError> {
     let allowed: &[&str] = match dataset {
         "securities.catalog" => &["catalog"],
         "market.daily" | "market.index" => &["daily", "cross_section"],
         "market.yearly" => &["yearly"],
         "market.adjustment_events" | "market.calendar" => &["daily"],
+        "market.security_master"
+        | "market.security_names"
+        | "market.capital_events"
+        | "market.risk_warnings"
+        | "market.suspensions"
+        | "market.price_limit_rules" => &["daily"],
         _ => return Ok(()),
     };
     let Some(filter) = map.get("filter").cloned() else {
@@ -198,6 +259,21 @@ fn filter(map: &mut Fields, dataset: &str) -> Result<(), ApiError> {
             "filter.kind {kind:?} is not valid for dataset {dataset}: allowed {}",
             quoted(allowed)
         )));
+    }
+    // `filter.as_of` is the M2 record-set constraint (issue-391 §12.2). It is
+    // rejected where the dataset does not declare it, and on tools that do not
+    // decode it.
+    if filter.get("as_of").is_some_and(|value| !value.is_null()) {
+        let declared = dataset_named(dataset).is_some_and(|dataset| dataset.temporal().as_of);
+        if !declared {
+            return Err(unsupported("filter.as_of", Some(dataset)));
+        }
+        if !TEMPORAL_TOOLS.contains(&name) {
+            return Err(invalid(format!(
+                "filter.as_of is accepted only by {}; {name} has no point-in-time response",
+                TEMPORAL_TOOLS.join("/")
+            )));
+        }
     }
     let required: &[&str] = match kind {
         "daily" | "cross_section" => &["start_date", "end_date"],
@@ -232,7 +308,7 @@ fn walk(value: &mut Value, path: &str) -> Result<(), ApiError> {
                     "entity" => entity_at(child, &path)?,
                     "entities" | "securities" => entities_at(child, &path)?,
                     "symbol" => symbol_at(child, &path)?,
-                    "start_date" | "end_date" | "target_day" => date_at(child, &path)?,
+                    "start_date" | "end_date" | "target_day" | "as_of" => date_at(child, &path)?,
                     _ => walk(child, &path)?,
                 }
             }

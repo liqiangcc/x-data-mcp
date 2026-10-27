@@ -294,6 +294,14 @@ impl DataApi {
             tool_name: e.name.into(),
             description: detailed.then_some(e.description.into()),
             dataset,
+            // The temporal declaration is a detailed-view field: the compact
+            // entry view has a byte budget and the registry view must stay
+            // byte-identical to the detailed capabilities answer.
+            temporal: if detailed {
+                dataset.map(Dataset::temporal)
+            } else {
+                None
+            },
             contract_version: ContractVersion::V1,
             implemented: true,
             operator_only: e.operator_only,
@@ -1331,7 +1339,15 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
         }
     } else if matches!(
         d,
-        Dataset::Index | Dataset::AdjustmentEvents | Dataset::Calendar
+        Dataset::Index
+            | Dataset::AdjustmentEvents
+            | Dataset::Calendar
+            | Dataset::SecurityMaster
+            | Dataset::SecurityNames
+            | Dataset::CapitalEvents
+            | Dataset::RiskWarnings
+            | Dataset::Suspensions
+            | Dataset::PriceLimitRules
     ) {
         v["contract_version"] = json!("v2");
         if v.get("selection").is_some() {
@@ -1340,12 +1356,22 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
                 Dataset::AdjustmentEvents => {
                     json!({"kind":"single","entity":{"exchange":"sh","code":"600006"}})
                 }
-                Dataset::Calendar => json!({"kind":"market"}),
+                Dataset::Calendar | Dataset::PriceLimitRules => json!({"kind":"market"}),
+                Dataset::SecurityMaster => json!({"kind":"universe"}),
+                Dataset::SecurityNames
+                | Dataset::CapitalEvents
+                | Dataset::RiskWarnings
+                | Dataset::Suspensions => {
+                    json!({"kind":"single","entity":{"exchange":"sh","code":"600006"}})
+                }
                 _ => unreachable!(),
             };
         }
         if v.get("filter").is_some() {
             v["filter"] = json!({"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"});
+            if d.temporal().as_of {
+                v["filter"]["as_of"] = json!("2025-12-31");
+            }
         }
         if let Some(object) = v.as_object_mut() {
             object.remove("fields");

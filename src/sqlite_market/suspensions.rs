@@ -20,7 +20,7 @@ use rusqlite::{Connection, params};
 use serde_json::json;
 
 use super::derived::{self, DerivedVersionRow};
-use super::{evidence_store, integrity, storage};
+use super::{evidence_store, integrity, series_commit, storage};
 use crate::compact_market::{self, Digest, EvidenceKind};
 use crate::market_storage::Error;
 use crate::security_master::suspensions::{
@@ -207,6 +207,91 @@ pub(crate) fn replace_suspensions(
     derived::read_version(c, DATASET_KIND, DATASET_KEY)?
         .map(Some)
         .ok_or_else(|| integrity("suspension registration vanished after its insert"))
+}
+
+/// One whole-market suspension commit driven by the daily
+/// `derived:suspensions` item (issue-391 §12.1).
+///
+/// `master` is the registration of the `security_master` dataset the gaps were
+/// derived from. The binding must match the one this commit writes, so a run
+/// that reads another generation's master fails closed instead of binding
+/// those rows to this generation's members.
+pub(crate) struct SuspensionWrite<'a> {
+    pub set: &'a SuspensionSet,
+    pub master: &'a DerivedVersionRow,
+    pub task_id: &'a str,
+    pub item_id: &'a str,
+    pub generation_id: &'a str,
+    pub generation_manifest_sha256: &'a str,
+    pub member_sha256: &'a str,
+    pub security_event_sha256: &'a str,
+    pub generation_evidence: &'a serde_json::Value,
+}
+
+/// Write the binding, verify the master came from the same inputs, then
+/// replace the whole suspension dataset, in the caller's transaction.
+pub(crate) fn commit_suspensions(
+    c: &Connection,
+    write: &SuspensionWrite<'_>,
+) -> Result<Option<DerivedVersionRow>, Error> {
+    let binding = series_commit::put_generation_binding(
+        c,
+        write.generation_id,
+        write.generation_manifest_sha256,
+        write.member_sha256,
+        write.security_event_sha256,
+        write.generation_evidence,
+    )?;
+    if write.master.source_binding_digest != binding {
+        return Err(integrity(
+            "suspensions derive from a security_master assembled from another generation",
+        ));
+    }
+    replace_suspensions(c, write.set, binding, write.task_id, write.item_id)
+}
+
+/// The four inputs `derived:suspensions` derives from, read in one snapshot
+/// (issue-391 §12.1). Reading them separately would let the interval list and
+/// the bars it is bracketed against come from different commits; taking them
+/// on one connection makes "the master this run wrote plus the bars it was
+/// written against" a single read.
+pub(crate) struct SuspensionInputs {
+    pub intervals: Vec<crate::security_master::SecurityLifecycleFact>,
+    /// The `security_master` registration the gaps are derived from. Its
+    /// binding must match the generation this item commits.
+    pub master: DerivedVersionRow,
+    pub calendar: Vec<chrono::NaiveDate>,
+    pub bar_days: std::collections::BTreeMap<String, Vec<chrono::NaiveDate>>,
+}
+
+/// Read [`SuspensionInputs`], failing closed when an input is absent: a
+/// missing master or an empty calendar would otherwise be read as "no gaps".
+pub(crate) fn read_inputs(c: &Connection) -> Result<SuspensionInputs, Error> {
+    let intervals = super::security::read_security_master(c)?;
+    let master = derived::read_version(
+        c,
+        crate::security_master::assembly::DATASET_KIND,
+        crate::security_master::assembly::DATASET_KEY,
+    )?
+    .ok_or_else(|| {
+        integrity("suspensions need a stored security_master; none exists for this run")
+    })?;
+    let calendar: Vec<chrono::NaiveDate> = super::calendar::read_days(c)?
+        .into_iter()
+        .map(|day| day.day)
+        .collect();
+    if calendar.is_empty() {
+        return Err(integrity(
+            "suspensions need the derived trading calendar; it is empty",
+        ));
+    }
+    let bar_days = super::series::read_raw_bar_days(c)?;
+    Ok(SuspensionInputs {
+        intervals,
+        master,
+        calendar,
+        bar_days,
+    })
 }
 
 /// Every stored suspension row in row-identity order. The decoder is PR-4's,

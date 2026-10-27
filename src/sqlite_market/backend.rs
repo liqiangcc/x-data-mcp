@@ -121,6 +121,61 @@ impl MarketBackend {
         }
     }
 
+    /// Replace the assembled M2 `security_master` dataset (issue-391 §12.1).
+    /// The `derived:security_master` item drives this; the legacy backend has
+    /// no M2 tables, so the item fails closed instead of writing a stub.
+    pub(crate) fn commit_security_master(
+        &self,
+        write: &super::security::SecurityMasterWrite<'_>,
+    ) -> Result<super::derived::DerivedVersionRow, Error> {
+        match self {
+            Self::Compact(m) => m.commit_security_master(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "security_master requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Replace the derived suspension dataset (issue-391 §12.1). The
+    /// `derived:suspensions` item drives this.
+    pub(crate) fn commit_suspensions(
+        &self,
+        write: &super::suspensions::SuspensionWrite<'_>,
+    ) -> Result<Option<super::derived::DerivedVersionRow>, Error> {
+        match self {
+            Self::Compact(m) => m.commit_suspensions(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "suspensions require the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Every stored A-share raw daily series' span (issue-391 §4.1). The
+    /// `derived:security_master` item uses them only as candidate migration
+    /// leads; the read connection keeps the full scan off the write lock.
+    pub(crate) fn raw_bar_spans(
+        &self,
+    ) -> Result<Vec<crate::security_master::assembly::BarSpan>, Error> {
+        match self {
+            Self::Compact(m) => m.raw_bar_spans(),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "security_master requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// The four inputs `derived:suspensions` derives from, read in one
+    /// snapshot (issue-391 §12.1). Read-only, so it never holds the write
+    /// lock while the whole-market bar days are scanned.
+    pub(crate) fn suspension_inputs(&self) -> Result<super::suspensions::SuspensionInputs, Error> {
+        match self {
+            Self::Compact(m) => m.suspension_inputs(),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "suspensions require the compact market schema".into(),
+            )),
+        }
+    }
+
     /// The calendar coverage self-check against the stored 不复权 series
     /// (issue-383 §5.2), measured on a read connection.
     pub(crate) fn measure_calendar_coverage(

@@ -20,6 +20,17 @@ pub struct QueryPlan {
     pub catalog_version: Option<String>,
     /// Trading days of a `cross_section` filter, resolved from the calendar.
     pub trade_days: Vec<NaiveDate>,
+    /// M2 point-in-time arguments with `as_of` resolved (issue-391 §12.2).
+    /// `None` for datasets that declare neither parameter.
+    pub temporal: Option<TemporalPlan>,
+}
+/// The resolved M2 point-in-time state of one query. `as_of` is resolved in
+/// [`QueryPlan::resolve`] (the plan itself never reads the clock); the
+/// information-set cutoff is the caller's value, never defaulted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TemporalPlan {
+    pub as_of: NaiveDate,
+    pub known_at: Option<NaiveDate>,
 }
 impl QueryPlan {
     pub fn new(mut args: Query, access: &Access) -> Result<Self, Error> {
@@ -55,11 +66,21 @@ impl QueryPlan {
                 Filter::Daily {
                     start_date,
                     end_date,
+                    ..
                 },
                 dataset,
             ) if matches!(
                 dataset,
-                Dataset::Daily | Dataset::Index | Dataset::AdjustmentEvents | Dataset::Calendar
+                Dataset::Daily
+                    | Dataset::Index
+                    | Dataset::AdjustmentEvents
+                    | Dataset::Calendar
+                    | Dataset::SecurityMaster
+                    | Dataset::SecurityNames
+                    | Dataset::CapitalEvents
+                    | Dataset::RiskWarnings
+                    | Dataset::Suspensions
+                    | Dataset::PriceLimitRules
             ) && valid_range(*start_date, *end_date) => {}
             (
                 Filter::CrossSection {
@@ -85,7 +106,11 @@ impl QueryPlan {
             VersionChoice::ExplicitVersionMap { versions }
                 if matches!(
                     args.dataset,
-                    Dataset::Daily | Dataset::Yearly | Dataset::Index | Dataset::AdjustmentEvents
+                    Dataset::Daily
+                        | Dataset::Yearly
+                        | Dataset::Index
+                        | Dataset::AdjustmentEvents
+                        | Dataset::CapitalEvents
                 ) && !matches!(args.selection, Selection::Universe { .. }) =>
             {
                 versions.sort_by(|a, b| a.entity.cmp(&b.entity));
@@ -104,20 +129,79 @@ impl QueryPlan {
         if let Selection::Batch { entities: e } = &mut args.selection {
             *e = entities.clone();
         }
+        // M2 point-in-time parameters are accepted only where declared
+        // (issue-391 §12.3). The decode layer already rejects them; this is
+        // the typed-request backstop for callers that bypass normalization.
+        let temporal = args.dataset.temporal();
+        let as_of = args.filter.as_of();
+        if as_of.is_some() && !temporal.as_of {
+            return Err(invalid(&unsupported("filter.as_of", args.dataset)));
+        }
+        if args.known_at.is_some() && !temporal.known_at {
+            return Err(invalid(&unsupported("known_at", args.dataset)));
+        }
+        // §11: `catalog_version` (the main table's projection of today) and
+        // `as_of` (a historical membership time point) cannot both define the
+        // same universe.
+        if args.dataset.is_m2()
+            && matches!(
+                &args.selection,
+                Selection::Universe {
+                    catalog_version: Some(_)
+                }
+            )
+            && as_of.is_some()
+        {
+            return Err(invalid(
+                "selection.catalog_version and filter.as_of are mutually exclusive for M2 universes",
+            ));
+        }
+        let temporal = args
+            .dataset
+            .is_m2()
+            .then(|| crate::data_supply::query::TemporalPlan {
+                as_of: as_of.unwrap_or_else(|| {
+                    // Replaced in `resolve` once the calendar is available; the
+                    // value here only keeps `TemporalPlan` non-optional.
+                    match &args.filter {
+                        Filter::Daily { end_date, .. } => *end_date,
+                        _ => NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+                    }
+                }),
+                known_at: args.known_at,
+            });
         Ok(Self {
             args,
             entities,
             catalog_version: None,
             trade_days: Vec::new(),
+            temporal,
         })
     }
     /// Resolve the parts that need storage: a universe's members and the
     /// trading days of a cross-section. Runs before the cursor key is built so
     /// the key contains the concrete catalog version.
     pub fn resolve<R: ReadRepository>(&mut self, repo: &R, access: &Access) -> Result<(), Error> {
+        if let Some(temporal) = &self.temporal {
+            let as_of = match self.args.filter.as_of() {
+                Some(as_of) => as_of,
+                None => repo.last_trading_day_upto(today())?,
+            };
+            self.temporal = Some(TemporalPlan {
+                as_of,
+                known_at: temporal.known_at,
+            });
+        }
+        let (as_of, known_at) = self
+            .temporal
+            .map_or((None, None), |t| (Some(t.as_of), t.known_at));
         if let Selection::Universe { catalog_version } = &mut self.args.selection {
-            let (resolved, members) =
-                repo.universe_members(self.args.dataset, catalog_version.as_deref())?;
+            let (resolved, members) = repo.universe_members(
+                self.args.dataset,
+                catalog_version.as_deref(),
+                as_of,
+                known_at,
+            )?;
             let resolved = (!resolved.is_empty()).then_some(resolved);
             self.catalog_version = resolved.clone();
             *catalog_version = resolved;
@@ -140,6 +224,18 @@ impl QueryPlan {
         }
         Ok(())
     }
+}
+/// The adapter's "today": the calendar day, never a data fact. The read model
+/// itself never reads the clock (issue-391 §12.2); resolving the default here
+/// keeps that property.
+pub fn today() -> NaiveDate {
+    chrono::Local::now().date_naive()
+}
+fn unsupported(field: &str, dataset: Dataset) -> String {
+    format!(
+        "unsupported_for_dataset: {field} is not declared for dataset {}",
+        dataset.name()
+    )
 }
 fn valid_range(start_date: NaiveDate, end_date: NaiveDate) -> bool {
     start_date <= end_date
@@ -174,14 +270,30 @@ pub fn page_size(n: usize) -> Result<(), Error> {
 pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<Security>, Error> {
     let mut e = match (dataset, s) {
         (Dataset::Catalog, Selection::Catalog { .. }) => vec![],
-        (Dataset::Calendar, Selection::Market { .. }) => vec![],
+        (Dataset::Calendar | Dataset::PriceLimitRules, Selection::Market { .. }) => vec![],
         (_, Selection::Universe { .. }) => vec![],
         (
-            Dataset::Daily | Dataset::Yearly | Dataset::Index | Dataset::AdjustmentEvents,
+            Dataset::Daily
+            | Dataset::Yearly
+            | Dataset::Index
+            | Dataset::AdjustmentEvents
+            | Dataset::SecurityMaster
+            | Dataset::SecurityNames
+            | Dataset::CapitalEvents
+            | Dataset::RiskWarnings
+            | Dataset::Suspensions,
             Selection::Single { entity },
         ) => vec![entity.clone()],
         (
-            Dataset::Daily | Dataset::Yearly | Dataset::Index | Dataset::AdjustmentEvents,
+            Dataset::Daily
+            | Dataset::Yearly
+            | Dataset::Index
+            | Dataset::AdjustmentEvents
+            | Dataset::SecurityMaster
+            | Dataset::SecurityNames
+            | Dataset::CapitalEvents
+            | Dataset::RiskWarnings
+            | Dataset::Suspensions,
             Selection::Batch { entities },
         ) => entities.clone(),
         _ => return Err(invalid("invalid selection for dataset")),
@@ -189,7 +301,10 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
     if !matches!(
         (dataset, s),
         (Dataset::Catalog, Selection::Catalog { .. })
-            | (Dataset::Calendar, Selection::Market { .. })
+            | (
+                Dataset::Calendar | Dataset::PriceLimitRules,
+                Selection::Market { .. }
+            )
             | (_, Selection::Universe { .. })
     ) && (e.is_empty() || e.len() > 100)
     {
@@ -209,6 +324,10 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
 pub struct QuerySnapshot {
     pub manifest: Vec<ManifestEntry>,
     pub rows: Vec<Row>,
+    /// M2 point-in-time facts (issue-391 §12.2); `None` when the dataset
+    /// declares neither parameter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal: Option<TemporalBlock>,
 }
 pub trait ReadRepository {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error>;
@@ -216,14 +335,21 @@ pub trait ReadRepository {
     fn versions(&self, args: &VersionsQuery, access: &Access) -> Result<Vec<VersionInfo>, Error>;
     /// Members of `selection.kind=universe`, plus the concrete catalog
     /// version echoed back. `market.index` returns its static registry and an
-    /// empty label (no catalog is involved).
+    /// empty label (no catalog is involved). M2 datasets resolve the T-day
+    /// stock pool from `security_master` (issue-391 §11), using `as_of` when
+    /// the caller supplied one and the last trading day up to today otherwise.
     fn universe_members(
         &self,
         dataset: Dataset,
         catalog_version: Option<&str>,
+        as_of: Option<NaiveDate>,
+        known_at: Option<NaiveDate>,
     ) -> Result<(String, Vec<Security>), Error>;
     /// Trading days in `[start, end]`, from the derived calendar.
     fn calendar_days(&self, start: NaiveDate, end: NaiveDate) -> Result<Vec<NaiveDate>, Error>;
+    /// The last trading day on or before `day`. Used only to resolve the M2
+    /// `as_of` default (issue-391 §12.2: "today", the last trading day).
+    fn last_trading_day_upto(&self, day: NaiveDate) -> Result<NaiveDate, Error>;
 }
 #[derive(Clone)]
 struct Saved {
@@ -381,6 +507,7 @@ impl<R: ReadRepository> Queries<R> {
             next_cursor: page.next_cursor.as_deref(),
             page_complete: page.page_complete,
             limitations: &page.limitations,
+            temporal: page.temporal.as_ref(),
         };
         let mut page = match plan.args.dataset {
             Dataset::Catalog => super::columnar::catalog_table(
@@ -391,6 +518,13 @@ impl<R: ReadRepository> Queries<R> {
             ),
             Dataset::AdjustmentEvents | Dataset::Calendar => super::columnar::row_table(
                 plan.args.dataset,
+                &page.version_manifest,
+                &page.records,
+                &fields,
+                &meta,
+            ),
+            dataset if dataset.is_m2() => super::columnar::fact_table(
+                dataset,
                 &page.version_manifest,
                 &page.records,
                 &fields,
@@ -479,6 +613,7 @@ impl<R: ReadRepository> Queries<R> {
             next_cursor: None,
             page_complete: !more,
             selection_complete: true,
+            temporal: data.temporal.clone(),
             limitations: vec![
                 "fixed version selection is not a shared source acquisition time".into(),
                 "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates".into(),
@@ -506,6 +641,7 @@ impl<R: ReadRepository> Queries<R> {
             next_cursor: page.next_cursor.as_deref(),
             page_complete: page.page_complete,
             limitations: &[],
+            temporal: None,
         };
         let mut out = super::columnar::versions_table(args.dataset, &page.items, &meta);
         if let Selection::Universe {
@@ -531,9 +667,12 @@ impl<R: ReadRepository> Queries<R> {
             )));
         }
         if let Selection::Universe { catalog_version } = &mut args.selection {
-            let (resolved, members) = self
-                .repository
-                .universe_members(args.dataset, catalog_version.as_deref())?;
+            let (resolved, members) = self.repository.universe_members(
+                args.dataset,
+                catalog_version.as_deref(),
+                None,
+                None,
+            )?;
             *catalog_version = (!resolved.is_empty()).then_some(resolved);
             checked_members(args.dataset, members, access)?;
         } else {
