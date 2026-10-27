@@ -22,7 +22,7 @@ allowed-tools:
 
 1. `get_acquisition_capabilities` 使用 `contract_version:"v1"`；
    `get_data_capabilities` 按当前 schema 使用空对象 `{}`。期望
-   `x-data-acquire-v1` / `official-generation-v1` / `generic-data-v7`；不匹配 →
+   `x-data-acquire-v1` / `official-generation-v1` / `generic-data-v8`；不匹配 →
    停止并报告 `SKILL_CONTRACT_MISMATCH`。
 2. `sync_status`：报告 active generation、各 generation 生命周期状态、inflight acquisition。
 3. `get_data_availability`：报告 market.daily（可选 market.yearly）coverage/freshness/gap 事实。

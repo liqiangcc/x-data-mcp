@@ -1,7 +1,8 @@
 # generic-data-v8 部署日切换清单
 
-**状态**：计划，未执行。当前部署仍是 `generic-data-v7` / 23 data tools / compact schema 21
-（见 [STATUS](../STATUS.md)）。本文是部署日在生产主机上要做的机械切换与批准边界；
+**状态**：已执行（2026-10-27，最小切换）。当前部署为 `generic-data-v8` /
+15 data tools（`mcp.sock` 的 `ops` 入口）/ compact schema 24（见 [STATUS](../STATUS.md)）；
+research/maint 单元、隧道切换与 §2.1/§2.2/§2.6 推迟到第二阶段，见 §9。
 契约本身见 [generic-data-v8](generic-data-v8.md)。
 
 实现已合并、部署未批准的部分：`data_service --entry research|ops|maint`（缺省 `ops`）、
@@ -16,16 +17,16 @@
 
 1. **实现阶段（已完成，合并日）**：入口拆分、v2 wire、任务面 v2、`list_catalog_facets`
    已合并；`EXPECTED_DATA_TOOLS` 已是 24，`EXPECTED_DEPLOYED_DATA_TOOLS` 仍是 23。
-   **代码里的 `capability_revision` 仍是 `generic-data-v7`**——bump 与部署事实翻转是
-   同一组事实，提前 bump 会让 `check_current_facts.py` 要求把「已部署 v8」写进当前区
-   （与事实相反）。所以 bump 放在 §5 的部署日提交里，本清单之外没有别的 v8 代码改动。
+   **`capability_revision` 的 bump 与部署事实翻转是同一组事实**，提前 bump 会让
+   `check_current_facts.py` 要求把「已部署 v8」写进当前区（与事实相反）。所以 bump
+   放在 §5 的部署日提交里；本次最小切换只做这一批改动。
 2. **本清单 §3–§5（部署日）**：socket/单元/隧道 + 常量 + 文档当前区 + Skill/evals，
    同一批提交、同一次部署窗口内完成。§5 的提交**包含代码常量**，因此 CI 必须跑 Rust
    测试——它是部署日提交，不是文档 PR。
 3. **Skill 与 eval 的改动不进提前的 PR**：它们被生产日更读取，提前改会让当前 Skill 对
    仍是 v7 的生产实例报 `SKILL_CONTRACT_MISMATCH` 并停止日更。只在部署日改。
-4. **schema 依赖**：v8 的发布二进制是 `COMPACT_SCHEMA_VERSION = 23`，**不能服务 schema 21
-   库**（`src/sqlite_tasks.rs:12,43,450-465`）。所以 v8 部署必须与 M1 的归档 + 全新 init
+4. **schema 依赖**：v8 的发布二进制是 `COMPACT_SCHEMA_VERSION = 24`（M1 的 022 +
+   M2 PR-1 的 023 + M2 PR-2 的 024），**不能服务 schema 21 库**（`src/sqlite_tasks.rs`）。所以 v8 部署必须与 M1 的归档 + 全新 init
    同一窗口（[M1 部署清单](../tasks/issue-383-m1-deploy-checklist.md)），不能单独热切二进制。
 5. **批准清单**：§2 的六项阻塞、§3 的每个单元、§4 的每条隧道命令、§5 的 Skill 改动，
    逐项需 owner 明确批准。本清单只是执行步骤，不是授权。
@@ -113,7 +114,7 @@ maint 清单含 `backfill_data`/`republish_data`/`retry_task`/`cancel_task`/`ver
 
 ### 2.5 schema 23 与 M1 重建
 
-见 §0.4。部署窗口内必须：归档 schema 21 库 → 全新 init 到 23 → M1 重建 → 才有可读数据。
+见 §0.4。部署窗口内必须：归档 schema 21 库 → 全新 init 到 24（M1 的 022 + M2 PR-1 的 023 + M2 PR-2 的 024）→ M1 重建 → 才有可读数据。
 v8 不新增 migration，但发布二进制读不了旧库。
 
 ### 2.6 三个单元的常驻成本
@@ -270,3 +271,59 @@ Rust 测试由 CI 证明；部署主机上不编译。
 | B-5 | `market.daily` 是否补 `adjustment` 选项（[generic-data-v8](generic-data-v8.md) §12.2） | 研究入口只能读前复权 | 未裁决 |
 | B-6 | `metadata.adjustment` 是否补齐 `algorithm_version`/`price_scale`（§12.3） | 下游无法从响应判断精度与算法 | 未裁决 |
 | B-7 | `deploy_preview.sh` 的 `EXPECTED_TOOLS` 是否仍在用 | 部署脚本自断言 | 未核实 |
+
+## 9. 最小切换路线（2026-10-27）
+
+owner 2026-10-27 裁决：v8 先走**最小切换**，只保留现有 `x-data-mcp-data` 单元，以
+`--entry ops`（缺省）运行 `mcp.sock` 上的 15 个工具，文本模式设
+`X_DATA_MCP_TEXT_MODE=full`。本清单的完整三入口方案留作第二阶段。
+
+### 9.1 本次做
+
+1. 版本 bump 到 `v0.2.0-preview.36`，`capability_revision` 翻为 `generic-data-v8`。
+2. `scripts/check_current_facts.py` 的部署常量：`EXPECTED_DEPLOYED_DATA_TOOLS = 15`
+   （`mcp.sock` 的 `ops` 入口）、`EXPECTED_DATA_CAPABILITY_REVISION` /
+   `EXPECTED_SKILL_CAPABILITY_REVISION` = `generic-data-v8`；`REQUIRED_FACTS` 的
+   「N data tools」正则随之改为 15。
+3. 当前状态区写部署后事实：preview.36、schema 24、`generic-data-v8`、15 data tools、
+   文本模式 `full`；生产只有 `ops` 入口，research/maint 未部署；generation 与数据量
+   写「部署后重建」，实测值由部署后的单独小 PR 补入。
+4. 日更 Skill / status Skill 的 revision 断言改 v8；Skill allowlist 核对为 `ops` 的
+   15 个工具（原 allowlist 已恰好是这 15 个，无需收缩）；eval 配置与 Skill 同提交。
+5. 新增 D-53（v8 最小切换）与 D-54（SLO 第 1 行临时豁免）。
+
+### 9.2 推迟到第二阶段
+
+- `x-data-mcp-research` / `x-data-mcp-maint` 单元与 `research.sock` / `maint.sock`。
+- 隧道改指 `research.sock`。
+- Devin 实测（§2.3）。
+- §2.1 单写者租约、§2.2 maint 写工具归属、§2.6 三单元常驻成本。
+
+### 9.3 第二阶段的前提条件
+
+1. §2.1 与 §2.2 已由 owner 裁决（单进程多 socket、只读租约或分时启停三者之一）。
+2. §2.6 的三单元常驻内存实测完成并给出 `MemoryMax`。
+3. Devin 实测确认 `text=summary` 是否可作缺省；在此之前 `ops` 保持 `full`。
+4. 最小切换在 `ops` 入口上连续运行，日更 Skill 无 `SKILL_CONTRACT_MISMATCH`。
+
+### 9.5 下游 `x`（XDM-66 核对结论）
+
+XDM-66 的 4 项核对都不阻塞，`x` 只调用 `query_data`；**连接入口不变**，仍然连
+`run/mcp.sock`，该 socket 在本次部署里是 `ops` 入口（D-40）。部署后用真实实例跑一次
+`query_data` 断言，内容取 #387 上的核对评论：
+
+- `version_manifest` 长度为 1；
+- 序列 `status=present`；
+- `metadata.adjustment={confirmed, qfq}`；
+- `close` 是 6 位小数字符串。
+
+以上任一项不符即按 §7 的入口粒度回滚，不静默适配。
+
+### 9.4 与 §5.1 的冲突项（本次按最小切换执行）
+
+| 项 | §5.1 原目标 | 本次实际 | 原因 |
+|---|---|---|---|
+| `EXPECTED_DEPLOYED_DATA_TOOLS` / `REQUIRED_FACTS` | 24（三入口总注册数） | **15**（`mcp.sock` 的 `ops` 入口） | 生产只有 `ops` 入口；24 是代码注册面，不是部署面 |
+| `scripts/smoke_release.py` | 按入口断言 5/15 | dev stdio 仍断言 24；`data_service` 运行时断言 15 + v8 | 脚本未加 `--entry`，运行时入口就是 `ops` |
+| `scripts/deploy_preview.sh` `EXPECTED_TOOLS` | 在用则改为 ops 集合 | **未改** | README 已标注该脚本是 preview.11 的单 data-service 历史证据，本次部署不用它 |
+| §3 三入口单元表 | research/ops/maint 四单元 | 只 `x-data-mcp-data`（ops）+ acquire | 第二阶段 |

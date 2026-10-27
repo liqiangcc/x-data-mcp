@@ -162,7 +162,7 @@ fn real_data_stdio_discovery_queries_and_control_schema_roundtrip() {
             .iter()
             .all(|r| !r["detail"].as_str().unwrap_or_default().contains("#225"))
     );
-    assert_eq!(republish["capability_revision"], "generic-data-v7");
+    assert_eq!(republish["capability_revision"], "generic-data-v8");
     let schema = |name: &str, field: &str| -> Value {
         if field == "inputSchema" {
             return tools.iter().find(|t| t["name"] == name).unwrap()[field].clone();

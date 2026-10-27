@@ -9,13 +9,15 @@
 见 [STATUS](STATUS.md)）：
 
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
-- `x-data-mcp`：任务、版本、发布、查询、核实和计算，23 data tools（含只读
-  `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`），
-  capability revision `generic-data-v7`（market
-  单版本序列：version_id=内容 hex，latest-only）；strict Skill
-  会话遇 revision 不匹配即停止。
+- `x-data-mcp`：任务、版本、发布、查询、核实和计算，`mcp.sock` 的 `ops` 入口
+  15 data tools（含只读 `get_yearly_base_years` 与
+  `plan_market_update`/`run_market_update`），capability revision `generic-data-v8`
+  （market 单版本序列：version_id=内容 hex，latest-only），文本模式 `full`；
+  strict Skill 会话遇 revision 不匹配即停止。生产只有 `ops` 入口，
+  `research`/`maint` 入口未部署（v8 第二阶段）。
 
-已部署实例为 fresh compact schema 21；代码（main）为 schema 24（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024，未部署），
+已部署实例为 fresh compact schema 24；代码（main）同为 schema 24（M1 的 schema 22 +
+M2 PR-1 的 023 + M2 PR-2 的 024），三个入口合计注册 24 个工具；
 显式 init 的新库按代码的 schema 建立；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
 
@@ -209,7 +211,7 @@ Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目
 任何 `unknown`、`not_verified` 或 `conflict` 分支在激活前停止。正常新增交易日由 `update_data` 内部验证 raw-day prefix/chunk 和 per-security GBBQ event continuity；AI 不逐证券调用 `verify_data_gap`。
 
 v7 起全市场日更改由 `plan_market_update`/`run_market_update` 完成（步骤与失败
-路由见 [generic-data-v7](contracts/generic-data-v7.md) §7）。同一次日线 run 里，
+路由见 [generic-data-v8](contracts/generic-data-v8.md) §7）。同一次日线 run 里，
 worker 还会追加 10 个服务器内部派生 item（9 个指数基准 + 交易日历）；它们的
 item 级结果只用于报告（`entity`/`period` 为 null），不进入实体补漏清单。
 

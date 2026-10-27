@@ -6,12 +6,14 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-10-24。除标注「历史」的段落外，本文件的数值均为 2026-10-24 只读实测：
+最后核实：2026-10-27（部署日提交）。部署段按 preview.36 的部署日事实填写；部署完成后的
+live 复核与重建实测由部署记录和后续小 PR 回填。除标注「历史」的段落外，下文的部署前数值为
+2026-10-24 只读实测：
 `python3` + `sqlite3`（`file:…?mode=ro`）读 `state/preview.sqlite` 与 `generations/acquire.sqlite`、
 `systemctl show`、`journalctl`、`curl -sI`、live MCP 只读工具（`current/bin/mcp_connect <sock>` 的
 `initialize`/`tools/list`/`get_data_capabilities`/`get_data_availability`/`sync_status`）、
-`du`/`df`/`free`/`lscpu`/`stat`。数据段为 **O2 补采结束后的 17:19Z 终态**（17:26Z 复核，preview.35 切换后数据未变），
-部署段已含 2026-10-24T17:25Z 的 preview.35 切换。
+`du`/`df`/`free`/`lscpu`/`stat`。数据段为 **O2 补采结束后的 17:19Z 终态**（历史），
+部署段已含 2026-10-24T17:25Z 的 preview.35 切换（历史）。
 「推断」标记表示由实测数据推出、但没有独立测量的结论。
 
 ## 部署
@@ -24,46 +26,70 @@
 | 本机工具链 | 本机禁止本地 Rust 编译：执行 `rustc --version` 被主机策略拦截并返回「Local Rust compilation is forbidden on this host (1.9 GB RAM)」，仅允许 `cargo fmt`。因此本机工具链版本未复核；部署二进制的构建版本见「构建」行 | 实测拦截提示 |
 | 部署版本 | v0.2.0-preview.35 @ `23edeaf648049463a80d1f20584945e738f532c5` | `/opt/x-data-mcp-preview/current/manifest.json`、`readlink current`、live MCP `initialize` 返回 `serverInfo.version=0.2.0-preview.35` |
 | 部署时间 | 2026-10-24T17:25Z，二进制热切换（`current` 符号链接与两个单元的重启均在 17:25:22，新 `mcp.sock` 17:25:35）；切换用的脚本是分支 `fix/service-readiness @ d2608e7`，该就绪修复已随 #370（`8e83f22`，2026-10-24 合入 main）进入仓库：`scripts/switch_binary.sh` 的 S6 调用 `scripts/wait_service_ready.py`，默认超时 120s（`XDM_READY_TIMEOUT` 可覆盖）。本次报告 `reports/preview35-switch-20261024.json` 是切换后整理的（mtime 2026-10-24T17:30:30Z，比切换晚约 5 分钟）：内容只有 7 条 check 名称字符串（S1–S7），没有逐项证据；当时仓库内没有任何脚本能产出它（`switch_binary.sh` 自 #296 P1-3 起才写机器报告）。就绪探针 data 13,461ms、acquire 8ms；DB 未迁移未重建（schema 21，`db_bytes` 1,185,640,448 与切换前相同）。上一个部署 preview.34 @ `a77d0901…` 保留在 `releases/` 作回滚点 | 报告 JSON、`stat`/`readlink`、`journalctl -u x-data-mcp-tunnel`、`scripts/switch_binary.sh:110-129`、PR #370 |
-| 数据库 schema | 已部署：schema 21（`pragma user_version=21`）；代码：schema 24（未部署；M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`，只建表、无写入路径；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
+| 数据库 schema | 已部署：schema 24（`pragma user_version=24`，M1 部署时归档 schema 21 后全新 init）；代码：schema 24（M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`，只建表、无写入路径；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
 | 构建 | rustc 1.99.1 (58cf8f9c3 2026-10-13)，ubuntu-24.04，最低 glibc 2.39 | `current/manifest.json` |
 | 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/23edeaf…`（6 个版本目录共存，共 348MiB） | `readlink`、`du -sh releases/*` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
 | ecs-node | 服务已 stop 并 disable，数据保留为冷备（含 generation `a49c314b…` 的字节） | 同上 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `get_data_capabilities` |
 
-v7 自 preview.33 起运行；preview.34（2026-10-17T18:09Z）与 preview.35（2026-10-24T17:25Z）都是二进制热切换，数据库沿用（schema 21），部署时刻无数据重建、无契约变更（`capability_revision` 仍为 `generic-data-v7`，23/10 工具不变）。
-preview.34 上线后 `x-data-mcp-data` 连续运行 5d12h39m 直到 2026-10-23 06:49 主机重启
-（`systemctl show` 的 `Consumed … wall clock time` 与 `journalctl --list-boots` 一致）；preview.35 切换时两个单元在 17:25:22 重启。
-preview.34 那次没有落盘报告（见「已知问题」），preview.35 这次有。回滚到 preview.34 不涉及契约差异；回滚到 preview.32（v6）的已知代价：v7 运行过 plan/run 之后，v6 对 plan/run 任务的 `get_task_progress` 会报未知契约，存在被重启恢复收尾（`interrupted`）的 plan/run 任务时 v6 的 `list_tasks` 会整体失败。
+v8 最小切换（preview.36，2026-10-27 收盘后）：`x-data-mcp-data` 以 `--entry ops` 运行
+`mcp.sock` 的 15 个工具，文本模式 `X_DATA_MCP_TEXT_MODE=full`，
+`capability_revision=generic-data-v8`；库按 D-08 归档 schema 21 后全新 init 到 schema 24
+并重建。生产只有 `ops` 入口，`research`/`maint` 入口与隧道改指 `research.sock` 推迟到
+v8 第二阶段（D-53、[v8 切换清单](contracts/v8-switch-checklist.md) §9）。
+历史：v7 自 preview.33 起运行；preview.34（2026-10-17T18:09Z）与 preview.35
+（2026-10-24T17:25Z）都是二进制热切换，数据库沿用 schema 21，部署时刻无数据重建、
+无契约变更（`capability_revision` 仍为 `generic-data-v7`，工具面不变）。
+回滚到 preview.35 需二进制与 schema 21 归档库一起退（只退二进制会因 schema 不匹配
+拒绝启动）。
 
-M1 代码已全部合并、**未部署**（代码 schema 已是 24：M1 的 022 + M2 PR-1 的 023 + M2 PR-2 的 024，见上表「数据库 schema」行）：PR #389/#390/#394/#397/#400/#402/#406/#408 与修复 #416（CI 绿）。部署按 D-08（归档旧库 + 全新 init），发布包默认带 `export_research`（#413 起 `scripts/build_release.sh` 固定 `--features export`，并在打包后断言该命令存在）。部署前实测清单见 [M1 部署清单](tasks/issue-383-m1-deploy-checklist.md)；实现记录见 [M1 实现记录](tasks/issue-383-m1-implementation.md)。
+M1 已随 preview.36 部署（代码 schema 24：M1 的 022 + M2 PR-1 的 023 + M2 PR-2 的 024，
+见上表「数据库 schema」行）：PR #389/#390/#394/#397/#400/#402/#406/#408 与修复 #416。
+部署按 D-08（归档旧库 + 全新 init），发布包默认带 `export_research`（#413 起
+`scripts/build_release.sh` 固定 `--features export`，并在打包后断言该命令存在）。
+部署窗口、重建步骤与耗时见 [M1 部署清单](tasks/issue-383-m1-deploy-checklist.md) §8；
+实现记录见 [M1 实现记录](tasks/issue-383-m1-implementation.md)。
 
-M2（[#391](https://github.com/liqiangcc/x-data-mcp/issues/391)）的 PR-1 把迁移链推到 schema 23（`migrations/tasks/023_security_master.sql`），PR-2 追加 024（`migrations/tasks/024_capital_categories.sql`）把迁移链推到 schema 24：023 只建表，024 只重建 `capital_events` 以放宽 `category` CHECK（D-50 R-3 修订），都不改任何读写行为，所以部署事实仍是 schema 21；schema 22/23 的库既不会被新二进制原地改写，也不会被 024 回填（`check_schema` 直接拒绝非当前 schema）。设计见 [M2 设计](tasks/issue-391-m2-security-master.md) §9。
+M2（[#391](https://github.com/liqiangcc/x-data-mcp/issues/391)）的 PR-1 把迁移链推到
+schema 23（`migrations/tasks/023_security_master.sql`），PR-2 追加 024
+（`migrations/tasks/024_capital_categories.sql`）把迁移链推到 schema 24：023 只建表，
+024 只重建 `capital_events` 以放宽 `category` CHECK（D-50 R-3 修订），都不改任何读写行为。
+M1 重建后部署事实已是 schema 24；schema 22/23 的库既不会被新二进制原地改写，也不会被
+024 回填（`check_schema` 直接拒绝非当前 schema）。设计见
+[M2 设计](tasks/issue-391-m2-security-master.md) §9。
 
 ## 服务
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 23 | capability `generic-data-v7`（含只读 `get_yearly_base_years`）；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`） | 15 | capability `generic-data-v8`（含只读 `get_yearly_base_years`）；`X_DATA_MCP_TEXT_MODE=full`；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 设置了 `X_DATA_MCP_TDX_FETCH=current/scripts/tdx_fetch.py` |
 | `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire；`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 **120s**（2026-10-24T16:56:58Z 由 10s 改为 120s，`deadline=time.monotonic()+120`；但单元未设 `TimeoutStartSec`，systemd 默认 90s 也覆盖 `ExecStartPre`，所以实际生效上限是 **90s**），单元为 `Restart=always` / `RestartSec=10`；data 服务停止时隧道会因 stdio 子进程退出而自行退出 |
 
 访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
 
-工具数与能力版本为 2026-10-24T17:26Z（preview.35 切换后）live MCP 只读复核：data socket `tools/list` 返回 23 个工具、
-`get_data_capabilities` 返回 `capability_revision=generic-data-v7`、`active_generation_ref=c184e9c4…`；
-acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.version` 均为 `0.2.0-preview.35`。
+工具数与能力版本的 live MCP 只读复核在部署完成后回填到部署记录：`mcp.sock` 的
+`tools/list` 应返回 15 个工具，`get_data_capabilities` 应返回
+`capability_revision=generic-data-v8`；acquire socket 返回 10 个工具。
 
-代码（main）为 24 data tools（v8 PR-2，未部署）：三个入口 `research`/`ops`/`maint` 由 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联 `outputSchema`。隧道改指 `research.sock`、新增 `x-data-mcp-research`/`x-data-mcp-maint` 单元的步骤见 [v8 切换清单](contracts/v8-switch-checklist.md)（未执行）。已部署实例仍为 23 data tools、单入口。
+代码（main）注册 24 data tools：三个入口 `research`/`ops`/`maint` 由
+`data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
+`outputSchema`。生产只部署 `ops` 入口（15 个工具）；`research`/`maint` 单元与隧道
+改指 `research.sock` 的步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9
+（第二阶段）。
 
 ## 数据
 
-以下为 **2026-10-24T17:19Z 终态**（O2 补采结束后实测；17:26Z 在 preview.35 切换后复核，数据未变）；补采过程见「日更」段的 2026-10-24 时间线。
+**部署后重建**：generation、目录、日线/年线 head、任务与事件计数、DB 字节以部署完成后的
+实测为准；本节在部署后由单独小 PR 写入实测值，部署日提交不编数字。下表是部署前
+**2026-10-24T17:19Z 终态**（历史；O2 补采结束后实测，补采过程见「日更」段的 2026-10-24
+时间线），保留作对照。
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 当前 generation | `c184e9c4b816dfc068d4d6e2eaedcf5e1742ad2979b0e54be2af798b54995d91`，2026-10-24T17:01:34Z 激活（`activation_request_id=ops-20261024-act-1`，previous `9d9e38d7…`）；代目录 572,634,818 B（三个官方成员合计 572,630,763 B + 清单/决策/证据） | `generations/active-generation.json`、live `sync_status`、`du -sb`、`snapshot-manifest.json` |
-| 热 generation | **5/6**（2026-10-24T17:52Z 清理后）：1 active + 4 superseded（`9d9e38d7`、`f289c612`、`8b8614c3`、`54553656`）；另有 10 个 evidence_only。下一次 acquire 可直接受理（5 < 6）；activate 成功后 preview.35 的自动保留会退役最旧的 superseded（预期 `8b8614c3`、`54553656`），保留最新 2 个加刚被取代的前一代 | `generations/acquire.sqlite`（按 `state` 计数）、`src/acquire/service.rs:39,456,1058-1084` |
+| 部署前 generation | `c184e9c4b816dfc068d4d6e2eaedcf5e1742ad2979b0e54be2af798b54995d91`，2026-10-24T17:01:34Z 激活（`activation_request_id=ops-20261024-act-1`，previous `9d9e38d7…`）；代目录 572,634,818 B（三个官方成员合计 572,630,763 B + 清单/决策/证据） | `generations/active-generation.json`、live `sync_status`、`du -sb`、`snapshot-manifest.json` |
+| 热 generation | **5/6**（部署前 2026-10-24T17:52Z 清理后；部署后重建，实测值部署后补）：1 active + 4 superseded（`9d9e38d7`、`f289c612`、`8b8614c3`、`54553656`）；另有 10 个 evidence_only。下一次 acquire 可直接受理（5 < 6）；activate 成功后 preview.35 的自动保留会退役最旧的 superseded（预期 `8b8614c3`、`54553656`），保留最新 2 个加刚被取代的前一代 | `generations/acquire.sqlite`（按 `state` 计数）、`src/acquire/service.rs:39,456,1058-1084` |
 | 退役记录 | `87322997…` 2026-10-19 退役（经用户确认）；`2d5851a4…` 2026-10-24T16:57:16Z 退役，**退役前 548M、退役后 16K，释放约 546MB**；`a119629b…` 2026-10-24T17:52Z 退役，**退役前 574M、退役后 16K，释放约 574MB**；更早 4 个已无字节的代（84b3f15d、c360967a、2e918330、a49c314b）2026-10-13 退役为 evidence_only（只改状态，清单/决策/证据保留） | `generations/acquire.sqlite`（`updated_at`、`request_outcomes` 的 `ops-20261024-retire-2d58`/`ops-20261024-retire-a119`）、`du -sb generations/generations/*`；退役前后 `generations` 总量 3.3G→2.7G→2.1G 与两次释放一致 |
 | 数据库 | `state/preview.sqlite`，fresh compact schema 21（`pragma user_version=21`），1,185,640,448 B；WAL 0 B（17:25:22 停服务时 checkpoint）、SHM 32,768 B | `ls -l`、`pragma user_version` |
 | 目录 | 5,228 个实体（`catalog-1791873196258239513`） | `catalog_head`/`catalog_members` 只读查询、live `get_data_availability`（`record_count=5228`） |

@@ -2,7 +2,8 @@
 
 > **历史文档（JSON 文件存储时期）。** 下文的「追加一个有效 version、`get` 取最后提交记录」描述
 > 的是早期文件存储的版本记录语义。SQLite schema 20（历史）用版本链实现发布；当前部署的
-> schema 21（preview.32 起）改为每 `(实体, 周期)` 只存当前序列，`version_id` 由内容摘要派生，见 [单版本（latest-only）行情存储模型](latest-only-storage.md)。
+> schema 24（M1，2026-10-27）改为每 `(实体, 周期)` 只存当前序列，`version_id` 由内容摘要派生
+> （模型自 schema 21 / preview.32 起，历史），见 [单版本（latest-only）行情存储模型](latest-only-storage.md)。
 > 本文的原子可见性保证（rename 为唯一可见提交点）不适用于 SQLite 后端，后者以单个写事务为提交点。
 
 发布将原始候选batch与其有效version记录保存在同一个 `effective/<symbol>.<period>.qfq.json`
