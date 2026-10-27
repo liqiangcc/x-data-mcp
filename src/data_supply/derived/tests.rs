@@ -7,7 +7,10 @@ use super::*;
 fn item_specs_cover_nine_indices_then_the_calendar() {
     let generation = json!("generation-1");
     let items = item_specs(&generation);
-    assert_eq!(items.len(), index_registry::INDEX_SERIES.len() + 1);
+    assert_eq!(
+        items.len(),
+        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len()
+    );
     for (item, registration) in items.iter().zip(index_registry::INDEX_SERIES.iter()) {
         assert_eq!(
             item.item_id,
@@ -22,7 +25,7 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
         );
         assert_eq!(item.frozen_inputs[SOURCE_GENERATION_KEY], generation);
     }
-    let calendar = items.last().unwrap();
+    let calendar = &items[index_registry::INDEX_SERIES.len()];
     assert_eq!(calendar.item_id, task_control::derived::CALENDAR);
     assert_eq!(
         calendar.target,
@@ -33,6 +36,20 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
         BTreeSet::from([task_control::derived::calendar_scope()])
     );
     assert_eq!(calendar.frozen_inputs[SOURCE_GENERATION_KEY], generation);
+    // The M2 datasets follow the calendar, main table first: the suspension
+    // gaps are derived from the master this same run writes (§12.1).
+    let m2 = &items[index_registry::INDEX_SERIES.len() + 1..];
+    let ids: Vec<&str> = m2.iter().map(|item| item.item_id.as_str()).collect();
+    assert_eq!(ids, task_control::derived::DATASETS);
+    for item in m2 {
+        assert_eq!(item.target, task_control::derived::target(&item.item_id));
+        assert_eq!(item.progress_unit, PROGRESS_UNIT);
+        assert_eq!(
+            item.scope_keys,
+            BTreeSet::from([task_control::derived::dataset_scope(&item.item_id)])
+        );
+        assert_eq!(item.frozen_inputs[SOURCE_GENERATION_KEY], generation);
+    }
 }
 
 #[test]

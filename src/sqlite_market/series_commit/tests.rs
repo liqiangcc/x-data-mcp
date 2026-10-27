@@ -3380,6 +3380,7 @@ fn commit_pair_first(
         raw_bars.to_vec(),
         raw_ev,
         crate::market_data::AdjustmentEventSet::empty(SYMBOL),
+        crate::security_master::CapitalEventSet::empty(SYMBOL),
     );
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
@@ -3564,6 +3565,7 @@ fn future_event_rewrites_only_the_forward_口径() {
         raw_bars.clone(),
         raw_ev,
         crate::market_data::AdjustmentEventSet::empty(SYMBOL),
+        crate::security_master::CapitalEventSet::empty(SYMBOL),
     );
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
@@ -3662,6 +3664,7 @@ fn raw_series_follows_an_authorized_forward_rewrite() {
         changed_raw,
         raw_ev,
         crate::market_data::AdjustmentEventSet::empty(SYMBOL),
+        crate::security_master::CapitalEventSet::empty(SYMBOL),
     );
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
@@ -3806,6 +3809,7 @@ fn commit_pair_with_factors(
         raw_bars.to_vec(),
         AdjustmentEvidence::confirmed("raw", "raw .day fact"),
         factors,
+        crate::security_master::CapitalEventSet::empty(SYMBOL),
     );
     repo.tx(|c| {
         let (version_ev, binding) = put_seed_material(c);
@@ -3988,6 +3992,7 @@ fn factor_set_write_rolls_back_with_the_series_commit() {
             raw_bars.clone(),
             AdjustmentEvidence::confirmed("raw", "raw .day fact"),
             factors.clone(),
+            crate::security_master::CapitalEventSet::empty(SYMBOL),
         );
         commit_item_tx(
             c,

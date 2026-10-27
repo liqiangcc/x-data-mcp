@@ -1432,6 +1432,7 @@ fn seed_daily_pair(fixture: &Fixture) {
         raw_bars,
         AdjustmentEvidence::confirmed("raw", "raw .day fact"),
         crate::market_data::AdjustmentEventSet::empty(SYMBOL),
+        crate::security_master::CapitalEventSet::empty(SYMBOL),
     );
     let MarketBackend::Compact(repo) = &fixture.backend else {
         panic!("fixture must open the compact backend");

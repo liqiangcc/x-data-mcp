@@ -78,6 +78,114 @@ fn day_member(_code: &str, last_day: u32) -> Vec<u8> {
     .concat()
 }
 
+/// The security fixture's `.day` member. `sz.000002` misses the middle of the
+/// three calendar days, so the daily `derived:suspensions` item has exactly one
+/// bracketed single-day gap to derive (issue-391 §7.3); every other member
+/// carries all three days.
+fn fixture_day_member(code: &str, last_day: u32) -> Vec<u8> {
+    if code != "000002" {
+        return day_member(code, last_day);
+    }
+    [
+        day_record(last_day - 2, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(last_day, [1131, 1135, 1130, 1134], 0.0, 120),
+    ]
+    .concat()
+}
+
+/// The 40-field anchored `base.dbf` schema (issue-391 #399 A-5): name, dBase
+/// type, length, decimals. The production parser anchors the same table; the
+/// fixture mirrors it so a drift on either side fails the parser's length and
+/// schema checks instead of silently shifting a field.
+const BASE_DBF_FIELDS: [(&str, u8, u8, u8); 40] = [
+    ("SC", b'C', 1, 0),
+    ("GPDM", b'C', 6, 0),
+    ("GXRQ", b'N', 8, 0),
+    ("ZGB", b'N', 14, 2),
+    ("GJG", b'N', 14, 2),
+    ("FQRFRG", b'N', 14, 2),
+    ("FRG", b'N', 14, 2),
+    ("BG", b'N', 14, 2),
+    ("HG", b'N', 14, 2),
+    ("LTAG", b'N', 14, 2),
+    ("ZGG", b'N', 14, 2),
+    ("ZPG", b'N', 14, 2),
+    ("ZZC", b'N', 14, 1),
+    ("LDZC", b'N', 14, 1),
+    ("GDZC", b'N', 14, 1),
+    ("WXZC", b'N', 14, 1),
+    ("CQTZ", b'N', 14, 1),
+    ("LDFZ", b'N', 14, 1),
+    ("CQFZ", b'N', 14, 1),
+    ("ZBGJJ", b'N', 14, 1),
+    ("JZC", b'N', 14, 1),
+    ("ZYSY", b'N', 14, 1),
+    ("ZYLY", b'N', 14, 1),
+    ("QTLY", b'N', 14, 1),
+    ("YYLY", b'N', 14, 1),
+    ("TZSY", b'N', 14, 1),
+    ("BTSY", b'N', 14, 1),
+    ("YYWSZ", b'N', 14, 1),
+    ("SNSYTZ", b'N', 14, 1),
+    ("LYZE", b'N', 14, 1),
+    ("SHLY", b'N', 14, 1),
+    ("JLY", b'N', 14, 1),
+    ("WFPLY", b'N', 14, 1),
+    ("TZMGJZ", b'N', 14, 3),
+    ("DY", b'C', 3, 0),
+    ("HY", b'C', 4, 0),
+    ("ZBNB", b'N', 2, 0),
+    ("SSDATE", b'C', 8, 0),
+    ("MODIDATE", b'C', 6, 0),
+    ("GDRS", b'N', 8, 0),
+];
+
+/// A `base.dbf` with one anchored row per `(market digit, code)`. Only
+/// `SC`/`GPDM`/`SSDATE` are filled; every other field stays blank so the
+/// parser's optional-value rule decides their meaning.
+fn base_dbf(rows: &[(u8, &str, u32)]) -> Vec<u8> {
+    let header_length = 32 + BASE_DBF_FIELDS.len() * 32 + 1;
+    let record_length = 1 + BASE_DBF_FIELDS
+        .iter()
+        .map(|f| usize::from(f.2))
+        .sum::<usize>();
+    assert_eq!(header_length, 1313);
+    assert_eq!(record_length, 481);
+    let mut out = vec![0u8; header_length];
+    out[0] = 0x03;
+    out[1..4].copy_from_slice(&[124, 1, 1]);
+    out[4..8].copy_from_slice(&(rows.len() as u32).to_le_bytes());
+    out[8..10].copy_from_slice(&1313u16.to_le_bytes());
+    out[10..12].copy_from_slice(&481u16.to_le_bytes());
+    for (index, (name, field_type, length, decimals)) in BASE_DBF_FIELDS.iter().enumerate() {
+        let offset = 32 + index * 32;
+        out[offset..offset + name.len()].copy_from_slice(name.as_bytes());
+        out[offset + 11] = *field_type;
+        out[offset + 16] = *length;
+        out[offset + 17] = *decimals;
+    }
+    out[header_length - 1] = 0x0d;
+    for (market, code, ssdate) in rows {
+        let mut record = vec![b' '; record_length];
+        record[0] = b' ';
+        let write = |record: &mut Vec<u8>, offset: usize, value: &str| {
+            record[offset..offset + value.len()].copy_from_slice(value.as_bytes());
+        };
+        write(&mut record, 1, &market.to_string());
+        write(&mut record, 2, code);
+        // SSDATE is the 38th field: sum the lengths before it plus the
+        // deletion flag.
+        let ssdate_offset = 1 + BASE_DBF_FIELDS[..37]
+            .iter()
+            .map(|field| usize::from(field.2))
+            .sum::<usize>();
+        write(&mut record, ssdate_offset, &ssdate.to_string());
+        out.extend_from_slice(&record);
+    }
+    out.push(0x1a);
+    out
+}
+
 /// Minimal inspected snapshot tree (three role-bound archives). `dir` holds
 /// the generated zips and the returned manifest.
 struct Snapshot {
@@ -88,12 +196,35 @@ struct Snapshot {
 /// `include_derived = false` builds a generation that carries only the
 /// caller's members — the fixture for "a source that cannot serve the
 /// derived datasets" (internal item failure semantics, issue-383 §9.2).
-fn snapshot_with(day_members: &[(&str, &[u8])], include_derived: bool) -> Snapshot {
+fn snapshot_with(
+    day_members: &[(&str, &[u8])],
+    codes: &[(&str, &str, u32)],
+    include_derived: bool,
+) -> Snapshot {
     let dir = tempfile::tempdir().unwrap();
-    let gbbq = gbbq_member(&[gbbq_record(1, "600006", 20240101, 1)]);
+    // Category 1 is the price event (前复权); category 2 is a capital event
+    // (shares), so the entity item must write both tables from this one member
+    // (issue-391 §12.1).
+    let gbbq = gbbq_member(&[
+        gbbq_record(1, "600006", 20240101, 1),
+        gbbq_record(1, "600006", 20240102, 2),
+    ]);
+    let ssdate = day_u32(3);
+    let rows: Vec<(u8, &str, u32)> = codes
+        .iter()
+        .map(|(market, code, _)| (if *market == "sh" { 1 } else { 0 }, *code, ssdate))
+        .collect();
+    let base = base_dbf(&rows);
     write_zip(
         &dir.path().join("base.zip"),
-        &[("base.dbf", b"unused-by-daily-source".as_slice())],
+        &[
+            ("base.dbf", base.as_slice()),
+            // One arrangement row with both dates absent: the source format
+            // has no empty-file form (every row is CRLF-terminated), and an
+            // absent start/end means "no delisting arrangement", so every code
+            // keeps its TDX listing date and the exchange branch stays pending.
+            ("infoharbor_spec.cfg", b"1|600006|0||\r\n".as_slice()),
+        ],
     );
     // issue-383 §9.2: the daily plan-run task also maintains the calendar and
     // the nine benchmark indices, so every fixture generation carries those
@@ -261,7 +392,7 @@ fn rig_with(members: &[(&str, &str, u32)], include_derived: bool) -> Rig {
         .map(|(ex, code, last)| {
             (
                 format!("{ex}\\lday\\{ex}{code}.day"),
-                day_member(code, *last),
+                fixture_day_member(code, *last),
             )
         })
         .collect();
@@ -269,7 +400,7 @@ fn rig_with(members: &[(&str, &str, u32)], include_derived: bool) -> Rig {
         .iter()
         .map(|(n, b)| (n.as_str(), b.as_slice()))
         .collect();
-    let snap = snapshot_with(&refs, include_derived);
+    let snap = snapshot_with(&refs, members, include_derived);
     let source =
         x_data_mcp::official_market::TdxMarketSource::inspect(&snap.root, &snap.manifest, now())
             .unwrap();
@@ -386,11 +517,14 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
         .api
         .call("get_task_progress", json!({"task_id":task_id}))
         .unwrap();
-    // issue-383 §9.2: the run appended and executed the 10 server-internal
-    // derived items (9 indices + calendar) after the two entity items. The
-    // acceptance still reports the plan's eligible count, not the live item
-    // count — the internal items are not plan items.
-    let derived = x_data_mcp::index_registry::INDEX_SERIES.len() + 1;
+    // issue-383 §9.2 / issue-391 §12.1: the run appended and executed the
+    // server-internal derived items (9 indices + calendar + the 4 M2
+    // whole-market datasets) after the two entity items. The acceptance still
+    // reports the plan's eligible count, not the live item count — the
+    // internal items are not plan items.
+    let derived = x_data_mcp::index_registry::INDEX_SERIES.len()
+        + 1
+        + x_data_mcp::task_control::derived::DATASETS.len();
     assert_eq!(progress["finished"], 2 + derived);
     assert_eq!(progress["total"], 2 + derived);
     let task = r
@@ -471,6 +605,135 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
             .unwrap();
         assert!(events >= 2, "{entity} carries one event per 口径: {events}");
     }
+    // §12.1: each entity item also writes the gbbq capital set in the same
+    // transaction. The fixture's second gbbq record (category 2) belongs to
+    // sh.600006 only, so the other entity's set stays empty (no registration).
+    let capital: i64 = c
+        .query_row(
+            "SELECT count(*) FROM capital_events WHERE exchange='sh' AND code='600006'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(capital, 1, "one admitted capital event for sh.600006");
+    let capital_versions: i64 = c
+        .query_row(
+            "SELECT count(*) FROM derived_dataset_versions \
+             WHERE dataset_kind='capital_events' AND dataset_key='sh.600006'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(capital_versions, 1);
+    // `derived:security_master` assembled the two TDX rows from base.dbf with
+    // the exchange branch pending (A-1/A-2 not admitted).
+    let master: i64 = c
+        .query_row("SELECT count(*) FROM security_master", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(master, 2, "one interval per collected A-share code");
+    let master_version: String = c
+        .query_row(
+            "SELECT version_id FROM derived_dataset_versions \
+             WHERE dataset_kind='security_master'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(master_version.len(), 64);
+    // `derived:suspensions` derived one bracketed single-day gap for
+    // sz.000002, with the confirmed branch pending (A-3 not admitted).
+    let gaps: (String, String, i64) = c
+        .query_row(
+            "SELECT certainty,reason,missing_days FROM suspension_intervals \
+             WHERE code='000002'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        gaps,
+        ("unresolved_gap".into(), "missing_bar_no_event".into(), 1)
+    );
+    // The two pending M2 datasets wrote no rows and record the pending source
+    // on their item evidence (AC-M2-13).
+    for (table, kind) in [
+        ("risk_warning_intervals", "risk_warnings"),
+        ("price_limit_rules", "price_limit_rules"),
+    ] {
+        let rows: i64 = c
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            rows, 0,
+            "{kind} keeps zero rows while its source is pending"
+        );
+        let version: i64 = c
+            .query_row(
+                "SELECT count(*) FROM derived_dataset_versions WHERE dataset_kind=?1",
+                [kind],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            version, 0,
+            "{kind} must not register a version without rows"
+        );
+    }
+    for (id, expected_dataset) in [
+        ("derived:security_master", "security_master"),
+        ("derived:risk_warnings", "risk_warnings"),
+        ("derived:suspensions", "suspensions"),
+        ("derived:trading_rules", "price_limit_rules"),
+    ] {
+        let item = internal
+            .iter()
+            .find(|item| item.spec.item_id == id)
+            .unwrap_or_else(|| panic!("{id} item exists"));
+        let evidence = item
+            .outcome
+            .as_ref()
+            .and_then(|outcome| outcome.evidence.as_ref())
+            .unwrap_or_else(|| panic!("{id} carries evidence"));
+        assert_eq!(evidence["dataset"], id);
+        assert!(
+            evidence["elapsed_ms"].as_u64().is_some(),
+            "{id} records its elapsed time: {evidence}"
+        );
+        if matches!(id, "derived:risk_warnings" | "derived:trading_rules") {
+            assert_eq!(evidence["row_count"], 0);
+            assert_eq!(evidence["pending_sources"][0]["dataset"], expected_dataset);
+            assert!(evidence["pending_sources"][0]["source"].is_string());
+        } else {
+            // The exchange/suspension announcement source is pending, but the
+            // dataset still writes the rows its admitted TDX inputs prove.
+            assert_eq!(evidence["pending_sources"][0]["dataset"], expected_dataset);
+            assert!(
+                evidence["row_count"].as_i64().is_some_and(|n| n > 0),
+                "{id} wrote its TDX-derived rows: {evidence}"
+            );
+        }
+        if id == "derived:security_master" {
+            // §12.1 puts 简称 in the same item's write set; the name history is
+            // #308 (S-6) blocked, so the item reports it pending and writes no
+            // name row, while the TDX rows above still land.
+            assert_eq!(evidence["name_rows"], 0);
+            let pending_ids: Vec<&str> = evidence["pending_sources"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|source| source["dataset"].as_str().unwrap())
+                .collect();
+            assert!(pending_ids.contains(&"security_names"), "{pending_ids:?}");
+            let names: i64 = c
+                .query_row("SELECT count(*) FROM security_name_history", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(names, 0);
+        }
+    }
 
     // Request replay returns the original acceptance — staleness does not
     // override the request binding.
@@ -548,11 +811,22 @@ fn internal_derived_item_failure_marks_the_run_partially_failed() {
         .collect();
     assert_eq!(
         internal.len(),
-        x_data_mcp::index_registry::INDEX_SERIES.len() + 1
+        x_data_mcp::index_registry::INDEX_SERIES.len()
+            + 1
+            + x_data_mcp::task_control::derived::DATASETS.len()
     );
+    // The missing index members fail the nine index items and the calendar
+    // that reads them; the suspensions then have no calendar to bracket gaps
+    // (fail-closed, not "no suspensions"). The M2 items whose inputs *are*
+    // present still succeed: the main table assembles from base.dbf, and the
+    // two pending-source datasets write zero rows without failing the run.
+    let mut failed = Vec::new();
     for item in &internal {
         let outcome = item.outcome.as_ref().expect("internal item has an outcome");
-        assert!(!outcome.success, "{:?}", item.spec.item_id);
+        if outcome.success {
+            continue;
+        }
+        failed.push(item.spec.item_id.clone());
         assert!(
             outcome
                 .error
@@ -560,6 +834,32 @@ fn internal_derived_item_failure_marks_the_run_partially_failed() {
                 .is_some_and(|error| !error.trim().is_empty()),
             "a failed internal item carries its reason: {:?}",
             item.spec.item_id
+        );
+    }
+    let expected_failed: std::collections::BTreeSet<String> =
+        x_data_mcp::index_registry::INDEX_SERIES
+            .iter()
+            .map(|registration| x_data_mcp::task_control::derived::index(registration.entity))
+            .chain([
+                x_data_mcp::task_control::derived::CALENDAR.to_string(),
+                x_data_mcp::task_control::derived::SUSPENSIONS.to_string(),
+            ])
+            .collect();
+    let failed: std::collections::BTreeSet<String> = failed.into_iter().collect();
+    assert_eq!(failed, expected_failed);
+    let failed_len = failed.len();
+    for id in [
+        x_data_mcp::task_control::derived::SECURITY_MASTER,
+        x_data_mcp::task_control::derived::RISK_WARNINGS,
+        x_data_mcp::task_control::derived::TRADING_RULES,
+    ] {
+        let item = internal
+            .iter()
+            .find(|item| item.spec.item_id == id)
+            .unwrap_or_else(|| panic!("{id} item exists"));
+        assert!(
+            item.outcome.as_ref().is_some_and(|outcome| outcome.success),
+            "{id} must not fail for a missing index member"
         );
     }
 
@@ -570,9 +870,9 @@ fn internal_derived_item_failure_marks_the_run_partially_failed() {
         .api
         .call("get_task_progress", json!({"task_id":task_id}))
         .unwrap();
-    assert_eq!(progress["failed"], internal.len());
+    assert_eq!(progress["failed"], failed_len);
     let unfinished = progress["unfinished"].as_array().unwrap();
-    assert_eq!(unfinished.len(), internal.len());
+    assert_eq!(unfinished.len(), failed_len);
     // Golden shape: an internal item is projected by the same `ProgressItem`
     // as a security item (no new field, `reason_code` only on bounded pages).
     let expected_keys: std::collections::BTreeSet<&str> = [
