@@ -22,8 +22,9 @@
 - **私有栈**：独立 `--stack-root`，不复用生产目录；复用现有 harness
   `evidence/perf-g8/s5/s5_run.py`（写阶段驱动）与 `evidence/perf-g8/s5/startup_probe.py`
   （冷/热启动探测）。两者是 schema-21 时期的工具，`--init-subcommand init21` 现在建的是
-  **schema 23**（`COMPACT_SCHEMA_VERSION`，`src/sqlite_tasks.rs:43`：M1 的 022 加 M2 PR-1 的 023，
-  M2 的表都是空的、无写入路径）；冷启动用 `posix_fadvise(DONTNEED)` 对**私有副本**降温，不 drop 全局 page cache，
+  **schema 24**（`COMPACT_SCHEMA_VERSION`，`src/sqlite_tasks.rs:45`：M1 的 022 + M2 PR-1 的 023 +
+  M2 PR-2 的 024；M2 的表都是空的、无写入路径，024 只是把 `capital_events.category` 的取值
+  放宽到 2,3,5,7,8,9,10）；冷启动用 `posix_fadvise(DONTNEED)` 对**私有副本**降温，不 drop 全局 page cache，
   不影响生产。
 - **记录格式**：每个阶段一个 JSON（字段与 `s5_run.py` 的 phase 输出同名），加一份汇总；
   汇总里必须同时给 considered / attempted / published / no_change / failed / absent 计数
@@ -39,7 +40,7 @@
 
 ## 2. 冷启动（U-4，设计 §9.3 的风险项）
 
-1. 全量重建出 schema 23 库后（M2 PR-1 的 023 只建表、无写入路径，表是空的，不影响本节的序列数），确认序列数：`select period, count(*) from market_series group by period`。
+1. 全量重建出 schema 24 库后（M2 的 023 只建表、024 只放宽 `capital_events.category` 的 CHECK，都无写入路径，表是空的，不影响本节的序列数），确认序列数：`select period, count(*) from market_series group by period`。
    **预期**：`period=1` 10,457（5,224 不复权 + 5,224 前复权 + 9 指数）、`period=2` 5,224，
    合计 **15,681**。设计 §9.3 的"5,224 → 10,457"只数了日线，年线也参与启动检查，所以估算的
    冷启动应按 15,681 而不是 10,457 复核（本清单的差异说明）。
@@ -84,7 +85,7 @@ load average 约 6，**不是独占窗口**，按 [SLO](../SLO.md) §3 不能当
 
 | 量 | 基线/估算 | 记录 |
 |---|---|---|
-| 全量重建后的 `state/*.sqlite` | 现库 1,185,640,448 B（schema 21）；设计估算 schema 23 约 2.7GB（+745MB 不复权 +745MB 前复权 +约 7MB 因子 +日历/指数；M2 PR-1 的 023 表为空，不增字节） | `du -sb`、`pragma page_count*page_size` |
+| 全量重建后的 `state/*.sqlite` | 现库 1,185,640,448 B（schema 21）；设计估算 schema 24 约 2.7GB（+745MB 不复权 +745MB 前复权 +约 7MB 因子 +日历/指数；M2 的 023/024 表为空，不增字节） | `du -sb`、`pragma page_count*page_size` |
 | `/opt` 部署树全树 | 2026-10-24 基线 4.2GiB；估算部署后约 5.7GiB | `du -sh`（含 releases/generations/state/reports） |
 | 事件日志增速 | 10,448 行/日 → 15,672 行/日（+5,224；设计 §9.3 估 +1.8MB/日、+650MB/年） | `market_events` 行数与 `dbstat` 增量 |
 | 首采后 DB（SLO 第 4 行） | 硬门槛 ≤2.5GiB（2.684GB）；M1 设计估算库约 2.7GB ≈ 2.51GiB，**正好压线、按估算略超** | 实测 DB 字节。若超门槛，由 owner 决定改门槛还是砍体积；本清单不自行判通过 |
@@ -114,7 +115,7 @@ AC 定义见 Issue #383 的验收表。CI 只覆盖小夹具，下面这些必�
 
 ## 6. 回滚演练
 
-- 按 D-08/D-33：归档 schema 23 库，回到上一版 release（preview.35）+ 归档的 schema 21 库，确认服务可启动、
+- 按 D-08/D-33：归档 schema 24 库，回到上一版 release（preview.35）+ 归档的 schema 21 库，确认服务可启动、
   `query_data` 可读、导出命令不影响库。
 - **副本要先改成 WAL**：用 backup API 做的副本是 `journal_mode=delete`，而 preview.35 的启动检查要求 WAL
   （`src/sqlite_market/compact_runtime.rs:452-455`），直接启动会拒绝；先跑 `PRAGMA journal_mode=WAL` 再启动，
