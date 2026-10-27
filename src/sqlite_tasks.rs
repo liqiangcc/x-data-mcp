@@ -35,14 +35,22 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
 /// Schema 21 replaces the version-manifest store with latest-only
 /// `market_series`/`series_bars` + the `market_events` log
 /// (SPEC-LATEST-ONLY §1; still fresh-init only, never in-place). Schema 22
-/// makes 口径/精度 series properties (M1 PR-1, issue-383 §3) — still
-/// fresh-init only, never in-place.
-pub const COMPACT_SCHEMA_VERSION: u32 = 22;
-pub(crate) const COMPACT_MIGRATIONS: [&str; 4] = [
+/// makes 口径/精度 series properties (M1 PR-1, issue-383 §3). Schema 23 adds
+/// the M2 security-master tables and trading rules plus the extended
+/// `derived_dataset_versions` vocabulary (M2 PR-1, issue-391 §9) — structure
+/// only, no writer. Every step stays fresh-init only, never in-place: a file
+/// built by another schema revision is refused, not upgraded (D-08).
+pub const COMPACT_SCHEMA_VERSION: u32 = 23;
+/// Fixed-length array on purpose: the length is a compile-time assertion that
+/// `COMPACT_SCHEMA_VERSION == MIGRATIONS.len() + COMPACT_MIGRATIONS.len()`, and
+/// the order is asserted at open time by the positional checksum comparison in
+/// `check_schema` (a reordered or edited migration file fails closed).
+pub(crate) const COMPACT_MIGRATIONS: [&str; 5] = [
     include_str!("../migrations/tasks/019_compact_market.sql"),
     include_str!("../migrations/tasks/020_evidence_parts.sql"),
     include_str!("../migrations/tasks/021_latest_only.sql"),
     include_str!("../migrations/tasks/022_research_data.sql"),
+    include_str!("../migrations/tasks/023_security_master.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.
@@ -443,8 +451,11 @@ pub(crate) fn check_schema(c: &Connection, current: bool) -> Result<u32, Error> 
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(storage)?;
     // `current` requires a schema this binary manages end-to-end (legacy
-    // 18 or latest-only 21); otherwise any applied migration row set up
-    // through 21 stays readable, including the compact 19/20 checkpoints.
+    // 18 or the latest compact revision); otherwise any applied migration row
+    // set up through the latest revision stays readable, including the older
+    // compact 19/20 checkpoints. The same `version > COMPACT_SCHEMA_VERSION`
+    // guard is what makes an older binary refuse a newer file instead of
+    // touching it (AC-M2-14).
     let supported = version == SCHEMA_VERSION || version == COMPACT_SCHEMA_VERSION;
     if version == 0 || version > COMPACT_SCHEMA_VERSION || (current && !supported) {
         return Err(Error::StorageUnavailable(format!(

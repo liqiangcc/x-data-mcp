@@ -140,8 +140,9 @@
 
 - 部署方式不变：归档旧库，全新 init，全市场重建。**不做数据迁移**；schema 21 只出现在 fresh init 链尾。
 - 新二进制**只认 schema 21**；旧二进制遇到 schema 21 库报 unsupported schema 并 fail-closed。
-- 代码（main）已升到 **schema 22**（M1 PR-1…PR-8，issue-383 §14：口径/精度列、双序列写入、
-  因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历），尚未部署；部署中的二进制与库仍是 schema 21。
+- 代码（main）已升到 **schema 23**（M1 的 schema 22：口径/精度列、双序列写入、因子事件表与
+  派生数据集版本登记、指数序列与逐指数口径元数据、交易日历；M2 PR-1 的 023：证券主表等八张表，
+  见 §14），尚未部署；部署中的二进制与库仍是 schema 21。
 - **回滚 = 旧二进制 + 归档的 schema 20 库**（既定做法，不改变）。
 - 已部署事实不因本文改变：本文写作时生产仍是 schema 20 / preview.31（历史）；2026-10-13 起
   生产已是 schema 21（preview.32 全新 init），当前事实见 [STATUS](STATUS.md)。
@@ -199,3 +200,31 @@ M1（[#383](https://github.com/liqiangcc/x-data-mcp/issues/383)）在 schema 21 
   O(#events)。
 - **写事务**：一个日线 item 在同一事务里写不复权序列、因子集、前复权序列与两条事件
   （[M1 实现记录](tasks/issue-383-m1-implementation.md)）；未来生效事件只改前复权。
+
+## 14. schema 23（M2 PR-1：表结构，代码已合并、未部署）
+
+M2（[#391](https://github.com/liqiangcc/x-data-mcp/issues/391)）在 schema 22 的链尾追加
+`023_security_master.sql`。本章只写代码事实：生产实例仍是 schema 21，部署事实见
+[STATUS](STATUS.md)。**本迁移只建表**——没有写入路径、没有派生、没有读接口；PR-1 之后各 PR
+（TDX 解析事实、主表组装、研究读模型、规则与涨跌停、停牌、导出、日更、v8 接线）才往里写。
+
+- **八张新表**（设计 §9.2 的"七张"里第 7 项是两张规则表）：`security_master`
+  （行身份 `(exchange, code, effective_from)`，发行人是普通列）、`code_migrations`、
+  `security_name_history`、`capital_events`（`*_bits` 原始 f32 + 派生股数两套）、
+  `risk_warning_intervals`、`suspension_intervals`、`price_limit_rules`、`min_tick_rules`
+  （`023:80-274`；逐表列清单由 `src/sqlite_tasks/tests.rs:933` 的 `assert_compact_shape` 断言）。
+- **`derived_dataset_versions.dataset_kind` 重建**（`023:30-59`）：M1 PR-4 的 CHECK 是封闭集合，
+  SQLite 不能改 CHECK，所以按 022 的做法"建新表 + 原值拷贝 + 删旧表 + 改名"。新词表是旧词表的
+  严格超集（`adjustment_events`、`trading_calendar` 保留），旧行不可能被改名或丢失。
+- **生效时间与知晓时间分开**：`effective_from`/`effective_to` 是 epoch-day 整数，
+  `known_at`/`announced_at` 是 ISO8601 TEXT（公告源是秒级）。`known_at IS NULL` 表示"知晓时间
+  未知"，按时点读取必须排除并计数，不猜。
+- **规则是数据**（分离点 6）：幅度（`band_bp`，1000 = 10%）、方向、取整、最小变动单位与上市阶段
+  都在行里，`basis_ref` 记出处、`basis_status='pending'` 的行不参与派生；同一
+  `(market, board, status_class, listing_phase)` 在任一日期必须恰好命中一行，命中 0 或 2 行都
+  fail-closed。
+- **不原地升级**：`COMPACT_SCHEMA_VERSION` 由 22 提到 23（`src/sqlite_tasks.rs:43`），
+  `check_schema` 只接受 legacy 18 与当前 compact schema，所以 schema 22 的库被拒绝而不是被改写；
+  旧二进制遇 schema 23 走同一条 `version > COMPACT_SCHEMA_VERSION` 拒绝分支（AC-M2-14）。
+  迁移链长度由 `[&str; 5]` 与 `COMPACT_SCHEMA_VERSION` 的一致性测试断言，顺序由
+  `schema_migrations` 的逐位摘要比较断言。

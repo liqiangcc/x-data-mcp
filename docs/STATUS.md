@@ -24,7 +24,7 @@
 | 本机工具链 | 本机禁止本地 Rust 编译：执行 `rustc --version` 被主机策略拦截并返回「Local Rust compilation is forbidden on this host (1.9 GB RAM)」，仅允许 `cargo fmt`。因此本机工具链版本未复核；部署二进制的构建版本见「构建」行 | 实测拦截提示 |
 | 部署版本 | v0.2.0-preview.35 @ `23edeaf648049463a80d1f20584945e738f532c5` | `/opt/x-data-mcp-preview/current/manifest.json`、`readlink current`、live MCP `initialize` 返回 `serverInfo.version=0.2.0-preview.35` |
 | 部署时间 | 2026-10-24T17:25Z，二进制热切换（`current` 符号链接与两个单元的重启均在 17:25:22，新 `mcp.sock` 17:25:35）；切换用的脚本是分支 `fix/service-readiness @ d2608e7`，该就绪修复已随 #370（`8e83f22`，2026-10-24 合入 main）进入仓库：`scripts/switch_binary.sh` 的 S6 调用 `scripts/wait_service_ready.py`，默认超时 120s（`XDM_READY_TIMEOUT` 可覆盖）。本次报告 `reports/preview35-switch-20261024.json` 是切换后整理的（mtime 2026-10-24T17:30:30Z，比切换晚约 5 分钟）：内容只有 7 条 check 名称字符串（S1–S7），没有逐项证据；当时仓库内没有任何脚本能产出它（`switch_binary.sh` 自 #296 P1-3 起才写机器报告）。就绪探针 data 13,461ms、acquire 8ms；DB 未迁移未重建（schema 21，`db_bytes` 1,185,640,448 与切换前相同）。上一个部署 preview.34 @ `a77d0901…` 保留在 `releases/` 作回滚点 | 报告 JSON、`stat`/`readlink`、`journalctl -u x-data-mcp-tunnel`、`scripts/switch_binary.sh:110-129`、PR #370 |
-| 数据库 schema | 已部署：schema 21（`pragma user_version=21`）；代码：schema 22（未部署；M1 PR-1…PR-8 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14 |
+| 数据库 schema | 已部署：schema 21（`pragma user_version=21`）；代码：schema 23（未部署；M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`，只建表、无写入路径） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
 | 构建 | rustc 1.99.1 (58cf8f9c3 2026-10-13)，ubuntu-24.04，最低 glibc 2.39 | `current/manifest.json` |
 | 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/23edeaf…`（6 个版本目录共存，共 348MiB） | `readlink`、`du -sh releases/*` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
@@ -37,6 +37,8 @@ preview.34 上线后 `x-data-mcp-data` 连续运行 5d12h39m 直到 2026-10-23 0
 preview.34 那次没有落盘报告（见「已知问题」），preview.35 这次有。回滚到 preview.34 不涉及契约差异；回滚到 preview.32（v6）的已知代价：v7 运行过 plan/run 之后，v6 对 plan/run 任务的 `get_task_progress` 会报未知契约，存在被重启恢复收尾（`interrupted`）的 plan/run 任务时 v6 的 `list_tasks` 会整体失败。
 
 M1（schema 22）代码已全部合并、**未部署**：PR #389/#390/#394/#397/#400/#402/#406/#408（CI 绿）。部署按 D-08（归档旧库 + 全新 init），发布包暂不含 `export_research`（`scripts/build_release.sh` 未加 `--features export`，属 owner 批准项）。部署前实测清单见 [M1 部署清单](tasks/issue-383-m1-deploy-checklist.md)；实现记录见 [M1 实现记录](tasks/issue-383-m1-implementation.md)。
+
+M2（[#391](https://github.com/liqiangcc/x-data-mcp/issues/391)）的 PR-1 把迁移链推到 schema 23（`migrations/tasks/023_security_master.sql`）：只建表、不写数据、不改任何读写行为，所以部署事实仍是 schema 21；schema 22 的库既不会被新二进制原地改写，也不会被 023 回填（`check_schema` 直接拒绝非当前 schema）。设计见 [M2 设计](tasks/issue-391-m2-security-master.md) §9。
 
 ## 服务
 
