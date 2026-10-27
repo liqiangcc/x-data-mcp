@@ -39,6 +39,7 @@ fn tdx(
         arrangement_end: to,
         listing_conflict: false,
         delisting_conflict: false,
+        known_at: None,
     }
 }
 
@@ -486,7 +487,7 @@ fn a_listing_without_a_date_is_unresolved_not_a_guessed_interval() {
 }
 
 #[test]
-fn the_digest_is_stable_and_covers_migrations_and_flags() {
+fn the_digest_is_stable_and_covers_migrations_flags_and_known_at() {
     let facts = vec![tdx(Exchange::Sz, "000001", day(1991, 4, 3), None)];
     let digest = assembly_digest(&facts, &[]);
     assert_eq!(digest, assembly_digest(&facts, &[]));
@@ -507,4 +508,10 @@ fn the_digest_is_stable_and_covers_migrations_and_flags() {
     let mut changed = facts.clone();
     changed[0].listing_conflict = true;
     assert_ne!(digest, assembly_digest(&changed, &[]));
+
+    // `known_at` is a stored column, so two otherwise identical datasets whose
+    // 知晓时间 differs must not share an identity.
+    let mut dated = facts.clone();
+    dated[0].known_at = Some(day(2025, 2, 17));
+    assert_ne!(digest, assembly_digest(&dated, &[]));
 }

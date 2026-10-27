@@ -369,11 +369,162 @@ pub struct SecurityLifecycleFact {
     pub arrangement_end: Option<NaiveDate>,
     pub listing_conflict: bool,
     pub delisting_conflict: bool,
+    /// The 知晓时间 of this interval. None of the sources admitted so far
+    /// carries an announcement day, so the writer stores NULL (§4.2: the
+    /// exchange snapshot's date is evidence, never a `known_at`). The column
+    /// exists because the row-level filter is part of the read model (§12.2).
+    pub known_at: Option<NaiveDate>,
 }
 
 impl SecurityLifecycleFact {
     pub fn entity(&self) -> String {
         format!("{}.{}", self.exchange.as_str(), self.code)
+    }
+}
+
+/// The risk-warning vocabulary of §6.3 (the #308 Stage C list, not a second
+/// one). `Suspended` is part of the vocabulary for #308 alignment; M2 never
+/// writes a suspension row here (suspensions live in `suspension_intervals`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RiskStatus {
+    Normal,
+    OtherRiskWarning,
+    DelistingRiskWarning,
+    DelistingArrangement,
+    TerminatedOrDelisted,
+    Suspended,
+    MarkerOnlyUnresolved,
+    Unknown,
+}
+
+impl RiskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::OtherRiskWarning => "other_risk_warning",
+            Self::DelistingRiskWarning => "delisting_risk_warning",
+            Self::DelistingArrangement => "delisting_arrangement",
+            Self::TerminatedOrDelisted => "terminated_or_delisted",
+            Self::Suspended => "suspended",
+            Self::MarkerOnlyUnresolved => "marker_only_unresolved",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "normal" => Self::Normal,
+            "other_risk_warning" => Self::OtherRiskWarning,
+            "delisting_risk_warning" => Self::DelistingRiskWarning,
+            "delisting_arrangement" => Self::DelistingArrangement,
+            "terminated_or_delisted" => Self::TerminatedOrDelisted,
+            "suspended" => Self::Suspended,
+            "marker_only_unresolved" => Self::MarkerOnlyUnresolved,
+            "unknown" => Self::Unknown,
+            _ => return None,
+        })
+    }
+}
+
+/// One `risk_warning_intervals` row (§6.3). `announced_at` is the publisher's
+/// announcement time, `known_at` the earliest time the consumer could have
+/// known; both are kept apart because only the latter bounds a point-in-time
+/// query. Production rows require #308.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RiskWarningInterval {
+    pub exchange: Exchange,
+    pub code: String,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub raw_status_code: String,
+    pub status: RiskStatus,
+    pub announced_at: Option<String>,
+    pub known_at: Option<NaiveDate>,
+    pub source_kind: String,
+}
+
+impl RiskWarningInterval {
+    pub fn entity(&self) -> String {
+        format!("{}.{}", self.exchange.as_str(), self.code)
+    }
+}
+
+/// `suspension_intervals.certainty` (§7.3): `confirmed` needs an admitted
+/// announcement or GP29 event; `unresolved_gap` is derived and only says "no
+/// bar, reason unknown" — it never means `suspended` (AC-M2-8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SuspensionCertainty {
+    Confirmed,
+    UnresolvedGap,
+}
+
+impl SuspensionCertainty {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Confirmed => "confirmed",
+            Self::UnresolvedGap => "unresolved_gap",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "confirmed" => Some(Self::Confirmed),
+            "unresolved_gap" => Some(Self::UnresolvedGap),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SuspensionReason {
+    ExchangeAnnouncement,
+    Gp29Resume,
+    MissingBarNoEvent,
+}
+
+impl SuspensionReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ExchangeAnnouncement => "exchange_announcement",
+            Self::Gp29Resume => "gp29_resume",
+            Self::MissingBarNoEvent => "missing_bar_no_event",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "exchange_announcement" => Some(Self::ExchangeAnnouncement),
+            "gp29_resume" => Some(Self::Gp29Resume),
+            "missing_bar_no_event" => Some(Self::MissingBarNoEvent),
+            _ => None,
+        }
+    }
+}
+
+/// One `suspension_intervals` row (§7.3). `end_day` is inclusive, so the
+/// interval covers `[start_day, end_day]` (the DDL requires
+/// `end_day >= start_day`); `missing_days` counts the missing trading days.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuspensionInterval {
+    pub exchange: Exchange,
+    pub code: String,
+    pub start_day: NaiveDate,
+    pub end_day: NaiveDate,
+    pub certainty: SuspensionCertainty,
+    pub missing_days: i64,
+    pub reason: SuspensionReason,
+    pub known_at: Option<NaiveDate>,
+    pub source_kind: String,
+    pub source_record_id: Option<String>,
+}
+
+impl SuspensionInterval {
+    pub fn entity(&self) -> String {
+        format!("{}.{}", self.exchange.as_str(), self.code)
+    }
+
+    pub fn covers(&self, day: NaiveDate) -> bool {
+        self.start_day <= day && day <= self.end_day
     }
 }
 

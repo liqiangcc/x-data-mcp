@@ -100,6 +100,7 @@ fn fact(
         issuer_resolution: IssuerResolution::CodeDate,
         listing_conflict: false,
         delisting_conflict: false,
+        known_at: None,
     }
 }
 
@@ -582,6 +583,7 @@ fn replace_master_writes_the_assembled_dataset_and_registers_a_version() {
         arrangement_end: None,
         listing_conflict: true,
         delisting_conflict: false,
+        known_at: None,
     };
     let later = SecurityLifecycleFact {
         exchange: Exchange::Sh,
@@ -603,6 +605,7 @@ fn replace_master_writes_the_assembled_dataset_and_registers_a_version() {
         arrangement_end: None,
         listing_conflict: true,
         delisting_conflict: false,
+        known_at: None,
     };
     let migration = CodeMigrationFact {
         from_exchange: Exchange::Sz,
@@ -713,4 +716,36 @@ fn replace_master_rejects_an_empty_assembly() {
     };
     assert!(replace_security_master(&c, &empty, binding, "t", "i").is_err());
     assert!(read_security_master(&c).unwrap().is_empty());
+}
+
+#[test]
+fn known_at_round_trips_as_a_day_and_stays_null_without_a_source() {
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let mut dated = fact(Exchange::Sh, "600001", day(1999, 11, 10), None);
+    dated.known_at = Some(day(2025, 2, 15));
+    let undated = fact(Exchange::Sh, "600002", day(1999, 11, 10), None);
+    upsert_security_master(&c, &[dated, undated], binding, "task-1", "item-1").unwrap();
+
+    let stored = read_security_master(&c).unwrap();
+    assert_eq!(stored[0].known_at, Some(day(2025, 2, 15)));
+    assert_eq!(stored[1].known_at, None);
+    let text: Option<String> = c
+        .query_row(
+            "SELECT known_at FROM security_master WHERE exchange='sh' AND code='600001'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(text.as_deref(), Some("2025-02-15"));
+
+    // The column keeps the source's ISO8601 text; the read model promises day
+    // granularity only (§6.2), so a timestamp is truncated, never rejected.
+    c.execute(
+        "UPDATE security_master SET known_at='2025-02-15T09:30:00+08:00' WHERE code='600002'",
+        [],
+    )
+    .unwrap();
+    let stored = read_security_master(&c).unwrap();
+    assert_eq!(stored[1].known_at, Some(day(2025, 2, 15)));
 }
