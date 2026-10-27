@@ -673,7 +673,7 @@ fn replace_master_writes_the_assembled_dataset_and_registers_a_version() {
     assert_eq!(evidence["confirmed_migration_count"], 1);
     assert_eq!(evidence["candidate_migration_count"], 0);
     assert_eq!(evidence["listing_conflict_count"], 2);
-    assert_eq!(evidence["ambiguous_code_reuse_count"], 0);
+    assert_eq!(evidence["ambiguous_code_reuse_count"], 1);
     assert_eq!(evidence["conflicts"][0]["kind"], "listing_date");
     assert_eq!(evidence["pending_sources"][0]["source"], "exchange_list");
     assert_eq!(evidence["known_at"], "unknown");

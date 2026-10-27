@@ -663,7 +663,12 @@ fn split_subject_change(
     }
 
     let mut earlier = if exchange_is_earlier {
-        exchange_row(listing, listing_date)
+        let mut row = exchange_row(listing, listing_date);
+        // The exchange issuer key names the current subject, which is the
+        // later row; the old subject is code-dated.
+        row.issuer_key = None;
+        row.issuer_resolution = IssuerResolution::CodeDate;
+        row
     } else {
         // The TDX interval is the earlier one. Its arrangement/delisting
         // belongs to the current subject, which is the later row, so clear it
@@ -675,7 +680,8 @@ fn split_subject_change(
         row.delisting_date_tdx = None;
         row.delisting_source = DelistingSource::Unknown;
         row.delisting_reason_class = DelistingReason::Unknown;
-        row.issuer_resolution = IssuerResolution::Ambiguous;
+        row.issuer_key = None;
+        row.issuer_resolution = IssuerResolution::CodeDate;
         row
     };
     earlier.effective_to = Some(later_date);
@@ -684,15 +690,21 @@ fn split_subject_change(
     let mut later = if exchange_is_earlier {
         let mut row = tdx_row;
         row.instrument_class = listing.instrument_class;
-        row.issuer_key = listing.issuer_key.clone();
+        if listing.issuer_key.is_some() {
+            row.issuer_key = listing.issuer_key.clone();
+        }
         row.b_listing_date = listing.b_listing_date;
         row.issuer_resolution = IssuerResolution::Ambiguous;
         row
     } else {
         let mut row = exchange_row(listing, listing_date);
+        if row.issuer_key.is_none() {
+            row.issuer_key = tdx_row.issuer_key.clone();
+        }
         // The TDX `SSDATE` is the subject's listing day, which still describes
         // the current subject even when the code itself listed later.
         row.listing_date_tdx = Some(tdx_row.effective_from);
+        row.issuer_resolution = IssuerResolution::Ambiguous;
         row
     };
     later.effective_from = later_date;
