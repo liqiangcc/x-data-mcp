@@ -458,7 +458,7 @@ impl Fixture {
                 task_id: "task-calendar",
                 item_id: "derived:calendar",
                 generation_id: "gen-1",
-                generation_manifest_sha256: "fixture",
+                generation_manifest_sha256: &"0f".repeat(32),
                 generation_evidence: &json!({"generation_id": "gen-1"}),
             },
         )
