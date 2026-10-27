@@ -122,20 +122,40 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
 
 dataset 矩阵（实现已核）：
 
-| dataset | selection.kind | filter.kind | version.kind | v2 layout | 备注 |
-|---|---|---|---|---|---|
-| `securities.catalog` | `catalog`（`scope:"current_sh_sz_a"`） | `catalog`（`code`/`name_query`/`industry_code` 可选） | `latest_per_entity` 或 `catalog_version` | `table` | 无实体行键 |
-| `market.daily` | `single`/`batch`/`universe` | `daily`/`cross_section` | `latest_per_entity`/`explicit_version_map` | `panel`/`cross_section` | 只读**前复权**序列（§12） |
-| `market.yearly` | `single`/`batch`（`universe` 被归一化层拒绝） | `yearly` | `latest_per_entity`/`explicit_version_map` | `panel` | 本地自然年派生 |
-| `market.index` | `single`/`batch`/`universe` | `daily`/`cross_section` | `latest_per_entity`/`explicit_version_map` | `panel`/`cross_section` | 指数基准；`universe` 来自静态登记（9 条），不回显 `catalog_version` |
-| `market.adjustment_events` | `single`/`batch`/`universe` | `daily`（生效日区间） | `latest_per_entity`/`explicit_version_map` | `table` | `known_at` 不输出 |
-| `market.calendar` | `market`（无实体） | `daily`（区间） | `latest_per_entity` | `table` | market 级，无 `entities` |
+| dataset | selection.kind | filter.kind | version.kind | v2 layout | `temporal`（`as_of` / `known_at` / `known_at_coverage`） | 备注 |
+|---|---|---|---|---|---|---|
+| `securities.catalog` | `catalog`（`scope:"current_sh_sz_a"`） | `catalog`（`code`/`name_query`/`industry_code` 可选） | `latest_per_entity` 或 `catalog_version` | `table` | `false` / `false` / `none` | 无实体行键 |
+| `market.daily` | `single`/`batch`/`universe` | `daily`/`cross_section` | `latest_per_entity`/`explicit_version_map` | `panel`/`cross_section` | `false` / `false` / `none` | 只读**前复权**序列（§12） |
+| `market.yearly` | `single`/`batch`（`universe` 被归一化层拒绝） | `yearly` | `latest_per_entity`/`explicit_version_map` | `panel` | `false` / `false` / `none` | 本地自然年派生 |
+| `market.index` | `single`/`batch`/`universe` | `daily`/`cross_section` | `latest_per_entity`/`explicit_version_map` | `panel`/`cross_section` | `false` / `false` / `none` | 指数基准；`universe` 来自静态登记（9 条），不回显 `catalog_version` |
+| `market.adjustment_events` | `single`/`batch`/`universe` | `daily`（生效日区间） | `latest_per_entity`/`explicit_version_map` | `table` | `false` / `false` / `none` | `known_at` 不输出 |
+| `market.calendar` | `market`（无实体） | `daily`（区间） | `latest_per_entity` | `table` | `false` / `false` / `none` | market 级，无 `entities` |
+| `market.security_master` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 行身份 `(exchange, code, effective_from)`；未登记版本 → `absent` |
+| `market.security_names` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 简称历史；未登记版本 → `absent` |
+| `market.capital_events` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity`/`explicit_version_map` | `table` | `true` / `false` / `none` | 股本事件；行无知晓时间；未登记版本 → `absent` |
+| `market.risk_warnings` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 历史 ST/\*ST；#308 未准入不出行 |
+| `market.suspensions` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | `unresolved_gap` 区间；未登记版本 → `absent` |
+| `market.price_limit_rules` | `market`（无实体） | `daily`（区间） | `latest_per_entity` | `table` | `true` / `false` / `none` | 按生效日期管理的规则；未登记版本 → `absent` |
 
-`market.index`/`market.adjustment_events`/`market.calendar` 是 v2-only：`contract_version:"v1"`
-请求 → `invalid_arguments`（`<dataset> requires contract_version v2`，`src/data_supply/query.rs:34-38,527-533`）。
+`market.index`/`market.adjustment_events`/`market.calendar` 以及上表 6 个 M2 数据集都是 v2-only：
+`contract_version:"v1"` 请求 → `invalid_arguments`（`<dataset> requires contract_version v2`，
+`src/data_supply/query.rs:34-38,527-533`）。
+
 v1 请求带 `fields`、`selection.kind=universe|market` 或 `filter.kind=cross_section` 同样拒绝
 （`src/data_supply/query.rs:30-51`）——不静默忽略。
 
+M2 的 `temporal` 声明由 `Dataset::temporal()` 唯一给出（`src/data_supply/wire.rs:127-146`），
+在 detailed `get_data_capabilities` 的每个 dataset 条目上发布；`as_of`/`known_at` 只在其声明为
+`true` 时被接受，且只有 `query_data`/`get_data_availability` 消费（`src/data_supply/wire/normalize.rs:68,110-145`）。
+`known_at` 是信息集上界（先应用），`as_of` 是记录集日（后应用）；`partial` 表示部分行有知晓时间，
+NULL 行被排除并在 `temporal.unknown_known_at_rows` 计数，`none` 的数据集在
+`temporal.datasets_without_known_at[]` 具名（`src/sqlite_supply/m2.rs:88-160`）。
+
+M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含 `security_names` 尚无写入器、
+`risk_warnings`/`suspensions` 来源未准入）→ `manifest.status=absent`、0 行**，不服务无版本数据
+（`src/sqlite_supply/m2.rs:73-82,498-506`）。历史 ST/\*ST 以 #308 Final Gate 为前提；#308 未准入时
+`market.risk_warnings` **不出行**，不用当前名称推断历史。`market.universe` 不是新 dataset：它是
+`selection.kind=universe` + `filter.as_of`（或 pinned `catalog_version`，二者互斥）。
 `selection.kind=universe`：服务端解析目录版本（缺省 `latest`），把**具体版本 id** 回显到
 `catalog_version`；`market.index` 的成员来自 `src/index_registry.rs:131` 的 9 条登记。
 `selection.kind=market` 只用于 `market.calendar`（`src/data_supply/wire.rs:166-192`）。
@@ -168,6 +188,7 @@ v1 请求带 `fields`、`selection.kind=universe|market` 或 `filter.kind=cross_
 | `metadata` | 共享元数据（§4.4） |
 | `catalog_version` | `universe` 解析出的目录版本（仅查询类工具） |
 | `tasks`、`limitations`（顶层） | 仅 `get_data_availability`：相关任务对象共享一次 |
+| `temporal` | M2 数据集：`as_of`、`known_at`（可 `null`）、`unknown_known_at_rows`、`datasets_without_known_at[]`（`src/sqlite_supply/m2.rs:88-103`） |
 
 ### 4.3 三种布局
 

@@ -502,11 +502,16 @@ D-29 说「MCP 的 `export_data` 放进 v8 一起设计」。本设计的设计�
 
 | 入口 | 工具数 | 今天 desc+input | 今天含 outputSchema | 描述瘦身（≤240 B） | 新增入参 | v8 预算（含 name/键） |
 |---|---|---|---|---|---|---|
-| research | 5 | 9,225 | 24,280 | −506 → 8,719 | +1,000（`universe`/`cross_section`/`fields`/`market`）+480（facets） | **≤11,000** |
-| ops | 15 | 28,674 | 84,028 | −3,729 → 24,945 | +1,100 | **≤27,500** |
+| research | 5 | 9,225 | 24,280 | −506 → 8,719 | +1,000（`universe`/`cross_section`/`fields`/`market`）+480（facets） | **≤11,700** |
+| ops | 15 | 28,674 | 84,028 | −3,729 → 24,945 | +1,100 | **≤28,400** |
 | maint | 9 | 14,615 | 33,297 | −1,667 → 12,948 | 0 | **≤14,500** |
 | acquire | 10 | 5,385 | 6,040 | 0（不改） | 0 | **6,040（不变）** |
 
+- **2026-10-27 上调（仅 research/ops）**：M2 PR-9 给共享 `Dataset` 枚举增加了 6 个值
+  （`market.security_master`/`security_names`/`capital_events`/`risk_warnings`/`suspensions`/
+  `price_limit_rules`），每个使用该枚举的 inputSchema 都随之增长；实测 research **11,511 B**、
+  ops **28,220 B**（maint 不含 dataset 枚举，仍 13,493 B，预算不变），故将上限改为 11,700 / 28,400。
+  审核接受（Claude，2026-10-27），理由是新增数据集带来的面增长；其他原因不得上调。
 - 预算按**线上 compact JSON**（`serde_json` 无空格）计，含 `name`/键名（约 +60 B/工具）。
 - 预算由 Rust 集成测试断言（`tests/mcp/v8_tool_surface.rs`）：对三个入口分别序列化 `tools/list`，
   `assert!(bytes <= budget)`，失败时打印实际字节与超出的工具名。
