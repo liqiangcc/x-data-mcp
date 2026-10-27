@@ -465,7 +465,7 @@ impl Fixture {
                     crate::compact_market::epoch_day(window[0]),
                     raw,
                     status.as_str(),
-                    binding.as_slice()
+                    risk_evidence.as_slice()
                 ],
             )
             .unwrap();
