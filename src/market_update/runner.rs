@@ -25,15 +25,55 @@ pub struct CombinedCandidate {
 /// materializing the whole batch (private-stack run peaked ~969MB
 /// during `prepare_batch.base_reads` before this).
 pub(crate) const EXEC_CHUNK: usize = 100;
-/// Parallel preparation workers for `run_items_parallel`. Preparation is
-/// I/O-heavy (snapshot member reads + base reads) while exactly one thread
-/// commits, so a small fixed pool overlaps both without multiplying the
-/// prepared working set beyond `workers * EXEC_CHUNK` items.
-fn prepare_workers() -> usize {
+/// Parallel preparation worker override (XDM-64 review). `1` is the
+/// operator rollback switch: `run_items_parallel` then takes the original
+/// sequential `run_items` path. Unset keeps the CPU-derived clamp below.
+pub const PREPARE_WORKERS_ENV: &str = "X_DATA_MCP_RUN_PREPARE_WORKERS";
+/// Upper bound for the override. Four is the largest pool whose conservative
+/// full-history bound (see `prepare_workers_from_env`) is 1.8 GiB on the
+/// 1.9 GiB host, so larger values are a wiring error instead of an accepted
+/// unbounded memory risk; the production 2-vCPU host defaults to 2 workers.
+const PREPARE_WORKERS_MAX: usize = 4;
+fn default_prepare_workers() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
-        .clamp(2, 4)
+        .clamp(2, PREPARE_WORKERS_MAX)
+}
+/// Parse the operator override once per process. The service binary calls
+/// this at startup so a bad value refuses to boot; the runner re-reads it so
+/// library/test callers fail closed instead of silently using a default.
+///
+/// Memory bound for the default pool (conservative, full-history case):
+/// a `Bar` is ~128 B (four `Decimal`s plus two `Option<Decimal>`s), one
+/// entity's two materialized sequences (不复权 + 前复权) are
+/// `8,000 * 2 * 128 B ≈ 2.0 MiB`, and one `EXEC_CHUNK = 100` chunk is
+/// `≈ 200 MiB`. `run_items_parallel` keeps at most one chunk queued per
+/// worker (`sync_channel(1)`), one being prepared per worker, and one being
+/// committed by the caller: `2*workers + 1` chunks. On the 2-vCPU production
+/// host the default is 2 workers → `5 * 200 MiB ≈ 1.0 GiB`; the 4-worker
+/// ceiling is `9 * 200 MiB ≈ 1.8 GiB`. That is the conservative worst case:
+/// prepared `UpdateBatchItem`s normally retain only the range/tail rather
+/// than both full sequences, and the override lets an operator lower the
+/// pool (or set `1`) on a memory-constrained host.
+pub fn prepare_workers_from_env() -> Result<usize, String> {
+    match std::env::var(PREPARE_WORKERS_ENV) {
+        Ok(value) => {
+            let workers: usize = value.parse().map_err(|_| {
+                format!("{PREPARE_WORKERS_ENV} must be an integer in 1..={PREPARE_WORKERS_MAX}")
+            })?;
+            if !(1..=PREPARE_WORKERS_MAX).contains(&workers) {
+                return Err(format!(
+                    "{PREPARE_WORKERS_ENV} must be an integer in 1..={PREPARE_WORKERS_MAX}"
+                ));
+            }
+            Ok(workers)
+        }
+        Err(std::env::VarError::NotPresent) => Ok(default_prepare_workers()),
+        Err(std::env::VarError::NotUnicode(_)) => Err(format!(
+            "{PREPARE_WORKERS_ENV} must be an integer in 1..={PREPARE_WORKERS_MAX}"
+        )),
+    }
 }
 pub struct Acquisition {
     pub batch: MarketDataBatch,
@@ -356,6 +396,12 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         R: Send,
     {
         let _total = crate::stage_trace::span("daily.run_items.total.parallel");
+        let workers = prepare_workers_from_env().map_err(Error::Invalid)?;
+        // `1` is the operationally documented rollback to the exact
+        // pre-XDM-64 sequential path: no fork, no worker threads.
+        if workers == 1 {
+            return self.run_items(task_id, item_ids, provider);
+        }
         if item_ids.is_empty() {
             return Ok(Some(()));
         }
@@ -363,7 +409,7 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         if chunk_count == 1 {
             return self.run_items(task_id, item_ids, provider);
         }
-        let workers = prepare_workers().min(chunk_count - 1);
+        let workers = workers.min(chunk_count - 1);
         let mut forks = Vec::with_capacity(workers);
         for _ in 0..workers {
             let Some(fork) = provider.fork() else {

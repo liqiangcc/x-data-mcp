@@ -304,6 +304,33 @@ fn snapshot_with(
 
 /// Env mutation is process-global; serialize all env-installed source tests.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// Restores `X_DATA_MCP_RUN_PREPARE_WORKERS` after a test that overrides the
+/// preparation-pool size.
+struct PrepareWorkersEnv(Option<std::ffi::OsString>);
+impl PrepareWorkersEnv {
+    fn set(value: Option<&str>) -> Self {
+        let key = x_data_mcp::market_update::runner::PREPARE_WORKERS_ENV;
+        let previous = std::env::var_os(key);
+        unsafe {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        Self(previous)
+    }
+}
+impl Drop for PrepareWorkersEnv {
+    fn drop(&mut self) {
+        let key = x_data_mcp::market_update::runner::PREPARE_WORKERS_ENV;
+        unsafe {
+            match &self.0 {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
 /// Counts `UPDATE tasks` statements on the compact writer connection —
 /// the regression signature of PLANRUN-COMMIT-COST (the pre-fix path
 /// wrote the `frozen_work_json`-sized task row ~2× per item).
@@ -1555,6 +1582,7 @@ struct ParallelUnchangedProvider {
     typed_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    forks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 impl x_data_mcp::market_update::runner::RangeProvider for ParallelUnchangedProvider {
     fn acquire(
@@ -1600,6 +1628,7 @@ impl x_data_mcp::market_update::runner::RangeProvider for ParallelUnchangedProvi
     fn fork(
         &self,
     ) -> Option<Box<dyn x_data_mcp::market_update::runner::RangeProvider + Send + '_>> {
+        self.forks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Some(Box::new(self.clone()))
     }
 }
@@ -1984,12 +2013,14 @@ fn run_items_commits_update_batch_in_bounded_chunks() {
 #[test]
 fn run_items_parallel_prepares_chunks_concurrently() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = PrepareWorkersEnv::set(None);
     let r = rig(&[("sh", "600006", day_u32(1))]);
     let (task_id, item_ids) = run_task_with_members(&r, 250);
     let provider = ParallelUnchangedProvider {
         typed_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        forks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let runner = x_data_mcp::market_update::runner::RangeRunner {
         repository: r.backend.clone(),
@@ -2012,6 +2043,10 @@ fn run_items_parallel_prepares_chunks_concurrently() {
             >= 2,
         "at least two preparation workers must overlap"
     );
+    assert!(
+        provider.forks.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+        "the parallel path must fork one provider per worker"
+    );
     let task = r.tasks.read_task(&task_id).unwrap().unwrap();
     assert!(task.task.status.terminal());
     assert!(
@@ -2019,6 +2054,120 @@ fn run_items_parallel_prepares_chunks_concurrently() {
             .iter()
             .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
         "parallel execution must produce the same successful outcomes"
+    );
+}
+
+#[test]
+fn run_items_parallel_worker_override_one_is_sequential() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = PrepareWorkersEnv::set(Some("1"));
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 250);
+    let sequential = rig(&[("sh", "600006", day_u32(1))]);
+    let (sequential_task, sequential_ids) = run_task_with_members(&sequential, 250);
+    assert_eq!(item_ids, sequential_ids);
+    let provider = ParallelUnchangedProvider {
+        typed_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        forks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    };
+    let runner = x_data_mcp::market_update::runner::RangeRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+    };
+    runner
+        .run_items_parallel(&task_id, &item_ids, &provider)
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    assert_eq!(
+        provider
+            .typed_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        250
+    );
+    assert_eq!(
+        provider
+            .max_active
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "X_DATA_MCP_RUN_PREPARE_WORKERS=1 must not prepare concurrently"
+    );
+    assert_eq!(
+        provider.forks.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the rollback switch must take run_items without forking"
+    );
+    // Reference: the same task through the unchanged sequential entry on an
+    // identically seeded rig. Receipt version ids differ by task-bound
+    // digests, so compare the durable outcome shape and the presence of a
+    // receipt per item.
+    let sequential_runner = x_data_mcp::market_update::runner::RangeRunner {
+        repository: sequential.backend.clone(),
+        run_id: "run".into(),
+    };
+    sequential_runner
+        .run_items(
+            &sequential_task,
+            &sequential_ids,
+            &UnchangedProvider {
+                typed_calls: std::cell::Cell::new(0),
+            },
+        )
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    let reference = sequential
+        .tasks
+        .read_task(&sequential_task)
+        .unwrap()
+        .unwrap();
+    assert!(task.task.status.terminal());
+    for (item, expected) in task.items.iter().zip(reference.items.iter()) {
+        assert_eq!(item.spec.item_id, expected.spec.item_id);
+        assert_eq!(
+            item.outcome
+                .as_ref()
+                .and_then(|o| o.evidence.as_ref())
+                .and_then(|e| e.get("result_kind")),
+            expected
+                .outcome
+                .as_ref()
+                .and_then(|o| o.evidence.as_ref())
+                .and_then(|e| e.get("result_kind"))
+        );
+        assert!(item.outcome.as_ref().is_some_and(|o| o.success));
+        assert!(
+            r.backend
+                .item_receipt(&task_id, &item.spec.item_id)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            sequential
+                .backend
+                .item_receipt(&sequential_task, &item.spec.item_id)
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[test]
+fn run_prepare_workers_env_rejects_invalid_values() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    for value in ["0", "5", "many", ""] {
+        let _env = PrepareWorkersEnv::set(Some(value));
+        assert!(
+            x_data_mcp::market_update::runner::prepare_workers_from_env().is_err(),
+            "{value:?} must be rejected"
+        );
+    }
+    let _env = PrepareWorkersEnv::set(None);
+    let workers = x_data_mcp::market_update::runner::prepare_workers_from_env().unwrap();
+    assert!(
+        (2..=4).contains(&workers),
+        "the unset default must stay in 2..=4, got {workers}"
     );
 }
 
