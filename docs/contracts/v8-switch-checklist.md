@@ -25,8 +25,8 @@ research/maint 单元、隧道切换与 §2.1/§2.2/§2.6 推迟到第二阶段�
    测试——它是部署日提交，不是文档 PR。
 3. **Skill 与 eval 的改动不进提前的 PR**：它们被生产日更读取，提前改会让当前 Skill 对
    仍是 v7 的生产实例报 `SKILL_CONTRACT_MISMATCH` 并停止日更。只在部署日改。
-4. **schema 依赖**：v8 的发布二进制是 `COMPACT_SCHEMA_VERSION = 24`，**不能服务 schema 21
-   库**（`src/sqlite_tasks.rs`）。所以 v8 部署必须与 M1 的归档 + 全新 init
+4. **schema 依赖**：v8 的发布二进制是 `COMPACT_SCHEMA_VERSION = 24`（M1 的 022 +
+   M2 PR-1 的 023 + M2 PR-2 的 024），**不能服务 schema 21 库**（`src/sqlite_tasks.rs`）。所以 v8 部署必须与 M1 的归档 + 全新 init
    同一窗口（[M1 部署清单](../tasks/issue-383-m1-deploy-checklist.md)），不能单独热切二进制。
 5. **批准清单**：§2 的六项阻塞、§3 的每个单元、§4 的每条隧道命令、§5 的 Skill 改动，
    逐项需 owner 明确批准。本清单只是执行步骤，不是授权。
@@ -114,7 +114,7 @@ maint 清单含 `backfill_data`/`republish_data`/`retry_task`/`cancel_task`/`ver
 
 ### 2.5 schema 23 与 M1 重建
 
-见 §0.4。部署窗口内必须：归档 schema 21 库 → 全新 init 到 24 → M1 重建 → 才有可读数据。
+见 §0.4。部署窗口内必须：归档 schema 21 库 → 全新 init 到 24（M1 的 022 + M2 PR-1 的 023 + M2 PR-2 的 024）→ M1 重建 → 才有可读数据。
 v8 不新增 migration，但发布二进制读不了旧库。
 
 ### 2.6 三个单元的常驻成本
@@ -305,6 +305,19 @@ owner 2026-10-27 裁决：v8 先走**最小切换**，只保留现有 `x-data-mc
 2. §2.6 的三单元常驻内存实测完成并给出 `MemoryMax`。
 3. Devin 实测确认 `text=summary` 是否可作缺省；在此之前 `ops` 保持 `full`。
 4. 最小切换在 `ops` 入口上连续运行，日更 Skill 无 `SKILL_CONTRACT_MISMATCH`。
+
+### 9.5 下游 `x`（XDM-66 核对结论）
+
+XDM-66 的 4 项核对都不阻塞，`x` 只调用 `query_data`；**连接入口不变**，仍然连
+`run/mcp.sock`，该 socket 在本次部署里是 `ops` 入口（D-40）。部署后用真实实例跑一次
+`query_data` 断言，内容取 #387 上的核对评论：
+
+- `version_manifest` 长度为 1；
+- 序列 `status=present`；
+- `metadata.adjustment={confirmed, qfq}`；
+- `close` 是 6 位小数字符串。
+
+以上任一项不符即按 §7 的入口粒度回滚，不静默适配。
 
 ### 9.4 与 §5.1 的冲突项（本次按最小切换执行）
 
