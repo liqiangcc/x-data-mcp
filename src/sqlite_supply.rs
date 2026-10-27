@@ -7,7 +7,7 @@ use crate::{
         VerifyCtx, backend::MarketBackend, read_record, read_record_slim, slim_published,
     },
 };
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 mod m2;
 #[derive(Clone)]
@@ -361,7 +361,8 @@ impl ReadRepository for SqliteSupply {
                 if let Some(known_at) = known_at {
                     request = request.with_known_at(known_at);
                 }
-                let answer = crate::research::universe::universe(c, &request)?;
+                let answer = crate::research::universe::universe(c, &request)
+                    .map_err(|error| Error::Storage(error.to_string()))?;
                 let members = answer
                     .members
                     .iter()
@@ -1994,7 +1995,7 @@ fn verify_versions_conn(
             .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
             derived_reference(r.dataset, None, &registration)
         } else if r.dataset.is_m2() {
-            m2::version_ref(c, r)?
+            m2::version_ref(c, &r)?
         } else {
             let entity = r
                 .entity
@@ -2083,7 +2084,7 @@ fn verify_versions_meta_conn(
                 .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
                 derived_reference(r.dataset, None, &registration)
             } else if r.dataset.is_m2() {
-                m2::version_ref(c, r)?
+                m2::version_ref(c, &r)?
             } else {
                 let entity = r
                     .entity

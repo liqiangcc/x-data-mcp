@@ -77,7 +77,7 @@ fn manifest(
     coverage_reason: &str,
 ) -> Result<ManifestEntry, Error> {
     let Some(registration) = registration(c, dataset, entity)? else {
-        return Ok(super::absent(entity.cloned()));
+        return Ok(super::absent(entity));
     };
     derived_manifest(dataset, entity, &registration, coverage_reason)
 }
@@ -502,7 +502,7 @@ fn derived_or_absent(
     coverage_reason: &str,
 ) -> Result<ManifestEntry, Error> {
     let Some(registration) = registration else {
-        return Ok(super::absent(entity.cloned()));
+        return Ok(super::absent(entity));
     };
     derived_manifest(dataset, entity, registration, coverage_reason)
 }
@@ -570,7 +570,7 @@ pub(super) fn versions(
 /// `get_data_availability` facts for one entity, derived from the same
 /// snapshot `query` returned (one read for the whole selection).
 pub(super) fn stats(snapshot: &QuerySnapshot, entity: Option<&Security>) -> AvailabilityStats {
-    let mut days = snapshot.rows.iter().filter_map(|row| {
+    let days = snapshot.rows.iter().filter_map(|row| {
         let Row::Fact {
             entity: row_entity,
             day,
