@@ -222,6 +222,87 @@ pub fn universe(c: &Connection, request: &UniverseRequest) -> Result<Universe, E
     })
 }
 
+/// One member interval as a whole, not a per-day verdict: what
+/// `universe_intervals.parquet` carries (§12.4).
+///
+/// The span is the part of a `security_master` interval where the member rule
+/// can hold at all — bounded by the listing and delisting dates, in the same
+/// order §11.1 applies them. Day-level exclusions are deliberately **not**
+/// materialised here: `known_at`, `strict` and migrations are answered per
+/// day by [`universe`]/[`member_state`], and folding them into an interval
+/// would claim a precision the data does not have (a `known_at` filter can
+/// remove a day in the middle of a span, and a candidate migration creates an
+/// overlapping copy rather than a hole).
+///
+/// `basis` says what proved the start: a listing date, or the first stored bar
+/// when the listing date is unknown (§11.1's fallback). An interval with
+/// neither cannot be a member at any day and is omitted, not exported as a
+/// zero-length span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberInterval {
+    pub entity: String,
+    pub member_from: NaiveDate,
+    pub member_to: Option<NaiveDate>,
+    pub basis: MembershipBasis,
+    pub flags: Vec<MemberFlag>,
+}
+
+/// Every member interval this database defines (§12.4 `universe_intervals`).
+///
+/// Ordered by entity then `member_from`, so the export is deterministic. The
+/// rows are A-share intervals only: a reserved `instrument_class` is not in the
+/// universe today, and this file does not pretend otherwise.
+pub fn member_intervals(c: &Connection) -> Result<Vec<MemberInterval>, Error> {
+    let rows = security::read_security_master(c).map_err(Error::from)?;
+    let spans = series::raw_daily_spans(c).map_err(Error::from)?;
+    let mut intervals = Vec::new();
+    for row in &rows {
+        if row.instrument_class != 0 {
+            continue;
+        }
+        let entity = row.entity();
+        let (start, basis) = match row.listing_date {
+            Some(listing) if listing > row.effective_from => {
+                (listing, MembershipBasis::ListingDate)
+            }
+            Some(_) => (row.effective_from, MembershipBasis::ListingDate),
+            None => match spans.get(&entity) {
+                Some(span) if span.first_day > row.effective_from => {
+                    (span.first_day, MembershipBasis::BarEvidence)
+                }
+                Some(_) => (row.effective_from, MembershipBasis::BarEvidence),
+                None => continue,
+            },
+        };
+        let end = match (row.effective_to, row.delisting_date) {
+            (Some(to), Some(delisting)) => Some(to.min(delisting)),
+            (Some(to), None) => Some(to),
+            (None, Some(delisting)) => Some(delisting),
+            (None, None) => None,
+        };
+        if end.is_some_and(|end| end <= start) {
+            continue;
+        }
+        let mut flags = Vec::new();
+        if row.issuer_resolution == IssuerResolution::Ambiguous {
+            flags.push(MemberFlag::AmbiguousIssuer);
+        }
+        intervals.push(MemberInterval {
+            entity,
+            member_from: start,
+            member_to: end,
+            basis,
+            flags,
+        });
+    }
+    intervals.sort_by(|left, right| {
+        left.entity
+            .cmp(&right.entity)
+            .then(left.member_from.cmp(&right.member_from))
+    });
+    Ok(intervals)
+}
+
 /// One code's state at `as_of` (separation point 7's atomic capability).
 ///
 /// When a code has more than one interval (code reuse), the answer is the

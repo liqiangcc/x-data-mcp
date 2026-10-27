@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 use parquet::basic::Compression as ParquetCompression;
 use parquet::data_type::{
-    ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type, Int64Type,
+    BoolType, ByteArray, ByteArrayType, FixedLenByteArray, FixedLenByteArrayType, Int32Type,
+    Int64Type,
 };
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
@@ -36,8 +37,11 @@ use rusqlite::Connection;
 use super::export::Compression;
 use super::read::{self, BarRow, FactorRow};
 use super::{
-    CALENDAR_FILE, DAILY_QFQ_FILE, DAILY_RAW_FILE, Error, FACTORS_FILE, FileStat, INDEX_FILE,
-    SeriesEntry, SnapshotPlan,
+    CALENDAR_FILE, CAPITAL_EVENTS_COLUMNS, CAPITAL_EVENTS_FILE, DAILY_QFQ_FILE, DAILY_RAW_FILE,
+    Error, FACTORS_FILE, FileStat, INDEX_FILE, PRICE_LIMIT_RULES_COLUMNS, PRICE_LIMIT_RULES_FILE,
+    RISK_WARNINGS_COLUMNS, RISK_WARNINGS_FILE, SECURITY_MASTER_COLUMNS, SECURITY_MASTER_FILE,
+    SECURITY_NAMES_COLUMNS, SECURITY_NAMES_FILE, SUSPENSIONS_COLUMNS, SUSPENSIONS_FILE,
+    SeriesEntry, SnapshotPlan, UNIVERSE_INTERVALS_COLUMNS, UNIVERSE_INTERVALS_FILE,
 };
 use crate::market_data::{Adjustment, INSTRUMENT_CLASS_STOCK};
 
@@ -908,6 +912,596 @@ fn write_index(
     file_stat(path, INDEX_FILE, rows)
 }
 
+// ---------------------------------------------------------------------------
+// M2 security-master files (§12.4)
+// ---------------------------------------------------------------------------
+//
+// These seven tables are small (5k–200k rows) and already materialised by the
+// read model, so the writer is one generic encoder instead of seven batching
+// types: a row is a `Vec<Option<Cell>>` and the column's [`ColumnType`] says how
+// to write it. The schema string, the manifest's column list and the type list
+// are three views of the same contract; `m2_schemas_match_the_columns` parses
+// every schema and compares all three (AC-M2-11 "新文件列类型"), so a column
+// cannot be added to one view and forgotten in another.
+
+const SECURITY_MASTER_SCHEMA: &str = "
+message security_master {
+  REQUIRED BINARY exchange (STRING);
+  REQUIRED BINARY code (STRING);
+  REQUIRED INT32 effective_from (DATE);
+  OPTIONAL INT32 effective_to (DATE);
+  REQUIRED INT32 instrument_class (INTEGER(8,true));
+  OPTIONAL BINARY issuer_key (STRING);
+  REQUIRED BINARY issuer_resolution (STRING);
+  OPTIONAL INT32 listing_date (DATE);
+  REQUIRED BINARY listing_source (STRING);
+  OPTIONAL INT32 delisting_date (DATE);
+  REQUIRED BINARY delisting_source (STRING);
+  OPTIONAL INT32 arrangement_start (DATE);
+  OPTIONAL INT32 arrangement_end (DATE);
+  OPTIONAL INT32 known_at (DATE);
+  REQUIRED BINARY flags (STRING);
+}";
+
+const SECURITY_NAMES_SCHEMA: &str = "
+message security_names {
+  REQUIRED BINARY exchange (STRING);
+  REQUIRED BINARY code (STRING);
+  REQUIRED INT32 effective_from (DATE);
+  OPTIONAL INT32 effective_to (DATE);
+  REQUIRED BINARY name (STRING);
+  REQUIRED BINARY certainty (STRING);
+  OPTIONAL INT32 known_at (DATE);
+  REQUIRED BINARY source_kind (STRING);
+}";
+
+const CAPITAL_EVENTS_SCHEMA: &str = "
+message capital_events {
+  REQUIRED BINARY exchange (STRING);
+  REQUIRED BINARY code (STRING);
+  REQUIRED INT64 ordinal;
+  REQUIRED INT32 effective_day (DATE);
+  REQUIRED INT32 category (INTEGER(8,true));
+  REQUIRED INT64 float_after;
+  REQUIRED INT64 total_after;
+  OPTIONAL INT32 known_at (DATE);
+  REQUIRED BOOLEAN suspicious;
+}";
+
+const RISK_WARNINGS_SCHEMA: &str = "
+message risk_warnings {
+  REQUIRED BINARY exchange (STRING);
+  REQUIRED BINARY code (STRING);
+  REQUIRED INT32 effective_from (DATE);
+  OPTIONAL INT32 effective_to (DATE);
+  REQUIRED BINARY normalized_status (STRING);
+  REQUIRED BINARY raw_status_code (STRING);
+  OPTIONAL BINARY announced_at (STRING);
+  OPTIONAL INT32 known_at (DATE);
+  REQUIRED BINARY source_kind (STRING);
+}";
+
+const SUSPENSIONS_SCHEMA: &str = "
+message suspensions {
+  REQUIRED BINARY exchange (STRING);
+  REQUIRED BINARY code (STRING);
+  REQUIRED INT32 start_day (DATE);
+  REQUIRED INT32 end_day (DATE);
+  REQUIRED BINARY certainty (STRING);
+  REQUIRED INT32 missing_days;
+  REQUIRED BINARY reason (STRING);
+  OPTIONAL INT32 known_at (DATE);
+}";
+
+const PRICE_LIMIT_RULES_SCHEMA: &str = "
+message price_limit_rules {
+  REQUIRED BINARY rule_id (STRING);
+  REQUIRED BINARY market (STRING);
+  REQUIRED BINARY board (STRING);
+  REQUIRED BINARY status_class (STRING);
+  REQUIRED BINARY listing_phase (STRING);
+  OPTIONAL INT64 band_bp;
+  REQUIRED BINARY band_side (STRING);
+  REQUIRED BINARY rounding (STRING);
+  REQUIRED INT32 effective_from (DATE);
+  OPTIONAL INT32 effective_to (DATE);
+  REQUIRED BINARY basis_ref (STRING);
+  REQUIRED BINARY basis_status (STRING);
+}";
+
+const UNIVERSE_INTERVALS_SCHEMA: &str = "
+message universe_intervals {
+  REQUIRED BINARY entity (STRING);
+  REQUIRED INT32 member_from (DATE);
+  OPTIONAL INT32 member_to (DATE);
+  REQUIRED BINARY basis (STRING);
+  REQUIRED BINARY flags (STRING);
+}";
+
+/// The physical type of one exported column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ColumnType {
+    Text,
+    TextOpt,
+    Date,
+    DateOpt,
+    Int8,
+    Int32,
+    Int64,
+    Int64Opt,
+    Bool,
+}
+
+impl ColumnType {
+    fn is_optional(self) -> bool {
+        matches!(self, Self::TextOpt | Self::DateOpt | Self::Int64Opt)
+    }
+}
+
+/// One column's cells for one file. The encoder rejects a cell whose variant
+/// does not match [`ColumnType`], so a row built with the wrong field fails
+/// closed instead of writing a plausible-looking wrong file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Cell {
+    Text(String),
+    Date(chrono::NaiveDate),
+    Int8(i64),
+    Int64(i64),
+    Bool(bool),
+}
+
+type Row = Vec<Option<Cell>>;
+
+struct TableSpec {
+    path: &'static str,
+    columns: &'static [&'static str],
+    types: &'static [ColumnType],
+    schema: &'static str,
+}
+
+const SECURITY_MASTER_SPEC: TableSpec = TableSpec {
+    path: SECURITY_MASTER_FILE,
+    columns: SECURITY_MASTER_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::DateOpt,
+        ColumnType::Int8,
+        ColumnType::TextOpt,
+        ColumnType::Text,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+        ColumnType::DateOpt,
+        ColumnType::DateOpt,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+    ],
+    schema: SECURITY_MASTER_SCHEMA,
+};
+
+const SECURITY_NAMES_SPEC: TableSpec = TableSpec {
+    path: SECURITY_NAMES_FILE,
+    columns: SECURITY_NAMES_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+    ],
+    schema: SECURITY_NAMES_SCHEMA,
+};
+
+const CAPITAL_EVENTS_SPEC: TableSpec = TableSpec {
+    path: CAPITAL_EVENTS_FILE,
+    columns: CAPITAL_EVENTS_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Int64,
+        ColumnType::Date,
+        ColumnType::Int8,
+        ColumnType::Int64,
+        ColumnType::Int64,
+        ColumnType::DateOpt,
+        ColumnType::Bool,
+    ],
+    schema: CAPITAL_EVENTS_SCHEMA,
+};
+
+const RISK_WARNINGS_SPEC: TableSpec = TableSpec {
+    path: RISK_WARNINGS_FILE,
+    columns: RISK_WARNINGS_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::TextOpt,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+    ],
+    schema: RISK_WARNINGS_SCHEMA,
+};
+
+const SUSPENSIONS_SPEC: TableSpec = TableSpec {
+    path: SUSPENSIONS_FILE,
+    columns: SUSPENSIONS_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::Date,
+        ColumnType::Text,
+        ColumnType::Int32,
+        ColumnType::Text,
+        ColumnType::DateOpt,
+    ],
+    schema: SUSPENSIONS_SCHEMA,
+};
+
+const PRICE_LIMIT_RULES_SPEC: TableSpec = TableSpec {
+    path: PRICE_LIMIT_RULES_FILE,
+    columns: PRICE_LIMIT_RULES_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Int64Opt,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+        ColumnType::Text,
+    ],
+    schema: PRICE_LIMIT_RULES_SCHEMA,
+};
+
+const UNIVERSE_INTERVALS_SPEC: TableSpec = TableSpec {
+    path: UNIVERSE_INTERVALS_FILE,
+    columns: UNIVERSE_INTERVALS_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::DateOpt,
+        ColumnType::Text,
+        ColumnType::Text,
+    ],
+    schema: UNIVERSE_INTERVALS_SCHEMA,
+};
+
+fn text(value: impl Into<String>) -> Option<Cell> {
+    Some(Cell::Text(value.into()))
+}
+
+fn opt_text(value: Option<impl Into<String>>) -> Option<Cell> {
+    value.map(|value| Cell::Text(value.into()))
+}
+
+fn date(value: chrono::NaiveDate) -> Option<Cell> {
+    Some(Cell::Date(value))
+}
+
+fn opt_date(value: Option<chrono::NaiveDate>) -> Option<Cell> {
+    value.map(Cell::Date)
+}
+
+fn join_flags(flags: &[&str]) -> Option<Cell> {
+    text(flags.join(","))
+}
+
+fn write_column(
+    column: &mut parquet::file::writer::SerializedColumnWriter<'_>,
+    kind: ColumnType,
+    cells: &[Option<Cell>],
+    name: &str,
+) -> Result<(), Error> {
+    let mut texts: Vec<ByteArray> = Vec::new();
+    let mut ints: Vec<i32> = Vec::new();
+    let mut longs: Vec<i64> = Vec::new();
+    let mut bools: Vec<bool> = Vec::new();
+    let mut defs: Vec<i16> = Vec::with_capacity(cells.len());
+    let mismatch = || Error::Integrity(format!("{name}: cell type does not match the schema"));
+    for cell in cells {
+        match (kind, cell) {
+            (ColumnType::Text | ColumnType::TextOpt, Some(Cell::Text(value))) => {
+                texts.push(ByteArray::from(value.as_bytes().to_vec()));
+                defs.push(1);
+            }
+            (ColumnType::Text | ColumnType::TextOpt, None) => defs.push(0),
+            (ColumnType::Date, Some(Cell::Date(value))) => {
+                ints.push(i32_value(compact_day(*value))?);
+                defs.push(1);
+            }
+            (ColumnType::Date, None) => return Err(mismatch()),
+            (ColumnType::DateOpt, Some(Cell::Date(value))) => {
+                ints.push(i32_value(compact_day(*value))?);
+                defs.push(1);
+            }
+            (ColumnType::DateOpt, None) => defs.push(0),
+            (ColumnType::Int8, Some(Cell::Int8(value))) => {
+                ints.push(i32_value(*value)?);
+                defs.push(0);
+            }
+            (ColumnType::Int32, Some(Cell::Int64(value))) => {
+                ints.push(i32_value(*value)?);
+                defs.push(0);
+            }
+            (ColumnType::Int8 | ColumnType::Int32, None) => return Err(mismatch()),
+            (ColumnType::Int64, Some(Cell::Int64(value))) => {
+                longs.push(*value);
+                defs.push(0);
+            }
+            (ColumnType::Int64Opt, Some(Cell::Int64(value))) => {
+                longs.push(*value);
+                defs.push(1);
+            }
+            (ColumnType::Int64Opt, None) => defs.push(0),
+            (ColumnType::Int64, None) => return Err(mismatch()),
+            (ColumnType::Bool, Some(Cell::Bool(value))) => {
+                bools.push(*value);
+                defs.push(0);
+            }
+            (ColumnType::Bool, None) => return Err(mismatch()),
+            (_, Some(_)) => return Err(mismatch()),
+        }
+    }
+    let levels = kind.is_optional().then_some(defs.as_slice());
+    match kind {
+        ColumnType::Text | ColumnType::TextOpt => column
+            .typed::<ByteArrayType>()
+            .write_batch(&texts, levels, None)
+            .map_err(parquet_error)?,
+        ColumnType::Date | ColumnType::DateOpt | ColumnType::Int8 | ColumnType::Int32 => column
+            .typed::<Int32Type>()
+            .write_batch(&ints, levels, None)
+            .map_err(parquet_error)?,
+        ColumnType::Int64 | ColumnType::Int64Opt => column
+            .typed::<Int64Type>()
+            .write_batch(&longs, levels, None)
+            .map_err(parquet_error)?,
+        ColumnType::Bool => column
+            .typed::<BoolType>()
+            .write_batch(&bools, levels, None)
+            .map_err(parquet_error)?,
+    }
+    column.close().map_err(parquet_error)?;
+    Ok(())
+}
+
+/// Encode one table (§12.4). `rows` are already ordered by the caller.
+fn write_table(
+    path: &Path,
+    spec: &TableSpec,
+    rows: &[Row],
+    compression: Compression,
+    row_group_rows: usize,
+) -> Result<FileStat, Error> {
+    if rows.iter().any(|row| row.len() != spec.columns.len()) {
+        return Err(Error::Integrity(format!(
+            "{}: a row does not have {} columns",
+            spec.path,
+            spec.columns.len()
+        )));
+    }
+    let mut writer = start(path, spec.schema, compression, row_group_rows)?;
+    for chunk in rows.chunks(row_group_rows.max(1)) {
+        let mut group = writer.next_row_group().map_err(parquet_error)?;
+        for (index, name) in spec.columns.iter().enumerate() {
+            let mut column = group
+                .next_column()
+                .map_err(parquet_error)?
+                .ok_or_else(|| Error::Parquet(format!("{}: missing {name}", spec.path)))?;
+            let cells: Vec<Option<Cell>> = chunk.iter().map(|row| row[index].clone()).collect();
+            write_column(&mut column, spec.types[index], &cells, name)?;
+        }
+        group.close().map_err(parquet_error)?;
+    }
+    writer.close().map_err(parquet_error)?;
+    file_stat(path, spec.path, rows.len() as i64)
+}
+
+fn security_master_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::security_master_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let mut flags: Vec<&str> = Vec::new();
+            if row.listing_conflict {
+                flags.push("listing_conflict");
+            }
+            if row.delisting_conflict {
+                flags.push("delisting_conflict");
+            }
+            if row.listing_date.is_none() {
+                flags.push("listing_unknown");
+            }
+            if row.delisting_date.is_none() {
+                flags.push("delisting_unknown");
+            }
+            if row.issuer_key.is_none() {
+                flags.push("issuer_key_unknown");
+            }
+            vec![
+                text(row.exchange.as_str()),
+                text(row.code),
+                date(row.effective_from),
+                opt_date(row.effective_to),
+                Some(Cell::Int8(i64::from(row.instrument_class))),
+                opt_text(row.issuer_key),
+                text(row.issuer_resolution.as_str()),
+                opt_date(row.listing_date),
+                text(row.listing_source.as_str()),
+                opt_date(row.delisting_date),
+                text(row.delisting_source.as_str()),
+                opt_date(row.arrangement_start),
+                opt_date(row.arrangement_end),
+                opt_date(row.known_at),
+                join_flags(&flags),
+            ]
+        })
+        .collect())
+}
+
+fn security_name_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::security_name_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                text(row.exchange),
+                text(row.code),
+                date(row.effective_from),
+                opt_date(row.effective_to),
+                text(row.name),
+                text(row.certainty),
+                opt_date(row.known_at),
+                text(row.source_kind),
+            ]
+        })
+        .collect())
+}
+
+fn capital_event_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::capital_event_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|(entity, event)| {
+            let (exchange, code) = entity.split_once('.').unwrap_or((entity.as_str(), ""));
+            vec![
+                text(exchange),
+                text(code),
+                Some(Cell::Int64(event.ordinal)),
+                date(event.effective_day),
+                Some(Cell::Int8(i64::from(event.category))),
+                Some(Cell::Int64(event.float_after)),
+                Some(Cell::Int64(event.total_after)),
+                opt_date(event.known_at),
+                Some(Cell::Bool(event.suspicious)),
+            ]
+        })
+        .collect())
+}
+
+fn risk_warning_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::risk_warning_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                text(row.exchange.as_str()),
+                text(row.code),
+                date(row.effective_from),
+                opt_date(row.effective_to),
+                text(row.status.as_str()),
+                text(row.raw_status_code),
+                opt_text(row.announced_at),
+                opt_date(row.known_at),
+                text(row.source_kind),
+            ]
+        })
+        .collect())
+}
+
+fn suspension_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::suspension_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                text(row.exchange.as_str()),
+                text(row.code),
+                date(row.start_day),
+                date(row.end_day),
+                text(row.certainty.as_str()),
+                Some(Cell::Int64(row.missing_days)),
+                text(row.reason.as_str()),
+                opt_date(row.known_at),
+            ]
+        })
+        .collect())
+}
+
+fn price_limit_rule_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::price_limit_rule_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                text(row.rule_id),
+                text(row.market.as_str()),
+                text(row.board.as_str()),
+                text(row.status_class.as_str()),
+                text(row.listing_phase.as_str()),
+                row.band_bp.map(Cell::Int64),
+                text(row.band_side.as_str()),
+                text(row.rounding.as_str()),
+                date(row.effective_from),
+                opt_date(row.effective_to),
+                text(row.basis_ref),
+                text(row.basis_status.as_str()),
+            ]
+        })
+        .collect())
+}
+
+fn universe_interval_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::universe_interval_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let flags: Vec<&str> = row.flags.iter().map(|flag| flag.as_str()).collect();
+            vec![
+                text(row.entity),
+                date(row.member_from),
+                opt_date(row.member_to),
+                text(row.basis.as_str()),
+                join_flags(&flags),
+            ]
+        })
+        .collect())
+}
+
+/// The table spec of one M2 file, or `None` for a file this module does not
+/// write. Shared by [`write_all`] and the schema test, so "planned but not
+/// writable" cannot hide.
+fn m2_spec(path: &str) -> Option<&'static TableSpec> {
+    Some(match path {
+        SECURITY_MASTER_FILE => &SECURITY_MASTER_SPEC,
+        SECURITY_NAMES_FILE => &SECURITY_NAMES_SPEC,
+        CAPITAL_EVENTS_FILE => &CAPITAL_EVENTS_SPEC,
+        RISK_WARNINGS_FILE => &RISK_WARNINGS_SPEC,
+        SUSPENSIONS_FILE => &SUSPENSIONS_SPEC,
+        PRICE_LIMIT_RULES_FILE => &PRICE_LIMIT_RULES_SPEC,
+        UNIVERSE_INTERVALS_FILE => &UNIVERSE_INTERVALS_SPEC,
+        _ => return None,
+    })
+}
+
+fn m2_rows(path: &str, c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    match path {
+        SECURITY_MASTER_FILE => security_master_rows(c, plan),
+        SECURITY_NAMES_FILE => security_name_rows(c, plan),
+        CAPITAL_EVENTS_FILE => capital_event_rows(c, plan),
+        RISK_WARNINGS_FILE => risk_warning_rows(c, plan),
+        SUSPENSIONS_FILE => suspension_rows(c, plan),
+        PRICE_LIMIT_RULES_FILE => price_limit_rule_rows(c, plan),
+        UNIVERSE_INTERVALS_FILE => universe_interval_rows(c, plan),
+        other => Err(Error::Integrity(format!("no row source for {other}"))),
+    }
+}
+
 /// Write every file the plan names, in plan order (§7.2).
 pub(crate) fn write_all(
     directory: &Path,
@@ -941,13 +1535,157 @@ pub(crate) fn write_all(
             FACTORS_FILE => write_factors(&path, c, plan, compression, row_group_rows)?,
             CALENDAR_FILE => write_calendar(&path, c, plan, compression, row_group_rows)?,
             INDEX_FILE => write_index(&path, c, plan, compression, row_group_rows)?,
-            other => {
-                return Err(Error::Integrity(format!(
-                    "no writer for planned file {other}"
-                )));
-            }
+            other => match m2_spec(other) {
+                Some(spec) => write_table(
+                    &path,
+                    spec,
+                    &m2_rows(spec.path, c, plan)?,
+                    compression,
+                    row_group_rows,
+                )?,
+                None => {
+                    return Err(Error::Integrity(format!(
+                        "no writer for planned file {other}"
+                    )));
+                }
+            },
         };
         files.push(stat);
     }
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parquet::basic::LogicalType;
+    use parquet::basic::Type as PhysicalType;
+
+    fn specs() -> Vec<&'static TableSpec> {
+        vec![
+            &SECURITY_MASTER_SPEC,
+            &SECURITY_NAMES_SPEC,
+            &CAPITAL_EVENTS_SPEC,
+            &RISK_WARNINGS_SPEC,
+            &SUSPENSIONS_SPEC,
+            &PRICE_LIMIT_RULES_SPEC,
+            &UNIVERSE_INTERVALS_SPEC,
+        ]
+    }
+
+    fn physical(kind: ColumnType) -> PhysicalType {
+        match kind {
+            ColumnType::Text | ColumnType::TextOpt => PhysicalType::BYTE_ARRAY,
+            ColumnType::Date | ColumnType::DateOpt | ColumnType::Int8 | ColumnType::Int32 => {
+                PhysicalType::INT32
+            }
+            ColumnType::Int64 | ColumnType::Int64Opt => PhysicalType::INT64,
+            ColumnType::Bool => PhysicalType::BOOLEAN,
+        }
+    }
+
+    /// The logical type each column kind must declare. `INTEGER(8,true)` is
+    /// the only width the M2 files use (`instrument_class`, `category`).
+    fn assert_logical(kind: ColumnType, logical: Option<LogicalType>, column: &str) {
+        match kind {
+            ColumnType::Text | ColumnType::TextOpt => assert!(
+                matches!(logical, Some(LogicalType::String)),
+                "{column}: expected STRING"
+            ),
+            ColumnType::Date | ColumnType::DateOpt => assert!(
+                matches!(logical, Some(LogicalType::Date)),
+                "{column}: expected DATE"
+            ),
+            ColumnType::Int8 => match logical {
+                Some(LogicalType::Integer(int)) => {
+                    assert_eq!((int.bit_width, int.is_signed), (8, true), "{column}");
+                }
+                other => panic!("{column}: expected INTEGER(8,true), got {other:?}"),
+            },
+            ColumnType::Int32 | ColumnType::Int64 | ColumnType::Int64Opt | ColumnType::Bool => {
+                assert!(logical.is_none(), "{column}: expected no logical type")
+            }
+        }
+    }
+
+    /// AC-M2-11 "新文件列类型": the schema string, the column list and the type
+    /// list are three views of one contract, and they agree. A column added to
+    /// the schema only would fail here instead of reaching a consumer.
+    #[test]
+    fn m2_schemas_match_their_columns_and_types() {
+        for spec in specs() {
+            assert_eq!(
+                spec.columns.len(),
+                spec.types.len(),
+                "{}: column/type length",
+                spec.path
+            );
+            let schema = parse_message_type(spec.schema).unwrap();
+            let fields = schema.get_fields();
+            assert_eq!(fields.len(), spec.columns.len(), "{}", spec.path);
+            for (index, field) in fields.iter().enumerate() {
+                let kind = spec.types[index];
+                assert_eq!(
+                    field.get_basic_info().name(),
+                    spec.columns[index],
+                    "{}: column {index}",
+                    spec.path
+                );
+                assert_eq!(
+                    field.is_optional(),
+                    kind.is_optional(),
+                    "{}: {} optional",
+                    spec.path,
+                    spec.columns[index]
+                );
+                assert_eq!(
+                    field.get_physical_type(),
+                    physical(kind),
+                    "{}: {} physical type",
+                    spec.path,
+                    spec.columns[index]
+                );
+                assert_logical(
+                    kind,
+                    field.get_basic_info().logical_type(),
+                    &format!("{}: {}", spec.path, spec.columns[index]),
+                );
+            }
+        }
+    }
+
+    /// The manifest's column list is the schema's, in the same order, for every
+    /// file the export plans (M1 and M2). `daily_raw` is included so the M1
+    /// files cannot drift either.
+    #[test]
+    fn every_planned_m2_file_has_a_spec_with_the_manifest_columns() {
+        let request = crate::research::ExportRequest::default();
+        for file in crate::research::file_plans(&request) {
+            let Some(spec) = m2_spec(file.path) else {
+                continue;
+            };
+            assert_eq!(file.columns, spec.columns, "{}", file.path);
+            assert_eq!(spec.path, file.path);
+        }
+        // The M2 selection must plan exactly the seven M2 files.
+        let planned: Vec<&str> = crate::research::file_plans(&crate::research::ExportRequest {
+            dataset: crate::research::DatasetSelection::Security,
+            ..Default::default()
+        })
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+        assert_eq!(
+            planned,
+            vec![
+                SECURITY_MASTER_FILE,
+                SECURITY_NAMES_FILE,
+                CAPITAL_EVENTS_FILE,
+                RISK_WARNINGS_FILE,
+                SUSPENSIONS_FILE,
+                PRICE_LIMIT_RULES_FILE,
+                UNIVERSE_INTERVALS_FILE,
+            ]
+        );
+    }
 }

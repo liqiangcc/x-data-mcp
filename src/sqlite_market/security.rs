@@ -165,6 +165,33 @@ pub(crate) fn read_capital_events(
     Ok(events)
 }
 
+/// Every stored `capital_events` row as `(entity, event)`, ordered by entity
+/// then ordinal. The export needs the whole table; the per-entity reader above
+/// stays for the read model, and both share the same decoder so they cannot
+/// drift.
+pub(crate) fn read_all_capital_events(
+    c: &Connection,
+) -> Result<Vec<(String, CapitalEvent)>, Error> {
+    let mut statement = c
+        .prepare("SELECT exchange,code FROM capital_events GROUP BY exchange,code ORDER BY 1,2")
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .map_err(storage)?;
+    let mut entities = Vec::new();
+    for row in rows {
+        entities.push(row.map_err(storage)?);
+    }
+    let mut all = Vec::new();
+    for (exchange, code) in entities {
+        let entity = format!("{exchange}.{code}");
+        for event in read_capital_events(c, &entity)? {
+            all.push((entity.clone(), event));
+        }
+    }
+    Ok(all)
+}
+
 /// Replace one entity's whole capital-event set and refresh its version
 /// registration, inside the caller's transaction.
 ///
@@ -823,6 +850,63 @@ pub(crate) fn read_risk_warning_intervals(
         });
     }
     Ok(intervals)
+}
+
+/// One `security_name_history` row. The names dataset has **no writer yet**
+/// (no name source is admitted), so this decoder keeps the stored vocabulary
+/// verbatim instead of inventing a domain enum ahead of the writer: the DDL
+/// CHECK lists are the contract until a source adapter exists. The export reads
+/// the table so the file's shape is fixed and its row count is honest (0 today).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityNameRow {
+    pub exchange: String,
+    pub code: String,
+    pub effective_from: NaiveDate,
+    pub effective_to: Option<NaiveDate>,
+    pub name: String,
+    pub certainty: String,
+    pub known_at: Option<NaiveDate>,
+    pub source_kind: String,
+}
+
+/// All stored `security_name_history` rows, ordered by the row identity.
+pub(crate) fn read_security_names(c: &Connection) -> Result<Vec<SecurityNameRow>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT exchange,code,effective_from,effective_to,name,certainty,known_at,\
+             source_kind FROM security_name_history ORDER BY exchange,code,effective_from",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, String>(7)?,
+            ))
+        })
+        .map_err(storage)?;
+    let mut names = Vec::new();
+    for row in rows {
+        let (exchange, code, from, to, name, certainty, known_at, source_kind) =
+            row.map_err(storage)?;
+        names.push(SecurityNameRow {
+            exchange,
+            code,
+            effective_from: read_day(from)?,
+            effective_to: read_opt_day(to)?,
+            name,
+            certainty,
+            known_at: read_text_day(known_at, "security_name_history.known_at")?,
+            source_kind,
+        });
+    }
+    Ok(names)
 }
 
 /// All stored `suspension_intervals` rows, ordered by the row identity. The

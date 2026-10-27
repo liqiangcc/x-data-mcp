@@ -27,8 +27,19 @@ use super::{
     GenerationBinding, SeriesEntry,
 };
 
-/// `manifest.json.schema` (§7.3).
-pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v1";
+/// `source_binding_digest` → generation. A named alias rather than the bare
+/// `BTreeMap<..>` in four signatures: the generic's comma is not a second
+/// parameter, and the pre-push arity heuristic reads one as such (the same
+/// reason `security_master::ExcludedCategories` exists).
+type LineageIndex = BTreeMap<String, GenerationBinding>;
+
+/// `manifest.json.schema` (§7.3). v2 adds `files[].dataset`/`files[].temporal`
+/// (§12.4/§12.5): the same request now names the M2 security-master files and
+/// says, per file, whether `as_of`/`known_at` would bound it. `snapshot_id`
+/// keeps its definition (canonical identity → first 32 hex), and the schema
+/// string is part of the identity, so a v1 directory and a v2 directory with
+/// otherwise identical inputs must differ.
+pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v2";
 
 /// Prefix of every snapshot id (§7.3).
 pub const ID_PREFIX: &str = "snapshot-";
@@ -59,10 +70,7 @@ fn request_value(request: &ExportRequest) -> Value {
     })
 }
 
-fn source_generation(
-    source_binding_digest: &str,
-    lineage: &BTreeMap<String, GenerationBinding>,
-) -> Result<Value, Error> {
+fn source_generation(source_binding_digest: &str, lineage: &LineageIndex) -> Result<Value, Error> {
     let generation = lineage.get(source_binding_digest).ok_or_else(|| {
         Error::Integrity(format!(
             "source binding {source_binding_digest} was not resolved while planning"
@@ -74,10 +82,7 @@ fn source_generation(
     }))
 }
 
-fn series_value(
-    entry: &SeriesEntry,
-    lineage: &BTreeMap<String, GenerationBinding>,
-) -> Result<Value, Error> {
+fn series_value(entry: &SeriesEntry, lineage: &LineageIndex) -> Result<Value, Error> {
     Ok(json!({
         "entity": entry.entity,
         "period": "day",
@@ -96,10 +101,7 @@ fn series_value(
     }))
 }
 
-fn derived_value(
-    entry: &DerivedEntry,
-    lineage: &BTreeMap<String, GenerationBinding>,
-) -> Result<Value, Error> {
+fn derived_value(entry: &DerivedEntry, lineage: &LineageIndex) -> Result<Value, Error> {
     let mut value = json!({
         "dataset": entry.dataset.as_str(),
         "version_id": entry.version_id,
@@ -122,7 +124,7 @@ pub fn identity(
     request: &ExportRequest,
     catalog: &CatalogBinding,
     generations: &[GenerationBinding],
-    lineage: &BTreeMap<String, GenerationBinding>,
+    lineage: &LineageIndex,
     series: &[SeriesEntry],
     derived: &[DerivedEntry],
 ) -> Result<Value, Error> {
@@ -174,6 +176,8 @@ pub fn files_value(plans: &[FilePlan], stats: Option<&[FileStat]>, compression: 
                 let stat = stats.and_then(|list| list.iter().find(|s| s.path == plan.path));
                 json!({
                     "path": plan.path,
+                    "dataset": plan.dataset,
+                    "temporal": plan.temporal.value(),
                     "rows": stat.map(|s| s.rows),
                     "bytes": stat.map(|s| s.bytes),
                     "sha256": stat.map(|s| s.sha256.clone()),

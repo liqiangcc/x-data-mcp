@@ -25,10 +25,11 @@
 pub mod manifest;
 pub mod read;
 
-// M2 read model (issue-391 §16 PR-4/PR-5, separation points 3/4/7). These
+// M2 read model (issue-391 §16 PR-4…PR-7, separation points 3/4/7). These
 // modules answer research questions; none of them is reachable from an MCP
-// tool and none of them is wired into the M1 snapshot export yet (that is
-// PR-7).
+// tool (v8 wiring is PR-9). The export reads `universe` for the member-interval
+// file and the storage adapters for the parsed facts, so the read model stays
+// the only place that decides membership.
 pub mod market_cap;
 pub mod member_state;
 pub mod price_limit;
@@ -52,7 +53,7 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 use rusqlite::Connection;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::market_data::{Adjustment, CoverageStatus};
 
@@ -129,6 +130,10 @@ pub enum DatasetSelection {
     Index,
     Calendar,
     Factors,
+    /// The M2 security-master datasets (§12.4): master intervals, names,
+    /// capital events, risk warnings, suspensions, price-limit rules and the
+    /// universe interval skeleton. `all` includes them.
+    Security,
 }
 
 impl DatasetSelection {
@@ -139,6 +144,7 @@ impl DatasetSelection {
             Self::Index => "index",
             Self::Calendar => "calendar",
             Self::Factors => "factors",
+            Self::Security => "security",
         }
     }
 
@@ -149,6 +155,7 @@ impl DatasetSelection {
             "index" => Self::Index,
             "calendar" => Self::Calendar,
             "factors" => Self::Factors,
+            "security" => Self::Security,
             _ => return None,
         })
     }
@@ -167,6 +174,10 @@ impl DatasetSelection {
 
     pub fn includes_factors(self) -> bool {
         matches!(self, Self::All | Self::Factors)
+    }
+
+    pub fn includes_security(self) -> bool {
+        matches!(self, Self::All | Self::Security)
     }
 }
 
@@ -367,6 +378,12 @@ pub fn coverage_name(status: CoverageStatus) -> &'static str {
 pub enum DerivedDataset {
     TradingCalendar,
     AdjustmentEvents,
+    /// The M2 whole-market datasets (§12.4). Their registrations travel in the
+    /// identity so a consumer can name the `version_id`/`algorithm_version` the
+    /// exported files were recomputed from (AC-M2-11).
+    SecurityMaster,
+    Suspensions,
+    PriceLimitRules,
 }
 
 impl DerivedDataset {
@@ -374,6 +391,9 @@ impl DerivedDataset {
         match self {
             Self::TradingCalendar => "trading_calendar",
             Self::AdjustmentEvents => "adjustment_events",
+            Self::SecurityMaster => "security_master",
+            Self::Suspensions => "suspensions",
+            Self::PriceLimitRules => "price_limit_rules",
         }
     }
 }
@@ -400,6 +420,58 @@ pub struct DerivedEntry {
 pub struct FilePlan {
     pub path: &'static str,
     pub columns: &'static [&'static str],
+    /// The dataset this file is (§12.4/§12.5). `market.daily` for both 口径,
+    /// `market.daily_factors` for the adjustment events, and so on; the value
+    /// is the v8 dataset name, so a reader can join a file to the tool surface.
+    pub dataset: &'static str,
+    /// Whether `as_of`/`known_at` would bound this dataset (§12.2/§12.3).
+    pub temporal: TemporalDecl,
+}
+
+/// One dataset's temporal declaration (§12.2). It answers "would a temporal
+/// parameter change this dataset?" before a consumer reads a row, which is the
+/// same question v8's per-dataset `temporal` block answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemporalDecl {
+    pub as_of: bool,
+    pub known_at: bool,
+    /// `full` | `partial` | `none` — how many rows carry a usable `known_at`.
+    pub known_at_coverage: &'static str,
+}
+
+impl TemporalDecl {
+    /// No temporal semantics: bars, the calendar, events, rule text.
+    pub const NONE: Self = Self {
+        as_of: false,
+        known_at: false,
+        known_at_coverage: "none",
+    };
+
+    /// Interval facts with a `known_at` column, most of it NULL: the
+    /// information-set filter is meaningful but never complete (§12.2
+    /// `known_at_coverage='partial'`).
+    pub const PARTIAL: Self = Self {
+        as_of: true,
+        known_at: true,
+        known_at_coverage: "partial",
+    };
+
+    /// Interval facts with **no** `known_at` column: `as_of` selects the row,
+    /// the information-set filter does not apply (§12.2: report coverage
+    /// `none` instead of returning every row as if it were known).
+    pub const AS_OF_ONLY: Self = Self {
+        as_of: true,
+        known_at: false,
+        known_at_coverage: "none",
+    };
+
+    pub fn value(self) -> Value {
+        json!({
+            "as_of": self.as_of,
+            "known_at": self.known_at,
+            "known_at_coverage": self.known_at_coverage,
+        })
+    }
 }
 
 /// A written file, with the layer-4 binding (`sha256`, §7.3/BR-M1-7).
@@ -456,6 +528,93 @@ pub const INDEX_COLUMNS: &[&str] = &[
     "member_count",
 ];
 
+/// The M2 security-master files (§12.4). Column order here is the contract the
+/// manifest lists and the Parquet schema must match; a test parses every schema
+/// string and compares names and physical types (AC-M2-11).
+pub const SECURITY_MASTER_COLUMNS: &[&str] = &[
+    "exchange",
+    "code",
+    "effective_from",
+    "effective_to",
+    "instrument_class",
+    "issuer_key",
+    "issuer_resolution",
+    "listing_date",
+    "listing_source",
+    "delisting_date",
+    "delisting_source",
+    "arrangement_start",
+    "arrangement_end",
+    "known_at",
+    "flags",
+];
+pub const SECURITY_NAMES_COLUMNS: &[&str] = &[
+    "exchange",
+    "code",
+    "effective_from",
+    "effective_to",
+    "name",
+    "certainty",
+    "known_at",
+    "source_kind",
+];
+pub const CAPITAL_EVENTS_COLUMNS: &[&str] = &[
+    "exchange",
+    "code",
+    "ordinal",
+    "effective_day",
+    "category",
+    "float_after",
+    "total_after",
+    "known_at",
+    "suspicious",
+];
+pub const RISK_WARNINGS_COLUMNS: &[&str] = &[
+    "exchange",
+    "code",
+    "effective_from",
+    "effective_to",
+    "normalized_status",
+    "raw_status_code",
+    "announced_at",
+    "known_at",
+    "source_kind",
+];
+pub const SUSPENSIONS_COLUMNS: &[&str] = &[
+    "exchange",
+    "code",
+    "start_day",
+    "end_day",
+    "certainty",
+    "missing_days",
+    "reason",
+    "known_at",
+];
+pub const PRICE_LIMIT_RULES_COLUMNS: &[&str] = &[
+    "rule_id",
+    "market",
+    "board",
+    "status_class",
+    "listing_phase",
+    "band_bp",
+    "band_side",
+    "rounding",
+    "effective_from",
+    "effective_to",
+    "basis_ref",
+    "basis_status",
+];
+pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] =
+    &["entity", "member_from", "member_to", "basis", "flags"];
+
+pub const SECURITY_MASTER_FILE: &str = "security_master.parquet";
+pub const SECURITY_NAMES_FILE: &str = "security_names.parquet";
+pub const CAPITAL_EVENTS_FILE: &str = "capital_events.parquet";
+pub const RISK_WARNINGS_FILE: &str = "risk_warnings.parquet";
+pub const SUSPENSIONS_FILE: &str = "suspensions.parquet";
+pub const PRICE_LIMIT_RULES_FILE: &str = "price_limit_rules.parquet";
+pub const UNIVERSE_INTERVALS_FILE: &str = "universe_intervals.parquet";
+
 pub const DAILY_RAW_FILE: &str = "daily_raw.parquet";
 pub const DAILY_QFQ_FILE: &str = "daily_qfq.parquet";
 pub const FACTORS_FILE: &str = "factors.parquet";
@@ -463,37 +622,105 @@ pub const CALENDAR_FILE: &str = "calendar.parquet";
 pub const INDEX_FILE: &str = "index_daily.parquet";
 
 /// The files a request produces, in a fixed order (§7.2).
+///
+/// The M2 files (§12.4) are appended after the M1 ones in this fixed order, so
+/// two runs over the same state list them identically. `price_limits.parquet`
+/// (the optional 16.7M-row derivation) is not written here: see the note in
+/// [`LIMITATIONS`]' PR discussion / the module docs of `parquet`.
 pub fn file_plans(request: &ExportRequest) -> Vec<FilePlan> {
     let mut files = Vec::new();
     if request.adjustment.includes(Adjustment::Raw) && request.dataset.includes_daily() {
         files.push(FilePlan {
             path: DAILY_RAW_FILE,
             columns: DAILY_COLUMNS,
+            dataset: "market.daily",
+            temporal: TemporalDecl::NONE,
         });
     }
     if request.adjustment.includes(Adjustment::Forward) && request.dataset.includes_daily() {
         files.push(FilePlan {
             path: DAILY_QFQ_FILE,
             columns: DAILY_COLUMNS,
+            dataset: "market.daily",
+            temporal: TemporalDecl::NONE,
         });
     }
     if request.dataset.includes_factors() {
         files.push(FilePlan {
             path: FACTORS_FILE,
             columns: FACTOR_COLUMNS,
+            dataset: "market.daily_factors",
+            temporal: TemporalDecl::NONE,
         });
     }
     if request.dataset.includes_calendar() {
         files.push(FilePlan {
             path: CALENDAR_FILE,
             columns: CALENDAR_COLUMNS,
+            dataset: "market.calendar",
+            temporal: TemporalDecl::NONE,
         });
     }
     if request.dataset.includes_index() {
         files.push(FilePlan {
             path: INDEX_FILE,
             columns: INDEX_COLUMNS,
+            dataset: "market.index_daily",
+            temporal: TemporalDecl::NONE,
         });
+    }
+    if request.dataset.includes_security() {
+        for (path, columns, dataset, temporal) in [
+            (
+                SECURITY_MASTER_FILE,
+                SECURITY_MASTER_COLUMNS,
+                "market.security_master",
+                TemporalDecl::PARTIAL,
+            ),
+            (
+                SECURITY_NAMES_FILE,
+                SECURITY_NAMES_COLUMNS,
+                "market.security_names",
+                TemporalDecl::PARTIAL,
+            ),
+            (
+                CAPITAL_EVENTS_FILE,
+                CAPITAL_EVENTS_COLUMNS,
+                "market.capital_events",
+                TemporalDecl::NONE,
+            ),
+            (
+                RISK_WARNINGS_FILE,
+                RISK_WARNINGS_COLUMNS,
+                "market.risk_warnings",
+                TemporalDecl::PARTIAL,
+            ),
+            (
+                SUSPENSIONS_FILE,
+                SUSPENSIONS_COLUMNS,
+                "market.suspensions",
+                TemporalDecl::PARTIAL,
+            ),
+            (
+                PRICE_LIMIT_RULES_FILE,
+                PRICE_LIMIT_RULES_COLUMNS,
+                "market.price_limit_rules",
+                TemporalDecl::AS_OF_ONLY,
+            ),
+            (
+                UNIVERSE_INTERVALS_FILE,
+                UNIVERSE_INTERVALS_COLUMNS,
+                "market.universe",
+                TemporalDecl::PARTIAL,
+            ),
+        ] {
+            files.push(FilePlan {
+                path,
+                columns,
+                dataset,
+                temporal,
+            });
+        }
     }
     files
 }
@@ -582,6 +809,37 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
     if request.dataset.includes_calendar() {
         derived.push(read::calendar_version(c)?);
     }
+    if request.dataset.includes_security() {
+        // Whole-market M2 registrations only: the per-entity ones
+        // (`capital_events`, and the not-yet-written names/risk warnings)
+        // would add one entry per entity without adding traceability a
+        // consumer cannot get from the file itself.
+        for (dataset, kind) in [
+            (
+                DerivedDataset::SecurityMaster,
+                crate::security_master::assembly::DATASET_KIND,
+            ),
+            (
+                DerivedDataset::Suspensions,
+                crate::security_master::suspensions::DATASET_KIND,
+            ),
+            (
+                DerivedDataset::PriceLimitRules,
+                crate::trading_rules::DATASET_KIND,
+            ),
+        ] {
+            let key = if dataset == DerivedDataset::SecurityMaster {
+                crate::security_master::assembly::DATASET_KEY
+            } else if dataset == DerivedDataset::Suspensions {
+                crate::security_master::suspensions::DATASET_KEY
+            } else {
+                crate::trading_rules::DATASET_KEY
+            };
+            if let Some(entry) = read::panel_version(c, dataset, kind, key)? {
+                derived.push(entry);
+            }
+        }
+    }
 
     let lineage = read::resolve_lineage(c, &series, &derived)?;
     let identity = manifest::identity(
@@ -643,4 +901,13 @@ pub const LIMITATIONS: &[&str] = &[
      DECIMAL(20,2), i.e. rounded from the stored decimal string",
     "volume_quantum is the per-bar volume precision (100 = a hand-recorded bar \
      precise to 100 shares, NULL = exact to the share); M1 stores no quantum yet",
+    "risk_warnings is incomplete by source: the SZ name history has dated rows, \
+     SH has no dated history yet, so a day without a covering interval is \
+     `unknown`, never `normal` (§6.3, M2 data-catalog deviation 3)",
+    "capital_events.known_at is always NULL: the gbbq source carries no \
+     announcement day, so the 知晓时间 of a 股本 event is unknown and never \
+     inferred from the effective day (§5.2)",
+    "price_limit_rules rows with basis_status='pending' record a known rule \
+     whose text is not admitted; they are provenance, never selected by the \
+     derivation, so a date without an admitted rule is `unknown` (§8.1/§8.5)",
 ];
