@@ -120,7 +120,7 @@ mod tests {
     fn m2_dataset_items_own_distinct_whole_market_scopes() {
         assert!(is_derived(SECURITY_MASTER));
         assert_eq!(DATASETS.len(), 4);
-        let scopes: BTreeSet<String> = DATASETS.iter().map(|id| dataset_scope(*id)).collect();
+        let scopes: BTreeSet<String> = DATASETS.iter().map(|id| dataset_scope(id)).collect();
         assert_eq!(scopes.len(), DATASETS.len());
         assert!(!scopes.contains(&calendar_scope()));
         assert_eq!(target(SUSPENSIONS), json!({"dataset": SUSPENSIONS}));
