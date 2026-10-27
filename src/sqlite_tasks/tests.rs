@@ -1222,9 +1222,9 @@ fn hex32(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
 
-/// Schema 23 length/order assertion (issue-391 §9.4, §19 note 8): the fixed
+/// Schema 24 length/order assertion (issue-391 §9.4, §19 note 8): the fixed
 /// array length, the schema constant and the `schema_migrations` rows must
-/// agree, and the tail of the chain must be the M2 security-master step.
+/// agree, and the tail of the chain must be the D-50 capital-category step.
 #[test]
 fn compact_migration_chain_matches_schema_version() {
     assert_eq!(
@@ -1234,10 +1234,16 @@ fn compact_migration_chain_matches_schema_version() {
     );
     let tail = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 1];
     assert!(
-        tail.contains("CREATE TABLE security_master(")
-            && tail.contains("CREATE TABLE price_limit_rules(")
-            && tail.contains("CREATE TABLE min_tick_rules("),
-        "the tail of the compact chain is not migration 023"
+        tail.contains("CREATE TABLE capital_events_v24(")
+            && tail.contains("category IN (2,3,5,7,8,9,10)"),
+        "the tail of the compact chain is not migration 024"
+    );
+    let previous = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 2];
+    assert!(
+        previous.contains("CREATE TABLE security_master(")
+            && previous.contains("CREATE TABLE price_limit_rules(")
+            && previous.contains("CREATE TABLE min_tick_rules("),
+        "migration 023 was not kept immutable before 024"
     );
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("chain.db");
@@ -1269,7 +1275,7 @@ fn compact_migration_chain_matches_schema_version() {
 /// AC-M2-14 first half: the migration builds on both paths (fresh compact init
 /// and the empty 18 -> compact upgrade) and creates the new tables empty.
 #[test]
-fn schema23_builds_on_fresh_init_and_empty_upgrade() {
+fn schema24_builds_on_fresh_init_and_empty_upgrade() {
     for fresh in [true, false] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m2.db");
@@ -1303,41 +1309,120 @@ fn schema23_builds_on_fresh_init_and_empty_upgrade() {
             .exists([])
             .unwrap();
         assert!(!broken, "foreign key violations (fresh={fresh})");
-        let rows: i64 = c
-            .query_row(
-                "SELECT count(*) FROM schema_migrations WHERE version=23",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(rows, 1, "migration 023 missing (fresh={fresh})");
+        for version in [23, 24] {
+            let rows: i64 = c
+                .query_row(
+                    "SELECT count(*) FROM schema_migrations WHERE version=?1",
+                    [version],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(rows, 1, "migration {version:03} missing (fresh={fresh})");
+        }
     }
 }
 
-/// AC-M2-14 second half: a schema-22 file is refused and left untouched (no
-/// in-place rewrite), and a file one revision ahead of this binary hits the
-/// same `version > COMPACT_SCHEMA_VERSION` guard — which is exactly the branch
-/// an older binary takes on a schema-23 file.
+/// D-50 migration proof: 024 rebuilds `capital_events` and copies a schema-23
+/// row verbatim. The fresh-init path applies 023 and 024 back to back on an
+/// empty table, so this test stops at 023, inserts a row, then applies 024.
 #[test]
-fn schema23_refuses_foreign_schema_files_without_rewriting_them() {
+fn schema24_rebuild_copies_capital_rows_and_keeps_the_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rebuild.db");
+    SqliteTasks::new(&path).initialize().unwrap();
+    let c = Connection::open(&path).unwrap();
+    c.pragma_update(None, "foreign_keys", false).unwrap();
+    for sql in COMPACT_MIGRATIONS.iter().take(5) {
+        c.execute_batch(sql).unwrap();
+    }
+    c.pragma_update(None, "foreign_keys", true).unwrap();
+    let evidence = hex32(0x11);
+    let binding = hex32(0x22);
+    c.execute(
+        &format!("INSERT INTO evidence_bundles VALUES(X'{evidence}','derived','{{}}')"),
+        [],
+    )
+    .unwrap();
+    c.execute(
+        &format!(
+            "INSERT INTO source_bindings VALUES(X'{binding}','gen-1',X'{}',X'{}',X'{}',X'{evidence}')",
+            hex32(0x33),
+            hex32(0x44),
+            hex32(0x55)
+        ),
+        [],
+    )
+    .unwrap();
+    let capital = |ordinal: i64, category: i64| {
+        format!(
+            "INSERT INTO capital_events(exchange,code,ordinal,effective_day,category,\
+             float_before_bits,total_before_bits,float_after_bits,total_after_bits,\
+             float_after,total_after,source_binding_digest,evidence_digest) \
+             VALUES('sz','000001',{ordinal},1000,{category},0,0,0,0,{ordinal},{ordinal},\
+             X'{binding}',X'{evidence}')"
+        )
+    };
+    c.execute(&capital(0, 2), []).unwrap();
+    c.execute_batch(COMPACT_MIGRATIONS[5]).unwrap();
+    let copied: (i64, i64, i64) = c
+        .query_row(
+            "SELECT ordinal,category,float_after FROM capital_events \
+             WHERE exchange='sz' AND code='000001'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(copied, (0, 2, 0), "the schema-23 row was not copied");
+    c.execute(&capital(1, 5), []).unwrap();
+    assert!(c.execute(&capital(2, 1), []).is_err());
+    assert_eq!(
+        raw_columns(&path, "capital_events"),
+        vec![
+            "exchange",
+            "code",
+            "ordinal",
+            "effective_day",
+            "category",
+            "float_before_bits",
+            "total_before_bits",
+            "float_after_bits",
+            "total_after_bits",
+            "float_after",
+            "total_after",
+            "prev_is_lagged",
+            "suspicious",
+            "known_at",
+            "source_binding_digest",
+            "evidence_digest",
+        ],
+        "024 changed a capital_events column"
+    );
+}
+
+/// AC-M2-14 second half: the previous compact revision (schema 23) is refused
+/// and left untouched (no in-place rewrite), and a file one revision ahead of
+/// this binary hits the same `version > COMPACT_SCHEMA_VERSION` guard — which
+/// is exactly the branch an older binary takes on a schema-24 file.
+#[test]
+fn schema24_refuses_foreign_schema_files_without_rewriting_them() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("v23.db");
     let db = SqliteTasks::new(&path);
     db.initialize_compact().unwrap();
     {
         let c = Connection::open(&path).unwrap();
-        c.execute("DELETE FROM schema_migrations WHERE version>22", [])
+        c.execute("DELETE FROM schema_migrations WHERE version>23", [])
             .unwrap();
-        c.pragma_update(None, "user_version", 22).unwrap();
+        c.pragma_update(None, "user_version", 23).unwrap();
     }
     let e = db.read(|_| Ok(())).unwrap_err().to_string();
-    assert!(e.contains("unsupported/uninitialized schema 22"), "{e}");
+    assert!(e.contains("unsupported/uninitialized schema 23"), "{e}");
     let e = db.write(|_| Ok(())).unwrap_err().to_string();
-    assert!(e.contains("unsupported/uninitialized schema 22"), "{e}");
+    assert!(e.contains("unsupported/uninitialized schema 23"), "{e}");
     assert_eq!(
         raw_user_version(&path),
-        22,
-        "the schema-22 file was rewritten"
+        23,
+        "the schema-23 file was rewritten"
     );
     {
         let c = Connection::open(&path).unwrap();
@@ -1359,11 +1444,11 @@ fn schema23_refuses_foreign_schema_files_without_rewriting_them() {
     );
 }
 
-/// AC-M2-14 third part: the unique keys and CHECKs of the schema-23 tables
-/// reject duplicates and impossible rows, including the extended
-/// `derived_dataset_versions.dataset_kind` vocabulary.
+/// AC-M2-14 third part: the unique keys and CHECKs of the schema-24 tables
+/// reject duplicates and impossible rows, including the D-50 capital-category
+/// vocabulary and the extended `derived_dataset_versions.dataset_kind` list.
 #[test]
-fn schema23_constraints_reject_duplicates_and_bad_values() {
+fn schema24_constraints_reject_duplicates_and_bad_values() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("constraints.db");
     let db = SqliteTasks::new(&path);
@@ -1500,13 +1585,17 @@ fn schema23_constraints_reject_duplicates_and_bad_values() {
         "duplicate capital_events (exchange,code,ordinal)",
         c.execute(&capital("000001", 0, 2, 100), []),
     );
+    for (ordinal, category) in [(1, 5), (2, 7), (3, 8)] {
+        c.execute(&capital("000001", ordinal, category, 100), [])
+            .unwrap_or_else(|error| panic!("D-50 category {category} rejected: {error}"));
+    }
     rejected(
-        "capital_events category outside (2,3,9,10)",
-        c.execute(&capital("000001", 1, 5, 100), []),
+        "capital_events category outside the D-50 admission set",
+        c.execute(&capital("000001", 4, 1, 100), []),
     );
     rejected(
         "negative capital_events shares",
-        c.execute(&capital("000001", 2, 2, -1), []),
+        c.execute(&capital("000001", 5, 2, -1), []),
     );
     let suspension = |code: &str, start: i64, end: i64, missing: i64| {
         format!(

@@ -18,13 +18,13 @@
 | 2 | 每个属性两个时间 | 上市日、退市日/整理期、简称、股本、风险警示、停牌、规则全部带 `effective_from/to` 与 `known_at`；`known_at` 缺失即 `NULL`，不得用文件 mtime 或事件日冒充 | 已确认原则（分离点 3；#308 AC-T01；M1 BR-M1-9） |
 | 3 | 上市日 | 交易所名单 > `base.dbf SSDATE` > `unknown`；实测 2,7xx 个两者都有的代码**零冲突**（过滤 `STOCK_TYPE=1` 后），62 个 `SSDATE='0'` 的退市代码由交易所名单补上 61 个 | 实测（§2.3 E-1/E-2/E-13） |
 | 4 | 退市日 | 交易所终止上市名单 > TDX `infoharbor_spec.cfg` 整理期 end > `unknown`；335 个退市代码里 **333 个**被交易所名单覆盖（含科创板 3 家），**2 个覆盖不到的是代码迁移与吸收合并** | 实测（E-3/E-4/E-8/E-14） |
-| 5 | 股本历史 | 只采用 cat 2/3/9/10 的**后值 + 事件日**（18,086 条）；前值只作审计；cat5/7/8 不入库。流通市值 = 不复权收盘 × 流通 A 股 | 已裁决（D-22）+ 实测（E-9） |
+| 5 | 股本历史 | 只采用 cat 2/3/5/7/8/9/10 的**后值 + 事件日**；前值只作审计；cat1 不入库（D-50 R-3 修订）。流通市值 = 不复权收盘 × 流通 A 股 | 已裁决（D-50）+ 实测（E-9） |
 | 6 | 市值口径 | `total_after` 是公司总股本（A+B+H），**不得**称为 A 股总市值；A 股总股本只有当前快照（SSE 逐股接口 / SZSE 1110 列），历史不可得 → A+H 的 A 股总市值在来源准入前返回 `unknown` | 实测（E-1/E-5；000002 差 22.07 亿 = H 股） |
 | 7 | 历史 ST | 表、状态机、fail-closed 语义在 M2 设计并实现（用夹具测）；**生产数据入库以 #308 Final Gate 变为 `APPROVED_SOURCE` 为前提**，M2 不推进也不绕过 | #308 现状（`OWNER_RISK_ACCEPTED`） |
 | 8 | 停牌 | 「交易日无 bar」只能产生 `unresolved_gap`，不能产生 `suspended`；`suspended` 需要公告或 GP29 证据 + `known_at` | 实测（E-11：`sz000631` 2006-04-27→2009-06-05 无 bar，0.76→10.30 元） |
 | 9 | 涨跌停 | 规则按生效区间存表（板块 × ST 档 × 上市阶段 × 最小变动 × 取整），每行带 `basis_ref`；无出处或 ST 未知 → `unknown`，不按 10% 兜底；派生不入库 | 设计 + 实测（E-12：HALF_UP 10% 命中 1.76%，floor 0.95%） |
 | 10 | T 日股票池 | `universe(as_of=T)` = 上市日 ≤ T < 退市日 ∧ 区间命中 ∧ 未被代码迁移取代；**股票池 ≠ 可交易**，停牌股仍在池内；目录版本只是主表在「今天」的投影 | 设计 |
-| 11 | 存储 | **schema 23**（追加 `023_security_master.sql`，不改已合并的 022）：主表、简称、股本事件、风险警示区间、停牌区间、涨跌停规则、最小变动规则；非 bar 数据集登记复用 M1 的 `derived_dataset_versions` | 设计（依赖 M1 PR-4） |
+| 11 | 存储 | **schema 24**（`023_security_master.sql` 建表，`024_capital_categories.sql` 按 D-50 重建 `capital_events` 放宽 `category` CHECK；不改已合并的 022/023）：主表、简称、股本事件、风险警示区间、停牌区间、涨跌停规则、最小变动规则；非 bar 数据集登记复用 M1 的 `derived_dataset_versions` | 设计（依赖 M1 PR-4） |
 | 12 | 契约 | M2 本身**不改 MCP 契约**；新数据集与 `as_of`/`known_at` 的接受由 v8 的 dataset 分支 + capabilities 的逐数据集 `temporal` 声明启用 | 设计（v8 §4.6 的接法） |
 | 13 | 可行性 | 主表/股本/股票池/停牌 `unresolved_gap`/规则表可达；**SH 历史 ST 完整性、历史 A 股总股本、规则原文**三项不可达或需准入；偏差逐条列在 §13 | 实测 + 设计 |
 
@@ -42,7 +42,7 @@
 
 1. 证券主表：身份与生效区间、上市日、退市日/退市整理期、代码复用与代码迁移。
 2. 证券简称历史（区间 + `known_at`），来源分 SZ 官方 dated 表 / GP29 事件 / 交易所名单快照。
-3. 股本历史事件（cat 2/3/9/10 的后值与事件日）、流通市值/换手率口径。
+3. 股本历史事件（cat 2/3/5/7/8/9/10 的后值与事件日，D-50）、流通市值/换手率口径。
 4. 风险警示区间（表 + 状态机 + fail-closed），**不含未准入的生产数据**。
 5. 停牌区间（`confirmed` / `unresolved_gap`）与可交易性判定。
 6. 交易规则表（涨跌停幅度、ST 档、上市首日/前 N 日、最小价格变动单位、取整）与涨跌停派生。
@@ -60,7 +60,7 @@
 | 裁决 | 本设计如何吸收 |
 |---|---|
 | D-20（一手官方来源 + 逐个过 #308 门禁） | §10 每个来源单列证据要求与阻塞关系；未准入来源的数据不进生产表（`pending_source`） |
-| D-22（gbbq 非 cat1 暂不作为生产语义） | §5 只采用 cat 2/3/9/10（R-3 准入范围），cat5/7/8 不入库；类别只作诊断字段 |
+| D-22（gbbq 非 cat1 暂不作为生产语义） | §5 采用 cat 2/3/5/7/8/9/10（D-50 修订 R-3 准入范围；D-22 的 cat5/7/8 部分已被 D-50 取代）；类别只作诊断字段 |
 | D-23（上市日取 `SSDATE`，缺失由交易所名单补） | §4.2 来源优先级 + 冲突策略；补充实测：`base.dbf` 字段在 #6 契约里仍是 UNANCHORED，需字段锚定证据包（§10 S-7） |
 | D-24（退市整理期取 TDX 表，要过门禁） | §4.3 整理期与摘牌日分开；TDX 表只覆盖 2013 年起，交易所名单补更早与吸收合并类 |
 | D-25（四类官方披露进入准入评估） | §10 把「上市/退市名单、风险警示公告、停复牌公告」落成 S-1…S-4；证监会行业分类不在 M2 |
@@ -217,14 +217,15 @@
 
 ### 5.1 准入范围与语义声明
 
-只采用 **cat 2/3/9/10** 的 `(effective_day, float_after, total_after)`：
+只采用 **cat 2/3/5/7/8/9/10** 的 `(effective_day, float_after, total_after)`（D-50 R-3 修订：5/7/8 整类准入，档位 `OWNER_RISK_ACCEPTED`）：
 
 - `float_after` / `total_after` 来自 f32 位模式，单位万股、2 位小数 → **换算成股是精确整数**（0.01 万股 = 100 股），所以库里存 `INTEGER` 股，不存浮点。
 - 前值（`float_before`/`total_before`）**只作审计列**，不参与状态；语义声明写死为「TDX 上一条记录的状态，可能滞后」（调研报告② §9 第 1 条）。
 - `category` 只作诊断字段，**生产语义不依赖 cat 标签**（cat2 与 cat9 不可区分，调研报告② §4.6）。
-- 不入库：cat5（混合桶，含 002868 群体级反例）、cat7（19 条，5/19 抽样有 5,148 万股级前值错误）、cat8（继承上游 cat5 错误）。它们进证据包的 `excluded` 计数，不进生产表。
+- 不入库：cat1（分红/送转/配股，走 `adjustment_events`）以及其他未准入类别；它们进证据包的 `excluded` 计数，不进生产表。
+- D-50 的两道质量门（链连续性：断点起标 `unknown`；末端对账：与交易所/`base.dbf` 当前值差 >1% 标 `low_confidence`）由 M2 PR-4 读模型实现；本 PR-2 只保证事实完整入库，不在写入层丢弃事件。
 
-实测条数：cat2 4,866 + cat3 4,929 + cat9 7,987 + cat10 304 = **18,086 条**（其中京市 1,479 条按 §13 偏差处理）。
+实测条数：cat2 4,866 + cat3 4,929 + cat9 7,987 + cat10 304 = **18,086 条**（D-41 口径）；D-50 追加 cat5/7/8 后按类别计数，质量门在 PR-4 施加（其中京市 1,479 条按 §13 偏差处理）。
 
 ### 5.2 状态函数
 
@@ -483,12 +484,12 @@ CREATE TABLE security_name_history(
   PRIMARY KEY(exchange, code, effective_from)
 ) STRICT;
 
--- 4) 股本事件（解析事实；只 cat 2/3/9/10）
+-- 4) 股本事件（解析事实；D-50 的 cat 2/3/5/7/8/9/10；024 重建此表放宽 CHECK）
 CREATE TABLE capital_events(
   exchange TEXT NOT NULL, code TEXT NOT NULL,
   ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
   effective_day INTEGER NOT NULL,
-  category INTEGER NOT NULL CHECK(category IN (2,3,9,10)),
+  category INTEGER NOT NULL CHECK(category IN (2,3,5,7,8,9,10)),
   float_before_bits INTEGER NOT NULL, total_before_bits INTEGER NOT NULL,
   float_after_bits INTEGER NOT NULL,  total_after_bits INTEGER NOT NULL,
   float_after INTEGER NOT NULL CHECK(float_after >= 0),   -- 股（由万股 2dp 精确换算）
@@ -885,7 +886,7 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 | PR | 范围 | AC | 测试计划（CI） | 依赖 |
 |---|---|---|---|---|
 | **PR-1** schema 23 + 表结构 | 023 迁移（§9.2 七张表）；`COMPACT_MIGRATIONS` 长度与顺序断言；`EXPECTED_COMPACT_SCHEMA` 23；`derived_dataset_versions.dataset_kind` 扩展（或重建）；空表升级路径 | AC-M2-14 | 迁移在全新 init 与空表升级两条路径可建；旧二进制拒绝 schema 23；唯一键/CHECK 冲突测试 | 无（但需 M1 PR-4 的 `derived_dataset_versions` 先落地，否则登记段延后） |
-| **PR-2** TDX 解析事实 | `base.dbf` 的 `SSDATE`/`ZGB`/`LTAG` 读取（复用 `src/dbf.rs`，加字段锚定常量）；`infoharbor_spec.cfg` 解析；`capital_events` 写入（cat2/3/9/10，整组替换）；`security_master` 的 TDX-only 行 | AC-M2-1（TDX 分支）、AC-M2-2（TDX 分支）、AC-M2-5 | 夹具：3 个 `base.dbf` 行 + 3 个 `infoharbor` 行 + 6 条 gbbq 事件；`to_shares(bits)` 断言；cat5/7/8 不入库；`suspicious` 门禁 | PR-1 |
+| **PR-2** TDX 解析事实 | `base.dbf` 的 `SSDATE`/`ZGB`/`LTAG` 读取（复用 `src/dbf.rs`，加字段锚定常量）；`infoharbor_spec.cfg` 解析；`capital_events` 写入（D-50 的 cat2/3/5/7/8/9/10，整组替换）；`security_master` 的 TDX-only 行；024 迁移放宽 `category` CHECK | AC-M2-1（TDX 分支）、AC-M2-2（TDX 分支）、AC-M2-5 | 夹具：3 个 `base.dbf` 行 + 3 个 `infoharbor` 行 + gbbq 事件（cat2/3/9/10/5/7/8 入库、cat1 排除）；`to_shares(bits)` 与后值断言、前值审计；`suspicious` 门禁；D-50 质量门由 PR-4 | PR-1 |
 | **PR-3** 主表组装 + 复用/迁移 | 交易所名单 Adapter 的**接口**（trait 不必；一个函数 + `pending_source`）；区间合并与重叠检测；`code_migrations`（confirmed/candidate）；冲突记录 | AC-M2-3、AC-M2-13 | 重叠 → `ambiguous_code_reuse`；`600018` 夹具；`300114`/`302132` 迁移夹具；来源缺失 → `pending_source` | PR-2 |
 | **PR-4** 研究读模型 | `src/research/`：`universe`、`member_state`、`tradability`、`market_cap`；`as_of`/`known_at` 语义；`strict` 模式 | AC-M2-4、AC-M2-6、AC-M2-8 | 10 个历史日的成员集合（夹具）；`known_at` 排除 NULL 并计数；停牌 → `unknown`；A+H 的 A 股总市值 `unknown` | PR-3 |
 | **PR-5** 规则表 + 涨跌停派生 | `price_limit_rules`/`min_tick_rules` 读写；`limit-v1` 纯函数（整数域、HALF_UP、phase、ST）；`unknown` 传播 | AC-M2-9、AC-M2-10 | 6 个板块×时段夹具；命中率回归（用 E-12 的样本口径）；规则缺失/命中 2 行 → `unknown`；`grep` 无幅度常量 | PR-1、PR-4 |

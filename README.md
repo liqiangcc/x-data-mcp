@@ -45,7 +45,7 @@ capability revision `generic-data-v7`，market 单版本序列：version_id=内�
 latest-only）与
 `x-data-mcp-acquire`（10 acquisition tools）。部署版本、socket 路径、
 generation 与数据量见 [docs/STATUS.md](docs/STATUS.md)。
-已部署实例为 fresh compact schema 21；代码（main）为 schema 23（M1 的 schema 22 + M2 PR-1 的 023，未部署），
+已部署实例为 fresh compact schema 21；代码（main）为 schema 24（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024，未部署），
 显式 `task_sqlite init` 的新库按代码的 schema 建立；工具数量不是稳定契约，
 客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
 
@@ -85,8 +85,9 @@ unsupported-metadata fallback 仍按
 external distribution is not authorized；它不是“服务未运行”的同义词。
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
-（既有库显式 upgrade 的来源版本），`COMPACT_SCHEMA_VERSION=21` 是 fresh 部署的
-compact schema。Issue/Epic 中的“v15”是交付规划标签，不是 schema 编号。
+（既有库显式 upgrade 的来源版本），已部署实例为 compact schema 21，代码的
+`COMPACT_SCHEMA_VERSION` 为 24（未部署）。Issue/Epic 中的“v15”是交付规划标签，
+不是 schema 编号。
 
 **历史（2026-09 来源收敛口径，已被 [D-20](docs/decisions.md) 修订）：** 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →
 从同一已发布 QFQ daily version 本地聚合 yearly。不存在多源生产 fallback。
