@@ -1108,8 +1108,9 @@ pub(crate) mod gaps;
 #[allow(dead_code)]
 pub(crate) mod index;
 pub(crate) mod manifest;
-pub(crate) mod series;
 #[allow(dead_code)]
+pub(crate) mod security;
+pub(crate) mod series;
 pub(crate) mod series_commit;
 pub(crate) mod update;
 pub(crate) mod yearly_results;
