@@ -34,6 +34,7 @@ pub mod snapshot;
 pub mod sqlite_tasks;
 pub mod task_control;
 pub mod trading_calendar;
+pub mod trading_rules;
 
 pub mod sqlite_task_mcp;
 

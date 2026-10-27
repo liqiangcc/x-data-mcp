@@ -636,6 +636,48 @@ pub(crate) fn raw_daily_close_at(
     .transpose()
 }
 
+/// The 不复权 close of the last bar **strictly before** `day`, with its trade
+/// day and the series' price scale; `None` when the series has no earlier bar
+/// (a listing day, or an entity without a raw daily series).
+///
+/// This is the §8.3 `prev_close_raw` lookup: the previous close is the last
+/// *bar*, not the previous calendar trading day, so a suspension/resumption
+/// pair uses the pre-suspension close exactly as the exchange does.
+pub(crate) fn raw_daily_close_before(
+    c: &Connection,
+    entity: &str,
+    day: NaiveDate,
+) -> Result<Option<(i64, u32, NaiveDate)>, Error> {
+    c.query_row(
+        "SELECT b.close_units,s.price_scale,b.trade_day FROM market_series s \
+         JOIN series_bars b ON b.series_key=s.series_key \
+         WHERE s.entity=?1 AND s.period=?2 AND s.adjustment=?3 AND s.instrument_class=?4 \
+         AND b.trade_day<?5 ORDER BY b.trade_day DESC LIMIT 1",
+        params![
+            entity,
+            super::compact_repo::period_code(Period::Day),
+            Adjustment::Raw.code(),
+            INSTRUMENT_CLASS_STOCK,
+            crate::compact_market::epoch_day(day)
+        ],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        },
+    )
+    .optional()
+    .map_err(storage)?
+    .map(|(close, scale, trade_day)| {
+        let scale = u32::try_from(scale).map_err(|_| invalid("negative price_scale"))?;
+        let trade_day = crate::compact_market::epoch_date(trade_day).map_err(invalid)?;
+        Ok((close, scale, trade_day))
+    })
+    .transpose()
+}
+
 /// Trade days inside [start_day, end_day] — the presence/year-set probe.
 pub(crate) fn days_in_range(
     c: &Connection,

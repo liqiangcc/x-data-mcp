@@ -25,11 +25,13 @@
 pub mod manifest;
 pub mod read;
 
-// M2 read model (issue-391 §16 PR-4, separation points 3/4/7). These modules
-// answer research questions; none of them is reachable from an MCP tool and
-// none of them is wired into the M1 snapshot export yet (that is PR-7).
+// M2 read model (issue-391 §16 PR-4/PR-5, separation points 3/4/7). These
+// modules answer research questions; none of them is reachable from an MCP
+// tool and none of them is wired into the M1 snapshot export yet (that is
+// PR-7).
 pub mod market_cap;
 pub mod member_state;
+pub mod price_limit;
 pub mod temporal;
 pub mod tradability;
 pub mod universe;
