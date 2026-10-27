@@ -39,15 +39,19 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 > 部署与运行事实以 [docs/STATUS.md](docs/STATUS.md) 为准，性能与容量目标以 [docs/SLO.md](docs/SLO.md) 为准。
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
-本机以 systemd 运行已部署的双 MCP server 拓扑：`x-data-mcp-data`（23 data tools，
-含只读 `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，
-capability revision `generic-data-v7`，market 单版本序列：version_id=内容 hex，
+本机以 systemd 运行已部署的双 MCP server 拓扑：`x-data-mcp-data`（`mcp.sock` 的
+`ops` 入口，15 data tools，含只读 `get_yearly_base_years` 与
+`plan_market_update`/`run_market_update`，capability revision `generic-data-v8`，
+文本模式 `X_DATA_MCP_TEXT_MODE=full`，market 单版本序列：version_id=内容 hex，
 latest-only）与
-`x-data-mcp-acquire`（10 acquisition tools）。部署版本、socket 路径、
-generation 与数据量见 [docs/STATUS.md](docs/STATUS.md)。
-已部署实例为 fresh compact schema 21；代码（main）为 schema 24（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024，未部署），
-显式 `task_sqlite init` 的新库按代码的 schema 建立；工具数量不是稳定契约，
-客户端仍须以运行实例 `tools/list` 与 `get_data_capabilities` 为准。
+`x-data-mcp-acquire`（10 acquisition tools）。生产只有 `ops` 入口；`research`/`maint`
+入口未部署（v8 第二阶段）。部署版本、socket 路径、generation 与数据量见
+[docs/STATUS.md](docs/STATUS.md)。
+已部署实例为 fresh compact schema 24；代码（main）同为 schema 24（M1 的 schema 22 +
+M2 PR-1 的 023 + M2 PR-2 的 024），三个入口合计注册 24 个工具（
+research 5 / ops 15 / maint 9），显式 `task_sqlite init` 的新库按代码的 schema 建立；
+工具数量不是稳定契约，客户端仍须以运行实例 `tools/list` 与
+`get_data_capabilities` 为准。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
 （acquire → byte verify → consistency verify → 条件 activate）、

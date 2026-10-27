@@ -6,8 +6,8 @@
 （冲突以 RULINGS 为准）；两文件不在仓库内，相关裁决已随文转述。
 
 **状态**：已部署（历史契约）。`generic-data-v6` 自 preview.32（2026-10-13）起部署，
-compact schema 21；当前部署已是 `generic-data-v7`（自 preview.33 起，见
-[generic-data-v7](generic-data-v7.md) 与 [STATUS](../STATUS.md)）。代码面 S1（存储+读路径）、
+compact schema 21；v7 自 preview.33 起为历史。当前部署已是 `generic-data-v8`（见
+[generic-data-v8](generic-data-v8.md) 与 [STATUS](../STATUS.md)）。代码面 S1（存储+读路径）、
 S2/S2b（日线写路径）、S3（年线 stale 出参）与 S4（capability bump、
 wire/description 收尾）已在 `feat/latest-only-storage` 落地（已随 PR #329 合入 main）：capability
 revision 为 `generic-data-v6`（`src/data_supply/mcp.rs:343`，行号为当时基线）。

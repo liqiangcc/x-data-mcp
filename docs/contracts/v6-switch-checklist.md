@@ -1,7 +1,7 @@
 # generic-data-v6 / schema 21 部署日切换清单
 
 **状态**：历史快照。v6 切换已于 2026-10-13 随 preview.32 执行完毕；当前契约见
-[generic-data-v7](generic-data-v7.md)，当前部署事实见 [STATUS](../STATUS.md)。
+[generic-data-v8](generic-data-v8.md)，部署事实见 [STATUS](../STATUS.md)。
 
 本文是当时**部署日**要做的机械切换：把各文档「当前状态」从
 `generic-data-v5` / compact schema 20 改成 `generic-data-v6` /

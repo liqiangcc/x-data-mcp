@@ -3,11 +3,12 @@
 当前摘要：#54 QFQ、#131 固定文件集合一致性和 #71 限定个人研究范围已分别裁定；这些结论只适用于明确证据与声明范围。新 generation 仍需新 manifest 和独立一致性决定。
 当前 acquisition 已实现 immutable generation、验证后条件激活和 generation-bound
 routine update（见[每日同步说明](daily-sync.md)）；双 MCP 拓扑已在本机
-部署运行——data socket 提供 23 data tools（`generic-data-v7`，含 `plan_market_update`/
-`run_market_update`，market 单版本序列：
+部署运行——`mcp.sock` 的 `ops` 入口提供 15 data tools（`generic-data-v8`，含
+`plan_market_update`/`run_market_update`，文本模式 `full`，market 单版本序列：
 version_id=内容 hex，latest-only）、acquire socket 提供
-10 acquisition tools；已部署实例为 compact schema 21，代码（main）为 schema 24
-（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024，未部署）；部署版本、generation
+10 acquisition tools；生产只有 `ops` 入口，`research`/`maint` 入口未部署（v8 第二阶段）。
+已部署实例为 compact schema 24，代码（main）同为 schema 24
+（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024），注册 24 data tools（三个入口）；部署版本、generation
 与数据量等机器事实只在 [STATUS](STATUS.md)
 维护，本文不复述。历史记录（preview.29 时期）：2026-09-30 operator-path 曾激活
 generation `2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，

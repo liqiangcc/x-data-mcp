@@ -4,16 +4,17 @@
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
-当前部署为双 MCP server：data socket 提供 23 data tools（capability revision
-`generic-data-v7`，含只读 `get_yearly_base_years` 与
-`plan_market_update`/`run_market_update`，market 单版本序列：
+当前部署为双 MCP server：`mcp.sock` 的 `ops` 入口提供 15 data tools（capability
+revision `generic-data-v8`，含只读 `get_yearly_base_years` 与
+`plan_market_update`/`run_market_update`，文本模式 `full`，market 单版本序列：
 version_id=内容 hex，latest-only），acquisition socket 提供
-10 acquisition tools；已部署实例为 compact schema 21，代码（main）为 schema 24
-（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024，未部署）。
-`market.daily` 前复权价的精度同样要分开读：已部署实例（schema 21）为 **2 位小数**；
-代码（schema 22 起，`qfq-exact-v1`，M1 PR-3）为**最多 6 位小数**（精确有理数链、末次一次
-舍入，尾随零不补），且数值可能与旧 2dp 在"恰好落在半分位"的 bar 上差 1 分——这不是
-回归，是旧 2dp 本身依赖中间精度、不可跨实现复现（[issue-383 设计](tasks/issue-383-m1-research-data.md)
+10 acquisition tools；生产只有 `ops` 入口，`research`/`maint` 入口未部署（v8 第二阶段）。
+已部署实例为 compact schema 24，代码（main）同为 schema 24
+（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024），注册 24 data tools（三个入口）。
+`market.daily` 前复权价的精度随 schema 22 起的 `qfq-exact-v1` 为**最多 6 位小数**
+（精确有理数链、末次一次舍入，尾随零不补）；部署已到 schema 24，不再有 schema 21 的
+2 位小数实例（历史数值可能与旧 2dp 在"恰好落在半分位"的 bar 上差 1 分——这不是回归，
+是旧 2dp 本身依赖中间精度、不可跨实现复现，[issue-383 设计](tasks/issue-383-m1-research-data.md)
 §4.3）。部署版本、
 generation、catalog 与行情数据量等机器事实只在
 [STATUS](STATUS.md) 维护，本文不复述；工具数不是稳定业务契约；客户端必须以
@@ -297,7 +298,7 @@ request_outcome，区分未绑定、任务绑定、请求级终态、结果待�
 
 v7 增量（历史记录，代码已实现、部署日随二进制切换生效）：`plan_market_update`
 /`run_market_update` 无状态计划+受理工作流，契约见
-[generic-data-v7](contracts/generic-data-v7.md)，部署切换步骤见
+[generic-data-v8](contracts/generic-data-v8.md)，部署切换步骤见
 [v7-switch-checklist](contracts/v7-switch-checklist.md)。
 
 此前逐类别工具、共享结果和组合探索已移到 [历史草案](history/mcp-tools-proposals.md)，仅供追溯，不据此额外注册工具。当前兼容差距与首个任务验收统一见实施基线。

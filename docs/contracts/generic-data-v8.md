@@ -1,8 +1,9 @@
 # generic-data-v8 契约（入口拆分、列式 v2、任务面 v2）
 
-**状态**：计划，未部署。当前部署仍是 `generic-data-v7` / 23 data tools / compact schema 21
-（见 [STATUS](../STATUS.md)）；本文描述的是 main 上已合并、尚未部署的 v8 代码事实。
-部署日步骤与并行期见 [v8-switch-checklist](v8-switch-checklist.md)。
+**状态**：已部署（2026-10-27，v8 最小切换）。当前部署为 `generic-data-v8` /
+15 data tools（`mcp.sock` 的 `ops` 入口）/ compact schema 24（见 [STATUS](../STATUS.md)）。
+research/maint 入口、隧道切换与清单 §2.1/§2.2/§2.6 推迟到第二阶段，
+见 [v8-switch-checklist](v8-switch-checklist.md) §9。
 
 设计依据：v8 设计 [#387](../tasks/issue-387-v8-ai-tool-surface.md)。凡本文标注「实现已核」的
 论断都附 `文件:行号`（行号取自 main `84b6657`）；未标注的是契约目标或未验证项。
@@ -11,8 +12,8 @@
 
 | 项 | v7（已部署） | v8（代码，未部署） | 兼容性 |
 |---|---|---|---|
-| `capability_revision` | `generic-data-v7` | `generic-data-v8`（部署日翻；代码当前仍是 v7，见 §12） | 客户端按 revision 握手，不匹配即停 |
-| data 工具数 | 23 | **24**（+ 只读 `list_catalog_facets`） | 旧工具名全部保留，无重命名、无删除 |
+| `capability_revision` | `generic-data-v7` | `generic-data-v8`（2026-10-27 部署日翻） | 客户端按 revision 握手，不匹配即停 |
+| data 工具数 | 23 | 代码 24（+ 只读 `list_catalog_facets`）；最小切换部署的 `ops` 入口 15 | 旧工具名全部保留，无重命名、无删除 |
 | 入口 | 1 个 data socket（23 工具） | **3 个入口**：research 5 / ops 15 / maint 9（`src/data_supply/registry.rs:43,51,70`） | `mcp.sock` 变成编排入口；旧单元不带 `--entry` 时默认 `ops`（`src/bin/data_service.rs:44`） |
 | `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支） | 缺省仍是 `v1`；v1 字节不变 |
 | `tools/list` | 含 `outputSchema` | **不含** `outputSchema`，描述 ≤240 B | 客户端失去内联校验；schema 从 capabilities 按需取 |
@@ -358,7 +359,7 @@ v1 请求带 `fields`、`selection.kind=universe|market` 或 `filter.kind=cross_
 以下是 main 上的实现与 v8 设计不一致、而本 PR 只改文档无法修正的点。逐条给出事实与代价，
 不静默按设计写。
 
-1. **`capability_revision` 仍是 `generic-data-v7`**（`src/data_supply/mcp.rs:396`）。
+1. **`capability_revision` 已在 2026-10-27 部署日提交翻为 `generic-data-v8`**（`src/data_supply/mcp.rs`）。
    设计 §9.3 写“与 capability bump 同提交（代码常量）”，但 PR-1…PR-5 都没有 bump；AC-V8-13
    要求“v8 实现合并后”是 v8。**处理**：bump 与 `EXPECTED_DATA_CAPABILITY_REVISION`、
    `EXPECTED_SKILL_CAPABILITY_REVISION` 及当前状态区是同一组事实，提前 bump 会让

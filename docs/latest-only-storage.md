@@ -1,8 +1,8 @@
 # 单版本（latest-only）行情存储模型
 
-> **状态：已部署（schema 21，preview.32 起）。** schema 21 随 preview.32 于 2026-10-13 全新 init
-> 部署（旧 v20 库归档），`generic-data-v7` 自 preview.33 起运行；当前部署事实以
-> [STATUS](STATUS.md) 为准。
+> **状态：模型自 preview.32 起部署（schema 21，历史）；当前部署为 schema 24（M1，2026-10-27）。**
+> schema 21 随 preview.32 于 2026-10-13 全新 init 部署（旧 v20 库归档），`generic-data-v7`
+> 自 preview.33 起运行（历史）；当前部署事实以 [STATUS](STATUS.md) 为准。
 > 历史：本文写于实现合入前（实现 PR：`feat/latest-only-storage`，已随 PR #329 合入 main），
 > 下面「待合并」「合并并部署之前」等表述是当时的语境，保留作历史记录。
 > 年线 fresh / behind / invalid 的对外出参形状、契约版本号与 Skill 变更**以 S3/S4 定稿为准**，
