@@ -650,7 +650,8 @@ fn availability_reports_open_proven_gaps_with_canonical_evidence() {
         gaps[0].range,
         Filter::Daily {
             start_date: "2025-01-05".parse().unwrap(),
-            end_date: "2025-01-06".parse().unwrap()
+            end_date: "2025-01-06".parse().unwrap(),
+            as_of: None
         }
     );
     assert_eq!(
@@ -664,7 +665,8 @@ fn availability_reports_open_proven_gaps_with_canonical_evidence() {
         gaps[1].range,
         Filter::Daily {
             start_date: "2025-03-01".parse().unwrap(),
-            end_date: "2025-03-10".parse().unwrap()
+            end_date: "2025-03-10".parse().unwrap(),
+            as_of: None
         }
     );
     store
@@ -681,7 +683,8 @@ fn availability_reports_open_proven_gaps_with_canonical_evidence() {
         &[ConfirmedGap {
             range: Filter::Daily {
                 start_date: "2025-01-05".parse().unwrap(),
-                end_date: "2025-01-06".parse().unwrap()
+                end_date: "2025-01-06".parse().unwrap(),
+                as_of: None
             },
             evidence: format!(
                 "{{\"kind\":\"fixture_evidence\",\"id\":\"object-g2\",\"sha256\":\"{}\"}}",

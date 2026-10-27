@@ -19,6 +19,8 @@ pub struct PageMeta<'a> {
     pub next_cursor: Option<&'a str>,
     pub page_complete: bool,
     pub limitations: &'a [String],
+    /// M2 point-in-time facts (issue-391 §12.2).
+    pub temporal: Option<&'a TemporalBlock>,
 }
 
 /// Allowed `fields` per dataset (v8 §4.2). Defaults are the design's core
@@ -49,6 +51,82 @@ pub const CATALOG_DEFAULT: &[&str] = &["name", "industry_code", "industry_name"]
 pub const EVENT_FIELDS: &[&str] = &["category", "c1", "c2", "c3", "c4"];
 /// `market.calendar`: the row key is the only column (v8 §4.2).
 pub const CALENDAR_FIELDS: &[&str] = &["trade_day"];
+/// M2 parsed-fact column sets (issue-391 §12.4). The row key is implicit:
+/// `effective_from`/`effective_day`/`start_day`/`rule_id` depends on the
+/// dataset.
+pub const SECURITY_MASTER_FIELDS: &[&str] = &[
+    "effective_from",
+    "effective_to",
+    "instrument_class",
+    "issuer_key",
+    "issuer_resolution",
+    "listing_date",
+    "listing_source",
+    "delisting_date",
+    "delisting_source",
+    "arrangement_start",
+    "arrangement_end",
+    "known_at",
+    "flags",
+];
+pub const SECURITY_MASTER_DEFAULT: &[&str] = &[
+    "instrument_class",
+    "issuer_resolution",
+    "listing_date",
+    "listing_source",
+    "delisting_date",
+    "delisting_source",
+    "known_at",
+    "flags",
+];
+pub const SECURITY_NAMES_FIELDS: &[&str] = &[
+    "effective_from",
+    "effective_to",
+    "name",
+    "certainty",
+    "known_at",
+    "source_kind",
+];
+pub const CAPITAL_EVENTS_FIELDS: &[&str] = &[
+    "ordinal",
+    "effective_day",
+    "category",
+    "float_after",
+    "total_after",
+    "known_at",
+    "suspicious",
+];
+pub const RISK_WARNINGS_FIELDS: &[&str] = &[
+    "effective_from",
+    "effective_to",
+    "normalized_status",
+    "raw_status_code",
+    "announced_at",
+    "known_at",
+    "source_kind",
+];
+pub const SUSPENSIONS_FIELDS: &[&str] = &[
+    "start_day",
+    "end_day",
+    "certainty",
+    "missing_days",
+    "reason",
+    "known_at",
+];
+pub const PRICE_LIMIT_RULES_FIELDS: &[&str] = &[
+    "rule_id",
+    "market",
+    "board",
+    "status_class",
+    "listing_phase",
+    "band_bp",
+    "band_side",
+    "rounding",
+    "effective_from",
+    "effective_to",
+    "basis_ref",
+    "basis_status",
+];
 /// `get_data_availability` columns (v8 §4.1): per-entity facts plus the
 /// related-task ids; the task objects themselves are shared once under
 /// `tasks`.
@@ -81,6 +159,12 @@ pub fn query_fields(dataset: Dataset) -> (&'static [&'static str], &'static [&'s
         Dataset::Index => (DAILY_FIELDS, DAILY_FIELDS),
         Dataset::AdjustmentEvents => (EVENT_FIELDS, EVENT_FIELDS),
         Dataset::Calendar => (CALENDAR_FIELDS, CALENDAR_FIELDS),
+        Dataset::SecurityMaster => (SECURITY_MASTER_FIELDS, SECURITY_MASTER_DEFAULT),
+        Dataset::SecurityNames => (SECURITY_NAMES_FIELDS, SECURITY_NAMES_FIELDS),
+        Dataset::CapitalEvents => (CAPITAL_EVENTS_FIELDS, CAPITAL_EVENTS_FIELDS),
+        Dataset::RiskWarnings => (RISK_WARNINGS_FIELDS, RISK_WARNINGS_FIELDS),
+        Dataset::Suspensions => (SUSPENSIONS_FIELDS, SUSPENSIONS_FIELDS),
+        Dataset::PriceLimitRules => (PRICE_LIMIT_RULES_FIELDS, PRICE_LIMIT_RULES_FIELDS),
     }
 }
 
@@ -265,6 +349,12 @@ fn envelope(layout: &str, dataset: Dataset, meta: &PageMeta) -> Map<String, Valu
         out.insert(
             "limitations".to_owned(),
             serde_json::to_value(meta.limitations).unwrap(),
+        );
+    }
+    if let Some(temporal) = meta.temporal {
+        out.insert(
+            "temporal".to_owned(),
+            serde_json::to_value(temporal).unwrap(),
         );
     }
     out
@@ -507,8 +597,6 @@ pub fn catalog_table(
     Value::Object(out)
 }
 
-/// `layout:"table"` for `list_data_versions`: one row per version, no
-/// `integrity_sha256` (it equals `version_id`).
 /// `layout:"table"` for `market.adjustment_events` and `market.calendar`.
 /// Events keep one `entities` entry per row (a batch spans several symbols);
 /// the calendar is market-level and has none.
@@ -558,6 +646,63 @@ pub fn row_table(
     Value::Object(out)
 }
 
+/// `layout:"table"` for the M2 parsed-fact datasets (issue-391 §12.3).
+/// Columns come from [`Row::Fact`] cells; entity-bound datasets list one
+/// `entities` entry per row, the whole-market rule set lists none.
+pub fn fact_table(
+    dataset: Dataset,
+    manifest: &[ManifestEntry],
+    rows: &[Row],
+    fields: &[String],
+    meta: &PageMeta,
+) -> Value {
+    let (shared, overrides) = split_metadata(manifest);
+    let entity_bound = dataset.is_entity_bound();
+    let mut entities = Vec::new();
+    let mut cells: Cells<'_> = fields
+        .iter()
+        .map(|field| (field.as_str(), Vec::new()))
+        .collect();
+    for row in rows {
+        let Row::Fact {
+            entity,
+            cells: values,
+            ..
+        } = row
+        else {
+            continue;
+        };
+        if entity_bound {
+            entities.push(json!(
+                entity.as_ref().map(Security::symbol).unwrap_or_default()
+            ));
+        }
+        for field in fields {
+            let cell = values
+                .get(field.as_str())
+                .cloned()
+                .map_or(Value::Null, FactValue::json);
+            cells.get_mut(field.as_str()).unwrap().push(cell);
+        }
+    }
+    let mut out = envelope("table", dataset, meta);
+    if entity_bound {
+        out.insert("entities".to_owned(), Value::Array(entities));
+    }
+    out.insert(
+        "versions".to_owned(),
+        Value::Array(version_rows(manifest, &overrides)),
+    );
+    if !shared.is_empty() {
+        out.insert("metadata".to_owned(), Value::Object(shared));
+    }
+    out.insert("columns".to_owned(), Value::Object(columns(fields, &cells)));
+    out.insert("row_count".to_owned(), json!(rows.len()));
+    Value::Object(out)
+}
+
+/// `layout:"table"` for `list_data_versions`: one row per version, no
+/// `integrity_sha256` (it equals `version_id`).
 pub fn versions_table(dataset: Dataset, items: &[VersionInfo], meta: &PageMeta) -> Value {
     let versions = items
         .iter()

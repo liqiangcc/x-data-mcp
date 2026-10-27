@@ -1,6 +1,6 @@
 # 数据目录（研究数据层）
 
-> **状态**：当前可用数据的入口说明。最后核实 2026-10-26。
+> **状态**：当前可用数据的入口说明。最后核实 2026-10-27。
 > **范围**（owner 2026-10-26 确认）：价量因子，加股本和市值；只做日线；A 股加指数基准；
 > ETF 以《ETF 收录前取证调研》（2026-10-26）的结论为准；先做批量导出。首期目标为**严谨回测级**（§3.1）。
 > **本文不写**：工具参数 schema（见 §1.2 的契约与 `get_data_capabilities`）、实体数与日期范围
@@ -42,8 +42,12 @@
 
 ## 2. 已提供的数据
 
-三个数据集：`securities.catalog`、`market.daily`、`market.yearly`
+三个**已部署**数据集：`securities.catalog`、`market.daily`、`market.yearly`
 （`src/data_supply/wire.rs:9-20`）。三者都用同一个实体身份。
+
+M2 的 6 个解析事实数据集（`market.security_master`、`security_names`、`capital_events`、
+`risk_warnings`、`suspensions`、`price_limit_rules`）已在 v8 代码接线，但**未部署**；生产数据要等
+M2 部署（见 §3.1「M2 接线状态」）。
 
 **实体身份**：`{exchange, code}`，`exchange ∈ {sh, sz}`，`code` 为 6 位数字，展示形式
 `sh.600000`（`src/data_supply/wire.rs:34-56`）。非规范实体在写入侧 fail-closed
@@ -256,7 +260,17 @@ AC-M1-1…12 是实现验收依据，见 [实现记录](tasks/issue-383-m1-imple
 
 范围：按生效区间的证券主表（证券类型、上市日、退市日、代码复用标记）、股本历史事件、
 历史 ST（依赖 #308）、停牌标记（`unresolved_gap` + 候选来源）、按生效日期管理的涨跌停规则表、
-T 日股票池 `universe(as_of=T)`。验收标准建议：
+T 日股票池 `universe(as_of=T)`。
+
+**M2 接线状态（2026-10-27）**：M2 已接线，生产数据要等 M2 部署。六个数据集
+`market.security_master` / `market.security_names` / `market.capital_events` /
+`market.risk_warnings` / `market.suspensions` / `market.price_limit_rules` 已进入 v8 代码的
+dataset 分支与 detailed capabilities `temporal` 声明（PR #425，未部署）；`as_of`/`known_at` 只在
+声明为 `true` 的数据集上接受，`known_at_coverage` 为 `partial` 或 `none`
+（`src/data_supply/wire.rs:127-146`）。未登记版本返回 `manifest.status=absent` 与 0 行，不服务
+无版本数据（`src/sqlite_supply/m2.rs:73-82,498-506`）。**#308 未准入时历史 ST 不出行**：
+`market.risk_warnings` 不用当前名称推断历史，`unresolved` 也不伪装成已知区间。这些数据集目前
+没有生产数据，读取结果不能当作 M2 已交付。验收标准建议：
 
 - AC-M2-1：主表覆盖目录成员与官方包内的退市代码，每个代码的上市日有来源或 `unknown`，
   缺失率与来源一并披露。
@@ -302,6 +316,10 @@ T 日股票池 `universe(as_of=T)`。验收标准建议：
 | 14 | 财务数据 | 不在范围 | 首期范围是价量 + 股本/市值，不含财务 | #1 | 不在首期 | — |
 | 15 | 分钟线 | 不在范围 | 首期只做日线；`series_bars.trade_day` 是日序号，分钟线要改主键 | #1 | 不在首期 | — |
 | 16 | 北交所 | 不在范围 | 暂不纳入；规则 S 已把 `f0=2` 显式排除（`scope.rs:10-24`） | #1、#246 | 不在首期 | — |
+
+> M2 相关项（#4 股本、#5 市值、#6 上市日、#7 退市日、#9 历史 ST、#11 停牌、#12 涨跌停）对应的
+> 6 个 dataset 已接线，但**生产数据要等 M2 部署**；未登记版本返回 `absent`，`risk_warnings` 在
+> #308 未准入时历史 ST 不出行。详见 §3.1「M2 接线状态」。
 
 **ETF 的取证结论**（2026-10-26）：
 

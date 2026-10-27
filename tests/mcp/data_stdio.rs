@@ -1389,7 +1389,8 @@ fn real_data_stdio_v8_input_normalization_accepts_friendly_spellings() {
         false,
     );
     assert_eq!(catalog["dataset"], "securities.catalog");
-    // AC-V8-11: M2 point-in-time parameters are reserved, not ignored.
+    // AC-M2-12: point-in-time parameters are dataset-declared, not ignored;
+    // market.daily declares neither.
     let err = s.call(
         "query_data",
         json!({
@@ -1400,7 +1401,13 @@ fn real_data_stdio_v8_input_normalization_accepts_friendly_spellings() {
         }),
         true,
     );
-    assert_eq!(err["code"], "reserved_for_m2");
+    assert_eq!(err["code"], "invalid_arguments");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported_for_dataset")
+    );
     // §7.3: the same request_id in the friendly and the contract spelling is
     // one request; the replay is `reused`, so the digest matched byte for
     // byte.

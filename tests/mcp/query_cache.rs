@@ -40,6 +40,7 @@ fn paged_query_shares_one_snapshot_and_byte_cap_evicts_lru() {
         a.filter = Filter::Daily {
             start_date: "2024-12-01".parse().unwrap(),
             end_date,
+            as_of: None,
         };
         a
     };
@@ -69,6 +70,7 @@ fn paged_query_shares_one_snapshot_and_byte_cap_evicts_lru() {
         a.filter = Filter::Daily {
             start_date,
             end_date: end.parse().unwrap(),
+            as_of: None,
         };
         a
     };

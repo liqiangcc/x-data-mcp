@@ -83,6 +83,7 @@ impl MetaInput {
             next_cursor: self.next_cursor.as_deref(),
             page_complete: self.page_complete,
             limitations: &self.limitations,
+            temporal: None,
         }
     }
 }

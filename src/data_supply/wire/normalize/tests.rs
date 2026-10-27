@@ -36,6 +36,20 @@ fn daily(extra: Value) -> Value {
     base
 }
 
+fn m2(dataset: &str, extra: Value) -> Value {
+    let mut base = json!({
+        "dataset": dataset,
+        "contract_version": "v2",
+        "selection": {"kind": "single", "entity": {"exchange": "sh", "code": "600000"}},
+        "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2025-12-31"},
+        "version": {"kind": "latest_per_entity"},
+    });
+    base.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    base
+}
+
 /// §2.1.1 #1: `entity: "sh.600000"` used to fail with "expected struct
 /// Security"; both spellings now decode to the same identity.
 #[test]
@@ -134,6 +148,7 @@ fn rejection_03_dates_accept_compact_and_dashed_forms() {
         Filter::Daily {
             start_date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
             end_date: NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+            as_of: None,
         }
     );
     // Range writes and plan/run inputs take the same spelling.
@@ -434,18 +449,129 @@ fn cancel_expected_revision_is_optional() {
     assert_eq!(explicit.expected_revision, Some(7));
 }
 
-/// AC-V8-11: `as_of`/`known_at` are reserved names, not bare unknown fields.
+/// AC-M2-12 (replacing AC-V8-11's blanket reservation): `as_of`/`known_at`
+/// are accepted exactly on the datasets whose `temporal` declaration says so,
+/// and rejected with `invalid_arguments` + `unsupported_for_dataset`
+/// everywhere else. `temporal=false` still rejects, and the versions list —
+/// which cannot answer point-in-time — rejects both even on a declared
+/// dataset.
 #[test]
-fn as_of_and_known_at_are_reserved_for_m2() {
-    for field in ["as_of", "known_at"] {
-        for name in ["query_data", "get_data_availability", "list_data_versions"] {
-            let mut input = daily(json!({}));
-            input[field] = json!("2025-01-01");
-            let (code, message) = rejection(name, input);
-            assert_eq!(code, "reserved_for_m2", "{name}/{field}");
-            assert!(message.contains(field), "{message}");
-            assert!(message.contains("M2"), "{message}");
-        }
+fn temporal_parameters_follow_the_dataset_declaration() {
+    // market.daily declares neither parameter.
+    let with_known_at = daily(json!({"known_at": "2025-06-30"}));
+    let (code, message) = rejection("query_data", with_known_at);
+    assert_eq!(code, "invalid_arguments");
+    assert!(message.contains("unsupported_for_dataset"), "{message}");
+    assert!(message.contains("market.daily"), "{message}");
+    let with_as_of = daily(json!({"filter": {
+        "kind": "daily",
+        "start_date": "2025-01-01",
+        "end_date": "2025-12-31",
+        "as_of": "2025-06-30"
+    }}));
+    let (code, message) = rejection("get_data_availability", with_as_of);
+    assert_eq!(code, "invalid_arguments");
+    assert!(message.contains("unsupported_for_dataset"), "{message}");
+
+    // The versions list does not decode `known_at` even on a declared dataset.
+    let mut versions = m2("market.security_master", json!({}));
+    versions["known_at"] = json!("2025-06-30");
+    let (code, message) = rejection("list_data_versions", versions);
+    assert_eq!(code, "invalid_arguments");
+    assert!(message.contains("accepted only by"), "{message}");
+
+    // Declared on security_master: both parameters decode and keep their
+    // meaning (as_of in filter, known_at top-level).
+    let query: Query = decoded(
+        "query_data",
+        m2(
+            "market.security_master",
+            json!({
+                "known_at": "2025-06-30",
+                "filter": {
+                    "kind": "daily",
+                    "start_date": "2020-01-01",
+                    "end_date": "2025-12-31",
+                    "as_of": "2025-06-30"
+                }
+            }),
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        query.known_at.map(|day| day.to_string()).as_deref(),
+        Some("2025-06-30")
+    );
+    assert_eq!(
+        query.filter.as_of().map(|day| day.to_string()).as_deref(),
+        Some("2025-06-30")
+    );
+
+    // capital_events declares `as_of` but not `known_at`: the exact split the
+    // declaration publishes is what the decode layer enforces.
+    let capital: Query = decoded(
+        "get_data_availability",
+        m2(
+            "market.capital_events",
+            json!({"filter": {
+                "kind": "daily",
+                "start_date": "2020-01-01",
+                "end_date": "2025-12-31",
+                "as_of": "2025-06-30"
+            }}),
+        ),
+    )
+    .unwrap();
+    assert!(capital.filter.as_of().is_some());
+    let mut capital = m2("market.capital_events", json!({}));
+    capital["known_at"] = json!("2025-06-30");
+    let (code, message) = rejection("query_data", capital);
+    assert_eq!(code, "invalid_arguments");
+    assert!(message.contains("unsupported_for_dataset"), "{message}");
+
+    // A top-level `as_of` is a wrong position, not an unsupported dataset.
+    let mut misplaced = m2("market.security_master", json!({}));
+    misplaced["as_of"] = json!("2025-06-30");
+    let (code, message) = rejection("query_data", misplaced);
+    assert_eq!(code, "invalid_arguments");
+    assert!(message.contains("belongs in filter"), "{message}");
+}
+
+/// The capability declaration and the read model's coverage table must agree:
+/// the wire layer owns the spelling, the research layer owns the semantics
+/// (issue-391 §12.2/§12.3).
+#[test]
+fn temporal_declaration_matches_the_read_model() {
+    for dataset in [
+        Dataset::SecurityMaster,
+        Dataset::SecurityNames,
+        Dataset::CapitalEvents,
+        Dataset::RiskWarnings,
+        Dataset::Suspensions,
+        Dataset::PriceLimitRules,
+    ] {
+        let declaration = dataset.temporal();
+        assert!(declaration.as_of, "{} should declare as_of", dataset.name());
+        let name = dataset.temporal_name().unwrap();
+        assert_eq!(
+            match declaration.known_at_coverage {
+                TemporalCoverage::Full => "complete",
+                TemporalCoverage::Partial => "partial",
+                TemporalCoverage::None => "none",
+            },
+            crate::research::temporal::KnownAtCoverage::declared(name).as_str(),
+            "{}",
+            dataset.name()
+        );
+        assert_eq!(
+            declaration.known_at,
+            declaration.known_at_coverage != TemporalCoverage::None,
+            "{}",
+            dataset.name()
+        );
+    }
+    for dataset in [Dataset::Daily, Dataset::Yearly, Dataset::Index] {
+        assert_eq!(dataset.temporal(), TemporalSupport::NONE);
     }
 }
 

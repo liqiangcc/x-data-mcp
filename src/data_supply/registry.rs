@@ -219,6 +219,11 @@ pub struct Capability {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset: Option<Dataset>,
+    /// Per-dataset point-in-time declaration (issue-391 §12.3). Present on
+    /// every dataset-bound detailed item; both booleans are always serialized
+    /// so a reader sees `false` rather than inferring "not declared".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temporal: Option<TemporalSupport>,
     pub contract_version: ContractVersion,
     pub implemented: bool,
     pub operator_only: bool,

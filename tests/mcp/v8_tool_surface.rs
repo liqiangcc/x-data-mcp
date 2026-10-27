@@ -103,9 +103,14 @@ fn entry_allowlists_cover_every_registered_tool_and_research_is_read_only() {
 
 #[test]
 fn tools_list_stays_within_entry_budgets_without_output_schema() {
+    // v8 §6.3 allocated 11_000 / 27_500 / 14_500 before M2. M2 PR-9 adds
+    // six datasets to the shared `Dataset` input enum, so the measured
+    // research/ops payloads grew to 11_511 / 28_220 B while maint (no
+    // dataset enum) stayed at 13_493 B. The budgets carry that documented
+    // surface growth; they are not relaxed for any other reason.
     let budgets = [
-        (EntryKind::Research, 5usize, 11_000usize),
-        (EntryKind::Ops, 15usize, 27_500usize),
+        (EntryKind::Research, 5usize, 11_700usize),
+        (EntryKind::Ops, 15usize, 28_400usize),
         (
             EntryKind::Maint,
             if cfg!(target_os = "linux") { 9 } else { 8 },
@@ -139,6 +144,82 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
         .filter(|(_, bytes, budget)| bytes > budget)
         .collect();
     assert!(over.is_empty(), "tools/list over budget: {measured:?}");
+}
+
+#[test]
+fn temporal_declaration_is_identical_on_every_entry_that_serves_the_query() {
+    let expected = json!({
+        "as_of": true,
+        "known_at": true,
+        "known_at_coverage": "partial"
+    });
+    for entry in [EntryKind::Research, EntryKind::Ops, EntryKind::All] {
+        let (api, _dir) = api(entry);
+        let detail = api
+            .call(
+                "get_data_capabilities",
+                json!({"dataset":"market.security_master","operation":"query_data"}),
+            )
+            .unwrap();
+        assert_eq!(
+            detail["items"][0]["temporal"],
+            expected,
+            "{} entry",
+            entry.name()
+        );
+        // A dataset with `known_at=false` publishes the split, and the
+        // declared-false parameter stays rejected on every entry.
+        let capital = api
+            .call(
+                "get_data_capabilities",
+                json!({"dataset":"market.capital_events","operation":"query_data"}),
+            )
+            .unwrap();
+        assert_eq!(
+            capital["items"][0]["temporal"],
+            json!({"as_of": true, "known_at": false, "known_at_coverage": "none"}),
+            "{} entry",
+            entry.name()
+        );
+        let err = api
+            .call(
+                "query_data",
+                json!({
+                    "dataset": "market.capital_events",
+                    "contract_version": "v2",
+                    "selection": {"kind": "single", "entity": "sh.600000"},
+                    "filter": {"kind": "daily", "start_date": "2025-01-01", "end_date": "2025-12-31"},
+                    "known_at": "2025-06-30"
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "invalid_arguments", "{} entry", entry.name());
+        assert!(
+            err.message.contains("unsupported_for_dataset"),
+            "{} entry: {}",
+            entry.name(),
+            err.message
+        );
+    }
+
+    // Maint does not serve query_data (v8 §3.1); the M2 wiring must not widen
+    // an entry allowlist.
+    #[cfg(target_os = "linux")]
+    {
+        let (api, _dir) = api(EntryKind::Maint);
+        let err = api
+            .call(
+                "query_data",
+                json!({
+                    "dataset": "market.security_master",
+                    "contract_version": "v2",
+                    "selection": {"kind": "single", "entity": "sh.600000"},
+                    "filter": {"kind": "daily", "start_date": "2025-01-01", "end_date": "2025-12-31"}
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "unknown_tool");
+    }
 }
 
 #[test]
