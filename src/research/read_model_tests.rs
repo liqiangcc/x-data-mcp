@@ -727,10 +727,9 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
             "sz.302132",
         ],
     ];
-    // Members without a bar, per day: `sh.600018` has no series at all (the
-    // reused code is only in the main table), `sz.000004` is suspended on days
-    // 3/4, and `sz.000631` only has bars on days 0 and 9.
-    let expected_member_without_bar: Vec<usize> = vec![1, 1, 1, 2, 2, 1, 1, 1, 1, 1];
+    // Members without a bar, per day: `sz.000631` only has bars on days 0 and 9,
+    // and `sz.000004` is suspended on days 3/4. Both stay in the universe.
+    let expected_member_without_bar: Vec<usize> = vec![0, 1, 1, 2, 2, 1, 1, 1, 1, 0];
     // Bars before the listing date: 600519 on days 0..3.
     let expected_bar_without_member: Vec<usize> = vec![1, 1, 1, 1, 0, 0, 0, 0, 0, 0];
 
@@ -775,8 +774,6 @@ fn universe_matches_the_bar_evidence_set_on_ten_historical_days() {
         for entity in &member_without_bar {
             let report = tradability(&c, entity, Temporal::effective_only(*as_of)).unwrap();
             let expected_state = match entity.as_str() {
-                // No series was ever written for the reused code.
-                "sh.600018" => Tradability::Unknown(TradabilityReason::NoBar),
                 // The confirmed suspension row covers days 3 and 4.
                 "sz.000004" => Tradability::NotTradable(TradabilityReason::Suspended),
                 // The interval is `unresolved_gap`: a missing bar is a data gap,
