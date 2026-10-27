@@ -835,7 +835,7 @@ fn head_transition_refreshes_a_stale_held_head() {
 /// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
 /// version-manifest/result tables below are replaced by `market_series` +
 /// `series_bars` + `yearly_series_lineage` + `market_events`.
-const COMPACT_TABLES: [&str; 12] = [
+const COMPACT_TABLES: [&str; 20] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
@@ -852,6 +852,16 @@ const COMPACT_TABLES: [&str; 12] = [
     "index_series_meta",
     // Schema 22 (M1 PR-6, issue-383 §3.8): the derived trading calendar.
     "trading_days",
+    // Schema 23 (M2 PR-1, issue-391 §9.2/§8.1): the seven table groups of the
+    // parsed-fact layer plus the two trading-rule tables.
+    "security_master",
+    "code_migrations",
+    "security_name_history",
+    "capital_events",
+    "risk_warning_intervals",
+    "suspension_intervals",
+    "price_limit_rules",
+    "min_tick_rules",
 ];
 /// Dropped by migration 021 — their absence is part of the v21 shape.
 const DROPPED_V19_TABLES: [&str; 12] = [
@@ -1029,6 +1039,120 @@ fn assert_compact_shape(path: &std::path::Path) {
     ] {
         assert!(index.contains(&column.to_string()), "missing {column}");
     }
+    // §9.2 (schema 23): the 时点 columns are per table, so a missing
+    // `effective_from`/`effective_to`/`known_at` or a lost second-source column
+    // is a shape error, not a writer bug. Column lists are checked, not the
+    // CHECK bodies: the constraints themselves are exercised by
+    // `schema23_constraints_reject_duplicates_and_bad_values`.
+    let master = raw_columns(path, "security_master");
+    for column in [
+        "exchange",
+        "code",
+        "effective_from",
+        "effective_to",
+        "instrument_class",
+        "issuer_key",
+        "issuer_resolution",
+        "listing_date",
+        "listing_date_tdx",
+        "listing_source",
+        "b_listing_date",
+        "delisting_date",
+        "delisting_date_tdx",
+        "delisting_source",
+        "delisting_reason_class",
+        "arrangement_start",
+        "arrangement_end",
+        "listing_conflict",
+        "delisting_conflict",
+        "known_at",
+        "source_binding_digest",
+        "evidence_digest",
+    ] {
+        assert!(master.contains(&column.to_string()), "missing {column}");
+    }
+    let migrations = raw_columns(path, "code_migrations");
+    for column in ["from_code", "to_code", "effective_from", "certainty"] {
+        assert!(migrations.contains(&column.to_string()), "missing {column}");
+    }
+    let names = raw_columns(path, "security_name_history");
+    for column in ["name", "certainty", "known_at", "source_kind"] {
+        assert!(names.contains(&column.to_string()), "missing {column}");
+    }
+    // §9.2 note 2: the immutable f32 bits and the derived 股 counts share one
+    // row, and 知晓时间 is a separate nullable column.
+    let capital = raw_columns(path, "capital_events");
+    for column in [
+        "ordinal",
+        "effective_day",
+        "category",
+        "float_before_bits",
+        "total_after_bits",
+        "float_after",
+        "total_after",
+        "prev_is_lagged",
+        "suspicious",
+        "known_at",
+        "source_binding_digest",
+        "evidence_digest",
+    ] {
+        assert!(capital.contains(&column.to_string()), "missing {column}");
+    }
+    // §6.3: 公告时间 and 知晓时间 are separate columns; the raw status code is
+    // kept next to the normalised vocabulary.
+    let warnings = raw_columns(path, "risk_warning_intervals");
+    for column in [
+        "raw_status_code",
+        "normalized_status",
+        "announced_at",
+        "known_at",
+        "source_kind",
+    ] {
+        assert!(warnings.contains(&column.to_string()), "missing {column}");
+    }
+    // §7.3/Q6: one row per interval with its missing-day count.
+    let suspensions = raw_columns(path, "suspension_intervals");
+    for column in [
+        "start_day",
+        "end_day",
+        "certainty",
+        "missing_days",
+        "reason",
+    ] {
+        assert!(
+            suspensions.contains(&column.to_string()),
+            "missing {column}"
+        );
+    }
+    // §8.1: 幅度/取整/上市阶段 are rule data, and `basis_ref` names the 出处.
+    let limits = raw_columns(path, "price_limit_rules");
+    for column in [
+        "market",
+        "board",
+        "status_class",
+        "listing_phase",
+        "band_bp",
+        "band_side",
+        "rounding",
+        "effective_from",
+        "effective_to",
+        "basis_ref",
+        "basis_status",
+    ] {
+        assert!(limits.contains(&column.to_string()), "missing {column}");
+    }
+    let ticks = raw_columns(path, "min_tick_rules");
+    for column in [
+        "market",
+        "board",
+        "tick_units",
+        "price_scale",
+        "effective_from",
+        "basis_ref",
+        "basis_status",
+    ] {
+        assert!(ticks.contains(&column.to_string()), "missing {column}");
+    }
 }
 fn assert_legacy_shape(path: &std::path::Path) {
     assert_eq!(raw_user_version(path), SCHEMA_VERSION);
@@ -1085,12 +1209,410 @@ fn upgrade_compact_replaces_empty_schema18_database() {
         .exists([])
         .unwrap();
     assert!(!broken);
-    // Schema 21 is the managed current schema: read/write accept it, while
-    // a second `upgrade_compact` still refuses the compact file.
+    // The latest compact revision is the managed current schema: read/write
+    // accept it, while a second `upgrade_compact` still refuses the compact
+    // file.
     db.read(|_| Ok(())).unwrap();
     db.write(|_| Ok(())).unwrap();
     let e = db.upgrade_compact().unwrap_err().to_string();
     assert!(e.contains("cannot upgrade to compact"), "{e}");
+}
+
+fn hex32(byte: u8) -> String {
+    format!("{byte:02x}").repeat(32)
+}
+
+/// Schema 23 length/order assertion (issue-391 §9.4, §19 note 8): the fixed
+/// array length, the schema constant and the `schema_migrations` rows must
+/// agree, and the tail of the chain must be the M2 security-master step.
+#[test]
+fn compact_migration_chain_matches_schema_version() {
+    assert_eq!(
+        MIGRATIONS.len() + COMPACT_MIGRATIONS.len(),
+        COMPACT_SCHEMA_VERSION as usize,
+        "migration chain and COMPACT_SCHEMA_VERSION disagree"
+    );
+    let tail = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 1];
+    assert!(
+        tail.contains("CREATE TABLE security_master(")
+            && tail.contains("CREATE TABLE price_limit_rules(")
+            && tail.contains("CREATE TABLE min_tick_rules("),
+        "the tail of the compact chain is not migration 023"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chain.db");
+    SqliteTasks::new(&path).initialize_compact().unwrap();
+    let c = Connection::open(&path).unwrap();
+    let rows: Vec<(u32, String)> = c
+        .prepare("SELECT version,checksum FROM schema_migrations ORDER BY version")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(rows.len(), COMPACT_SCHEMA_VERSION as usize);
+    let chain: Vec<&str> = MIGRATIONS
+        .iter()
+        .chain(COMPACT_MIGRATIONS.iter())
+        .copied()
+        .collect();
+    for (index, (version, checksum)) in rows.iter().enumerate() {
+        assert_eq!(*version as usize, index + 1, "chain gap at {index}");
+        assert_eq!(
+            *checksum,
+            crate::hash::sha256(chain[index].as_bytes()),
+            "checksum mismatch at version {version}"
+        );
+    }
+}
+
+/// AC-M2-14 first half: the migration builds on both paths (fresh compact init
+/// and the empty 18 -> compact upgrade) and creates the new tables empty.
+#[test]
+fn schema23_builds_on_fresh_init_and_empty_upgrade() {
+    for fresh in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m2.db");
+        let db = SqliteTasks::new(&path);
+        if fresh {
+            db.initialize_compact().unwrap();
+        } else {
+            db.initialize().unwrap();
+            db.upgrade_compact().unwrap();
+        }
+        assert_compact_shape(&path);
+        let c = Connection::open(&path).unwrap();
+        for table in [
+            "security_master",
+            "code_migrations",
+            "security_name_history",
+            "capital_events",
+            "risk_warning_intervals",
+            "suspension_intervals",
+            "price_limit_rules",
+            "min_tick_rules",
+        ] {
+            let n: i64 = c
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} must be created empty (fresh={fresh})");
+        }
+        let broken: bool = c
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!broken, "foreign key violations (fresh={fresh})");
+        let rows: i64 = c
+            .query_row(
+                "SELECT count(*) FROM schema_migrations WHERE version=23",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "migration 023 missing (fresh={fresh})");
+    }
+}
+
+/// AC-M2-14 second half: a schema-22 file is refused and left untouched (no
+/// in-place rewrite), and a file one revision ahead of this binary hits the
+/// same `version > COMPACT_SCHEMA_VERSION` guard — which is exactly the branch
+/// an older binary takes on a schema-23 file.
+#[test]
+fn schema23_refuses_foreign_schema_files_without_rewriting_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v23.db");
+    let db = SqliteTasks::new(&path);
+    db.initialize_compact().unwrap();
+    {
+        let c = Connection::open(&path).unwrap();
+        c.execute("DELETE FROM schema_migrations WHERE version>22", [])
+            .unwrap();
+        c.pragma_update(None, "user_version", 22).unwrap();
+    }
+    let e = db.read(|_| Ok(())).unwrap_err().to_string();
+    assert!(e.contains("unsupported/uninitialized schema 22"), "{e}");
+    let e = db.write(|_| Ok(())).unwrap_err().to_string();
+    assert!(e.contains("unsupported/uninitialized schema 22"), "{e}");
+    assert_eq!(
+        raw_user_version(&path),
+        22,
+        "the schema-22 file was rewritten"
+    );
+    {
+        let c = Connection::open(&path).unwrap();
+        c.pragma_update(None, "user_version", COMPACT_SCHEMA_VERSION + 1)
+            .unwrap();
+    }
+    let e = db.read(|_| Ok(())).unwrap_err().to_string();
+    assert!(
+        e.contains(&format!(
+            "unsupported/uninitialized schema {}",
+            COMPACT_SCHEMA_VERSION + 1
+        )),
+        "{e}"
+    );
+    assert_eq!(
+        raw_user_version(&path),
+        COMPACT_SCHEMA_VERSION + 1,
+        "a newer schema file was rewritten"
+    );
+}
+
+/// AC-M2-14 third part: the unique keys and CHECKs of the schema-23 tables
+/// reject duplicates and impossible rows, including the extended
+/// `derived_dataset_versions.dataset_kind` vocabulary.
+#[test]
+fn schema23_constraints_reject_duplicates_and_bad_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("constraints.db");
+    let db = SqliteTasks::new(&path);
+    db.initialize_compact().unwrap();
+    let c = Connection::open(&path).unwrap();
+    c.pragma_update(None, "foreign_keys", true).unwrap();
+    let evidence = hex32(0x11);
+    let binding = hex32(0x22);
+    c.execute(
+        &format!("INSERT INTO evidence_bundles VALUES(X'{evidence}','derived','{{}}')"),
+        [],
+    )
+    .unwrap();
+    c.execute(
+        &format!(
+            "INSERT INTO source_bindings VALUES(X'{binding}','gen-1',X'{}',X'{}',X'{}',X'{evidence}')",
+            hex32(0x33),
+            hex32(0x44),
+            hex32(0x55)
+        ),
+        [],
+    )
+    .unwrap();
+    fn rejected(label: &str, r: rusqlite::Result<usize>) {
+        assert!(r.is_err(), "{label} was accepted");
+    }
+    let master = |exchange: &str,
+                  code: &str,
+                  from: i64,
+                  to: &str,
+                  listing: &str,
+                  listing_source: &str,
+                  evidence: &str| {
+        format!(
+            "INSERT INTO security_master(exchange,code,effective_from,effective_to,\
+             instrument_class,issuer_resolution,listing_date,listing_source,\
+             delisting_source,delisting_reason_class,listing_conflict,\
+             delisting_conflict,source_binding_digest,evidence_digest) \
+             VALUES('{exchange}','{code}',{from},{to},0,'code_date',{listing},\
+             '{listing_source}','unknown','other',0,0,X'{binding}',X'{evidence}')"
+        )
+    };
+    c.execute(
+        &master(
+            "sh",
+            "600000",
+            1000,
+            "NULL",
+            "9000",
+            "exchange_list",
+            &evidence,
+        ),
+        [],
+    )
+    .unwrap();
+    rejected(
+        "duplicate security_master interval",
+        c.execute(
+            &master(
+                "sh",
+                "600000",
+                1000,
+                "NULL",
+                "9000",
+                "exchange_list",
+                &evidence,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "exchange outside (sh,sz,bj)",
+        c.execute(
+            &master(
+                "xx",
+                "600001",
+                1000,
+                "NULL",
+                "9000",
+                "exchange_list",
+                &evidence,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "effective_to not after effective_from",
+        c.execute(
+            &master(
+                "sh",
+                "600002",
+                1000,
+                "1000",
+                "9000",
+                "exchange_list",
+                &evidence,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "listing_date with listing_source='unknown'",
+        c.execute(
+            &master("sh", "600003", 1000, "NULL", "9000", "unknown", &evidence),
+            [],
+        ),
+    );
+    rejected(
+        "evidence digest with no evidence bundle",
+        c.execute(
+            &master(
+                "sh",
+                "600004",
+                1000,
+                "NULL",
+                "9000",
+                "exchange_list",
+                &hex32(0x99),
+            ),
+            [],
+        ),
+    );
+    let capital = |code: &str, ordinal: i64, category: i64, after: i64| {
+        format!(
+            "INSERT INTO capital_events(exchange,code,ordinal,effective_day,category,\
+             float_before_bits,total_before_bits,float_after_bits,total_after_bits,\
+             float_after,total_after,source_binding_digest,evidence_digest) \
+             VALUES('sz','{code}',{ordinal},1000,{category},0,0,0,0,{after},{after},\
+             X'{binding}',X'{evidence}')"
+        )
+    };
+    c.execute(&capital("000001", 0, 2, 100), []).unwrap();
+    rejected(
+        "duplicate capital_events (exchange,code,ordinal)",
+        c.execute(&capital("000001", 0, 2, 100), []),
+    );
+    rejected(
+        "capital_events category outside (2,3,9,10)",
+        c.execute(&capital("000001", 1, 5, 100), []),
+    );
+    rejected(
+        "negative capital_events shares",
+        c.execute(&capital("000001", 2, 2, -1), []),
+    );
+    let suspension = |code: &str, start: i64, end: i64, missing: i64| {
+        format!(
+            "INSERT INTO suspension_intervals(exchange,code,start_day,end_day,\
+             certainty,missing_days,reason,source_kind,evidence_digest) \
+             VALUES('sz','{code}',{start},{end},'unresolved_gap',{missing},\
+             'missing_bar_no_event','missing_bar',X'{evidence}')"
+        )
+    };
+    c.execute(&suspension("000631", 100, 200, 5), []).unwrap();
+    rejected(
+        "suspension with missing_days=0",
+        c.execute(&suspension("000632", 100, 200, 0), []),
+    );
+    rejected(
+        "suspension ending before it starts",
+        c.execute(&suspension("000633", 200, 100, 1), []),
+    );
+    let rule = |id: &str, phase: &str, band: &str, side: &str, from: i64, basis: &str| {
+        format!(
+            "INSERT INTO price_limit_rules(rule_id,market,board,status_class,\
+             listing_phase,band_bp,band_side,rounding,effective_from,basis_ref,\
+             basis_status,evidence_digest) VALUES('{id}','sz','gem','normal',\
+             '{phase}',{band},'{side}','half_up',{from},'{basis}','verified',\
+             X'{evidence}')"
+        )
+    };
+    c.execute(
+        &rule("r1", "seasoned", "2000", "both", 1000, "url#clause"),
+        [],
+    )
+    .unwrap();
+    rejected(
+        "duplicate rule scope and effective date",
+        c.execute(
+            &rule("r1b", "seasoned", "2000", "both", 1000, "url#clause"),
+            [],
+        ),
+    );
+    rejected(
+        "band_side='none' carrying a band",
+        c.execute(
+            &rule("r2", "first_day", "2000", "none", 1000, "url#clause"),
+            [],
+        ),
+    );
+    rejected(
+        "bounded side without a band",
+        c.execute(
+            &rule("r3", "first_5_days", "NULL", "both", 1000, "url#clause"),
+            [],
+        ),
+    );
+    rejected(
+        "rule without a basis_ref",
+        c.execute(&rule("r4", "all", "2000", "both", 1000, ""), []),
+    );
+    c.execute(
+        &rule("r5", "first_day", "NULL", "none", 1000, "url#clause"),
+        [],
+    )
+    .unwrap();
+    let tick = |id: &str, from: i64, units: i64| {
+        format!(
+            "INSERT INTO min_tick_rules(rule_id,market,board,effective_from,tick_units,\
+             price_scale,basis_ref,basis_status,evidence_digest) \
+             VALUES('{id}','all','all',{from},{units},2,'url#tick','verified',X'{evidence}')"
+        )
+    };
+    c.execute(&tick("t1", 0, 1), []).unwrap();
+    rejected(
+        "duplicate min_tick_rules (market,board,effective_from)",
+        c.execute(&tick("t2", 0, 1), []),
+    );
+    rejected(
+        "min_tick_rules with zero tick",
+        c.execute(&tick("t3", 1, 0), []),
+    );
+    let dataset = |kind: &str, content: &str, version: &str| {
+        format!(
+            "INSERT INTO derived_dataset_versions(dataset_kind,dataset_key,\
+             version_id,content_digest,digest_format,record_count,first_day,\
+             last_day,algorithm_version,source_binding_digest,evidence_digest,\
+             task_id,item_id,created_at,updated_at) \
+             VALUES('{kind}','key','{version}',X'{content}','security-master-v1',10,\
+             1000,2000,'security-master-v1',X'{binding}',X'{evidence}',\
+             'task','item','2026-10-26T00:00:00Z','2026-10-26T00:00:00Z')"
+        )
+    };
+    // The schema-22 vocabulary stays valid (the rebuild is a strict superset),
+    // the six M2 kinds are accepted, and an unregistered kind fails closed.
+    c.execute(&dataset("trading_calendar", &hex32(0x61), &hex32(0x61)), [])
+        .unwrap();
+    c.execute(&dataset("security_master", &hex32(0x62), &hex32(0x62)), [])
+        .unwrap();
+    rejected(
+        "unregistered dataset_kind",
+        c.execute(
+            &dataset("security_master_v9", &hex32(0x63), &hex32(0x63)),
+            [],
+        ),
+    );
+    rejected(
+        "version_id not equal to the content digest",
+        c.execute(&dataset("suspensions", &hex32(0x64), &hex32(0x65)), []),
+    );
 }
 
 #[test]
