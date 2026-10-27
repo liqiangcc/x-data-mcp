@@ -99,7 +99,7 @@ scope 固定为当前沪深 A 股。
 ### 2.2 `market.daily`
 
 **身份**：`{exchange, code}` + `period=1` + `adjustment=1`（已部署实例只有前复权一个口径，
-`src/market_data.rs:11-13`；DDL `migrations/tasks/021_latest_only.sql:11`）。代码（schema 23，未部署）
+`src/market_data.rs:11-13`；DDL `migrations/tasks/021_latest_only.sql:11`）。代码（schema 24，未部署）
 同一实体同一周期有 `adjustment=0` 不复权与 `adjustment=1` 前复权两条序列，见
 [latest-only-storage](latest-only-storage.md) §13。
 
@@ -136,7 +136,7 @@ scope 固定为当前沪深 A 股。
 
 - 前复权，**基准是最新事件**：每根 bar 叠加所有 `event_date > bar_date` 的 cat1 事件的仿射链，
   oldest→newest、无中间舍入，末次 2dp HALF_UP（`src/qfq.rs:7-11,101-127`）。
-  代码（schema 23，未部署）改为**精确有理数链 + 末次一次舍入到序列精度**（`qfq-exact-v1`，
+  代码（schema 24，未部署）改为**精确有理数链 + 末次一次舍入到序列精度**（`qfq-exact-v1`，
   `src/qfq.rs:204`；前复权 `price_scale=6`）；2dp 实现保留为历史 oracle，不再写库。
 - 因此**新的分红送转会改写该实体整段历史**，提交为一次 `replace` 事件
   （[latest-only-storage](latest-only-storage.md) §4、§6）。
@@ -433,7 +433,7 @@ T 日股票池 `universe(as_of=T)`。验收标准建议：
   （`scripts/build_release.sh` 未加 `--features export`，属 owner 批准项）。
 - **MCP 仍没有 `export_data`**：v8 只设计、不实现（D-39）；工具数与 `capability_revision` 不因此变化。
 - **只读**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`，并要求库的 `user_version` 等于
-  代码的 `COMPACT_SCHEMA_VERSION`（当前 23，即 D-08 的全新 init；`src/research/read.rs:69-78`）。
+  代码的 `COMPACT_SCHEMA_VERSION`（当前 24，即 D-08 的全新 init；`src/research/read.rs:69-78`）。
 - **导出范围**：目录 + 日线（`daily_raw` / `daily_qfq`）+ 因子（`factors`）+ 日历（`calendar`）
   + 指数（`index_daily`），文件名固定、顺序固定（`src/research/mod.rs:436-476`）。不复权、因子、
   日历与指数在 MCP 读不到，但在导出里可见（AC-M1-10）。
