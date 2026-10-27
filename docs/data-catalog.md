@@ -99,7 +99,7 @@ scope 固定为当前沪深 A 股。
 ### 2.2 `market.daily`
 
 **身份**：`{exchange, code}` + `period=1` + `adjustment=1`（已部署实例只有前复权一个口径，
-`src/market_data.rs:11-13`；DDL `migrations/tasks/021_latest_only.sql:11`）。代码（schema 22，未部署）
+`src/market_data.rs:11-13`；DDL `migrations/tasks/021_latest_only.sql:11`）。代码（schema 23，未部署）
 同一实体同一周期有 `adjustment=0` 不复权与 `adjustment=1` 前复权两条序列，见
 [latest-only-storage](latest-only-storage.md) §13。
 
@@ -118,7 +118,7 @@ scope 固定为当前沪深 A 股。
 | 字段 | 存储 | 查询返回 | 单位 / 精度 | 可空 | 来源与证据 |
 |---|---|---|---|---|---|
 | `date` | `trade_day INTEGER`（1970-01-01 起的天数） | `date` | 交易日（Asia/Shanghai 自然日） | 否 | `021_latest_only.sql:32,40`；`src/compact_market.rs:798-801` |
-| `open`/`high`/`low`/`close` | `*_cents INTEGER`（schema 21 库）/ `*_units INTEGER`（schema 22 代码） | 十进制字符串 | **元**。已部署实例是 2 位小数 HALF_UP 的前复权价。代码按序列的 `price_scale` 解释整数：不复权 2 位、前复权最多 6 位 | 否 | 已部署：DDL `021:33-36`；`src/qfq.rs:68-74`（`raw_price`、`cent`）；`compact_market.rs:812-822`（非恰好 2dp 直接拒绝）。代码：DDL `022:74-99`；`src/compact_market.rs:17,24`（`MAX_PRICE_SCALE=6`、`PRICE_SCALE_QFQ=6`） |
+| `open`/`high`/`low`/`close` | `*_cents INTEGER`（schema 21 库）/ `*_units INTEGER`（代码，schema 22 起） | 十进制字符串 | **元**。已部署实例是 2 位小数 HALF_UP 的前复权价。代码按序列的 `price_scale` 解释整数：不复权 2 位、前复权最多 6 位 | 否 | 已部署：DDL `021:33-36`；`src/qfq.rs:68-74`（`raw_price`、`cent`）；`compact_market.rs:812-822`（非恰好 2dp 直接拒绝）。代码：DDL `022:74-99`；`src/compact_market.rs:17,24`（`MAX_PRICE_SCALE=6`、`PRICE_SCALE_QFQ=6`） |
 | `volume` | `volume INTEGER` | 十进制字符串 | **股**（不随复权调整）。手日按 `r7_raw` 标记 + 原始值 VWAP 校验换算 ×100，无法确认时发布 `null` | 是 | `src/official_market.rs:502`（`normalized_volume`，`:101-113`）；单位锚定 #239（`evidence/issue-239-day-volume-amount/README.md`）；手日规则见 [day-file](day-file.md) 与 #381/#382 |
 | `amount` | `amount TEXT` | 十进制字符串 | **元**（`.day` f32 值的精确十进制展开，相对误差 ≤ 约 6e-8） | 是 | `official_market.rs:503`（`amount_decimal`，`:78-81`）；#239 同上 |
 | `r7_raw` | `r7_raw INTEGER` | **不返回**（不进查询契约） | 原样保留、不解释。A 股 1999–2010 为官方除权基准价（分），2010-09 起退化为 `0x10000` 哨兵 | 是 | `src/day_file.rs:14-18`；`src/market_data.rs:192-196`；`evidence/issue-240-r7-analysis/README.md` |
@@ -136,7 +136,7 @@ scope 固定为当前沪深 A 股。
 
 - 前复权，**基准是最新事件**：每根 bar 叠加所有 `event_date > bar_date` 的 cat1 事件的仿射链，
   oldest→newest、无中间舍入，末次 2dp HALF_UP（`src/qfq.rs:7-11,101-127`）。
-  代码（schema 22，未部署）改为**精确有理数链 + 末次一次舍入到序列精度**（`qfq-exact-v1`，
+  代码（schema 23，未部署）改为**精确有理数链 + 末次一次舍入到序列精度**（`qfq-exact-v1`，
   `src/qfq.rs:204`；前复权 `price_scale=6`）；2dp 实现保留为历史 oracle，不再写库。
 - 因此**新的分红送转会改写该实体整段历史**，提交为一次 `replace` 事件
   （[latest-only-storage](latest-only-storage.md) §4、§6）。
@@ -432,8 +432,8 @@ T 日股票池 `universe(as_of=T)`。验收标准建议：
   `/root/x-data-exports/`（`src/research/mod.rs:583`；D-29）。发布包还没有这个命令
   （`scripts/build_release.sh` 未加 `--features export`，属 owner 批准项）。
 - **MCP 仍没有 `export_data`**：v8 只设计、不实现（D-39）；工具数与 `capability_revision` 不因此变化。
-- **只读**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`，并要求库是 schema 22
-  （`src/research/read.rs:58-80`）。
+- **只读**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`，并要求库的 `user_version` 等于
+  代码的 `COMPACT_SCHEMA_VERSION`（当前 23，即 D-08 的全新 init；`src/research/read.rs:69-78`）。
 - **导出范围**：目录 + 日线（`daily_raw` / `daily_qfq`）+ 因子（`factors`）+ 日历（`calendar`）
   + 指数（`index_daily`），文件名固定、顺序固定（`src/research/mod.rs:436-476`）。不复权、因子、
   日历与指数在 MCP 读不到，但在导出里可见（AC-M1-10）。
