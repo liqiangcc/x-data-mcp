@@ -8,8 +8,8 @@
 `generic-data-v7`，含只读 `get_yearly_base_years` 与
 `plan_market_update`/`run_market_update`，market 单版本序列：
 version_id=内容 hex，latest-only），acquisition socket 提供
-10 acquisition tools；已部署实例为 compact schema 21，代码（main）为 schema 23
-（M1 的 schema 22 + M2 PR-1 的 023，未部署）。
+10 acquisition tools；已部署实例为 compact schema 21，代码（main）为 schema 24
+（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024，未部署）。
 `market.daily` 前复权价的精度同样要分开读：已部署实例（schema 21）为 **2 位小数**；
 代码（schema 22 起，`qfq-exact-v1`，M1 PR-3）为**最多 6 位小数**（精确有理数链、末次一次
 舍入，尾随零不补），且数值可能与旧 2dp 在"恰好落在半分位"的 bar 上差 1 分——这不是

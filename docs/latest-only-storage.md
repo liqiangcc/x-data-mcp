@@ -140,9 +140,10 @@
 
 - 部署方式不变：归档旧库，全新 init，全市场重建。**不做数据迁移**；schema 21 只出现在 fresh init 链尾。
 - 新二进制**只认 schema 21**；旧二进制遇到 schema 21 库报 unsupported schema 并 fail-closed。
-- 代码（main）已升到 **schema 23**（M1 的 schema 22：口径/精度列、双序列写入、因子事件表与
+- 代码（main）已升到 **schema 24**（M1 的 schema 22：口径/精度列、双序列写入、因子事件表与
   派生数据集版本登记、指数序列与逐指数口径元数据、交易日历；M2 PR-1 的 023：证券主表等八张表，
-  见 §14），尚未部署；部署中的二进制与库仍是 schema 21。
+  见 §14；M2 PR-2 的 024：重建 `capital_events`，按 D-50 把 `category` CHECK 扩到
+  2/3/5/7/8/9/10），尚未部署；部署中的二进制与库仍是 schema 21。
 - **回滚 = 旧二进制 + 归档的 schema 20 库**（既定做法，不改变）。
 - 已部署事实不因本文改变：本文写作时生产仍是 schema 20 / preview.31（历史）；2026-10-13 起
   生产已是 schema 21（preview.32 全新 init），当前事实见 [STATUS](STATUS.md)。

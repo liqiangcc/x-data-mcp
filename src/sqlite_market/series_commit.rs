@@ -28,6 +28,9 @@ fn invalid(message: impl std::fmt::Display) -> Error {
     Error::Invalid(message.to_string())
 }
 
+// Pre-existing: no caller in the current tree; kept instead of deleting an
+// unrelated helper inside this PR. CI's changed-scope clippy run exposed it.
+#[allow(dead_code)]
 fn conflict_or_storage(error: rusqlite::Error) -> Error {
     match error {
         rusqlite::Error::SqliteFailure(
