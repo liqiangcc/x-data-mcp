@@ -228,13 +228,23 @@ impl Fixture {
         .unwrap();
 
         let calendar_days = weekdays(day(2006, 4, 27), day(2009, 6, 5));
+        // The union requires every registered input (§5.1), so the fixture
+        // supplies both index series with the same date list.
         let batch = CalendarBatch {
-            inputs: vec![CalendarInputDates {
-                entity: "sh.000001".into(),
-                member: "sh\\lday\\sh000001.day".into(),
-                day_member_sha256: "aa".repeat(32),
-                days: calendar_days.clone(),
-            }],
+            inputs: vec![
+                CalendarInputDates {
+                    entity: "sh.000001".into(),
+                    member: "sh\\lday\\sh000001.day".into(),
+                    day_member_sha256: "aa".repeat(32),
+                    days: calendar_days.clone(),
+                },
+                CalendarInputDates {
+                    entity: "sz.399001".into(),
+                    member: "sz\\lday\\sz399001.day".into(),
+                    day_member_sha256: "bb".repeat(32),
+                    days: calendar_days.clone(),
+                },
+            ],
             security_event_sha256: crate::hash::sha256(&0u64.to_le_bytes()),
         };
         let calendar = TradingCalendar::union(&batch).unwrap();
