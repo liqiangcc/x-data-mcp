@@ -187,13 +187,15 @@ fn single_day_gaps_and_long_gaps_are_counted_apart() {
         Some(day(2024, 3, 4)),
         None,
     )];
-    // Bars on 03-04, 03-06, 03-08, 03-15: one single-day hole (03-05) and one
-    // long run (03-11..03-14).
+    // Weekdays are 03-04…03-08 and 03-11…03-15. Bars on 03-04, 03-05, 03-06,
+    // 03-08 and 03-15: one single-day hole (03-07) and one long run
+    // (03-11..03-14).
     let mut bars = BTreeMap::new();
     bars.insert(
         "sh.600000".to_string(),
         vec![
             day(2024, 3, 4),
+            day(2024, 3, 5),
             day(2024, 3, 6),
             day(2024, 3, 8),
             day(2024, 3, 15),
@@ -207,7 +209,7 @@ fn single_day_gaps_and_long_gaps_are_counted_apart() {
     assert_eq!(set.missing_days(), 5);
     assert_eq!(
         (set.rows[0].start_day, set.rows[0].missing_days),
-        (day(2024, 3, 5), 1)
+        (day(2024, 3, 7), 1)
     );
     assert_eq!(
         (set.rows[1].start_day, set.rows[1].end_day),
