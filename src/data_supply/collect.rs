@@ -20,9 +20,9 @@ impl Collection {
     }
     pub fn request_id(&self) -> &str {
         match self {
-            Self::Daily { request_id, .. }
-            | Self::Catalog { request_id, .. }
-            | Self::Yearly { request_id, .. } => request_id,
+            Collection::Daily { request_id, .. }
+            | Collection::Catalog { request_id, .. }
+            | Collection::Yearly { request_id, .. } => request_id,
         }
     }
     pub fn payload(&self) -> Value {
