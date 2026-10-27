@@ -204,6 +204,9 @@ pub struct TemporalBlock {
 /// One cell of an M2 fact row. The v2 layouts project these by field name;
 /// the tagged `Row` shape is never serialized for these datasets (they are
 /// v2-only), so a closed value vocabulary is enough.
+/// The column map of one [`Row::Fact`] row.
+pub type FactCells = BTreeMap<String, FactValue>;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum FactValue {
@@ -533,7 +536,7 @@ pub enum Row {
     Fact {
         entity: Option<Security>,
         day: NaiveDate,
-        cells: std::collections::BTreeMap<String, FactValue>,
+        cells: FactCells,
     },
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
