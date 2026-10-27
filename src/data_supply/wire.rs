@@ -14,17 +14,17 @@ pub enum Dataset {
     Daily,
     #[serde(rename = "market.yearly")]
     Yearly,
-    /// M1 PR-5 benchmark series (issue-383 §6.3): a raw, 0.01-point bar
-    /// series kept apart from `market.daily` so an index never changes the
-    /// stock query's semantics (v8 #387 §4.2 constraint 3).
+    // M1 PR-5 benchmark series (issue-383 §6.3): a raw, 0.01-point bar
+    // series kept apart from `market.daily` so an index never changes the
+    // stock query's semantics (v8 #387 §4.2 constraint 3).
     #[serde(rename = "market.index")]
     Index,
-    /// M1 PR-4 parsed corporate-action facts (issue-383 §3.6): effective-day
-    /// rows, no versioned price series.
+    // M1 PR-4 parsed corporate-action facts (issue-383 §3.6): effective-day
+    // rows, no versioned price series.
     #[serde(rename = "market.adjustment_events")]
     AdjustmentEvents,
-    /// M1 PR-6 derived trading calendar (issue-383 §3.8): market-level, no
-    /// entity and no security price.
+    // M1 PR-6 derived trading calendar (issue-383 §3.8): market-level, no
+    // entity and no security price.
     #[serde(rename = "market.calendar")]
     Calendar,
 }
@@ -146,15 +146,15 @@ pub enum Selection {
     Catalog {
         scope: CatalogScope,
     },
-    /// A frozen catalog version's whole member set (v8 #387 §4.3). The
-    /// server resolves `"latest"` and echoes the concrete version id.
-    /// `market.index` resolves its members from the static benchmark
-    /// registry instead, so it omits `catalog_version`.
+    // A frozen catalog version's whole member set (v8 #387 §4.3). The
+    // server resolves `"latest"` and echoes the concrete version id.
+    // `market.index` resolves its members from the static benchmark
+    // registry instead, so it omits `catalog_version`.
     Universe {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         catalog_version: Option<String>,
     },
-    /// A market-level dataset with no security entity (`market.calendar`).
+    // A market-level dataset with no security entity (`market.calendar`).
     Market,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -178,8 +178,8 @@ pub enum Filter {
         name_query: Option<String>,
         industry_code: Option<String>,
     },
-    /// At most five trading days (v8 #387 §4.3): a cross-section is not a
-    /// panel. The repository resolves the trading days from the calendar.
+    // At most five trading days (v8 #387 §4.3): a cross-section is not a
+    // panel. The repository resolves the trading days from the calendar.
     CrossSection {
         start_date: NaiveDate,
         end_date: NaiveDate,

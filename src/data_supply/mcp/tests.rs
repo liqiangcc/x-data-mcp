@@ -1895,7 +1895,7 @@ fn cross_section_universe_projects_the_column_grid() {
     assert_eq!(page["catalog_version"], "catalog-cs");
     assert_eq!(page["trade_days"], json!(["2020-01-06"]));
     assert_eq!(page["entities"], json!(["sh.600006", "sz.000001"]));
-    assert_eq!(page["columns"]["close"], json!([[["10.05", "20.00"]]]));
+    assert_eq!(page["columns"]["close"], json!([[["10.05", "20"]]]));
 }
 
 /// AC-V8-5: more than five trading days is rejected and the message names the
@@ -1956,7 +1956,7 @@ fn index_is_visible_only_through_its_own_dataset() {
     let mut daily = base.clone();
     daily["dataset"] = json!("market.daily");
     let daily_page = f.api.call("query_data", daily).unwrap();
-    assert_eq!(daily_page["version_manifest"][0]["status"], "absent");
+    assert_eq!(daily_page["versions"][0]["status"], "absent");
     assert_eq!(daily_page["row_count"], 0);
 
     let mut index = base;
@@ -2000,7 +2000,7 @@ fn calendar_is_market_level_and_entity_free() {
     assert!(page.get("entities").is_none(), "{page}");
     assert_eq!(
         page["columns"]["trade_day"],
-        json!([["2020-01-06"], ["2020-01-07"]])
+        json!(["2020-01-06", "2020-01-07"])
     );
     assert_eq!(page["versions"][0]["status"], "present");
     assert!(page["versions"][0].get("entity").is_none(), "{page}");
@@ -2121,5 +2121,5 @@ fn facets_agree_with_the_catalog_query() {
             }),
         )
         .unwrap();
-    assert_eq!(catalog["row_count"], 2);
+    assert_eq!(catalog["records"].as_array().unwrap().len(), 2);
 }

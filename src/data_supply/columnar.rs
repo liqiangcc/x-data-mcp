@@ -575,6 +575,12 @@ pub fn versions_table(dataset: Dataset, items: &[VersionInfo], meta: &PageMeta) 
 }
 
 fn availability_cell(item: &AvailabilityItem, field: &str) -> Value {
+    // A universe row is already collapsed; per-task columns would only repeat
+    // zeros for every member and break the one-row budget (v8 #387 §4.3).
+    if item.universe.is_some() && matches!(field, "related_tasks_total" | "related_tasks_truncated")
+    {
+        return Value::Null;
+    }
     match field {
         "availability" => json!(item.availability),
         "integrity" => json!(item.integrity),
