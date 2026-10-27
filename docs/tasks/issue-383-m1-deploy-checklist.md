@@ -22,7 +22,8 @@
 - **私有栈**：独立 `--stack-root`，不复用生产目录；复用现有 harness
   `evidence/perf-g8/s5/s5_run.py`（写阶段驱动）与 `evidence/perf-g8/s5/startup_probe.py`
   （冷/热启动探测）。两者是 schema-21 时期的工具，`--init-subcommand init21` 现在建的是
-  schema 22；冷启动用 `posix_fadvise(DONTNEED)` 对**私有副本**降温，不 drop 全局 page cache，
+  **schema 23**（`COMPACT_SCHEMA_VERSION`，`src/sqlite_tasks.rs:43`：M1 的 022 加 M2 PR-1 的 023，
+  M2 的表都是空的、无写入路径）；冷启动用 `posix_fadvise(DONTNEED)` 对**私有副本**降温，不 drop 全局 page cache，
   不影响生产。
 - **记录格式**：每个阶段一个 JSON（字段与 `s5_run.py` 的 phase 输出同名），加一份汇总；
   汇总里必须同时给 considered / attempted / published / no_change / failed / absent 计数
@@ -34,11 +35,11 @@
 |---|---|---|---|
 | 默认构建 | 用 CI 产物或 `cargo build --release --locked`（在 CI/发布流水线，不在本机） | 二进制字节数、构建时间、rustc 版本 | 体积门禁见 §4；没有历史硬门槛 |
 | 导出 feature | `cargo build --release --features export --locked --bin export_research` | 二进制字节数、构建时间 | 参考值：CI 记录 release 构建 110s（PR #408）；**编译时间与增量体积要贴 Issue**（U-3） |
-| 发布包 | `scripts/build_release.sh` 默认**不含** `export_research` | 包内是否有该命令 | 若本次要带，先改脚本（需批准）并重跑 `scripts/smoke_release.py` |
+| 发布包 | `scripts/build_release.sh` **默认带 `export_research`**（#413：脚本固定 `--features export`，打包后断言该命令存在，`scripts/build_release.sh:11-17,39`） | 包内 bin 清单与 `manifest.json` 的 `features` | 包内必须有 `bin/export_research`；重跑 `scripts/smoke_release.py` |
 
 ## 2. 冷启动（U-4，设计 §9.3 的风险项）
 
-1. 全量重建出 schema 22 库后，确认序列数：`select period, count(*) from market_series group by period`。
+1. 全量重建出 schema 23 库后（M2 PR-1 的 023 只建表、无写入路径，表是空的，不影响本节的序列数），确认序列数：`select period, count(*) from market_series group by period`。
    **预期**：`period=1` 10,457（5,224 不复权 + 5,224 前复权 + 9 指数）、`period=2` 5,224，
    合计 **15,681**。设计 §9.3 的"5,224 → 10,457"只数了日线，年线也参与启动检查，所以估算的
    冷启动应按 15,681 而不是 10,457 复核（本清单的差异说明）。
@@ -57,12 +58,18 @@
 每个阶段用单调时钟：从提交第一个写请求到最后一个任务终态，任务之间的探测与轮询都计入
 （SLO §2）。preflight 与 readback 单独报告，不混进 write-loop。
 
-| 阶段 | 基线（v6/schema 21） | 设计估算（§9.3） | 记录项 |
-|---|---|---|---|
-| 首次全市场采集 | collect write-loop 200.3s（k=5）/ 208.8s（k=1），5,228 considered / 5,224 succeeded / 4 failed（官方缺成员，预期） | 260–320s | 阶段 JSON + 4 个 absent 实体清单 |
-| 同代 no-change 日更 | 70.9s（k=5）/ 74.5s（k=1），5,224 no_change，`data_versions` +0 | 85–100s | 净增长（≤4KiB/item）、`data_versions` +0、10 个内部 item 的 item 级结果 |
-| 跨代 append 日更 | 97.4s（k=5）/ 93.5s（k=1），5,224 published | 120–145s | 追加周期库增量（基线约 +27MB） |
-| 年线重聚合 | 233.3s / 234.8s | 不变（±5%） | 每个日更周期库增量（基线约 54MB） |
+| 阶段 | 基线（v6/schema 21） | 设计估算（§9.3） | M1/v2 实测（私有栈，2026-10-27） | 记录项 |
+|---|---|---|---|---|
+| 首次全市场采集 | collect write-loop 200.3s（k=5）/ 208.8s（k=1），5,228 considered / 5,224 succeeded / 4 failed（官方缺成员，预期） | 260–320s | **664s**（双序列；基线约 200s） | 阶段 JSON + 4 个 absent 实体清单 |
+| 同代 no-change 日更 | 70.9s（k=5）/ 74.5s（k=1），5,224 no_change，`data_versions` +0 | 85–100s | **169s** | 净增长（≤4KiB/item）、`data_versions` +0、10 个内部 item 的 item 级结果 |
+| 跨代 append 日更 | 97.4s（k=5）/ 93.5s（k=1），5,224 published | 120–145s | **735s**（v2 plan/run；**超 SLO 第 2 行的 600s，按 D-52 临时豁免**） | 追加周期库增量（基线约 +27MB） |
+| 年线重聚合 | 233.3s / 234.8s | 不变（±5%） | **460s** | 每个日更周期库增量（基线约 54MB） |
+
+最后一列的预期值来自 2026-10-27 的私有栈实测（代码 `84b6657`，2 vCPU；跨代日更那次测量时
+load average 约 6，**不是独占窗口**，按 [SLO](../SLO.md) §3 不能当门禁判定）。本清单仍要求按 §0
+的独占窗口重测：重测结果与这一列不一致时以重测为准，并记录偏差。跨代日更 735s 高于第 2 行的
+600s，owner 2026-10-27 给了临时豁免（[SLO](../SLO.md) 第 2 行、[DECISIONS](../decisions.md) D-52），
+到期条件是「v2 日更分块并发」完成并重测 <600s。
 
 额外必测（设计 §9.3 与 PR-7 的偏差项）：
 
@@ -77,7 +84,7 @@
 
 | 量 | 基线/估算 | 记录 |
 |---|---|---|
-| 全量重建后的 `state/*.sqlite` | 现库 1,185,640,448 B（schema 21）；设计估算 schema 22 约 2.7GB（+745MB 不复权 +745MB 前复权 +约 7MB 因子 +日历/指数） | `du -sb`、`pragma page_count*page_size` |
+| 全量重建后的 `state/*.sqlite` | 现库 1,185,640,448 B（schema 21）；设计估算 schema 23 约 2.7GB（+745MB 不复权 +745MB 前复权 +约 7MB 因子 +日历/指数；M2 PR-1 的 023 表为空，不增字节） | `du -sb`、`pragma page_count*page_size` |
 | `/opt` 部署树全树 | 2026-10-24 基线 4.2GiB；估算部署后约 5.7GiB | `du -sh`（含 releases/generations/state/reports） |
 | 事件日志增速 | 10,448 行/日 → 15,672 行/日（+5,224；设计 §9.3 估 +1.8MB/日、+650MB/年） | `market_events` 行数与 `dbstat` 增量 |
 | 首采后 DB（SLO 第 4 行） | 硬门槛 ≤2.5GiB（2.684GB）；M1 设计估算库约 2.7GB ≈ 2.51GiB，**正好压线、按估算略超** | 实测 DB 字节。若超门槛，由 owner 决定改门槛还是砍体积；本清单不自行判通过 |
@@ -93,7 +100,7 @@ AC 定义见 Issue #383 的验收表。CI 只覆盖小夹具，下面这些必�
 | AC-M1-2 | 用库里的不复权 bar + `adjustment_events` 重跑 `qfq-exact-v1`，与库内 6dp 序列比对 | 逐位相等 |
 | AC-M1-4 | 对全部 A 股不复权 bar 检查 `trade_day ∈ trading_days` | 落在日历外的比例 ≤0.01%（1/10000），逐条列出（1991 年深市边界） |
 | AC-M1-7 | 同一 active generation、无日更，导出两次 | 两次 `snapshot_id` 与全部文件 sha256 相同 |
-| AC-M1-10 | `query_data` 取 `sh.000001`、取 raw/因子/日历/指数 | `market.daily(sh.000001)` → absent；raw/因子/日历/指数在 MCP 不可见，只在导出里可见 |
+| AC-M1-10 | `query_data` 取 `sh.000001`、取 raw/因子/日历/指数 | `market.daily(sh.000001)` → absent；`market.index`/`market.calendar`/`market.adjustment_events` 自 #410 起由 `query_data` 直接返回（v8 的 dataset 分支：`src/sqlite_supply.rs:411-423`、`docs/contracts/generic-data-v8.md:129-131`）；只有 `market.daily` 的 `adjustment=0`（raw）序列仍只在导出里可见 |
 
 **下游 `x` 仓库的部署前置（D-32）**——两个上游契约点，必须用真实 `query_data` 验一次：
 
@@ -107,9 +114,14 @@ AC 定义见 Issue #383 的验收表。CI 只覆盖小夹具，下面这些必�
 
 ## 6. 回滚演练
 
-- 按 D-08/D-33：归档 schema 22 库，回到上一版 release + 归档的 schema 21 库，确认服务可启动、
+- 按 D-08/D-33：归档 schema 23 库，回到上一版 release（preview.35）+ 归档的 schema 21 库，确认服务可启动、
   `query_data` 可读、导出命令不影响库。
-- 记录回滚耗时与任何手工步骤；回滚脚本用 `scripts/rollback_preview.sh`（若与本次部署方式匹配）。
+- **副本要先改成 WAL**：用 backup API 做的副本是 `journal_mode=delete`，而 preview.35 的启动检查要求 WAL
+  （`src/sqlite_market/compact_runtime.rs:452-455`），直接启动会拒绝；先跑 `PRAGMA journal_mode=WAL` 再启动，
+  实测改完 **22.8 s** 就绪。
+- 正式回滚用部署时改名归档的**原库**：它的 WAL 模式随文件保留，不需要这一步；backup API 的副本只用于演练。
+- 记录回滚耗时与任何手工步骤；回滚脚本用 `scripts/rollback_preview.sh`（若与本次部署方式匹配）。注意脚本会
+  `cp` 副本并删 `-wal`/`-shm`，所以副本的 `journal_mode` 必须先改成 WAL（见上一条）。
 
 ## 7. 汇总（贴回 Issue #383）
 

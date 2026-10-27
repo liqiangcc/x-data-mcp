@@ -25,8 +25,9 @@
 4. **日更多 10 个服务器内部 item**（9 个指数基准 + 1 个交易日历）。它们复用现有任务/进度面，
    `entity`/`period` 为 null，wire 形状不变（[M1 设计](issue-383-m1-research-data.md) §9.2）。
 5. **研究快照导出（可选 feature）。** `export_research` bin 产出 5 个 Parquet 文件 + `manifest.json`，
-   默认落 `/root/x-data-exports/`。**发布包暂不含该命令**（`scripts/build_release.sh` 未加
-   `--features export`，需 owner 批准），MCP 也没有 `export_data`（D-39）。
+   默认落 `/root/x-data-exports/`。**发布包默认带该命令**：`scripts/build_release.sh` 自 #413 起固定
+   `--features export`，并在打包后断言 `bin/export_research` 存在（`scripts/build_release.sh:11-17,39`）。
+   MCP 仍没有 `export_data`（D-39）。
 
 ## 为什么
 
@@ -61,25 +62,32 @@
 
 1. 合并、打 tag、发布、部署（D-10 的同类边界）。
 2. 下游 `x` 仓库 `KlineReader` 的兼容性确认（见上）。
-3. `scripts/build_release.sh` 增加 `--features export`（若本次发布要带导出命令）。
+3. 发布包已默认带 `export_research`（#413），不需要再改脚本；若本次要**不带**，需改回脚本并另行批准。
 4. 私有栈上的实测清单全部跑完并贴 Issue（[部署清单](issue-383-m1-deploy-checklist.md)）。
 5. 部署方式按 D-08：归档旧库 + 全新 init 重建，不做原地迁移（D-33）；保留上一版 release 作回滚点。
 
 ## 回滚
 
 - 回到上一版 release + 归档的 schema 21 库（D-08 标准做法）。导出产物是独立文件，不受影响。
-- 只想撤掉导出功能：`export` 是可选 feature，发布包不带 `--features export` 即可，不影响库与日更。
+- 只想撤掉导出功能：`export` 仍是可选 feature，把 `scripts/build_release.sh` 的 `--features export` 去掉重打即可
+  （改动发布脚本需另行批准），不影响库与日更。
 
 ## 明确不变
 
-- 工具数量与入口：M1 本身不新增工具（data 23 / acquire 10）。若发布构建同时含 v8 的入口拆分，
-  工具面变化以 v8 的发布说明为准。
+- 工具数量与入口：M1 本身不新增工具；当前 main 含 v8 PR-4（#410），data 工具为 **24**（新增只读
+  `list_catalog_facets`），acquire 仍是 10；已部署的 23 是 preview.35 的旧事实。入口拆分以 v8 发布说明为准。
 - dataset 枚举、wire 字段、错误码、幂等/取消/版本语义。
 - `capability_revision` 仍是 `generic-data-v7`（D-32：精度变化不算契约升版）。
-- 不复权、因子、日历、指数**不通过 `query_data` 暴露**（AC-M1-10）；它们只出现在导出里。
+- **M1 不把 `market.daily` 的不复权序列（`adjustment=0`）暴露给 `query_data`**（AC-M1-10 的可测边界），
+  它只出现在导出里；**因子/日历/指数是 v8 PR-4（#410）新增的另外三个 dataset**
+  （`market.adjustment_events`/`market.calendar`/`market.index`），`query_data` 可直接读（v2-only，
+  `docs/contracts/generic-data-v8.md:129-131`），详见 v8 发布说明。
 
 ## 未验证（发布时如实保留）
 
 - 真实全量导出的体积与耗时（设计估算约 340MB）。
-- 全市场 6dp 复权的耗时与峰值内存、schema 22 下的冷启动、write-loop 与部署体积。
+- 全市场 6dp 复权的耗时与峰值内存、schema 23（M1 的 022 + M2 PR-1 的 023）下的冷启动、write-loop 与部署体积。
+- 跨代日更的 SLO 第 2 行（<600s）：v2 实测 **735s**（私有栈，代码 `84b6657`，2 vCPU，load average 约 6，
+  非独占测量），按 [DECISIONS](../decisions.md) D-52 临时豁免到「v2 日更分块并发」完成并重测 <600s；
+  本版本不满足第 2 行。其余三行（同代无变化 169s、首采 664s、年线 460s）见[部署清单](issue-383-m1-deploy-checklist.md) §3。
 - 指数历史早期 `volume` 是否也是手。

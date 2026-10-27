@@ -36,7 +36,7 @@ preview.34 上线后 `x-data-mcp-data` 连续运行 5d12h39m 直到 2026-10-23 0
 （`systemctl show` 的 `Consumed … wall clock time` 与 `journalctl --list-boots` 一致）；preview.35 切换时两个单元在 17:25:22 重启。
 preview.34 那次没有落盘报告（见「已知问题」），preview.35 这次有。回滚到 preview.34 不涉及契约差异；回滚到 preview.32（v6）的已知代价：v7 运行过 plan/run 之后，v6 对 plan/run 任务的 `get_task_progress` 会报未知契约，存在被重启恢复收尾（`interrupted`）的 plan/run 任务时 v6 的 `list_tasks` 会整体失败。
 
-M1（schema 22）代码已全部合并、**未部署**：PR #389/#390/#394/#397/#400/#402/#406/#408（CI 绿）。部署按 D-08（归档旧库 + 全新 init），发布包暂不含 `export_research`（`scripts/build_release.sh` 未加 `--features export`，属 owner 批准项）。部署前实测清单见 [M1 部署清单](tasks/issue-383-m1-deploy-checklist.md)；实现记录见 [M1 实现记录](tasks/issue-383-m1-implementation.md)。
+M1（schema 22）代码已全部合并、**未部署**：PR #389/#390/#394/#397/#400/#402/#406/#408（CI 绿）。部署按 D-08（归档旧库 + 全新 init），发布包默认带 `export_research`（#413 起 `scripts/build_release.sh` 固定 `--features export`，并在打包后断言该命令存在）。部署前实测清单见 [M1 部署清单](tasks/issue-383-m1-deploy-checklist.md)；实现记录见 [M1 实现记录](tasks/issue-383-m1-implementation.md)。
 
 M2（[#391](https://github.com/liqiangcc/x-data-mcp/issues/391)）的 PR-1 把迁移链推到 schema 23（`migrations/tasks/023_security_master.sql`）：只建表、不写数据、不改任何读写行为，所以部署事实仍是 schema 21；schema 22 的库既不会被新二进制原地改写，也不会被 023 回填（`check_schema` 直接拒绝非当前 schema）。设计见 [M2 设计](tasks/issue-391-m2-security-master.md) §9。
 
