@@ -1895,7 +1895,7 @@ fn cross_section_universe_projects_the_column_grid() {
     assert_eq!(page["catalog_version"], "catalog-cs");
     assert_eq!(page["trade_days"], json!(["2020-01-06"]));
     assert_eq!(page["entities"], json!(["sh.600006", "sz.000001"]));
-    assert_eq!(page["columns"]["close"], json!([[["10.05", "20"]]]));
+    assert_eq!(page["columns"]["close"], json!([["10.05", "20"]]));
 }
 
 /// AC-V8-5: more than five trading days is rejected and the message names the
@@ -1964,7 +1964,7 @@ fn index_is_visible_only_through_its_own_dataset() {
     let index_page = f.api.call("query_data", index).unwrap();
     assert_eq!(index_page["layout"], "panel");
     assert_eq!(index_page["versions"][0]["status"], "present");
-    assert_eq!(index_page["columns"]["close"], json!([["30.00"]]));
+    assert_eq!(index_page["columns"]["close"], json!([["30"]]));
     let metadata = &index_page["metadata"];
     assert_eq!(metadata["index"]["price_unit"], "index_point");
     assert_eq!(metadata["index"]["volume_unit"], "hand");

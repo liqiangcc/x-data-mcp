@@ -210,7 +210,7 @@ pub struct Query {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
-    /// v2 only: column projection (omitted = the dataset's core fields).
+    // v2 only: column projection (omitted = the dataset's core fields).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<String>>,
 }
