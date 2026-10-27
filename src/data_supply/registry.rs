@@ -325,7 +325,22 @@ fn entry<I: JsonSchema, O: JsonSchema>(
     example: Value,
 ) -> Entry {
     let mut input = schema_for!(I);
-    super::wire::strip_additional_properties(&mut input);
+    // Read schemas drop the redundant `additionalProperties:false` keyword to
+    // stay inside the entry byte budget; runtime decoding still denies it.
+    // Write schemas keep the keyword: their closed-shape tests rely on it.
+    if !matches!(
+        handler,
+        Handler::Collection
+            | Handler::Range(_)
+            | Handler::Republish
+            | Handler::Retry
+            | Handler::Cancel
+            | Handler::Worker
+            | Handler::PlanMarketUpdate
+            | Handler::RunMarketUpdate
+    ) {
+        super::wire::strip_additional_properties(&mut input);
+    }
     Entry {
         name,
         handler,
