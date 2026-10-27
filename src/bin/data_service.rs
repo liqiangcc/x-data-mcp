@@ -85,6 +85,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("X_DATA_MCP_TEXT_MODE must be full, summary or off".into());
     }
+    // XDM-64: a bad preparation-pool override refuses to start. `1` is the
+    // operator rollback to the sequential run path.
+    x_data_mcp::market_update::runner::prepare_workers_from_env()?;
     // v8 §3.4: only the ops entry runs the background worker; research and
     // maint serve reads/forensics without writing.
     config.run_worker = entry == EntryKind::Ops;
