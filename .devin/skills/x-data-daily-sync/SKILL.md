@@ -68,10 +68,15 @@ plan/run 大任务的进度按 `get_task_progress` 的 `unfinished` keyset 分�
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
   `contract_version`）：
-  - `capability_revision` 必须等于 `generic-data-v7`
+  - `capability_revision` 必须等于 `generic-data-v8`
     （v6 起 market 数据为单版本序列：`version_id` 为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取被取代时报 `stale_version`，写路径 stale base 为 item 级 `needs_verification`（`STALE_BASE:` 前缀），均须重取当前 head 重试，不得静默适配；v5 的 `related_tasks` 口径沿用，只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；v6 的 `generic-data-v6` 断言遇到 v7 即按下一条停止，不得静默适配。v7 新增 `plan_market_update`/`run_market_update`，日更编排见 §3。）
 
-任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。记录 `schema_digest`、`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 作为事实。
+任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。无过滤
+`get_data_capabilities({})` 只用于 revision 握手：v8 起它返回紧凑目录，`schema_digest`、
+`active_generation_ref`、`runtime_readiness`、`blocking_reasons` 只在详版里出现。
+需要这些事实时，对目标工具再调用一次详版
+`get_data_capabilities({"dataset":<目标 dataset>,"operation":<工具名>})`，从对应 item 读取；
+不得把紧凑目录里的缺省字段当成 `ready` 或空阻塞。
 
 握手后先调用 `sync_status`。若存在 inflight acquisition：
 
@@ -127,7 +132,7 @@ pending 就必须停止。
 
 ## 3. 数据更新（v7：日线 plan/run → 日线补漏 → 年线 plan → 年线 run → 年线补漏 → readback）
 
-完整有序步骤见 `docs/contracts/generic-data-v7.md` §7.1；本节是 Skill 侧的可执行版本。
+完整有序步骤见 `docs/contracts/generic-data-v8.md` §7.1；本节是 Skill 侧的可执行版本。
 **两步补漏（§3.3、§3.6）不可省略**。
 
 `market.daily` / `market.yearly` 的 `query_data`、`list_data_versions` 与
@@ -163,7 +168,7 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 
 本任务除 plan 的实体 item 外，worker 还会追加 10 个**服务器内部派生 item**
 （`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历，见
-`docs/contracts/generic-data-v7.md` §3）。受理响应与
+`docs/contracts/generic-data-v8.md` §3）。受理响应与
 `plan_counts` 的 `item_count` 仍是 plan 的 `eligible`；`get_task_progress` 的
 `total` 会比它多 10。内部 item 在 `unfinished` 里 `entity`/`period` 为 `null`、
 `item_id` 以 `derived:` 开头，失败只记 item 级结果并使 run 收尾
@@ -213,7 +218,7 @@ plan/run 或 §3.6 显式分支。轮询与 fail-closed 判定同 §3.2/§3.3。
 ### 3.6 年线不可处理路由（按 `ineligible_reasons` 补漏，不可省略）
 
 年线 run（§3.5）终态后处理 `ineligible_reasons`（全量原因表见
-`docs/contracts/generic-data-v7.md` §7.3）：
+`docs/contracts/generic-data-v8.md` §7.3）：
 
 - `value_semantics_changed` / `daily_replaced_since_derivation`：旧年线已失效
   （日线 replace 或 {source,unit_currency,adjustment_evidence} 变化），**必须显式重推**。
