@@ -511,7 +511,7 @@ D-29 说「MCP 的 `export_data` 放进 v8 一起设计」。本设计的设计�
   （`market.security_master`/`security_names`/`capital_events`/`risk_warnings`/`suspensions`/
   `price_limit_rules`），每个使用该枚举的 inputSchema 都随之增长；实测 research **11,511 B**、
   ops **28,220 B**（maint 不含 dataset 枚举，仍 13,493 B，预算不变），故将上限改为 11,700 / 28,400。
-  审核接受（Claude，2026-10-27），理由是新增数据集带来的面增长；其他原因不得上调。
+  审核接受（Claude），owner 2026-10-27 确认；理由是新增数据集带来的面增长，其他原因不得上调。
 - 预算按**线上 compact JSON**（`serde_json` 无空格）计，含 `name`/键名（约 +60 B/工具）。
 - 预算由 Rust 集成测试断言（`tests/mcp/v8_tool_surface.rs`）：对三个入口分别序列化 `tools/list`，
   `assert!(bytes <= budget)`，失败时打印实际字节与超出的工具名。
