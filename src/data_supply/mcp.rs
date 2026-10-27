@@ -677,11 +677,7 @@ fn plan_error(e: super::plan::PlanError) -> ApiError {
     }
 }
 fn plan_dataset_name(dataset: Dataset) -> &'static str {
-    match dataset {
-        Dataset::Daily => "market.daily",
-        Dataset::Yearly => "market.yearly",
-        Dataset::Catalog => "securities.catalog",
-    }
+    dataset.name()
 }
 fn mapped(e: Error) -> ApiError {
     if let Error::Task(task) = e {
@@ -1332,6 +1328,27 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
         }
         if v.get("filter").is_some() {
             v["filter"] = json!({"kind":"catalog"});
+        }
+    } else if matches!(
+        d,
+        Dataset::Index | Dataset::AdjustmentEvents | Dataset::Calendar
+    ) {
+        v["contract_version"] = json!("v2");
+        if v.get("selection").is_some() {
+            v["selection"] = match d {
+                Dataset::Index => json!({"kind":"single","entity":"sh.000001"}),
+                Dataset::AdjustmentEvents => {
+                    json!({"kind":"single","entity":{"exchange":"sh","code":"600006"}})
+                }
+                Dataset::Calendar => json!({"kind":"market"}),
+                _ => unreachable!(),
+            };
+        }
+        if v.get("filter").is_some() {
+            v["filter"] = json!({"kind":"daily","start_date":"2025-01-01","end_date":"2025-12-31"});
+        }
+        if let Some(object) = v.as_object_mut() {
+            object.remove("fields");
         }
     } else if d == Dataset::Yearly {
         if matches!(e.handler, Handler::Range(_)) {

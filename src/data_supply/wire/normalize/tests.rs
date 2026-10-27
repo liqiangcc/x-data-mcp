@@ -99,10 +99,10 @@ fn rejection_02_version_defaults_and_accepts_the_latest_alias() {
     let mut omitted = daily(json!({}));
     omitted.as_object_mut().unwrap().remove("version");
     let query: Query = decoded("query_data", omitted).unwrap();
-    assert_eq!(query.version, VersionChoice::LatestPerEntity);
+    assert_eq!(query.version, VersionChoice::LatestPerEntity {});
     let alias: Query =
         decoded("query_data", daily(json!({"version": {"kind": "latest"}}))).unwrap();
-    assert_eq!(alias.version, VersionChoice::LatestPerEntity);
+    assert_eq!(alias.version, VersionChoice::LatestPerEntity {});
     // An explicit pin is unchanged and only the `latest` alias is widened.
     let pinned: Query = decoded(
         "query_data",
@@ -377,7 +377,7 @@ fn rejection_14_catalog_filter_defaults_and_market_filter_is_required() {
             industry_code: None,
         }
     );
-    assert_eq!(catalog.version, VersionChoice::LatestPerEntity);
+    assert_eq!(catalog.version, VersionChoice::LatestPerEntity {});
     let (code, message) = rejection(
         "query_data",
         json!({

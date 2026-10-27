@@ -93,11 +93,14 @@ pub(crate) struct DerivedVersionRow {
     /// The task item whose commit last wrote the set (audit only).
     pub task_id: String,
     pub item_id: String,
+    /// Registration timestamp; the read model's `published_at` for a derived
+    /// dataset (the rows themselves carry no per-row stamp).
+    pub updated_at: String,
 }
 
 const VERSION_COLUMNS: &str = "dataset_kind,dataset_key,version_id,content_digest,\
      digest_format,record_count,first_day,last_day,algorithm_version,\
-     source_binding_digest,evidence_digest,task_id,item_id";
+     source_binding_digest,evidence_digest,task_id,item_id,updated_at";
 
 type RawVersion = (
     String,
@@ -111,6 +114,7 @@ type RawVersion = (
     String,
     Vec<u8>,
     Vec<u8>,
+    String,
     String,
     String,
 );
@@ -148,6 +152,7 @@ fn version_row(raw: RawVersion) -> Result<DerivedVersionRow, Error> {
             .map_err(|_| integrity("evidence_digest column is not 32 bytes"))?,
         task_id: raw.11,
         item_id: raw.12,
+        updated_at: raw.13,
     })
 }
 
@@ -180,6 +185,7 @@ pub(crate) fn read_version(
                     r.get(10)?,
                     r.get(11)?,
                     r.get(12)?,
+                    r.get(13)?,
                 ))
             },
         )

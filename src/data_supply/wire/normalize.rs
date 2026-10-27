@@ -132,7 +132,11 @@ fn shape(name: &str, input: &mut Value) -> Result<(), ApiError> {
 fn selection_kind(name: &str, map: &Fields, dataset: &str) -> Result<(), ApiError> {
     let allowed: &[&str] = match dataset {
         "securities.catalog" => &["catalog"],
-        "market.daily" | "market.yearly" => &["single", "batch"],
+        "market.daily" | "market.index" | "market.adjustment_events" => {
+            &["single", "batch", "universe"]
+        }
+        "market.yearly" => &["single", "batch"],
+        "market.calendar" => &["market"],
         _ => return Ok(()),
     };
     let Some(kind) = map
@@ -166,8 +170,9 @@ fn version(map: &mut Fields) {
 fn filter(map: &mut Fields, dataset: &str) -> Result<(), ApiError> {
     let allowed: &[&str] = match dataset {
         "securities.catalog" => &["catalog"],
-        "market.daily" => &["daily"],
+        "market.daily" | "market.index" => &["daily", "cross_section"],
         "market.yearly" => &["yearly"],
+        "market.adjustment_events" | "market.calendar" => &["daily"],
         _ => return Ok(()),
     };
     let Some(filter) = map.get("filter").cloned() else {
@@ -195,7 +200,7 @@ fn filter(map: &mut Fields, dataset: &str) -> Result<(), ApiError> {
         )));
     }
     let required: &[&str] = match kind {
-        "daily" => &["start_date", "end_date"],
+        "daily" | "cross_section" => &["start_date", "end_date"],
         "yearly" => &["start_year", "end_year"],
         _ => return Ok(()),
     };

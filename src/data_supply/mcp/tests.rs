@@ -1725,3 +1725,468 @@ fn index_series_stay_invisible_on_the_query_surface() {
         .unwrap();
     assert!(versions["items"].as_array().unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// v8 PR-4 (#387 §4.2/§4.3): universe + cross-section and the three M1
+// datasets. The fixtures below commit through the real storage paths; the
+// assertions are the wire shape, not a reimplementation of it.
+// ---------------------------------------------------------------------------
+
+fn publish_catalog(fixture: &Fixture, id: &str, members: &[(&str, crate::catalog::Exchange)]) {
+    use crate::catalog::{
+        CatalogSnapshot, CompletenessEvidence, IndustryInfo, SecurityRecord, SecurityType,
+    };
+    use crate::sqlite_catalog::SqliteCatalog;
+    let now = chrono::Utc::now();
+    let records = members
+        .iter()
+        .map(|(code, exchange)| SecurityRecord {
+            symbol: (*code).into(),
+            name: format!("股票{code}"),
+            exchange: exchange.clone(),
+            security_type: SecurityType::AShare,
+            source_security_id: (*code).into(),
+            industry: IndustryInfo::Assigned {
+                code: "I1".into(),
+                name: "行业一".into(),
+                scheme: None,
+            },
+            source: "fixture:catalog".into(),
+            acquired_at: now,
+        })
+        .collect::<Vec<_>>();
+    SqliteCatalog::new(fixture.tasks.clone())
+        .publish_fixture(
+            id,
+            CatalogSnapshot {
+                source: "fixture:catalog".into(),
+                acquired_at: now,
+                completeness: CompletenessEvidence::Complete {
+                    expected_count: records.len(),
+                },
+                records,
+            },
+            None,
+        )
+        .unwrap();
+}
+
+fn commit_calendar_days(fixture: &Fixture, days: &[NaiveDate]) {
+    use crate::market_data::{CalendarBatch, CalendarInputDates};
+    use crate::trading_calendar::{CalendarCoverage, TradingCalendar};
+    let input = |entity: &str, member: &str| CalendarInputDates {
+        entity: entity.into(),
+        member: member.into(),
+        day_member_sha256: "0a".repeat(32),
+        days: days.to_vec(),
+    };
+    let batch = CalendarBatch {
+        inputs: vec![
+            input("sh.000001", "sh000001.day"),
+            input("sz.399001", "sz399001.day"),
+        ],
+        security_event_sha256: "0e".repeat(32),
+    };
+    let calendar = TradingCalendar::union(&batch).unwrap();
+    let coverage = CalendarCoverage {
+        total_bars: 1,
+        outside_bars: 0,
+        outside_days: vec![],
+        outside_samples: vec![],
+        days_truncated: false,
+        samples_truncated: false,
+        calendar_digest: calendar.digest_hex(),
+    };
+    let manifest = "0b".repeat(32);
+    let MarketBackend::Compact(repo) = &fixture.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.commit_calendar(&crate::sqlite_market::calendar::CalendarWrite {
+        batch: &batch,
+        coverage: &coverage,
+        task_id: "task-calendar",
+        item_id: "derived:calendar",
+        generation_id: "gen-1",
+        generation_manifest_sha256: &manifest,
+        generation_evidence: &json!({"fixture": true}),
+    })
+    .unwrap();
+}
+
+fn seed_adjustment_events(fixture: &Fixture, symbol: &str) {
+    use crate::market_data::{AdjustmentEvent, AdjustmentEventSet};
+    use rust_decimal::Decimal;
+    let MarketBackend::Compact(repo) = &fixture.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let binding = repo
+        .read(|c| series::read_series_adjusted(c, symbol, Period::Day, Adjustment::Forward))
+        .unwrap()
+        .unwrap()
+        .source_binding_digest;
+    let set = AdjustmentEventSet {
+        entity: symbol.into(),
+        events: vec![AdjustmentEvent {
+            ordinal: 1,
+            effective_day: NaiveDate::from_ymd_opt(2020, 1, 6).unwrap(),
+            category: 1,
+            c_bits: [0; 4],
+            factors: [Decimal::new(150, 2); 4],
+            known_at: None,
+        }],
+        excluded: 0,
+    };
+    repo.write(|c| {
+        crate::sqlite_market::derived::replace_adjustment_events(
+            c,
+            &set,
+            binding,
+            "task-events",
+            "item-1",
+        )
+    })
+    .unwrap();
+}
+
+fn cross_section_query() -> Value {
+    json!({
+        "dataset":"market.daily",
+        "contract_version":"v2",
+        "selection":{"kind":"universe","catalog_version":"catalog-cs"},
+        "filter":{"kind":"cross_section","start_date":"2020-01-06","end_date":"2020-01-06"},
+        "version":{"kind":"latest_per_entity"},
+        "fields":["close"]
+    })
+}
+
+/// AC-V8-5: `universe` + `cross_section` projects `trade_days` once,
+/// `entities` once, and `columns[field][day][entity]`; the concrete catalog
+/// version is echoed.
+#[test]
+fn cross_section_universe_projects_the_column_grid() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    let second = task(&f, "sz.000001", 1, "day", "req-cs-second");
+    publish_daily(
+        &f,
+        &second,
+        "item-1",
+        "sz.000001",
+        vec![bar(day_epoch(2020, 1, 6), 2000)],
+        None,
+    );
+    publish_catalog(
+        &f,
+        "catalog-cs",
+        &[
+            ("600006", crate::catalog::Exchange::Shanghai),
+            ("000001", crate::catalog::Exchange::Shenzhen),
+        ],
+    );
+    commit_calendar_days(
+        &f,
+        &[
+            NaiveDate::from_ymd_opt(2020, 1, 6).unwrap(),
+            NaiveDate::from_ymd_opt(2020, 1, 7).unwrap(),
+        ],
+    );
+    let page = f.api.call("query_data", cross_section_query()).unwrap();
+    assert_eq!(page["layout"], "cross_section");
+    assert_eq!(page["catalog_version"], "catalog-cs");
+    assert_eq!(page["trade_days"], json!(["2020-01-06"]));
+    assert_eq!(page["entities"], json!(["sh.600006", "sz.000001"]));
+    assert_eq!(page["columns"]["close"], json!([["10.05", "20"]]));
+}
+
+/// AC-V8-5: more than five trading days is rejected and the message names the
+/// longer-panel alternative.
+#[test]
+fn cross_section_rejects_a_window_over_five_trading_days() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    publish_catalog(
+        &f,
+        "catalog-cs",
+        &[("600006", crate::catalog::Exchange::Shanghai)],
+    );
+    let days = (6..=13)
+        .map(|d| NaiveDate::from_ymd_opt(2020, 1, d).unwrap())
+        .filter(|d| {
+            use chrono::Datelike;
+            !matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(days.len(), 6);
+    commit_calendar_days(&f, &days);
+    let mut query = cross_section_query();
+    query["filter"]["end_date"] = json!("2020-01-13");
+    let error = f.api.call("query_data", query).unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error.message.contains("6 trading days"),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains("selection.kind=batch"),
+        "{}",
+        error.message
+    );
+}
+
+/// AC-V8-6: `market.daily` keeps the stock boundary, so the index entity is
+/// absent there; `market.index` exposes the same entity with its own metadata.
+#[test]
+fn index_is_visible_only_through_its_own_dataset() {
+    let f = fixture();
+    let task_id = task(&f, "sh.000001", 1, "day", "req-index");
+    commit_index(
+        &f,
+        &task_id,
+        "item-1",
+        "sh.000001",
+        vec![bar(day_epoch(2020, 1, 6), 3000)],
+    );
+    let base = json!({
+        "contract_version":"v2",
+        "selection":{"kind":"single","entity":"sh.000001"},
+        "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+        "version":{"kind":"latest_per_entity"}
+    });
+    let mut daily = base.clone();
+    daily["dataset"] = json!("market.daily");
+    let daily_page = f.api.call("query_data", daily).unwrap();
+    assert_eq!(daily_page["versions"][0]["status"], "absent");
+    assert_eq!(daily_page["row_count"], 0);
+
+    let mut index = base;
+    index["dataset"] = json!("market.index");
+    let index_page = f.api.call("query_data", index).unwrap();
+    assert_eq!(index_page["layout"], "panel");
+    assert_eq!(index_page["versions"][0]["status"], "present");
+    assert_eq!(index_page["columns"]["close"], json!([["30"]]));
+    let metadata = &index_page["metadata"];
+    assert_eq!(metadata["index"]["price_unit"], "index_point");
+    assert_eq!(metadata["index"]["volume_unit"], "hand");
+    assert_eq!(metadata["index"]["aggregate_scope"], "whole_market");
+}
+
+/// AC-V8-6/AC-V8-8: the calendar has no entity, its rows are `trade_day`, and
+/// `selection.kind=market` is the only selection it accepts.
+#[test]
+fn calendar_is_market_level_and_entity_free() {
+    let f = fixture();
+    commit_calendar_days(
+        &f,
+        &[
+            NaiveDate::from_ymd_opt(2020, 1, 6).unwrap(),
+            NaiveDate::from_ymd_opt(2020, 1, 7).unwrap(),
+        ],
+    );
+    let page = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.calendar",
+                "contract_version":"v2",
+                "selection":{"kind":"market"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-07"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(page["layout"], "table");
+    assert!(page.get("entities").is_none(), "{page}");
+    assert_eq!(
+        page["columns"]["trade_day"],
+        json!(["2020-01-06", "2020-01-07"])
+    );
+    assert_eq!(page["versions"][0]["status"], "present");
+    assert!(page["versions"][0].get("entity").is_none(), "{page}");
+    let error = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.calendar",
+                "contract_version":"v2",
+                "selection":{"kind":"single","entity":"sh.600006"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-07"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+}
+
+/// AC-V8-6: adjustment events expose effective-day facts and never a
+/// `known_at` column (M1 stores NULL; v8 §4.6 keeps it out of the wire).
+#[test]
+fn adjustment_events_have_no_known_at_and_no_entity_gate() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    seed_adjustment_events(&f, SYMBOL);
+    let page = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.adjustment_events",
+                "contract_version":"v2",
+                "selection":{"kind":"single","entity":SYMBOL},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(page["layout"], "table");
+    assert_eq!(page["entities"], json!([SYMBOL]));
+    assert_eq!(page["columns"]["category"], json!([1]));
+    assert_eq!(page["columns"]["c1"], json!(["1.50"]));
+    assert!(page["columns"].get("known_at").is_none(), "{page}");
+    assert!(page["columns"].get("effective_day").is_none(), "{page}");
+}
+
+/// AC-V8-8: a universe availability is one aggregate row, not one row per
+/// member, and it stays inside the small-response budget.
+#[test]
+fn universe_availability_is_one_aggregate_row() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    publish_catalog(
+        &f,
+        "catalog-cs",
+        &[
+            ("600006", crate::catalog::Exchange::Shanghai),
+            ("000001", crate::catalog::Exchange::Shenzhen),
+        ],
+    );
+    let page = f
+        .api
+        .call(
+            "get_data_availability",
+            json!({
+                "dataset":"market.daily",
+                "contract_version":"v2",
+                "selection":{"kind":"universe","catalog_version":"catalog-cs"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(page["row_count"], 1);
+    assert_eq!(page["columns"]["universe"][0]["entities"], 2);
+    assert_eq!(page["columns"]["universe"][0]["present"], 1);
+    assert_eq!(page["columns"]["universe"][0]["absent"], 1);
+    assert_eq!(page["columns"]["availability"], json!(["partial"]));
+    let bytes = serde_json::to_vec(&page).unwrap().len();
+    assert!(bytes <= 700, "universe availability is {bytes} B: {page}");
+}
+
+/// AC-V8-6: facets are derived from the same frozen catalog version the
+/// catalog query reads, so member counts agree.
+#[test]
+fn facets_agree_with_the_catalog_query() {
+    let f = fixture();
+    publish_catalog(
+        &f,
+        "catalog-facets",
+        &[
+            ("600006", crate::catalog::Exchange::Shanghai),
+            ("600007", crate::catalog::Exchange::Shanghai),
+        ],
+    );
+    let facets = f
+        .api
+        .call(
+            "list_catalog_facets",
+            json!({"dataset":"securities.catalog","catalog_version":"catalog-facets"}),
+        )
+        .unwrap();
+    let members = facets["facets"]["industries"].as_array().unwrap();
+    assert_eq!(members.len(), 1, "{facets}");
+    assert_eq!(members[0]["code"], "I1");
+    assert_eq!(members[0]["members"], 2);
+    let catalog = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"securities.catalog",
+                "contract_version":"v1",
+                "selection":{"kind":"catalog","scope":"current_sh_sz_a"},
+                "filter":{"kind":"catalog","industry_code":"I1"},
+                "version":{"kind":"catalog_version","version_id":"catalog-facets"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(catalog["records"].as_array().unwrap().len(), 2);
+}
+
+/// Internally-tagged unit variants silently ignore extra keys under serde's
+/// `deny_unknown_fields`; these variants are structs so a caller cannot widen
+/// `market` into a single-entity request by accident.
+#[test]
+fn market_selection_rejects_extra_keys() {
+    let f = fixture();
+    for (selection, key) in [
+        (json!({"kind":"market","entity":"sh.600006"}), "entity"),
+        (json!({"kind":"market","exchange":"sz"}), "exchange"),
+    ] {
+        let error = f
+            .api
+            .call(
+                "query_data",
+                json!({
+                    "dataset":"market.calendar",
+                    "contract_version":"v2",
+                    "selection":selection,
+                    "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                    "version":{"kind":"latest_per_entity"}
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments");
+        assert!(error.message.contains(key), "{}", error.message);
+    }
+}
+
+#[test]
+fn latest_per_entity_rejects_extra_keys() {
+    let f = fixture();
+    let error = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.daily",
+                "contract_version":"v2",
+                "selection":{"kind":"single","entity":"sh.600006"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity","entity":"sh.600006"}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(error.message.contains("entity"), "{}", error.message);
+}
+
+#[test]
+fn default_write_selection_rejects_extra_keys() {
+    let f = fixture();
+    let error = f
+        .api
+        .call(
+            "start_collection",
+            json!({
+                "request_id":"r",
+                "dataset":"market.daily",
+                "contract_version":"v1",
+                "selection":{"kind":"default","symbols":["sh.600006"]}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(error.message.contains("symbols"), "{}", error.message);
+}

@@ -189,7 +189,12 @@ impl Entry {
                 .then_some(Some(Dataset::Catalog))
                 .into_iter()
                 .collect(),
-            Handler::Query | Handler::Versions | Handler::Availability | Handler::Collection => {
+            Handler::Collection => [Dataset::Catalog, Dataset::Daily, Dataset::Yearly]
+                .into_iter()
+                .filter(|d| access.allows(*d, None))
+                .map(Some)
+                .collect(),
+            Handler::Query | Handler::Versions | Handler::Availability => {
                 access.datasets.iter().copied().map(Some).collect()
             }
             _ => vec![None],
@@ -319,11 +324,28 @@ fn entry<I: JsonSchema, O: JsonSchema>(
     description: &'static str,
     example: Value,
 ) -> Entry {
+    let mut input = schema_for!(I);
+    // Read schemas drop the redundant `additionalProperties:false` keyword to
+    // stay inside the entry byte budget; runtime decoding still denies it.
+    // Write schemas keep the keyword: their closed-shape tests rely on it.
+    if !matches!(
+        handler,
+        Handler::Collection
+            | Handler::Range(_)
+            | Handler::Republish
+            | Handler::Retry
+            | Handler::Cancel
+            | Handler::Worker
+            | Handler::PlanMarketUpdate
+            | Handler::RunMarketUpdate
+    ) {
+        super::wire::strip_additional_properties(&mut input);
+    }
     Entry {
         name,
         handler,
         description,
-        input: serde_json::to_value(schema_for!(I)).unwrap(),
+        input: serde_json::to_value(input).unwrap(),
         output: serde_json::to_value(schema_for!(O)).unwrap(),
         example,
         operator_only: false,

@@ -165,6 +165,9 @@ impl Plan {
             Dataset::Daily => "market.daily",
             Dataset::Yearly => "market.yearly",
             Dataset::Catalog => "securities.catalog",
+            Dataset::Index => "market.index",
+            Dataset::AdjustmentEvents => "market.adjustment_events",
+            Dataset::Calendar => "market.calendar",
         }
     }
     /// Canonical serialization — the exact digest input.
@@ -479,9 +482,11 @@ pub fn resolve_plan(
         .read(|c| match dataset {
             Dataset::Daily => resolve_daily_on(c, target_day, today),
             Dataset::Yearly => resolve_yearly_on(c, target_day, today),
-            Dataset::Catalog => Err(iinvalid(
-                "plan_market_update supports market.daily and market.yearly",
-            )),
+            Dataset::Catalog | Dataset::Index | Dataset::AdjustmentEvents | Dataset::Calendar => {
+                Err(iinvalid(
+                    "plan_market_update supports market.daily and market.yearly",
+                ))
+            }
         })
         .map_err(|e| PlanError::Storage(e.to_string()))?;
     plan.generation_id = generation_id;
@@ -511,7 +516,10 @@ pub fn resolve_run(
             let plan = match dataset {
                 Dataset::Daily => resolve_daily_on(c, target_day, today),
                 Dataset::Yearly => resolve_yearly_on(c, target_day, today),
-                Dataset::Catalog => Err(iinvalid(
+                Dataset::Catalog
+                | Dataset::Index
+                | Dataset::AdjustmentEvents
+                | Dataset::Calendar => Err(iinvalid(
                     "run_market_update supports market.daily and market.yearly",
                 )),
             }?;

@@ -15,7 +15,14 @@ impl Access {
     pub fn local() -> Self {
         Self {
             principal: "local-owner".into(),
-            datasets: BTreeSet::from([Dataset::Catalog, Dataset::Daily, Dataset::Yearly]),
+            datasets: BTreeSet::from([
+                Dataset::Catalog,
+                Dataset::Daily,
+                Dataset::Yearly,
+                Dataset::Index,
+                Dataset::AdjustmentEvents,
+                Dataset::Calendar,
+            ]),
             securities: None,
         }
     }

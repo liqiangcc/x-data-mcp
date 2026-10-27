@@ -20,9 +20,9 @@ impl Collection {
     }
     pub fn request_id(&self) -> &str {
         match self {
-            Self::Daily { request_id, .. }
-            | Self::Catalog { request_id, .. }
-            | Self::Yearly { request_id, .. } => request_id,
+            Collection::Daily { request_id, .. }
+            | Collection::Catalog { request_id, .. }
+            | Collection::Yearly { request_id, .. } => request_id,
         }
     }
     pub fn payload(&self) -> Value {
@@ -63,7 +63,7 @@ impl CollectionContract {
                     json!({"catalog_version_id":version_id,"catalog_digest":digest}),
                 ))
             }
-            WriteSelection::Default => Err(invalid(
+            WriteSelection::Default { .. } => Err(invalid(
                 "default selection is only implemented for market.daily update/backfill",
             )),
         }
@@ -101,7 +101,7 @@ impl Contract for CollectionContract {
                             return Err(invalid("catalog version required"));
                         }
                     }
-                    WriteSelection::Default => {
+                    WriteSelection::Default { .. } => {
                         return Err(invalid(
                             "default selection is only implemented for market.daily update/backfill",
                         ));
