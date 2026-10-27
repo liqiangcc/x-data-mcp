@@ -558,7 +558,7 @@ fn listing_phase(
         Some(listing_index) => {
             if as_of_index < listing_index {
                 Err(PriceLimitReason::NotListed)
-            } else if as_of_index - listing_index + 1 <= 5 {
+            } else if as_of_index - listing_index < 5 {
                 Ok(ListingPhase::First5Days)
             } else {
                 Ok(ListingPhase::Seasoned)

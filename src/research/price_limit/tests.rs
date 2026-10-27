@@ -176,7 +176,7 @@ fn base_book() -> RuleBook {
         None,
     );
     pending.basis_status = BasisStatus::Pending;
-    let mut book = RuleBook {
+    let book = RuleBook {
         price_limits: vec![
             rule(
                 "sz-main-normal-v1",
@@ -187,7 +187,7 @@ fn base_book() -> RuleBook {
                 Some(500),
                 BandSide::Both,
                 start,
-                Some(day(2026, 7, 6)),
+                Some(day(2026, 7, 9)),
             ),
             rule(
                 "sz-main-normal-v2",
@@ -197,7 +197,7 @@ fn base_book() -> RuleBook {
                 ListingPhase::Seasoned,
                 Some(1_000),
                 BandSide::Both,
-                day(2026, 7, 6),
+                day(2026, 7, 9),
                 None,
             ),
             rule(
@@ -526,17 +526,18 @@ fn a_seasoned_main_board_uses_the_rule_row_and_the_last_bar() {
 fn the_effective_date_selects_the_rule_row() {
     let fixture = Fixture::new();
     let c = fixture.open();
-    // 2026-07-03 -> v1 (500 bp); prev close 1003 -> 1053 / 953.
-    let before = ask(&c, "sz.000001", days()[4]);
+    // 2026-07-06 (the 6th trading day) -> v1 (500 bp); prev close 1004
+    // -> 1054 / 954.
+    let before = ask(&c, "sz.000001", days()[5]);
     assert_eq!(before.rule_id.as_deref(), Some("sz-main-normal-v1"));
-    assert_eq!(before.limit_up_units, Some(1_053));
-    assert_eq!(before.limit_down_units, Some(953));
+    assert_eq!(before.limit_up_units, Some(1_054));
+    assert_eq!(before.limit_down_units, Some(954));
 
-    // 2026-07-06 -> v2 (1000 bp); prev close 1004 -> 1104 / 904.
-    let after = ask(&c, "sz.000001", days()[5]);
+    // 2026-07-09 -> v2 (1000 bp); prev close 1007 -> 1108 / 906.
+    let after = ask(&c, "sz.000001", days()[8]);
     assert_eq!(after.rule_id.as_deref(), Some("sz-main-normal-v2"));
-    assert_eq!(after.limit_up_units, Some(1_104));
-    assert_eq!(after.limit_down_units, Some(904));
+    assert_eq!(after.limit_up_units, Some(1_108));
+    assert_eq!(after.limit_down_units, Some(906));
 }
 
 #[test]
