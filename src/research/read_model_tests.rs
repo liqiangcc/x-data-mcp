@@ -863,13 +863,14 @@ fn known_at_excludes_null_rows_and_counts_them() {
     assert_eq!(report.coverage(), KnownAtCoverage::Partial);
     assert_eq!(answer.known_at, Some(days[1]));
 
-    // The row known on day 2 is not in day 1's information set.
-    let request = UniverseRequest::new(days[1]).with_known_at(days[2]);
-    let answer = universe(&c, &request).unwrap();
-    assert_eq!(
-        entities(&answer),
-        vec!["sz.000001", "sz.000002", "sz.000004"]
-    );
+    // Same `as_of`, two information sets: 000002 lists on day 2 and its row is
+    // known on day 2, so a day-1 cutoff drops it by `known_at` rather than by
+    // `as_of` — the two filters are not interchangeable (§12.2).
+    let answer = universe(&c, &UniverseRequest::new(days[2]).with_known_at(days[1])).unwrap();
+    assert!(!entities(&answer).contains(&"sz.000002"));
+    assert_eq!(answer.exclusions.excluded_by_known_at, 10);
+    let answer = universe(&c, &UniverseRequest::new(days[2]).with_known_at(days[2])).unwrap();
+    assert!(entities(&answer).contains(&"sz.000002"));
     assert_eq!(answer.exclusions.excluded_by_known_at, 9);
 }
 
