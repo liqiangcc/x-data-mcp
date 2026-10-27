@@ -554,7 +554,7 @@ pub fn parse_infoharbor(bytes: &[u8]) -> Result<Vec<InfoharborRow>, Error> {
             line: line_number,
             detail: format!("market is not a byte: {:?}", fields[0]),
         })?;
-        if !matches!(market, 0 | 1 | 2) {
+        if !matches!(market, 0..=2) {
             return Err(Error::InfoharborLine {
                 line: line_number,
                 detail: format!("market {market} is outside 0/1/2"),
@@ -577,13 +577,13 @@ pub fn parse_infoharbor(bytes: &[u8]) -> Result<Vec<InfoharborRow>, Error> {
         }
         let start = parse_optional_infoharbor_date(fields[3], line_number, "start")?;
         let end = parse_optional_infoharbor_date(fields[4], line_number, "end")?;
-        if let (Some(start), Some(end)) = (start, end) {
-            if start > end {
-                return Err(Error::InfoharborLine {
-                    line: line_number,
-                    detail: format!("start {start} is after end {end}"),
-                });
-            }
+        if let (Some(start), Some(end)) = (start, end)
+            && start > end
+        {
+            return Err(Error::InfoharborLine {
+                line: line_number,
+                detail: format!("start {start} is after end {end}"),
+            });
         }
         if !seen.insert((market, code.to_string())) {
             return Err(Error::InfoharborDuplicate {

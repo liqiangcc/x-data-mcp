@@ -454,10 +454,10 @@ fn validate_fact(fact: &SecurityLifecycleFact) -> Result<(), Error> {
     if fact.code.len() != 6 || !fact.code.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(integrity("security_master code is not six digits"));
     }
-    if let Some(to) = fact.effective_to {
-        if to <= fact.effective_from {
-            return Err(integrity("effective_to is not after effective_from"));
-        }
+    if let Some(to) = fact.effective_to
+        && to <= fact.effective_from
+    {
+        return Err(integrity("effective_to is not after effective_from"));
     }
     if fact.listing_date.is_some() != (fact.listing_source != ListingSource::Unknown) {
         return Err(integrity("listing_date and listing_source disagree"));
@@ -465,10 +465,10 @@ fn validate_fact(fact: &SecurityLifecycleFact) -> Result<(), Error> {
     if fact.delisting_date.is_some() != (fact.delisting_source != DelistingSource::Unknown) {
         return Err(integrity("delisting_date and delisting_source disagree"));
     }
-    if let (Some(start), Some(end)) = (fact.arrangement_start, fact.arrangement_end) {
-        if start > end {
-            return Err(integrity("arrangement_start is after arrangement_end"));
-        }
+    if let (Some(start), Some(end)) = (fact.arrangement_start, fact.arrangement_end)
+        && start > end
+    {
+        return Err(integrity("arrangement_start is after arrangement_end"));
     }
     Ok(())
 }

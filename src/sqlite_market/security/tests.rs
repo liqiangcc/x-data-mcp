@@ -102,6 +102,24 @@ fn fact(
 
 const ENTITY: &str = "sz.000001";
 
+type MasterRow = (
+    i64,
+    i64,
+    i64,
+    String,
+    i64,
+    i64,
+    String,
+    i64,
+    i64,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    Option<String>,
+);
+
 #[test]
 fn capital_digest_depends_on_facts_and_order_only() {
     let a = event(0, day(2024, 6, 20), 2, [0.0, 1000.0, 500.0, 1500.0]);
@@ -210,9 +228,9 @@ fn replace_stores_capital_facts_and_registers_one_version() {
     assert_eq!(evidence["known_at"], "unknown");
     assert_eq!(evidence["content_digest"], written.version_id);
     assert_eq!(evidence["suspicious_count"], 0);
-    // The fixture's event 1 starts from 0 while event 0 ended at 5,000,000:
-    // §5.2 counts that break instead of rejecting the chain.
-    assert_eq!(evidence["chain_gap_count"], 1);
+    // Event 0 ends at 5,000,000 but event 1 starts at 0, and event 2 ends at
+    // 10,000,000 but event 3 starts at 0: §5.2 counts both breaks.
+    assert_eq!(evidence["chain_gap_count"], 2);
     assert_eq!(evidence["same_day_multi_event_count"], 0);
 }
 
@@ -378,23 +396,7 @@ fn master_upsert_writes_tdx_only_rows_and_keeps_other_rows() {
         2
     );
 
-    let stored: (
-        i64,
-        i64,
-        i64,
-        String,
-        i64,
-        i64,
-        String,
-        i64,
-        i64,
-        String,
-        String,
-        i64,
-        i64,
-        i64,
-        Option<String>,
-    ) = c
+    let stored: MasterRow = c
         .query_row(
             "SELECT effective_from,effective_to,instrument_class,issuer_resolution,\
              listing_date,listing_date_tdx,listing_source,delisting_date,delisting_date_tdx,\
