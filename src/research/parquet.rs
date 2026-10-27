@@ -1258,7 +1258,9 @@ fn write_column(
         }
     }
     let levels = kind.is_optional().then_some(defs.as_slice());
-    match kind {
+    // The writers return the number of values written; the caller already
+    // knows it (`cells.len()`), so the count is discarded here.
+    let _ = match kind {
         ColumnType::Text | ColumnType::TextOpt => column
             .typed::<ByteArrayType>()
             .write_batch(&texts, levels, None)
@@ -1275,7 +1277,7 @@ fn write_column(
             .typed::<BoolType>()
             .write_batch(&bools, levels, None)
             .map_err(parquet_error)?,
-    }
+    };
     column.close().map_err(parquet_error)?;
     Ok(())
 }

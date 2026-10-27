@@ -31,7 +31,8 @@ use crate::market_data::{
     Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, CalendarBatch,
     CalendarInputDates, CoverageStatus, EvidenceValue, Period, UnitCurrencyEvidence,
 };
-use crate::security_master::{SecurityLifecycleFact, SuspensionSet};
+use crate::security_master::SecurityLifecycleFact;
+use crate::security_master::suspensions::SuspensionSet;
 use crate::sqlite_market::calendar::{self, CalendarWrite};
 use crate::sqlite_market::series::NewSeries;
 use crate::sqlite_market::{derived, evidence_store, security, series};
