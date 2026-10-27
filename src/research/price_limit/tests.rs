@@ -327,8 +327,7 @@ impl Fixture {
         )
         .unwrap();
         let version_evidence =
-            evidence_store::put_evidence(&tx, EvidenceKind::Version, &json!({"fixture": "series"}))
-                .unwrap();
+            evidence_store::put_evidence(&tx, EvidenceKind::Version, &series_evidence()).unwrap();
 
         let entities: Vec<(&str, Vec<usize>, i64)> = vec![
             ("sz.000001", (0..10).collect(), 1_000),
