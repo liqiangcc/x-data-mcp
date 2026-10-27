@@ -1114,8 +1114,13 @@ pub(crate) mod security;
 // then only its tests and the read model's reader drive this module.
 #[allow(dead_code)]
 pub(crate) mod rules;
+// The suspension writer is consumed by the future derived-suspensions item
+// (PR-8); until then only its tests and the read model's reader drive this
+// module.
 pub(crate) mod series;
 pub(crate) mod series_commit;
+#[allow(dead_code)]
+pub(crate) mod suspensions;
 pub(crate) mod update;
 pub(crate) mod yearly_results;
 

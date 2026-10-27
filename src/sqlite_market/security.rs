@@ -825,9 +825,10 @@ pub(crate) fn read_risk_warning_intervals(
     Ok(intervals)
 }
 
-/// All stored `suspension_intervals` rows, ordered by the row identity. PR-4
-/// only reads them; deriving `unresolved_gap` rows and writing `confirmed`
-/// rows is PR-6 (§16).
+/// All stored `suspension_intervals` rows, ordered by the row identity. The
+/// writer, its validation and the `unresolved_gap` derivation are
+/// [`super::suspensions`] (PR-6); this decoder is shared with both so the
+/// writer and every reader cannot drift on encoding.
 pub(crate) fn read_suspension_intervals(c: &Connection) -> Result<Vec<SuspensionInterval>, Error> {
     let mut statement = c
         .prepare(

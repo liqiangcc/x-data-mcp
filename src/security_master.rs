@@ -32,6 +32,7 @@ use rust_decimal::Decimal;
 use crate::gbbq;
 
 pub mod assembly;
+pub mod suspensions;
 
 /// One of the three mainland exchanges. M2 only consumes `Sh`/`Sz`; `Bj` is
 /// part of the table vocabulary but out of the M2 scope (§1.2).

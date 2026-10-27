@@ -4,10 +4,11 @@
 //! (`security::replace_security_master`, `series::insert_series`/`insert_bars`,
 //! `calendar::commit_calendar`, `security::replace_capital_events`), so the
 //! rows the read model sees carry the same encoding the daily run produces.
-//! Two tables have no writer in M2 yet — `risk_warning_intervals` (needs #308)
-//! and `suspension_intervals` (PR-6 derives the gap rows) — so those rows are
-//! inserted with SQL on purpose; the read model is what is under test, not the
-//! writer that will land later.
+//! Two tables are not driven through their writer here: `risk_warning_intervals`
+//! has no writer in M2 (it needs #308), and the `suspension_intervals` rows are
+//! inserted with SQL so the read model is pinned independently of the
+//! derivation and its writer (`sqlite_market::suspensions`, PR-6); those paths
+//! are covered end to end by that module's tests.
 //!
 //! The ten-day fixture is built so every §11.1 rule has a witness:
 //!
