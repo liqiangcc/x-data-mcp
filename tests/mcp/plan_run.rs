@@ -1546,6 +1546,64 @@ impl x_data_mcp::market_update::runner::RangeProvider for UnchangedProvider {
     }
 }
 
+/// Forkable version of [`UnchangedProvider`] for the parallel-preparation
+/// test. A fork owns only cloneable counters, so the runner can share the
+/// provider table across preparation workers; the short sleep makes the
+/// overlap observable without relying on scheduler timing.
+#[derive(Clone)]
+struct ParallelUnchangedProvider {
+    typed_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+impl x_data_mcp::market_update::runner::RangeProvider for ParallelUnchangedProvider {
+    fn acquire(
+        &self,
+        _base: &x_data_mcp::market_storage::compat::CheckedRecord,
+        _range: &x_data_mcp::market_update::DateRange,
+        _candidate_id: &str,
+    ) -> Result<x_data_mcp::market_update::runner::Acquisition, x_data_mcp::market_data::SourceError>
+    {
+        Err(x_data_mcp::market_data::SourceError::NotVerified(
+            "fixture: envelope path unused".into(),
+        ))
+    }
+    fn acquire_typed(
+        &self,
+        facts: &x_data_mcp::market_update::UpdateBaseFacts,
+        _base_window: &[x_data_mcp::market_data::Bar],
+        range: &x_data_mcp::market_update::DateRange,
+    ) -> Result<
+        Option<x_data_mcp::market_update::runner::TypedAcquisition>,
+        x_data_mcp::market_data::SourceError,
+    > {
+        use std::sync::atomic::Ordering;
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(2));
+        self.typed_calls.fetch_add(1, Ordering::SeqCst);
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(Some(x_data_mcp::market_update::runner::TypedAcquisition {
+            decision: x_data_mcp::market_update::runner::TypedDecision::Unchanged,
+            evidence: x_data_mcp::market_update::Evidence {
+                base_version_id: facts.version_id.clone(),
+                base_integrity_sha256: facts.integrity_sha256.clone(),
+                candidate_sha256: "fixture:candidate".into(),
+                range: range.clone(),
+                same_qfq_basis_ref: "fixture:basis".into(),
+                revision_ref: None,
+                continuity: None,
+            },
+            raw: None,
+        }))
+    }
+    fn fork(
+        &self,
+    ) -> Option<Box<dyn x_data_mcp::market_update::runner::RangeProvider + Send + '_>> {
+        Some(Box::new(self.clone()))
+    }
+}
+
 /// Delegating wrapper over the live backend: every call forwards to the
 /// real repository while `commit_update_batch` records each call's item
 /// ids and can inject a structural failure or a task cancellation at a
@@ -1923,6 +1981,47 @@ fn run_items_commits_update_batch_in_bounded_chunks() {
     );
     assert_eq!(provider.typed_calls.get(), 250);
 }
+#[test]
+fn run_items_parallel_prepares_chunks_concurrently() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 250);
+    let provider = ParallelUnchangedProvider {
+        typed_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+    };
+    let runner = x_data_mcp::market_update::runner::RangeRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+    };
+    runner
+        .run_items_parallel(&task_id, &item_ids, &provider)
+        .unwrap()
+        .expect("compact backend carries the update batch");
+    assert_eq!(
+        provider
+            .typed_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        250
+    );
+    assert!(
+        provider
+            .max_active
+            .load(std::sync::atomic::Ordering::SeqCst)
+            >= 2,
+        "at least two preparation workers must overlap"
+    );
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(task.task.status.terminal());
+    assert!(
+        task.items
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "parallel execution must produce the same successful outcomes"
+    );
+}
+
 #[test]
 fn run_items_empty_and_single_item_boundaries() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
