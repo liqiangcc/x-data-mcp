@@ -553,7 +553,7 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
      "price_scale":2,"version_id":"<hex>","record_count":8000,"first_day":"1999-11-10",
      "last_day":"2026-10-23","source_binding_digest":"<hex>",
      "source_generation":{"generation_id":"<hex>","manifest_sha256":"<hex>"},
-     "coverage":"complete"}
+     "coverage":"complete","excluded_bar_count":0}
   ],
   "derived": [
     {"dataset":"trading_calendar","version_id":"<hex>","record_count":8793,
