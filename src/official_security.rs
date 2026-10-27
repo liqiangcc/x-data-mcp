@@ -25,8 +25,8 @@ use chrono::NaiveDate;
 use crate::dbf::{self, DbfRecord, FieldDescriptor};
 use crate::gbbq;
 use crate::security_master::{
-    CapitalEvent, CapitalEventSet, CurrentShares, DelistingSource, Exchange, IssuerResolution,
-    ListingSource, SecurityLifecycleFact, is_admitted_category,
+    ArrangementFact, CapitalEvent, CapitalEventSet, CurrentShares, DelistingSource, Exchange,
+    IssuerResolution, ListingSource, SecurityLifecycleFact, is_admitted_category,
 };
 
 /// One anchored field: name, dBase type byte, length, decimals (#399 A-5).
@@ -351,6 +351,10 @@ pub struct SkipCounts {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityFacts {
     pub lifecycle: Vec<SecurityLifecycleFact>,
+    /// Every A-share `infoharbor_spec.cfg` row, including the codes whose
+    /// `base.dbf` `SSDATE` is the `'0'` sentinel. The assembly needs the
+    /// arrangement bounds for those exchange-only rows (#401 A-6).
+    pub arrangements: Vec<ArrangementFact>,
     pub capital: Vec<CapitalEventSet>,
     pub current_shares: Vec<CurrentShareSnapshot>,
     pub skipped: SkipCounts,
@@ -610,7 +614,9 @@ pub fn parse_infoharbor(bytes: &[u8]) -> Result<Vec<InfoharborRow>, Error> {
 /// are not A shares (B/BJ/fund/bond/index) are counted and skipped, never
 /// stored as `instrument_class=0`. A `base.dbf` row with the `SSDATE='0'`
 /// sentinel gets no `security_master` interval: §4.1 has no defensible
-/// `effective_from` for it, so PR-3's exchange branch owns those codes.
+/// `effective_from` for it, so PR-3's exchange branch owns those codes. The
+/// full A-share arrangement subset is returned separately so PR-3 can attach
+/// the 退市整理期 to an exchange-only row.
 pub fn parse_security_facts(
     base: &BaseDbf,
     infoharbor: &[InfoharborRow],
@@ -670,6 +676,9 @@ pub fn parse_security_facts(
                 code: row.code.clone(),
                 effective_from: listing,
                 effective_to: delisting_date,
+                instrument_class: 0,
+                issuer_key: None,
+                b_listing_date: None,
                 listing_date: Some(listing),
                 listing_date_tdx: Some(listing),
                 listing_source: ListingSource::TdxSsdate,
@@ -719,8 +728,28 @@ pub fn parse_security_facts(
         }
     }
 
+    // The arrangement list is the full A-share subset, not only the rows that
+    // matched a `base.dbf` interval: the `SSDATE='0'` codes are exactly the
+    // ones whose arrangement PR-3 attaches to an exchange-only row.
+    let mut arrangements: Vec<ArrangementFact> = infoharbor
+        .iter()
+        .filter_map(|row| {
+            let exchange = classify_a_share(row.market, &row.code)?;
+            Some(ArrangementFact {
+                exchange,
+                code: row.code.clone(),
+                start: row.start,
+                end: row.end,
+            })
+        })
+        .collect();
+    arrangements.sort_by(|left, right| {
+        (left.exchange, left.code.as_str()).cmp(&(right.exchange, right.code.as_str()))
+    });
+
     Ok(SecurityFacts {
         lifecycle,
+        arrangements,
         capital,
         current_shares,
         skipped,

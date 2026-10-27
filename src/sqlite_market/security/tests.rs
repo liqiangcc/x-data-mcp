@@ -81,6 +81,9 @@ fn fact(
         code: code.into(),
         effective_from: from,
         effective_to: to,
+        instrument_class: 0,
+        issuer_key: None,
+        b_listing_date: None,
         listing_date: Some(from),
         listing_date_tdx: Some(from),
         listing_source: ListingSource::TdxSsdate,
@@ -549,4 +552,165 @@ fn master_rejects_inconsistent_sources_and_duplicate_intervals() {
     assert!(
         upsert_security_master(&c, &[duplicate.clone(), duplicate], binding, "t", "i").is_err()
     );
+}
+
+#[test]
+fn replace_master_writes_the_assembled_dataset_and_registers_a_version() {
+    use crate::security_master::assembly::{
+        self, Assembly, CodeMigrationFact, Conflict, MigrationCertainty, PendingSource,
+    };
+
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let earlier = SecurityLifecycleFact {
+        exchange: Exchange::Sh,
+        code: "600018".into(),
+        effective_from: day(2000, 7, 19),
+        effective_to: Some(day(2006, 10, 26)),
+        instrument_class: 0,
+        issuer_key: None,
+        issuer_resolution: IssuerResolution::CodeDate,
+        listing_date: Some(day(2000, 7, 19)),
+        listing_date_tdx: None,
+        listing_source: ListingSource::ExchangeList,
+        b_listing_date: None,
+        delisting_date: None,
+        delisting_date_tdx: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        arrangement_start: None,
+        arrangement_end: None,
+        listing_conflict: true,
+        delisting_conflict: false,
+    };
+    let later = SecurityLifecycleFact {
+        exchange: Exchange::Sh,
+        code: "600018".into(),
+        effective_from: day(2006, 10, 26),
+        effective_to: None,
+        instrument_class: 0,
+        issuer_key: Some("上港集团".into()),
+        issuer_resolution: IssuerResolution::Ambiguous,
+        listing_date: Some(day(2006, 10, 26)),
+        listing_date_tdx: Some(day(2006, 10, 26)),
+        listing_source: ListingSource::TdxSsdate,
+        b_listing_date: None,
+        delisting_date: None,
+        delisting_date_tdx: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        arrangement_start: None,
+        arrangement_end: None,
+        listing_conflict: true,
+        delisting_conflict: false,
+    };
+    let migration = CodeMigrationFact {
+        from_exchange: Exchange::Sz,
+        from_code: "300114".into(),
+        to_exchange: Exchange::Sz,
+        to_code: "302132".into(),
+        effective_from: day(2025, 2, 17),
+        certainty: MigrationCertainty::Confirmed,
+        source_kind: "exchange_announcement".into(),
+        source_record_id: Some("ann-1".into()),
+        known_at: Some(day(2025, 2, 15)),
+    };
+    let assembled = Assembly {
+        rows: vec![earlier.clone(), later.clone()],
+        migrations: vec![migration.clone()],
+        conflicts: vec![Conflict::ListingDate {
+            exchange: Exchange::Sh,
+            code: "600018".into(),
+            exchange_date: day(2000, 7, 19),
+            tdx_date: day(2006, 10, 26),
+        }],
+        pending_sources: vec![PendingSource {
+            dataset: assembly::DATASET_KIND,
+            source: "exchange_list",
+            reason: "test",
+        }],
+        unresolved: vec![],
+        exchange_as_of: Some(day(2026, 10, 26)),
+    };
+    let written = replace_security_master(&c, &assembled, binding, "task-1", "item-1").unwrap();
+    assert_eq!(written.dataset_kind, assembly::DATASET_KIND);
+    assert_eq!(written.dataset_key, assembly::DATASET_KEY);
+    assert_eq!(written.digest_format, assembly::DIGEST_FORMAT);
+    assert_eq!(written.algorithm_version, assembly::ALGORITHM_VERSION);
+    assert_eq!(written.record_count, 2);
+    assert_eq!(
+        written.content_digest,
+        assembly::assembly_digest(&assembled.rows, &assembled.migrations)
+    );
+    assert_eq!(
+        written.version_id,
+        compact_market::digest_hex(&written.content_digest)
+    );
+    assert_eq!(
+        written.first_day,
+        compact_market::epoch_day(day(2000, 7, 19))
+    );
+    assert_eq!(
+        written.last_day,
+        compact_market::epoch_day(day(2006, 10, 26))
+    );
+    assert_eq!(written.source_binding_digest, binding);
+
+    assert_eq!(
+        read_security_master(&c).unwrap(),
+        vec![earlier.clone(), later.clone()]
+    );
+    assert_eq!(read_code_migrations(&c).unwrap(), vec![migration]);
+
+    let (kind, canonical) =
+        super::super::evidence_store::read_evidence(&c, &written.evidence_digest).unwrap();
+    assert_eq!(kind, EvidenceKind::Derived);
+    let evidence: Value = serde_json::from_str(&canonical).unwrap();
+    assert_eq!(evidence["dataset"], "security_master");
+    assert_eq!(evidence["dataset_key"], "a_share");
+    assert_eq!(evidence["row_count"], 2);
+    assert_eq!(evidence["migration_count"], 1);
+    assert_eq!(evidence["confirmed_migration_count"], 1);
+    assert_eq!(evidence["candidate_migration_count"], 0);
+    assert_eq!(evidence["listing_conflict_count"], 2);
+    assert_eq!(evidence["ambiguous_code_reuse_count"], 0);
+    assert_eq!(evidence["conflicts"][0]["kind"], "listing_date");
+    assert_eq!(evidence["pending_sources"][0]["source"], "exchange_list");
+    assert_eq!(evidence["known_at"], "unknown");
+    assert_eq!(evidence["exchange_as_of"], "2026-10-26");
+    assert_eq!(evidence["limitations"].as_array().unwrap().len(), 4);
+
+    // The second generation replaces the dataset: the old interval and the
+    // migration must not survive as stale rows.
+    let one = Assembly {
+        rows: vec![later.clone()],
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: Some(day(2026, 10, 26)),
+    };
+    let second = replace_security_master(&c, &one, binding, "task-2", "item-2").unwrap();
+    assert_ne!(written.version_id, second.version_id);
+    assert_eq!(second.record_count, 1);
+    assert_eq!(read_security_master(&c).unwrap(), vec![later]);
+    assert!(read_code_migrations(&c).unwrap().is_empty());
+}
+
+#[test]
+fn replace_master_rejects_an_empty_assembly() {
+    use crate::security_master::assembly::Assembly;
+
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let empty = Assembly {
+        rows: vec![],
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: None,
+    };
+    assert!(replace_security_master(&c, &empty, binding, "t", "i").is_err());
+    assert!(read_security_master(&c).unwrap().is_empty());
 }

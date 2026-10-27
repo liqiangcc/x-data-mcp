@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 
 use super::*;
-use crate::security_master::DelistingReason;
+use crate::security_master::{ArrangementFact, DelistingReason};
 
 fn day(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -260,6 +260,24 @@ fn assembles_lifecycle_capital_and_current_shares() {
     assert_eq!(facts.current_shares.len(), 2);
     assert_eq!(facts.skipped.non_a_share_base_rows, 1);
     assert_eq!(facts.skipped.non_a_share_arrangement_rows, 1);
+    // The B-share arrangement row is not an A-share arrangement.
+    assert_eq!(
+        facts.arrangements,
+        vec![
+            ArrangementFact {
+                exchange: Exchange::Sh,
+                code: "600001".into(),
+                start: Some(day(2013, 1, 4)),
+                end: Some(day(2013, 12, 31)),
+            },
+            ArrangementFact {
+                exchange: Exchange::Sz,
+                code: "000001".into(),
+                start: None,
+                end: None,
+            },
+        ]
+    );
 
     let delisted = facts
         .lifecycle
@@ -346,6 +364,15 @@ fn missing_listing_is_counted_and_not_written() {
     let facts = parse_security_facts(&base, &arrangements, &[]).unwrap();
     assert!(facts.lifecycle.is_empty());
     assert_eq!(facts.capital.len(), 1);
+    assert_eq!(
+        facts.arrangements,
+        vec![ArrangementFact {
+            exchange: Exchange::Sz,
+            code: "002257".into(),
+            start: Some(day(2020, 1, 1)),
+            end: Some(day(2020, 2, 1)),
+        }]
+    );
     assert_eq!(facts.skipped.missing_listing_base_rows, 1);
     assert_eq!(facts.skipped.missing_listing_with_arrangement_rows, 1);
     assert_eq!(facts.skipped.unmatched_arrangement_rows, 0);
