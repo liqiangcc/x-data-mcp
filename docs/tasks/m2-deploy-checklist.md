@@ -22,14 +22,27 @@
    `state/preview.sqlite.v24-archived-<UTC>`，**保留不迁移**。
 3. 从 release 提交读取期望的 fresh-init schema（#423 起部署脚本自己读，不再写死 21），
    `task_sqlite init` 建全新库——**不做原地升级**。
-4. 起两个 systemd 单元，检查 socket、`tools/list`（15 / 10）、`pragma user_version=24`。
-5. 写部署报告到 `reports/preview37-phaseg-deployment.json`。
+4. **data 单元的 drop-in 加 `X_DATA_MCP_RUN_PREPARE_WORKERS=1`**（与
+   `text-mode.conf` 并列，新的 `prepare-workers.conf`；`daemon-reload` 后重启单元）。
+   #429 起 v2 日更的准备线程数由它控制：`1` 走原来的串行 `run_items` 路径，不设时按
+   CPU 取 `clamp(2,4)`，生产 2 vCPU 主机默认 **2**，其保守最坏内存估算约 **1.0 GiB**
+   （`2*workers + 1` 个 ≤100-item chunk × 约 200 MiB；`src/market_update/runner.rs`
+   的 `prepare_workers_from_env` 注释）。本机 1.9 GiB RAM，部署窗口先按 1 跑。
+   放开条件：**独占窗口**（[SLO](../SLO.md) §3）实测内存与耗时，owner 确认后再改回不设
+   或 2；非整数/超范围的值会让 `data_service` 拒绝启动，不是静默降级。
+5. 起两个 systemd 单元，检查 socket、`tools/list`（15 / 10）、`pragma user_version=24`、
+   单元环境里有 `X_DATA_MCP_RUN_PREPARE_WORKERS=1`。
+6. 写部署报告到 `reports/preview37-phaseg-deployment.json`。
 
 ## 2. 重建步骤与预计耗时
 
 预计值与 preview.36 同量级（采集 11–16 min、plan/run 约 10 min、年线约 8 min，不可读窗口约
 40–50 min）；preview.36 实测 844s / 41s / 302s。**新增的 4 个 M2 内部 item 的耗时未测量**
 （preview.36 的 41s 只含 9 个指数 + 日历），按「部署后回填」处理，不作门禁。
+
+本次窗口的 plan/run 以 `X_DATA_MCP_RUN_PREPARE_WORKERS=1` 运行（串行准备）：**耗时预期高于
+默认 2 线程**，内存预期低于 1 GiB 上限；这两项都只记录实测，不当门禁——2 线程的收益与内存
+代价要等独占窗口实测后由 owner 决定（见 §1 第 4 步）。
 
 1. 全量采集：目录 + 日线（不复权/前复权）+ 年线首建。
 2. v2 `plan_market_update` / `run_market_update`：实体 item 之后追加 **14** 个内部 item
@@ -60,6 +73,13 @@ M2 读回（`query_data`，`contract_version:"v2"`，`filter.kind:"daily"`）：
   这不等于失败，不要把 0 行当成缺陷。
 - 研究快照导出里 7 个 M2 文件列名/类型与 `files[].dataset`/`temporal` 声明一致；
   `daily_raw` 不含涨跌停/可交易性派生列（AC-M2-11）。
+
+窗口内额外记录（不发门禁结论）：
+
+- plan/run 期间的峰值 RSS（`systemctl show -p MemoryPeak x-data-mcp-data` 或
+  `/proc/<pid>/status` 的 `VmHWM`）与墙钟耗时，以及当时是否独占（SLO §3）。
+- 部署报告里写明 `X_DATA_MCP_RUN_PREPARE_WORKERS=1`；回填 PR 把它记进
+  [STATUS](../STATUS.md) 的「服务」表。
 
 部署后按实测回填 [STATUS](../STATUS.md)（版本 SHA、部署时刻、数据量、耗时、M2 行数），
 并跑 `python3 scripts/check_current_facts.py`。

@@ -97,7 +97,7 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`） | 15 | capability `generic-data-v8`（含只读 `get_yearly_base_years`）；`X_DATA_MCP_TEXT_MODE=full`；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`） | 15 | capability `generic-data-v8`（含只读 `get_yearly_base_years`）；`X_DATA_MCP_TEXT_MODE=full`；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` 与 `X_DATA_MCP_RUN_PREPARE_WORKERS=1`（preview.37 部署窗口起，v2 日更的准备线程串行；放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1） |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 设置了 `X_DATA_MCP_TDX_FETCH=current/scripts/tdx_fetch.py` |
 | `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire；`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 **120s**（2026-10-24T16:56:58Z 由 10s 改为 120s，`deadline=time.monotonic()+120`；但单元未设 `TimeoutStartSec`，systemd 默认 90s 也覆盖 `ExecStartPre`，所以实际生效上限是 **90s**），单元为 `Restart=always` / `RestartSec=10`；data 服务停止时隧道会因 stdio 子进程退出而自行退出 |
 
