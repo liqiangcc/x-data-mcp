@@ -624,7 +624,7 @@ pub struct Observer<R> {
     sequence: RefCell<u64>,
     instance: String,
 }
-impl<R: ObservationRepository> Observer<R> {
+impl<R: ObservationRepository + super::query::ReadRepository> Observer<R> {
     pub fn new(repository: R, run_id: String) -> Self {
         Self {
             repository,
