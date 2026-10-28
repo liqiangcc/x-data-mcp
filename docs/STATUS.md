@@ -185,7 +185,7 @@ preview.36 重建）。
 
 补采后的落后集合由 13 个变为 8 个：6 个原落后实体（sz.002731、sh.600293、sz.002388、sh.603517、sh.603759、sh.603838）已补到 2026-10-23，新增 1 个（sh.601326 停在 2026-10-20）。
 
-运维事实：热 generation 上限 6（`MAX_HOT_GENERATIONS`，`src/acquire/service.rs:39`；判定见 `:456`，hot = 状态不是 evidence_only 的代），超限后 `acquire_generation` 被拒 `generation_capacity`；Skill 无权退役 generation；退役历史：2026-10-13 由操作员退役 4 个已无字节的旧代，2026-10-19 退役 87322997，2026-10-24T16:57:16Z 退役 2d5851a4（释放约 546MB）。**历史：10-24 补采后一度回到 6/6**（新代 `c184e9c4` 激活，`9d9e38d7` 转为 superseded）；17:52Z 退役 `a119629b…` 后当前为 **5/6**（2026-10-26 只读实测：1 active + 4 superseded），下一次 acquire 可直接受理。保留策略（`RETAINED_SUPERSEDED=2`，`src/acquire/service.rs:43`）已随 preview.35 **于 2026-10-24T17:25Z 部署**，但只在 activate 提交成功后触发（`src/acquire/service.rs:1058-1084`），不能解除 acquire 之前的容量拒绝。Skill 在有更新日的路径仍未完整验证（枚举过慢一次、部分自行追加一次）；#304 的有效 PASS 仍为 3/10（均为 unchanged）。批量更新工具（plan/run，generic-data-v7）实现中。
+运维事实：热 generation 上限 6（`MAX_HOT_GENERATIONS`，`src/acquire/service.rs:39`；判定见 `:456`，hot = 状态不是 evidence_only 的代），超限后 `acquire_generation` 被拒 `generation_capacity`；Skill 无权退役 generation；退役历史：2026-10-13 由操作员退役 4 个已无字节的旧代，2026-10-19 退役 87322997，2026-10-24T16:57:16Z 退役 2d5851a4（释放约 546MB）。**历史：10-24 补采后一度回到 6/6**（新代 `c184e9c4` 激活，`9d9e38d7` 转为 superseded）；17:52Z 退役 `a119629b…` 后当前为 **5/6**（2026-10-26 只读实测：1 active + 4 superseded），下一次 acquire 可直接受理。保留策略（`RETAINED_SUPERSEDED=2`，`src/acquire/service.rs:43`）已随 preview.35 **于 2026-10-24T17:25Z 部署**，但只在 activate 提交成功后触发（`src/acquire/service.rs:1058-1084`），不能解除 acquire 之前的容量拒绝。Skill 在有更新日的路径仍未完整验证（枚举过慢一次、部分自行追加一次）；#304 的有效 PASS 仍为 3/10（均为 unchanged）。批量更新工具（`plan_market_update`/`run_market_update`）自 `generic-data-v7`（preview.33，2026-10-16）起已实现并随二进制上线；preview.36 与 preview.37 的日更即由它驱动（preview.37 本轮 84s，见「重建耗时」行）；Skill 逐页枚举的旧路径已不是日更主路径。
 
 ## 新鲜度
 
@@ -246,7 +246,7 @@ preview.36 重建）。
 | `src/acquire/fetch.rs` 在未设置 `X_DATA_MCP_TDX_FETCH` 时，回退到编译期的 `CARGO_MANIFEST_DIR` | 历史：preview.35 及更早不带该变量启动的实例无法下载。main 已修（#375）：未设置时只认包内 `<exe dir>/../scripts/tdx_fetch.py`，找不到即启动失败并报出变量名与路径；preview.36 构建自 `fcb86ab`（含 #375），本轮未实测该回退路径 | 源码、#375 |
 | 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存；`/tmp` 是内存盘 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
 | 热 generation 上限 6：超限后 `acquire_generation` 被拒（`generation_capacity`）。2026-10-24 实测路径：16:56Z 为 6/6（1 active + 5 superseded）→ 16:57:16Z 退役 `2d5851a4…` 降到 5/6 → 16:57:26Z acquire 被受理 → 17:01:34Z 新代 `c184e9c4` 激活，`9d9e38d7` 转为 superseded，**回到 6/6** → 17:52Z 再退役 `a119629b…`，**当前 5/6**，下一次 acquire 无需再手工腾位。容量是**计数**，但退役一个有字节的代同时释放空间（`2d5851a4` 约 546MB、`a119629b` 约 574MB）。自动保留策略（保留最新 2 个 superseded）**已随 preview.35 部署**（2026-10-24T17:25Z），在 activate 提交成功后生效 | 跨代日更会消耗热代名额；当前 5/6，activate 后由自动保留回收到约 4/6 | 2026-10-13 / 2026-10-24 实测（`generations/acquire.sqlite`、`du -sh`、`df /`）、`src/acquire/service.rs:43,925,1058-1084` |
-| Skill 日更依赖 AI 会话逐页枚举目录实体（页大小受限、随目录规模线性增长；5,228 实体实测 27 分钟未提交一条更新） | 有更新那天的同步在 Skill 口径下不可用；已改由程序化追加驱动完成，批量更新工具（generic-data-v7）设计中 | 2026-10-13 首次增量实测 |
+| Skill 日更依赖 AI 会话逐页枚举目录实体（页大小受限、随目录规模线性增长；5,228 实体实测 27 分钟未提交一条更新） | 有更新那天的同步在 Skill 口径下不可用；已改由程序化驱动完成——批量更新工具 `plan_market_update`/`run_market_update` 自 `generic-data-v7`（preview.33）起可用，preview.36 与 preview.37 日更即走该路径（preview.37 本轮 84s） | 2026-10-13 首次增量实测 |
 | 历史：AGENTS.md 的环境段、README「当前状态」、`docs/daily-sync.md`「当前状态」曾写 ecs-node / preview.29 / generation `2e9183…` | 已修：#421 起 README 与 daily-sync 的当前态只链接本文件（本节为权威值），AGENTS.md 的 ecs-node / preview.29 段标为「历史」 | #421、本次核对 |
 
 已关闭：#324（stopped-write 重写 `outcome_json`，随 PR #323 修复）；受理体检扫描全部历史（随 PR #323 修复，2026-10-12 部署后生产已包含）。
