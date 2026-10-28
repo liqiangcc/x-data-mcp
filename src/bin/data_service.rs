@@ -21,7 +21,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     use x_data_mcp::{
         data_supply::{Access, mcp::DataApi, registry::EntryKind},
-        local_runtime::{Config, DatabaseLease, Endpoint, WorkerGate, serve},
+        local_runtime::{Config, DatabaseLease, Endpoint, WorkerGate, serve_many},
         sqlite_tasks::SqliteTasks,
         task_control::TaskRepository,
     };
@@ -38,11 +38,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         );
         return Ok(());
     }
-    // v8 §3.4: one binary, one entry per socket. The default stays `ops` so
-    // an unchanged old unit file keeps serving the daily-sync surface.
+    // v8 §3.4 + phase 2 §2.1(a): one binary, one process, one entry per socket.
+    // The default stays `ops` so an unchanged old unit file keeps serving the
+    // daily-sync surface. Extra sockets are positional too, and `--entry` binds
+    // to the socket before it: `<db> <sock> [--entry k] [<sock> [--entry k]]...`.
     let mut config = Config::default();
-    let mut entry = EntryKind::Ops;
     let mut positional: Vec<std::ffi::OsString> = Vec::new();
+    let mut entries: Vec<EntryKind> = Vec::new();
+    let mut pending = EntryKind::Ops;
     let mut index = 0;
     while index < args.len() {
         match args[index].to_str() {
@@ -52,8 +55,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .get(index)
                     .and_then(|value| value.to_str())
                     .ok_or("--entry requires research|ops|maint")?;
-                entry =
+                let kind =
                     EntryKind::parse(value).ok_or("unknown --entry value (research|ops|maint)")?;
+                match entries.last_mut() {
+                    Some(entry) => *entry = kind,
+                    None => pending = kind,
+                }
             }
             Some("--poll-ms") => {
                 index += 1;
@@ -67,18 +74,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 config.poll_interval = Duration::from_millis(ms);
             }
-            _ => positional.push(args[index].clone()),
+            _ => {
+                // The first positional is the database; every later one is a
+                // socket served by this process.
+                if !positional.is_empty() {
+                    entries.push(pending);
+                }
+                positional.push(args[index].clone());
+            }
         }
         index += 1;
     }
-    if positional.len() != 2 {
+    if positional.len() < 2 {
         return Err(
-            "usage: data_service <initialized-db> <private-socket> [--entry research|ops|maint] [--poll-ms <10..60000>]".into(),
+            "usage: data_service <initialized-db> <private-socket> [--entry research|ops|maint] [<private-socket> [--entry research|ops|maint]]... [--poll-ms <10..60000>]".into(),
         );
     }
     // Fail-closed startup check: an allowlist naming an unregistered tool is a
-    // wiring error, not a silently narrower surface (v8 §3.3 item 4).
-    entry.validate()?;
+    // wiring error, not a silently narrower surface (v8 §3.3 item 4). Every
+    // distinct entry is checked once, before any socket is bound.
+    let mut checked: Vec<EntryKind> = Vec::new();
+    for entry in entries.iter().copied() {
+        if !checked.contains(&entry) {
+            entry.validate()?;
+            checked.push(entry);
+        }
+    }
     // text grading switch (v8 §5.4): an unknown value is a wiring error too.
     if let Ok(mode) = std::env::var("X_DATA_MCP_TEXT_MODE")
         && x_data_mcp::mcp::TextMode::parse(&mode).is_none()
@@ -89,8 +110,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // operator rollback to the sequential run path.
     x_data_mcp::market_update::runner::prepare_workers_from_env()?;
     // v8 §3.4: only the ops entry runs the background worker; research and
-    // maint serve reads/forensics without writing.
-    config.run_worker = entry == EntryKind::Ops;
+    // maint serve reads/forensics without writing. One process holds the single
+    // write lease, so at most one worker exists even with several ops sockets.
+    let has_ops = entries.contains(&EntryKind::Ops);
+    config.run_worker = has_ops;
     let path = PathBuf::from(&positional[0]);
     let lease = Arc::new(DatabaseLease::acquire(&path)?);
     let run_id = format!(
@@ -115,7 +138,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // contracts are untouched — their needs_verification marking stays a
     // visible-state decision, not a startup write. Only the ops entry owns
     // that write (v8 §3.4); research/maint start without touching task state.
-    if entry == EntryKind::Ops {
+    if has_ops {
         backend.tasks().reconcile_plan_run(&run_id)?;
     }
     // The accept path only checks in-flight tasks; terminal history is
@@ -133,7 +156,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Committed-state closure checks for latest-only market storage
     // (SPEC-LATEST-ONLY §3.5; no-op on schemas <21).
     backend.series_startup_check()?;
-    let endpoint = Endpoint::bind(std::path::Path::new(&positional[1]), &lease)?;
+    // Bind every socket after the one-time startup checks. Any failure is
+    // fail-closed: already-bound endpoints drop (removing their socket files)
+    // and the process exits without serving a partial surface.
+    let mut endpoints = Vec::new();
+    for (offset, entry) in entries.iter().copied().enumerate() {
+        let endpoint = Endpoint::bind(std::path::Path::new(&positional[offset + 1]), &lease)?;
+        endpoints.push((endpoint, entry));
+    }
     let gate = Arc::new(WorkerGate::default());
     let stopping = Arc::new(AtomicBool::new(false));
     // SAFETY: handler only stores a lock-free atomic; no allocation/I/O/locks.
@@ -165,7 +195,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let generation = x_data_mcp::data_supply::generation::GenerationSource::from_env();
     let factory = {
         let gate = gate.clone();
-        move || {
+        move |entry: EntryKind| {
             DataApi::new_with_backend(
                 tasks.clone(),
                 backend.clone(),
@@ -177,7 +207,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(std::io::Error::other)
         }
     };
-    let result = serve(endpoint, lease, factory, gate, stopping.clone(), config);
+    // The worker's session is the ops entry; it never uses a research/maint
+    // surface even when those sockets are bound in the same process.
+    let result = serve_many(
+        endpoints,
+        EntryKind::Ops,
+        lease,
+        factory,
+        gate,
+        stopping.clone(),
+        config,
+    );
     stopping.store(true, Ordering::SeqCst);
     let _ = monitor.join();
     result?;

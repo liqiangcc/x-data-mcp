@@ -58,7 +58,36 @@ where
     F: Fn() -> io::Result<H> + Send + Sync + 'static,
     H: ToolHandler + 'static,
 {
-    if config.poll_interval.is_zero()
+    serve_many(
+        vec![(endpoint, ())],
+        (),
+        db,
+        move |()| factory(),
+        gate,
+        stopping,
+        config,
+    )
+}
+/// One process, several sockets (v8 phase 2 §2.1(a), D-56): every listener
+/// shares the lease, backend and worker gate, while `factory(entry)` builds the
+/// per-entry session behind its own socket. At most one worker runs, and only
+/// when `config.run_worker` is set; it uses `worker_entry`.
+pub fn serve_many<F, H, E>(
+    listeners: Vec<(Endpoint, E)>,
+    worker_entry: E,
+    db: Arc<DatabaseLease>,
+    factory: F,
+    gate: Arc<WorkerGate>,
+    stopping: Arc<AtomicBool>,
+    config: Config,
+) -> io::Result<()>
+where
+    E: Clone + Send + Sync + 'static,
+    F: Fn(E) -> io::Result<H> + Send + Sync + 'static,
+    H: ToolHandler + 'static,
+{
+    if listeners.is_empty()
+        || config.poll_interval.is_zero()
         || config.stop_budget.is_zero()
         || config.io_timeout.is_zero()
         || config.max_clients == 0
@@ -75,7 +104,7 @@ where
         let stop = stopping.clone();
         let cfg = config.clone();
         thread::spawn(move || -> io::Result<()> {
-            let api = factory()?;
+            let api = factory(worker_entry)?;
             while !stop.load(Ordering::SeqCst) {
                 // Wait between turns, interruptibly; never a source retry loop.
                 let until = Instant::now() + cfg.poll_interval;
@@ -120,53 +149,62 @@ where
                 ));
             }
             db.validate()?;
-            match endpoint.listener.accept() {
-                Ok((stream, _)) => {
-                    if endpoint.authorize(&stream).is_err()
-                        || active.load(Ordering::SeqCst) >= config.max_clients
-                    {
-                        drop(stream);
-                        continue;
-                    }
-                    stream.set_read_timeout(Some(config.io_timeout.min(Duration::from_secs(1))))?;
-                    stream.set_write_timeout(Some(config.io_timeout))?;
-                    active.fetch_add(1, Ordering::SeqCst);
-                    let slot = Slot(active.clone());
-                    let factory = factory.clone();
-                    let db = db.clone();
-                    let stop = stopping.clone();
-                    let cfg = config.clone();
-                    let socket = stream.try_clone()?;
-                    let thread = thread::spawn(move || -> io::Result<()> {
-                        let _slot = slot;
-                        let api = factory()?;
-                        let mut writer = stream.try_clone()?;
-                        let mut reader = BufReader::new(stream);
-                        while !stop.load(Ordering::SeqCst) {
-                            let Some(frame) = super::frame::read_frame(
-                                &mut reader,
-                                &stop,
-                                cfg.max_frame_bytes,
-                                cfg.io_timeout,
-                            )?
-                            else {
-                                break;
-                            };
-                            db.validate()?;
-                            let input = std::str::from_utf8(&frame).map_err(io::Error::other)?;
-                            if let Some(response) = handle_json(&api, input) {
-                                writeln!(writer, "{response}")?;
-                                writer.flush()?;
-                            }
+            let mut idle = true;
+            for (endpoint, entry) in &listeners {
+                match endpoint.listener.accept() {
+                    Ok((stream, _)) => {
+                        idle = false;
+                        if endpoint.authorize(&stream).is_err()
+                            || active.load(Ordering::SeqCst) >= config.max_clients
+                        {
+                            drop(stream);
+                            continue;
                         }
-                        Ok(())
-                    });
-                    clients.push(Client { thread, socket });
+                        stream.set_read_timeout(Some(
+                            config.io_timeout.min(Duration::from_secs(1)),
+                        ))?;
+                        stream.set_write_timeout(Some(config.io_timeout))?;
+                        active.fetch_add(1, Ordering::SeqCst);
+                        let slot = Slot(active.clone());
+                        let factory = factory.clone();
+                        let db = db.clone();
+                        let stop = stopping.clone();
+                        let cfg = config.clone();
+                        let socket = stream.try_clone()?;
+                        let entry = entry.clone();
+                        let thread = thread::spawn(move || -> io::Result<()> {
+                            let _slot = slot;
+                            let api = factory(entry)?;
+                            let mut writer = stream.try_clone()?;
+                            let mut reader = BufReader::new(stream);
+                            while !stop.load(Ordering::SeqCst) {
+                                let Some(frame) = super::frame::read_frame(
+                                    &mut reader,
+                                    &stop,
+                                    cfg.max_frame_bytes,
+                                    cfg.io_timeout,
+                                )?
+                                else {
+                                    break;
+                                };
+                                db.validate()?;
+                                let input =
+                                    std::str::from_utf8(&frame).map_err(io::Error::other)?;
+                                if let Some(response) = handle_json(&api, input) {
+                                    writeln!(writer, "{response}")?;
+                                    writer.flush()?;
+                                }
+                            }
+                            Ok(())
+                        });
+                        clients.push(Client { thread, socket });
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(e),
                 }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10))
-                }
-                Err(e) => return Err(e),
+            }
+            if idle {
+                thread::sleep(Duration::from_millis(10))
             }
             let mut index = 0;
             while index < clients.len() {
@@ -185,7 +223,7 @@ where
     })();
     stopping.store(true, Ordering::SeqCst);
     gate.stop();
-    drop(endpoint); // Stops accepting. This never releases task occupancy.
+    drop(listeners); // Stops accepting on every socket. Never releases task occupancy.
     for client in &clients {
         let _ = client.socket.shutdown(Shutdown::Read);
     }

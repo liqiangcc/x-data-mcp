@@ -3,7 +3,7 @@ mod paths;
 pub use paths::{DatabaseLease, Endpoint, connect};
 mod frame;
 mod server;
-pub use server::{Config, serve};
+pub use server::{Config, serve, serve_many};
 
 use std::sync::{
     Mutex, MutexGuard,
