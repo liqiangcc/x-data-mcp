@@ -349,10 +349,7 @@ impl TdxMarketSource {
     /// empty index and the byte/prefix continuity proofs stay fail-closed.
     /// A poisoned cache is read-only bookkeeping only; the read degrades to
     /// an uncached index instead of failing.
-    fn archive_index(
-        &self,
-        input: &FileInput,
-    ) -> Result<std::sync::Arc<std::sync::Mutex<ArchiveIndex>>, SourceError> {
+    fn archive_index(&self, input: &FileInput) -> Result<ArchiveIndexSlot, SourceError> {
         let path = self.archive_path(input)?;
         let key = (path.clone(), input.sha256.clone());
         let mut entries = match self.archives.entries.lock() {
@@ -489,16 +486,15 @@ impl ArchiveIndex {
 /// bytes are unlinked; an open handle would retain the space):
 /// `GenerationSource::sweep` drops the sessions — and with them these
 /// indexes — as soon as the store stops listing the generation.
+/// One archive's lazily built index, shared by every reader of a source.
+type ArchiveIndexSlot = std::sync::Arc<std::sync::Mutex<ArchiveIndex>>;
+
+/// Cache entries: `(canonical archive path, pinned archive digest)` → index.
+type SharedIndexMap = std::collections::HashMap<(PathBuf, String), ArchiveIndexSlot>;
+
 #[derive(Clone, Default)]
 struct SharedArchives {
-    entries: std::sync::Arc<
-        std::sync::Mutex<
-            std::collections::HashMap<
-                (PathBuf, String),
-                std::sync::Arc<std::sync::Mutex<ArchiveIndex>>,
-            >,
-        >,
-    >,
+    entries: std::sync::Arc<std::sync::Mutex<SharedIndexMap>>,
     /// Test-only bookkeeping: how many index builds this source paid for.
     #[cfg(test)]
     builds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -3284,8 +3280,8 @@ mod archive_cache_tests {
         // are not equal-by-accident on the price column.
         assert_ne!(cold.raw.bars[0].close, cold.forward.bars[0].close);
         // A fork (parallel preparation worker) shares the same indexes.
-        let forked = source.materialize_session().fork();
-        let forked_pair = forked.materialize_pair("sh.600006").unwrap();
+        let worker = source.materialize_session();
+        let forked_pair = worker.fork().materialize_pair("sh.600006").unwrap();
         assert_eq!(source.archive_index_builds(), 2);
         assert_eq!(
             serde_json::to_vec(&forked_pair.forward).unwrap(),
