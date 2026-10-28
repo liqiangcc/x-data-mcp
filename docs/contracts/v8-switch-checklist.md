@@ -63,7 +63,7 @@ v7 面 = `mcp.sock` 上的编排入口 + v1 wire + [generic-data-v7](generic-dat
    减少 `CURRENT_DOCS` 计数。
 4. `mcp.sock` 继续是编排入口：研究入口是**加法**，v7 面退役不等于删掉 `mcp.sock`。
 
-## 2. 部署前必须完成的六项（阻塞，逐项需 owner 裁决）
+## 2. 部署前必须完成的六项（阻塞；§2.1／§2.2／§2.6 已于 2026-10-28 裁决，见 D-56）
 
 ### 2.1 单写者租约：三个进程不能同时持有同一个库
 
@@ -78,6 +78,13 @@ v7 面 = `mcp.sock` 上的编排入口 + v1 wire + [generic-data-v7](generic-dat
 §3 的单元表按「一个入口一个进程」写（即 (b)）；若裁决为 (a)，§3 合并成一个单元、三个 socket
 由同一进程创建，其余步骤不变。
 
+> **已裁决（2026-10-28，D-56）：选 (a) 单进程多 socket。** `data_service` 接受重复的
+> `<socket> --entry <kind>` 参数（`--entry` 绑定它前面的 socket），启动检查只做一次，
+> 之后绑定 N 个 endpoint；共享同一个 lease／backend／generation／`WorkerGate`，每个
+> listener 用自己的入口 allowlist，worker 只在 ops 入口跑一次；任一 socket 绑定失败则整体
+> 不启动（fail-closed）。§3 因此是**一个 data 单元、三个 socket**。仍待执行的是 §2.6 的
+> 内存实测与 `MemoryMax`。
+
 ### 2.2 maint 的写工具与「只有 ops 受理写」冲突
 
 maint 清单含 `backfill_data`/`republish_data`/`retry_task`/`cancel_task`/`verify_data_gap`/
@@ -90,6 +97,12 @@ maint 清单含 `backfill_data`/`republish_data`/`retry_task`/`cancel_task`/`ver
 
 在裁决前，`x-data-mcp-maint` 不能上线：它启动后会因为没有租约而失败，或（若绕过租约）
 违反单写者边界。
+
+> **已裁决（2026-10-28，D-56）：选 (c)，与 §2.1 同裁决。** maint 保留 9 个工具（含写工具与
+> `run_worker_once`），写租约只由这**一个进程**持有；worker 只在 ops 入口运行一次，maint 的
+> `run_worker_once` 与 ops worker 共用 `WorkerGate`，不能并行执行。maint 是仅本机的
+> operator 入口，不暴露隧道。写边界由「socket 名必须叫 mcp」改为「同一数据库只有一个进程
+> 持有 `DatabaseLease` 与写协调器」。
 
 ### 2.3 Devin 实测（#387 的 Q3）
 
@@ -123,41 +136,52 @@ XDM-59 实测（研究侧，单进程）：冷启动 4.449/4.958/4.424 s、热�
 库 1.691 GiB。三进程各自打开同一个库会放大页缓存与冷启动；部署前按实测给每个单元设
 `MemoryMax`，并确认总内存余量。未实测不得凭估算设限。
 
+> **已裁决（2026-10-28，D-56）：先测量再定值。** 三进程方案已排除（最坏合计约 2.0 GiB，
+> 超过 1.9 GB 主机内存），改为单进程三 socket；私有栈上按 XDM-59 的方法测三件事——
+> 空闲 RSS、一次真实 v2 日更的 `MemoryCurrent` 峰值、一次 research 大查询峰值——测完再把
+> `MemoryHigh`／`MemoryMax` 写进 unit。在测出之前，本节与设计里的 256M／512M／1.25G 只是
+> 测量起点，不是部署值。
+
 ## 3. socket 与 systemd 单元（每条需 owner 批准）
 
-| 入口 | `--entry` | socket | 单元 | 工具数 | 隧道暴露 |
-|---|---|---|---|---|---|
-| 研究 | `research` | `run/research.sock`（新增） | `x-data-mcp-research`（新增） | 5 | **是（唯一）** |
-| 编排 | `ops` | `run/mcp.sock`（沿用） | `x-data-mcp-data`（沿用） | 15 | 否 |
-| 运维/取证 | `maint` | `run/maint.sock`（新增） | `x-data-mcp-maint`（新增） | 9 | 否 |
-| 来源接入 | — | `run/acquire.sock`（不变） | `x-data-mcp-acquire`（不变） | 10 | 否 |
+**已裁决（2026-10-28，D-56）**：**一个 `x-data-mcp-data` 单元、三个 socket**，由同一个
+`data_service` 进程创建（§2.1 案 (a)）。工具面仍按入口拆分，写租约只有这一份，worker 只有
+一个。`x-data-mcp-acquire` 不变、仍是独立单元。
+
+| 入口 | `--entry` | socket | 工具数 | 隧道暴露 |
+|---|---|---|---|---|
+| 研究 | `research` | `run/research.sock`（新增） | 5 | **是（唯一）** |
+| 编排 | `ops` | `run/mcp.sock`（沿用） | 15 | 否 |
+| 运维/取证 | `maint` | `run/maint.sock`（新增） | 9 | 否 |
+| 来源接入 | — | `run/acquire.sock`（不变，独立单元 `x-data-mcp-acquire`） | 10 | 否 |
 
 `mcp.sock` 保持编排入口：日更 Skill、部署脚本与下游读取都连它，换成研究入口会静默让
 Skill 失去 plan/run。研究入口是加法，回滚只需把隧道指回 `mcp.sock`。
 
-单元定义（`ExecStartPre` 沿用 D-17 的唯一定义）：
+单元定义（`ExecStartPre` 沿用 D-17 的唯一定义；三个 socket 各一条就绪探针）：
 
 | 单元 | `ExecStart` | `ExecStartPre` |
 |---|---|---|
-| `x-data-mcp-research` | `data_service <db> run/research.sock --entry research` | `wait_service_ready.py run/research.sock --timeout 120 --expect-tool query_data` |
-| `x-data-mcp-data` | `data_service <db> run/mcp.sock --entry ops` | `wait_service_ready.py run/mcp.sock --timeout 120 --expect-tool plan_market_update` |
-| `x-data-mcp-maint` | `data_service <db> run/maint.sock --entry maint` | `wait_service_ready.py run/maint.sock --timeout 120 --expect-tool cancel_task` |
+| `x-data-mcp-data` | `data_service <db> run/mcp.sock --entry ops run/research.sock --entry research run/maint.sock --entry maint` | `wait_service_ready.py run/mcp.sock --timeout 120 --expect-tool plan_market_update`；`wait_service_ready.py run/research.sock --timeout 120 --expect-tool query_data`；`wait_service_ready.py run/maint.sock --timeout 120 --expect-tool cancel_task` |
+| `x-data-mcp-acquire` | 不变 | 不变 |
 
 执行顺序（每步确认后再下一步）：
 
-1. **[批准]** 确认 §2.1/§2.2 已裁决，且 §2.5 的库已重建到 23；记录 catalog/daily/yearly head
-   计数与 `sync_status` 基线（后面每步都与它比对）。
-2. **[批准]** 给 `run/` 目录补 socket 的属主/权限（与 data 单元同用户）；旧 socket 文件先
-   确认没有进程在用（`ss -xl` 只读查看），不 `rm` 活 socket。
-3. **[批准]** 起 `x-data-mcp-research`；`wait_service_ready.py` 通过后只读核对
-   `tools/list` 恰好 5 个工具名、`capability_revision == generic-data-v8`、
-   `get_data_capabilities({})` ≤1,500 B。
-4. **[批准]** 改 `x-data-mcp-data` 的 `ExecStart` 加 `--entry ops`（旧单元不带 `--entry`
-   时缺省也是 `ops`，所以这一步是显式化，不是行为变化）；重启后核对 15 个工具、
-   `plan_market_update`/`run_market_update` 的 `implemented:true`、head 计数与第 1 步的基线一致。
-5. **[批准]** 起 `x-data-mcp-maint`（前提是 §2.2 裁决为「maint 可独立持租约」）；核对 9 个
-   工具与 `compute_metrics`/`run_worker_once` 的 `operator_only:true`。
-6. **[批准]** 记录三个 socket 的 `tools/list` 字节数与工具名，写入部署记录。
+1. **[批准]** 确认 §2.1／§2.2 已裁决（D-56）、§2.6 的 `MemoryMax` 已实测，且 §2.5 的库已
+   重建到 23；记录 catalog/daily/yearly head 计数与 `sync_status` 基线（后面每步都与它比对）。
+2. **[批准]** 给 `run/` 目录补三个 socket 的属主/权限（与 data 单元同用户）；旧 socket 文件
+   先确认没有进程在用（`ss -xl` 只读查看），不 `rm` 活 socket。
+3. **[批准]** 以一个进程同时绑定三个 socket 起 `x-data-mcp-data`；三条
+   `wait_service_ready.py` 均通过后逐个核对：`research.sock` 恰好 5 个工具、`mcp.sock` 15 个
+   （`plan_market_update`/`run_market_update` 的 `implemented:true`）、`maint.sock` 9 个
+   （`compute_metrics`/`run_worker_once` 的 `operator_only:true`），三者
+   `capability_revision == generic-data-v8`，`get_data_capabilities({})` ≤1,500 B，且 head
+   计数与第 1 步基线一致。
+4. **[批准]** 只读核对单写者与 worker：同一库上另起第二个 `data_service` 必须因租约拒绝启动；
+   `maint.sock` 的 `run_worker_once` 在 ops worker 忙碌时返回 `worker_busy`（共用一个 gate）。
+5. **[批准]** 记录三个 socket 的 `tools/list` 字节数与工具名，写入部署记录。
+6. **回滚**：只停/退无效的那个入口不在本次粒度内——三 socket 同一进程，回滚是退掉新 socket
+   参数（回到单 `mcp.sock` 旧 unit）或按 §7 退二进制＋库。
 
 启动检查是 fail-closed：allowlist 与注册表不一致、`X_DATA_MCP_TEXT_MODE` 非法值时进程
 拒绝启动（`src/data_supply/registry.rs:114-136`，`src/bin/data_service.rs:81-86`），
@@ -254,7 +278,7 @@ Rust 测试由 CI 证明；部署主机上不编译。
 | 粒度 | 触发 | 动作 | 数据影响 |
 |---|---|---|---|
 | 隧道 | 研究入口异常、客户端不兼容 | drop-in 指回 `mcp.sock`，重启隧道 | 无 |
-| 单元 | 研究/maint 单元起不来或吃内存 | `systemctl stop` 该单元；`x-data-mcp-data` 不动 | 无 |
+| 单元 | 研究/maint socket 起不来或吃内存 | `systemctl stop` 整个 `x-data-mcp-data` 退回单 socket 旧 unit；三个 socket 同进程，不能单独停一个 | 无 |
 | 入口 | ops 入口 `text=summary` 不可用 | `X_DATA_MCP_TEXT_MODE=full` 重启 `x-data-mcp-data` | 无 |
 | 二进制 + 库 | v8 形状有 P1 事故 | 上一版 release + 归档的 schema 21 库一起退 | 库回滚到归档点；期间的采集需重放 |
 
@@ -264,8 +288,8 @@ Rust 测试由 CI 证明；部署主机上不编译。
 
 | # | 事项 | 影响 | 现状 |
 |---|---|---|---|
-| B-1 | §2.1 租约模型：单进程多 socket / 只读租约 / 分时启停 | 决定 §3 能否上线 | 未裁决 |
-| B-2 | §2.2 maint 写工具归属 | `x-data-mcp-maint` 是否可上线 | 未裁决 |
+| B-1 | §2.1 租约模型：单进程多 socket / 只读租约 / 分时启停 | 决定 §3 能否上线 | 已裁决（2026-10-28，D-56）：单进程多 socket |
+| B-2 | §2.2 maint 写工具归属 | `x-data-mcp-maint` 是否可上线 | 已裁决（2026-10-28，D-56）：与 2.1 同裁决，maint 保留 9 工具、写租约只由该进程持有 |
 | B-3 | §2.3 Devin 实测（Q3） | `text=summary` 能否作为缺省 | 未实测 |
 | B-4 | §2.4 `x` 仓库两项核对 | 下游兼容 | 只读核对已做一次，部署日复测 |
 | B-5 | `market.daily` 是否补 `adjustment` 选项（[generic-data-v8](generic-data-v8.md) §12.2） | 研究入口只能读前复权 | 未裁决 |
@@ -299,10 +323,17 @@ owner 2026-10-27 裁决：v8 先走**最小切换**，只保留现有 `x-data-mc
 - Devin 实测（§2.3）。
 - §2.1 单写者租约、§2.2 maint 写工具归属、§2.6 三单元常驻成本。
 
+> **已裁决（2026-10-28，D-56）**：§2.1／§2.2／§2.6 三项已定——§2.1 选单进程多 socket；
+> §2.2 与它同裁决（maint 九个工具保留、写租约只由这一个进程持有、worker 只在 ops）；
+> §2.6 先测量再定 `MemoryMax`。因此不再起 research/maint 两个单元，改为 §3 的「一个 data 单元、三个
+> socket」；第二阶段从 PR-1 开始按 §9.6 执行。隧道改指 `research.sock` 与 Devin 实测仍需
+> 另行批准，不在 PR-1 内。
+
 ### 9.3 第二阶段的前提条件
 
-1. §2.1 与 §2.2 已由 owner 裁决（单进程多 socket、只读租约或分时启停三者之一）。
-2. §2.6 的三单元常驻内存实测完成并给出 `MemoryMax`。
+1. **已完成（2026-10-28，D-56）**：§2.1 与 §2.2 已由 owner 裁决——单进程多 socket，
+   maint 与 2.1 同裁决（9 工具保留，写租约只由这一个进程持有，worker 只在 ops 入口）。
+2. §2.6 的三单元常驻内存实测完成并给出 `MemoryMax`（已裁决为「先测量再定值」）。
 3. Devin 实测确认 `text=summary` 是否可作缺省；在此之前 `ops` 保持 `full`。
 4. 最小切换在 `ops` 入口上连续运行，日更 Skill 无 `SKILL_CONTRACT_MISMATCH`。
 
@@ -326,4 +357,23 @@ XDM-66 的 4 项核对都不阻塞，`x` 只调用 `query_data`；**连接入口
 | `EXPECTED_DEPLOYED_DATA_TOOLS` / `REQUIRED_FACTS` | 24（三入口总注册数） | **15**（`mcp.sock` 的 `ops` 入口） | 生产只有 `ops` 入口；24 是代码注册面，不是部署面 |
 | `scripts/smoke_release.py` | 按入口断言 5/15 | dev stdio 仍断言 24；`data_service` 运行时断言 15 + v8 | 脚本未加 `--entry`，运行时入口就是 `ops` |
 | `scripts/deploy_preview.sh` `EXPECTED_TOOLS` | 在用则改为 ops 集合 | **未改** | README 已标注该脚本是 preview.11 的单 data-service 历史证据，本次部署不用它 |
-| §3 三入口单元表 | research/ops/maint 四单元 | 只 `x-data-mcp-data`（ops）+ acquire | 第二阶段 |
+| §3 三入口单元表 | research/ops/maint 四单元 | 只 `x-data-mcp-data`（ops）+ acquire | 第二阶段（D-56 已裁定为单进程三 socket） |
+
+### 9.6 第二阶段启动（2026-10-28）
+
+XDM-73 备忘（仓库外，2026-10-28）§6 的实施顺序已获批准，从本小节起生效：
+
+| 步骤 | 内容 | 状态 |
+|---|---|---|
+| 0 | 裁决记录：本清单 §2／§3／§9 与 D-56 | 已落地（D-56） |
+| 1 | PR-1：`data_service` 重复 `<socket> --entry <kind>`、一次启动检查、N 个 endpoint、共享 lease／backend／generation／gate、每个 listener 独立 allowlist、worker 只在 ops 跑一次、任一 bind 失败整体不启动 | 代码在本分支，未合并 |
+| 2 | PR-2：写边界策略（maint 9 工具、worker 只在 ops、共用 gate）的文档与测试 | 未开始 |
+| 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 未开始 |
+| 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 未开始 |
+| 5 | Ops-B：生产同进程三 socket，隧道不动 | 未开始 |
+| 6 | Ops-C：Devin 实测（§2.3） | 未开始 |
+| 7 | Ops-D：隧道改指 `research.sock`（另行批准） | 未开始 |
+| 8 | Ops-E：maint 启用（仅本机 operator） | 未开始 |
+
+PR-1 的旧单 socket 调用方式（`data_service <db> <socket> [--entry k]`）保持可用，回退只需用旧
+unit 与旧二进制；隧道的 runbook（§4）与生产 unit 仍按 §3 的「每条需 owner 批准」执行。

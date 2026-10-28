@@ -66,6 +66,12 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
   （`src/data_supply/registry.rs:114-145`，`src/bin/data_service.rs:81`）。
 - 只有 `ops` 入口跑后台 worker 与启动时的 plan-run `interrupted` 收尾
   （`src/bin/data_service.rs:90,115-116`）；research/maint 启动不写任务状态。
+- v8 第二阶段（D-56）：三个 socket **由同一个 `data_service` 进程**创建，不按入口起三个进程。
+  `data_service <db> <socket> [--entry k] [<socket> [--entry k]]...`，启动检查只做一次，之后
+  绑定 N 个 endpoint；共享同一个 `DatabaseLease`／backend／generation／`WorkerGate`，每个
+  listener 用自己的入口 allowlist，worker 只跑一次且只服务 ops；任一 bind 失败整体不启动
+  （`src/local_runtime/server.rs` 的 `serve_many`、`tests/service/multi_socket.rs`）。旧单 socket
+  调用方式保持不变。
 - 同一份注册表同时驱动 `tools/list`、`get_data_capabilities` 与 dispatch
   （`src/data_supply/mcp.rs:701-713`）；三个入口共享的工具（`query_data` 等）逐字节相同
   （`tests/mcp/v8_tool_surface.rs:232-252`）。
@@ -422,6 +428,6 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 | U-1 | 各客户端是否把 `structuredContent` 注入模型上下文 | 需要真实客户端会话 | 隧道 + ChatGPT/Claude/Devin 各跑一次同一 `query_data` |
 | U-2 | Devin 在 `text=summary` 下是否被截断、摘要字段是否够用 | 官方未规定；只有 Skill 的经验 | 部署前用 Devin 跑一次 v8 编排入口（Q3） |
 | U-3 | 全市场截面（T2）的真实字节 | CI 只有夹具 | 私有栈实测一次并贴 Issue |
-| U-4 | 三个单元的内存与冷启动影响 | 需要编译产物 | 私有栈实测（单库多进程只读） |
+| U-4 | 单进程三 socket 的内存与冷启动影响 | 需要编译产物 | 私有栈实测（§2.6；D-56 已定「先测量再设 `MemoryMax`」） |
 | U-5 | 隧道侧实际看到的研究入口工具数 | 隧道配置不在仓库 | 改指 `research.sock` 后 `tools/list` 复核 |
 | U-6 | `x` 仓库 `KlineReader` 在 v8 上的行为 | 另一个仓库 | 只读核对（v1 路径不变）；改连入口需另行批准 |
