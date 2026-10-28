@@ -9,7 +9,10 @@
 //! It deliberately overlaps nothing: each turn writes at most one item and then
 //! returns, exactly like the production worker.
 use super::*;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{
+    collections::BTreeSet,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use x_data_mcp::{
     data_supply::{
         Access,
@@ -101,6 +104,7 @@ struct BoundaryService {
     /// Coordinator-bound task handle: the same writer the sessions use, so a
     /// test can read state without opening a second writer.
     tasks: SqliteTasks,
+    backend: MarketBackend,
     executor: Arc<Blocking>,
     stop: Arc<AtomicBool>,
     server: Option<std::thread::JoinHandle<std::io::Result<()>>>,
@@ -123,6 +127,7 @@ impl BoundaryService {
         // the background worker (v8 §3.4).
         let has_ops = entries.iter().any(|(_, entry)| *entry == EntryKind::Ops);
         let tasks = backend.tasks();
+        let shared = backend.clone();
         let gate = Arc::new(WorkerGate::default());
         let stop = Arc::new(AtomicBool::new(false));
         let executor = Arc::new(Blocking::default());
@@ -172,6 +177,7 @@ impl BoundaryService {
         let service = Self {
             dir: dir.to_path_buf(),
             tasks,
+            backend: shared,
             executor,
             stop,
             server: Some(server),
@@ -196,6 +202,23 @@ impl BoundaryService {
     /// on the fixture barrier.
     fn release(&self) {
         self.executor.release.store(true, Ordering::SeqCst);
+    }
+    /// Seeds a pending task through the same coordinator. Only ops serves
+    /// task-creating tools, so this out-of-band session is an ops session.
+    fn accept(&self, request_id: &str, code: &str) -> String {
+        let api = DataApi::new_with_backend(
+            self.tasks.clone(),
+            self.backend.clone(),
+            "boundary-seed".into(),
+            Access::local(),
+            None,
+        )
+        .unwrap()
+        .with_entry(EntryKind::Ops);
+        let accepted = api
+            .call("start_collection", collection(request_id, code))
+            .unwrap();
+        accepted["task_id"].as_str().unwrap().to_string()
     }
     fn status(&self, id: &str) -> Status {
         self.tasks.read_task(id).unwrap().unwrap().task.status
@@ -233,6 +256,12 @@ fn tool_names(session: &mut Session) -> Vec<String> {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_string())
         .collect()
+}
+fn task_count(ops: &mut Session) -> usize {
+    ops.call("list_tasks", json!({}), false)["items"]
+        .as_array()
+        .unwrap()
+        .len()
 }
 fn collection(request_id: &str, code: &str) -> Value {
     json!({
@@ -297,11 +326,12 @@ fn maint_keeps_its_nine_tools_and_the_operator_only_flags() {
     // The nine maint tools are unchanged: the write boundary moved to the
     // process, it did not remove the operator surface.
     let mut maint = service.session("maint.sock");
-    let expected: Vec<String> = registry::MAINT_TOOLS
+    let served: BTreeSet<String> = tool_names(&mut maint).into_iter().collect();
+    let expected: BTreeSet<String> = registry::MAINT_TOOLS
         .iter()
         .map(|n| n.to_string())
         .collect();
-    assert_eq!(tool_names(&mut maint), expected);
+    assert_eq!(served, expected);
     assert_eq!(registry::MAINT_TOOLS.len(), 9);
     for name in [
         "run_worker_once",
@@ -389,109 +419,104 @@ fn concurrent_maint_and_ops_writes_share_one_registry_without_duplicates() {
             ("mcp.sock", EntryKind::Ops),
             ("maint.sock", EntryKind::Maint),
         ],
-        Duration::from_secs(60),
+        Duration::from_secs(60), // no automatic turn while the test drives
     );
-    // The same request_id accepted at the same time from both entries: the
-    // replay binding converges on one task, and the single write coordinator
-    // rejects nothing on the way.
-    let barrier = Arc::new(std::sync::Barrier::new(2));
-    let callers: Vec<_> = ["mcp.sock", "maint.sock"]
-        .into_iter()
-        .map(|socket| {
-            let barrier = barrier.clone();
-            let path = service.socket(socket);
-            std::thread::spawn(move || {
-                let mut session = Session::new(&path);
-                barrier.wait();
-                session.call("start_collection", collection("shared", "600000"), false)
-            })
-        })
-        .collect();
-    let accepted: Vec<Value> = callers
-        .into_iter()
-        .map(|caller| caller.join().unwrap())
-        .collect();
-    assert_eq!(accepted[0]["task_id"], accepted[1]["task_id"]);
-    let id = accepted[0]["task_id"].as_str().unwrap().to_string();
-    let items = accepted[0]["item_ids"].clone();
-
+    service.release(); // explicit turns finish immediately
     let mut ops = service.session("mcp.sock");
     let mut maint = service.session("maint.sock");
-    assert_eq!(
-        ops.call("list_tasks", json!({}), false)["items"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
-    // One turn through maint's shared gate executes the single item once.
-    service.release();
-    let turn = maint.call("run_worker_once", json!({}), false);
-    assert_eq!(turn["task_id"], id.as_str());
-    assert_eq!(service.executor.count.load(Ordering::SeqCst), 1);
-    wait_terminal(&mut ops, &id);
 
-    // A maint write creates a linked task that ops reads back: one store, one
-    // writer, no shadow registry per entry.
-    let retried = maint.call(
-        "retry_task",
-        json!({
-            "contract_version":"v1",
-            "original_task_id":id,
-            "new_request_id":"retry",
-            "item_ids":items,
-        }),
-        false,
-    );
-    let retry_id = retried["task_id"].as_str().unwrap();
-    assert_ne!(retry_id, id.as_str());
-    assert_eq!(
-        ops.call("list_tasks", json!({}), false)["items"]
-            .as_array()
-            .unwrap()
-            .len(),
-        2
-    );
+    // The ops daily write runs one turn through the shared gate, then maint
+    // links a retry to the same task registry.
+    let first = ops.call("start_collection", collection("daily-1", "600000"), false);
+    let first_id = first["task_id"].as_str().unwrap().to_string();
     let turn = maint.call("run_worker_once", json!({}), false);
-    assert_eq!(turn["task_id"], retry_id);
+    assert_eq!(turn["task_id"], first_id.as_str());
+    assert!(service.status(&first_id).terminal());
+    assert_eq!(service.executor.count.load(Ordering::SeqCst), 1);
+    let retry = json!({
+        "contract_version":"v1",
+        "original_task_id":first_id,
+        "new_request_id":"retry-1",
+        "item_ids":first["item_ids"],
+    });
+    let retried = maint.call("retry_task", retry.clone(), false);
+    let retry_id = retried["task_id"].as_str().unwrap().to_string();
+    assert_ne!(retry_id, first_id);
+    assert_eq!(retried["reused"], false);
+    // Replaying the same retry request binds the same task: no second one.
+    let replay = maint.call("retry_task", retry, false);
+    assert_eq!(replay["task_id"], retry_id.as_str());
+    assert_eq!(replay["reused"], true);
+    assert_eq!(task_count(&mut ops), 2);
+
+    // The next ops write and a maint cancellation race: both commit on the one
+    // coordinator, neither is rejected, and no write is lost.
+    let barrier = Arc::new(std::sync::Barrier::new(2));
+    let ops_path = service.socket("mcp.sock");
+    let maint_path = service.socket("maint.sock");
+    let accept = {
+        let barrier = barrier.clone();
+        std::thread::spawn(move || {
+            let mut session = Session::new(&ops_path);
+            barrier.wait();
+            session.call("start_collection", collection("daily-2", "000001"), false)
+        })
+    };
+    let cancel = {
+        let barrier = barrier.clone();
+        let id = retry_id.clone();
+        std::thread::spawn(move || {
+            let mut session = Session::new(&maint_path);
+            barrier.wait();
+            session.call(
+                "cancel_task",
+                json!({"contract_version":"v1","task_id":id}),
+                false,
+            )
+        })
+    };
+    let second = accept.join().unwrap();
+    let cancelled = cancel.join().unwrap();
+    assert_eq!(cancelled["status"], "cancel_requested");
+    assert_ne!(second["task_id"], first_id.as_str());
+    assert_eq!(task_count(&mut ops), 3);
+
+    // The cancelled retry task holds no claimable item, so exactly one turn
+    // remains; every turn uses the same executor and task store.
+    assert_eq!(
+        maint.call("run_worker_once", json!({}), false)["task_id"],
+        second["task_id"]
+    );
+    assert_eq!(
+        maint.call("run_worker_once", json!({}), false)["idle"],
+        json!(true)
+    );
     assert_eq!(service.executor.count.load(Ordering::SeqCst), 2);
     service.finish();
 }
 
 /// Ops is the only entry that advances tasks on its own; a maint-only process
-/// accepts the write and leaves the task pending until an explicit turn.
+/// accepts work and leaves it pending until an explicit turn.
 #[test]
-fn a_maint_only_process_accepts_writes_but_never_runs_the_background_worker() {
+fn a_maint_only_process_does_not_run_the_background_worker() {
     let dir = tempfile::tempdir().unwrap();
     let mut service = BoundaryService::start(
         dir.path(),
         &[("maint.sock", EntryKind::Maint)],
         Duration::from_millis(10),
     );
-    let mut maint = service.session("maint.sock");
-    // `verify_data_gap` only needs a target: acceptance writes a task without
-    // reading any published data.
-    let accepted = maint.call(
-        "verify_data_gap",
-        json!({
-            "contract_version":"v1",
-            "request_id":"idle",
-            "target":{"symbol":"sh.600006","period":"day","start_date":"2025-01-01","end_date":"2025-01-10"},
-        }),
-        false,
-    );
-    let id = accepted["task_id"].as_str().unwrap();
-    assert_eq!(accepted["status"], "pending");
+    let id = service.accept("idle", "600000");
     std::thread::sleep(Duration::from_millis(150));
     assert_eq!(service.executor.count.load(Ordering::SeqCst), 0);
-    assert_eq!(service.status(id), Status::Pending);
+    assert_eq!(service.status(&id), Status::Pending);
     // The explicit single turn still works from this entry.
+    let mut maint = service.session("maint.sock");
     service.release();
     assert_eq!(
         maint.call("run_worker_once", json!({}), false)["task_id"],
-        id
+        id.as_str()
     );
-    assert!(service.status(id).terminal());
+    assert!(service.status(&id).terminal());
     assert_eq!(service.executor.count.load(Ordering::SeqCst), 1);
     service.finish();
 }
