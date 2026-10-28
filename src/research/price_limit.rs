@@ -581,13 +581,13 @@ const CONCRETE_STATUSES: [StatusClass; 4] = [
 /// guessing the status. Two rows that merely share a band are *not* enough:
 /// citing one of them would borrow a status-specific `basis_ref` for an
 /// unknown status.
-fn invariant_band<'a>(
-    book: &'a RuleBook,
+fn invariant_band(
+    book: &RuleBook,
     market: RuleMarket,
     board: RuleBoard,
     phase: ListingPhase,
     as_of: NaiveDate,
-) -> Option<&'a PriceLimitRule> {
+) -> Option<&PriceLimitRule> {
     let mut found: Option<&PriceLimitRule> = None;
     for status in CONCRETE_STATUSES {
         let RuleLookup::Found(rule) = book.price_rule(market, board, status, phase, as_of) else {
