@@ -487,7 +487,8 @@ T 日股票池 `universe(as_of=T)`。
 - 目录 scope 只有 `current_sh_sz_a`（`wire.rs:73-77`）。
 - `query_data` 是纯读：不触发采集、修复或换源（`src/data_supply/registry.rs:139`）。
 - 工具清单、参数与返回形状用 `get_data_capabilities` 查（`registry.rs` 的 `entries()`），本文不复述；
-  data 侧当前部署的 `ops` 入口注册 15 个 data 工具，数量以 [STATUS](STATUS.md) 的「服务」表为权威。
+  data 侧当前部署三个入口（单进程三 socket）：`ops` 15 个 data 工具、`research`（只读研究面）
+  与 `maint`（本机运维）各 5 / 9，数量以 [STATUS](STATUS.md) 的「服务」表为权威。
 
 ### 5.2 过渡期直读（#373 分析脚本）
 

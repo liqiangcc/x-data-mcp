@@ -4,11 +4,12 @@
 
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
-当前部署为双 MCP server：`mcp.sock` 的 `ops` 入口提供 15 data tools（capability
-revision `generic-data-v8`，含只读 `get_yearly_base_years` 与
+当前部署为双 MCP server：一个 `data_service` 进程服务三个 socket——`mcp.sock` 的 `ops` 入口
+提供 15 data tools（capability revision `generic-data-v8`，含只读 `get_yearly_base_years` 与
 `plan_market_update`/`run_market_update`，文本模式 `full`，market 单版本序列：
-version_id=内容 hex，latest-only），acquisition socket 提供
-10 acquisition tools；生产只有 `ops` 入口，`research`/`maint` 入口未部署（v8 第二阶段）。
+version_id=内容 hex，latest-only）、`research.sock` 的 `research` 入口（只读研究面，
+工具数 5）、`maint.sock` 的 `maint` 入口（仅本机运维使用，不经隧道，工具数 9）；
+acquire socket 提供 10 acquisition tools；隧道仍指 `mcp.sock`。
 已部署实例为 compact schema 24，代码（main）同为 schema 24
 （M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024），注册 24 data tools（三个入口）。
 `market.daily` 前复权价的精度随 schema 22 起的 `qfq-exact-v1` 为**最多 6 位小数**

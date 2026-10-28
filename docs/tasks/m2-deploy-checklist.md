@@ -111,13 +111,15 @@ M2 读回（`query_data`，`contract_version:"v2"`，`filter.kind:"daily"`）：
   不匹配拒绝启动（[v8 切换清单](../contracts/v8-switch-checklist.md) §9）。
 - 回滚后同样要重跑 §3 的验证，并在同一个 PR 里更新 STATUS。
 
-## 5. 第二阶段运维步骤（草案，未执行）
+## 5. 第二阶段运维步骤（Ops-A / Ops-B 已执行）
 
-v8 第二阶段（D-56 单进程多 socket）的运维顺序草案，来源是 XDM-73 备忘 §6；本清单只记录
-**窗口内要做的事**，不是部署日提交，也不改变 [STATUS](../STATUS.md) 的当前事实。执行前每个
-`[批准]` 项都需 owner 单独确认；生产 data 单元在 Ops-A 完成前保持单 `ops` socket。
+v8 第二阶段（D-56 单进程多 socket）的运维顺序，来源是 XDM-73 备忘 §6。**2026-10-28 状态**：
+Ops-A 已完成（XDM-84，报告在仓库外），Ops-B 已随 preview.38 执行——生产 data 单元自
+2026-10-28 起是单进程三 socket，实际步骤、回滚与当天事故见
+[v8 切换清单](../contracts/v8-switch-checklist.md) §9.7；[STATUS](../STATUS.md) 已按部署后事实更新。
+Ops-C（Devin 实测）/ Ops-D（隧道改指 `research.sock`）仍未开始。
 
-### 5.1 Ops-A：私有栈三 socket 内存实测
+### 5.1 Ops-A：私有栈三 socket 内存实测（已完成）
 
 - 在私有栈（不是 `/opt` 生产根）用与生产相同的发布目录与库副本起**一个** `data_service`，
   `ExecStart` 为 `<db> run/mcp.sock --entry ops run/research.sock --entry research
@@ -129,8 +131,11 @@ v8 第二阶段（D-56 单进程多 socket）的运维顺序草案，来源是 X
   并发与代码版本一并记录，结果不带入生产预算。
 - 只有实测给出每个入口峰值后，才写 `[批准]` 的 `MemoryHigh`/`MemoryMax`；测完停私有栈，
   释放端口、socket 与租约。生产不受影响。
+- 结论（XDM-84，w=1）：峰值 304.3 MiB（含并发全市场 `query_data`），建议
+  `MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`；这三个值已在 Ops-B 写进生产
+  `memory.conf`。w=2 的峰值（XDM-64 跨代 554 MiB）不在覆盖范围，启用 w=2 需重定上限。
 
-### 5.2 Ops-B：生产同进程三 socket，隧道不动
+### 5.2 Ops-B：生产同进程三 socket，隧道不动（已执行）
 
 - 前置：Ops-A 完成并批准内存值；`scripts/deploy_phase_g.sh` / `switch_binary.sh` 的
   PR 已合并（它们解析并生成多 socket `ExecStart`，保留 `--poll-ms` 等尾部参数）。
@@ -151,6 +156,6 @@ v8 第二阶段（D-56 单进程多 socket）的运维顺序草案，来源是 X
 
 - 每一步在部署记录里写：实际 `ExecStart`、每条探针的 JSON（`entry`/`tool`/`tools`/
   `elapsed_ms`）、`MemoryCurrent` 观测值、回滚点。
-- 部署日提交才把 [STATUS](../STATUS.md)「服务」表与
-  [v8 切换清单](../contracts/v8-switch-checklist.md) §3/§9.6 的「已部署入口」翻成三入口；
-  本草案与脚本改动都不翻。
+- 部署日提交（preview.38）已把 [STATUS](../STATUS.md)「服务」表与
+  [v8 切换清单](../contracts/v8-switch-checklist.md) §9.6/§9.7 的「已部署入口」翻成三入口；
+  Ops-C/Ops-D 仍按各自批准边界执行。

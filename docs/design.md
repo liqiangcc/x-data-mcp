@@ -74,14 +74,14 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 | 能力 | 基线事实 | 目标 / 依赖 |
 |---|---|---|
-| MCP | 双 server：data socket 的 `ops` 入口 15 data tools、acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；`research`/`maint` 入口未部署 | 稳定契约与真实客户端验收 |
+| MCP | 双 server：data socket 单进程三入口——`ops` 15 data tools（编排）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道仍指 `ops` 的 `mcp.sock` | 稳定契约与真实客户端验收 |
 | 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
 | 行情 | SQLite fresh compact schema 24（代码与生产实例一致）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
 | 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |
 | QFQ / GBBQ | #54 契约实现并经 Final Gate 验收 | 新 generation 重审计 |
 | 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |
 | 目录 | 官方目录全市场 5,228 实体已发布（`catalog-1791873196258239513`） | — |
-| 服务 | 双 systemd 单元 + 本机私有 socket 长期运行（`x-data-mcp-data` 为 `ops` 入口；research/maint 未部署） | 外部分发/远程访问授权 |
+| 服务 | 双 systemd 单元 + 本机私有 socket 长期运行（`x-data-mcp-data` 单进程服务 `mcp.sock`/`research.sock`/`maint.sock`；cgroup 上限 `MemoryHigh=384M`/`MemoryMax=640M`） | 外部分发/远程访问授权 |
 | 性能 / 全市场 | class-specific 合同（当前门禁见 [SLO](SLO.md) 第 1 行）：同代 no-change `update_data` write-loop <600s；checkpoint 后净增长 ≤4KiB/attempted item；`data_versions +0`。历史：时间项曾为 ≤15min（2026-09-28，2026-10-10 被 write-loop <600s 取代）；历史实测（preview.27/schema20）：5,222 items / 616s / +18.5MB / 0 new versions | 跨代 envelope 约 37min 仅 measured baseline；真实 append/rewrite 待独立证据 |
 | 编排 | 项目 Skill 覆盖 generation 与全市场分批编排 | 独立新会话仅 Skill 验收 |
 

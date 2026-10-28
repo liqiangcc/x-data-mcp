@@ -196,16 +196,28 @@ COUNTS = {"research": 5, "ops": 15, "maint": 9}
 class DeployedEntries(unittest.TestCase):
     """v8 phase 2: the 服务 table states the deployed entries and their counts."""
 
-    def test_single_ops_row_passes(self):
-        self.assertEqual(check_deployed_entries(SERVICE_TABLE, COUNTS), [])
+    def test_single_ops_row_passes_before_the_flip(self):
+        # Pre-Ops-B: only `ops` on mcp.sock was deployed.
+        with mock.patch("check_deploy_facts.DEPLOYED_DATA_ENTRIES", ("ops",)):
+            self.assertEqual(check_deployed_entries(SERVICE_TABLE, COUNTS), [])
+
+    def test_ops_only_row_is_now_incomplete(self):
+        # Ops-B (preview.38) deploys research and maint too; an ops-only row
+        # no longer states the deployed entry set.
+        errors = check_deployed_entries(SERVICE_TABLE, COUNTS)
+        self.assertEqual(
+            sorted(e.rsplit(" ", 1)[-1] for e in errors), ["maint", "research"], errors
+        )
 
     def test_row_without_entry_means_the_implicit_ops_socket(self):
         text = SERVICE_TABLE.replace("`run/mcp.sock`（`--entry ops`）", "`run/mcp.sock`")
-        self.assertEqual(check_deployed_entries(text, COUNTS), [])
+        with mock.patch("check_deploy_facts.DEPLOYED_DATA_ENTRIES", ("ops",)):
+            self.assertEqual(check_deployed_entries(text, COUNTS), [])
 
     def test_count_must_match_that_entrys_allowlist(self):
         text = SERVICE_TABLE.replace("| 15 |", "| 21 |")
-        errors = check_deployed_entries(text, COUNTS)
+        with mock.patch("check_deploy_facts.DEPLOYED_DATA_ENTRIES", ("ops",)):
+            errors = check_deployed_entries(text, COUNTS)
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("allowlist: 15", errors[0])
 
@@ -215,7 +227,8 @@ class DeployedEntries(unittest.TestCase):
             "`run/mcp.sock`（`--entry ops`）、`run/research.sock`"
             "（`--entry research`）",
         ).replace("| 15 |", "| 15 / 5 |")
-        errors = check_deployed_entries(text, COUNTS)
+        with mock.patch("check_deploy_facts.DEPLOYED_DATA_ENTRIES", ("ops",)):
+            errors = check_deployed_entries(text, COUNTS)
         self.assertTrue(any("not deployed" in e and "research" in e for e in errors), errors)
 
     def test_deployed_entry_missing_from_the_table_is_flagged(self):
@@ -223,7 +236,8 @@ class DeployedEntries(unittest.TestCase):
         text = SERVICE_TABLE.replace(
             "`run/mcp.sock`（`--entry ops`）", "`run/research.sock`（`--entry research`）"
         )
-        errors = check_deployed_entries(text, COUNTS)
+        with mock.patch("check_deploy_facts.DEPLOYED_DATA_ENTRIES", ("ops",)):
+            errors = check_deployed_entries(text, COUNTS)
         self.assertTrue(any("omits deployed data entry ops" in e for e in errors), errors)
         self.assertTrue(any("not deployed" in e for e in errors), errors)
 
@@ -232,19 +246,20 @@ class DeployedEntries(unittest.TestCase):
         errors = check_deployed_entries(text, COUNTS)
         self.assertTrue(any("no x-data-mcp-data row" in e for e in errors), errors)
 
-    def test_multi_entry_row_passes_once_the_deploy_day_constant_flips(self):
+    def test_multi_entry_row_passes_after_the_flip(self):
         text = SERVICE_TABLE.replace(
             "`run/mcp.sock`（`--entry ops`）",
             "`run/mcp.sock`（`--entry ops`）、`run/research.sock`"
             "（`--entry research`）、`run/maint.sock`（`--entry maint`）",
         ).replace("| 15 |", "| 15 / 5 / 9 |")
-        # Still the pre-Ops-B deployment: the extra entries are not deployed.
-        self.assertTrue(check_deployed_entries(text, COUNTS))
+        # Ops-B is deployed: one process, three sockets is the current fact.
+        self.assertEqual(check_deployed_entries(text, COUNTS), [])
+        # Against the pre-Ops-B deployment the same row would be stale.
         with mock.patch(
             "check_deploy_facts.DEPLOYED_DATA_ENTRIES",
-            ("ops", "research", "maint"),
+            ("ops",),
         ):
-            self.assertEqual(check_deployed_entries(text, COUNTS), [])
+            self.assertTrue(check_deployed_entries(text, COUNTS))
 
     def test_repository_status_passes(self):
         text = (Path(__file__).resolve().parent.parent / "docs/STATUS.md").read_text(

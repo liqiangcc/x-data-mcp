@@ -39,13 +39,15 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 > 部署与运行事实以 [docs/STATUS.md](docs/STATUS.md) 为准，性能与容量目标以 [docs/SLO.md](docs/SLO.md) 为准。
 **OWNER-ONLY OPERATIONAL PREVIEW — external distribution not authorized.**
 
-本机以 systemd 运行已部署的双 MCP server 拓扑：`x-data-mcp-data`（`mcp.sock` 的
-`ops` 入口，15 data tools，含只读 `get_yearly_base_years` 与
-`plan_market_update`/`run_market_update`，capability revision `generic-data-v8`，
+本机以 systemd 运行已部署的 MCP 拓扑：`x-data-mcp-data` **一个进程服务三个 socket**：
+`mcp.sock` 的 `ops` 入口（编排入口，15 data tools，含只读 `get_yearly_base_years` 与
+`plan_market_update`/`run_market_update`，x 与日更 Skill 的连接不变）、
+`research.sock` 的 `research` 入口（只读研究面，工具数 5）、`maint.sock` 的 `maint`
+入口（本机运维，工具数 9，不经隧道）；capability revision `generic-data-v8`，
 文本模式 `X_DATA_MCP_TEXT_MODE=full`，market 单版本序列：version_id=内容 hex，
-latest-only）与
-`x-data-mcp-acquire`（10 acquisition tools）。生产只有 `ops` 入口；`research`/`maint`
-入口未部署（v8 第二阶段）。部署版本、socket 路径、generation 与数据量见
+latest-only。另有
+`x-data-mcp-acquire`（10 acquisition tools）。隧道仍指 `mcp.sock`（改指 `research.sock` 未做）。
+部署版本、socket 路径、generation 与数据量见
 [docs/STATUS.md](docs/STATUS.md)。
 已部署实例为 fresh compact schema 24；代码（main）同为 schema 24（M1 的 schema 22 +
 M2 PR-1 的 023 + M2 PR-2 的 024），三个入口合计注册 24 个工具（
@@ -53,12 +55,12 @@ research 5 / ops 15 / maint 9），显式 `task_sqlite init` 的新库按代码�
 工具数量不是稳定契约，客户端仍须以运行实例 `tools/list` 与
 `get_data_capabilities` 为准。
 
-M2 随 preview.37 上线：6 个解析事实数据集（`market.security_master`、
+M2 已上线：6 个解析事实数据集（`market.security_master`、
 `market.capital_events`、`market.suspensions`、`market.risk_warnings`、
 `market.price_limit_rules`、`market.security_names`）在 `query_data` v2 上可读，
 日更 run 的内部 item 维护其中四个全市场数据集；交易所名单、历史 ST（#308）、
 停复牌公告与涨跌停规则原文未接入时按 `pending_source` 记录，读取结果按
-`absent`/0 行如实返回（详见 [STATUS](docs/STATUS.md)「M2 随 preview.37 部署」）。
+`absent`/0 行如实返回（详见 [STATUS](docs/STATUS.md)「数据」段的 M2 数据集行）。
 同一部署带上 `research-snapshot.v2` 研究快照导出。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
