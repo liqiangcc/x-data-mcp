@@ -36,7 +36,7 @@ use crate::{
     security_master::assembly::{self, PendingSource},
     sqlite_market::{
         backend::MarketBackend, calendar::CalendarWrite, index::IndexWrite,
-        security::SecurityMasterWrite, suspensions::SuspensionWrite,
+        rules::TradingRulesWrite, security::SecurityMasterWrite, suspensions::SuspensionWrite,
     },
     task_control::{self, Change, ItemOutcome, ItemSpec, Stage, Status, TaskItem},
     trading_calendar::TradingCalendar,
@@ -406,19 +406,55 @@ fn execute(
     }
     if item.item_id == task_control::derived::TRADING_RULES {
         let started = std::time::Instant::now();
-        let source = crate::trading_rules::rule_source(None);
-        return match source {
-            crate::trading_rules::RuleSource::Pending(pending) => Ok(json!({
-                "dataset": item.item_id,
-                "version_id": Value::Null,
-                "row_count": 0,
-                "pending_sources": pending_json(&[pending]),
-                "elapsed_ms": elapsed_ms(started),
-            })),
-            crate::trading_rules::RuleSource::Admitted(_) => Err(Error::Integrity(
-                "an admitted rule book has no daily write path yet; refusing to ignore it".into(),
-            )),
+        let source = crate::trading_rules::rule_source()
+            .map_err(|error| Error::Integrity(error.to_string()))?;
+        let book = match source {
+            crate::trading_rules::RuleSource::Admitted(book) => book,
+            crate::trading_rules::RuleSource::Pending(pending) => {
+                // A-7 is admitted (D-44/D-59), so this branch is unreachable
+                // through `rule_source`; keep it so an adapter that later has
+                // no frozen text reports `pending_source` instead of writing
+                // an empty rule set.
+                return Ok(json!({
+                    "dataset": item.item_id,
+                    "version_id": Value::Null,
+                    "row_count": 0,
+                    "pending_sources": pending_json(&[pending]),
+                    "elapsed_ms": elapsed_ms(started),
+                }));
+            }
         };
+        // The book is not derived from the generation's members, but the
+        // registration's `source_binding_digest` must name a real binding, so
+        // the commit records the generation the item first wrote it under.
+        let source = dataset_source(session, source_cache)?;
+        let generation_evidence = source.generation_evidence(generation_manifest_sha256);
+        let commit = market.commit_trading_rules(&TradingRulesWrite {
+            book: &book,
+            task_id,
+            item_id: &item.item_id,
+            generation_id,
+            generation_manifest_sha256,
+            member_sha256: &source.base_member_sha256,
+            security_event_sha256: &source.security_event_sha256,
+            generation_evidence: &generation_evidence,
+        })?;
+        let registration = commit.registration.ok_or_else(|| {
+            Error::Integrity("the admitted rule book wrote no registration".into())
+        })?;
+        return Ok(json!({
+            "dataset": item.item_id,
+            "version_id": registration.version_id,
+            "row_count": registration.record_count,
+            "price_limit_rule_count": book.price_limits.len(),
+            "min_tick_rule_count": book.min_ticks.len(),
+            // A-7 is admitted, so the item has no blocked source branch left.
+            "pending_sources": [],
+            // Unchanged content keeps the stored version instead of minting a
+            // new one; the flag is the item's `published`/`no_change` answer.
+            "no_change": commit.no_change,
+            "elapsed_ms": elapsed_ms(started),
+        }));
     }
     Err(Error::Integrity(format!(
         "{} is not a known derived dataset item",

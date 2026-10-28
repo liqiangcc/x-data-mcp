@@ -337,6 +337,11 @@ impl Fixture {
             ("sz.000006", (6..10).collect(), 6_000),
             ("sz.300001", (0..10).collect(), 7_000),
             ("sz.300002", vec![9], 7_500),
+            // GEM/STAR members with no risk-warning interval: their stored
+            // status is `unknown`, which is what the D-44 rule book must not
+            // read as non-ST (item 3 of the A-7 write-path task).
+            ("sz.300003", (0..10).collect(), 7_600),
+            ("sh.688002", (0..10).collect(), 9_100),
             ("sh.600519", (0..10).collect(), 8_000),
             ("sh.688001", (0..10).collect(), 9_000),
             ("sz.000004", vec![9], 4_000),
@@ -374,13 +379,17 @@ impl Fixture {
 
         let rows = vec![
             lifecycle(Exchange::Sz, "000001", days[0], 0),
-            lifecycle(Exchange::Sz, "000002", days[0], 0),
+            // Listed long before the fixture window: the R2 tests need a
+            // seasoned main-board row, not a first-five-days one.
+            lifecycle(Exchange::Sz, "000002", day(2020, 1, 2), 0),
             lifecycle(Exchange::Sz, "000003", days[0], 0),
             lifecycle(Exchange::Sz, "000004", days[9], 0),
-            lifecycle(Exchange::Sz, "000005", days[0], 0),
+            lifecycle(Exchange::Sz, "000005", day(2020, 1, 2), 0),
             lifecycle(Exchange::Sz, "000006", days[6], 0),
             lifecycle(Exchange::Sz, "300001", days[0], 0),
             lifecycle(Exchange::Sz, "300002", days[9], 0),
+            lifecycle(Exchange::Sz, "300003", days[0], 0),
+            lifecycle(Exchange::Sh, "688002", days[0], 0),
             lifecycle(Exchange::Sh, "600519", days[0], 0),
             lifecycle(Exchange::Sh, "688001", days[0], 0),
         ];
@@ -730,4 +739,80 @@ fn rounding_matches_the_e12_half_up_definition() {
         assert_eq!(limits.up, Some(expected_up), "{rounding:?} up");
         assert_eq!(limits.down, Some(expected_down), "{rounding:?} down");
     }
+}
+
+/// The repository's admitted rule book (A-7 / D-44), not a hand fixture: the
+/// tests below check the actual data that the daily item writes.
+fn real_book() -> RuleBook {
+    crate::trading_rules::rule_book().unwrap()
+}
+
+#[test]
+fn the_r2_switch_moves_the_main_board_st_band() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let c = fixture.open();
+    // days()[4] = 2026-07-03 is the last day of the 5% row, days()[5] =
+    // 2026-07-06 the first day of the 10% row.
+    let before = ask(&c, "sz.000005", days()[4]);
+    assert_eq!(before.state, PriceLimitState::Known);
+    assert_eq!(before.status_class, Some(StatusClass::St));
+    assert_eq!(before.band_bp, Some(500));
+    let after = ask(&c, "sz.000005", days()[5]);
+    assert_eq!(after.state, PriceLimitState::Known);
+    assert_eq!(after.band_bp, Some(1_000));
+    assert_ne!(before.rule_id, after.rule_id);
+    assert_eq!(
+        before.limit_up_units.map(|up| up - 5_003),
+        Some(250),
+        "5% of the 2026-07-02 close 5003 rounds to +250"
+    );
+}
+
+#[test]
+fn an_unknown_st_status_poisons_a_band_that_differs_by_status() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    // sz.000002 has no risk interval, so its status is unknown. Before the
+    // 2026-07-06 switch the main board has 5% for ST and 10% for normal, so
+    // the band cannot be known and the status must not be treated as normal.
+    let report = ask(&fixture.open(), "sz.000002", days()[4]);
+    assert_eq!(report.state, PriceLimitState::Unknown);
+    assert_eq!(report.reason, Some(PriceLimitReason::StUnknown));
+    assert_eq!(report.status_class, None);
+    assert!(!report.status_unknown_band_invariant);
+    let bands: Vec<Option<i64>> = report.candidates.iter().map(|c| c.band_bp).collect();
+    assert_eq!(bands.len(), 2);
+    assert!(bands.contains(&Some(500)));
+    assert!(bands.contains(&Some(1_000)));
+}
+
+#[test]
+fn an_unknown_st_status_still_answers_when_every_status_shares_the_band() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let c = fixture.open();
+    // GEM after 2020-08-24 and STAR keep the same band for ST and non-ST, so
+    // the limit is known even though the status is not. `status_class` stays
+    // `None` — a consumer must not read this as "normal".
+    for (entity, expected_board) in [("sz.300003", Board::Gem), ("sh.688002", Board::Star)] {
+        let report = ask(&c, entity, days()[9]);
+        assert_eq!(report.state, PriceLimitState::Known, "{entity}");
+        assert_eq!(report.board, Some(expected_board), "{entity}");
+        assert_eq!(report.status_class, None, "{entity}");
+        assert!(report.status_unknown_band_invariant, "{entity}");
+        assert_eq!(report.band_bp, Some(2_000), "{entity}");
+    }
+    // From 2026-07-06 the main board's ST and normal bands coincide, but they
+    // are still two different rows. The answer stays `unknown` rather than
+    // borrowing the normal row's provenance: only a status-agnostic row
+    // (`status_class='all'`) may answer an unknown status.
+    let main = ask(&c, "sz.000002", days()[9]);
+    assert_eq!(main.state, PriceLimitState::Unknown);
+    assert_eq!(main.reason, Some(PriceLimitReason::StUnknown));
+    assert_eq!(main.status_class, None);
+    assert!(!main.status_unknown_band_invariant);
+    // The diagnostic still collapses the (now identical) candidates to one.
+    assert_eq!(main.candidates.len(), 1);
+    assert_eq!(main.candidates[0].band_bp, Some(1_000));
 }

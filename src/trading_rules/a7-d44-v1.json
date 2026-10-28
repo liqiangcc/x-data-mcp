@@ -1,0 +1,306 @@
+{
+  "schema": "trading-rule-book/1",
+  "snapshot_id": "A-7/D-44 2026-10-26",
+  "notes": [
+    "Every basis_ref carries its provenance tier in text: APPROVED_SOURCE for the exchange rule text, OWNER_RISK_ACCEPTED for the owner-accepted additions. basis_status only says admitted-vs-not-admitted; the tier is never inferred from it.",
+    "R9 (rounding = HALF_UP) is a property of every price-limit row, so each row names its clause instead of adding a separate rule row.",
+    "The exact document URL, fetch time and byte sha256 live in the private A-7 evidence report (#395); they are not reproduced here because this repository does not redistribute the exchange rule text (D-44 (4)).",
+    "R7 is NOT_AVAILABLE: no price-limit row starts before 1996-12-16, so a derivation before that day is rule_missing/unknown. There is no 'no limit' wildcard and the loader rejects an earlier row.",
+    "Rows are effective-dated facts, not a time series: effective_to is exclusive.",
+    "A main-board ST span before 2023-02-17 has no dated source in the frozen evidence (the SH 2020-2023 and SZ 2023-2026 inference gaps close text content, not calendar dates), so it is not encoded and derives as rule_missing. Encoding it at a guessed start date would be 'today's rule over history'."
+  ],
+  "not_available": [
+    {
+      "rule": "R7",
+      "range": "1990-12-19..1996-12-15",
+      "status": "NOT_AVAILABLE",
+      "reason": "No exchange archive text exists for the 1990-1996 Shanghai band changes: the deprecated rule library (443 enumerable documents), the announcement index and the current rule library (earliest version 2006) contain no such rule or notice. Per D-44 (3), derivations before 1996-12-16 return unknown; 'no price limit' is forbidden as a fallback. Evidence: #395 comment 2026-10-26, D-44/D-59."
+    }
+  ],
+  "not_encoded": [
+    {
+      "rule": "R6-first-day",
+      "range": "2014-06-13..2023-02-16",
+      "reason": "The main-board first-day rule is asymmetric (effective declared price range 144%/64%, i.e. +44%/-36%) and price_limit_rules carries one band_bp with a band_side. Encoding 4400 as up_only would report the down side as unbounded. limit-v1 also keys on a previous close, which a listing day has none of. The segment stays rule_missing/unknown until the contract can express two-sided asymmetric bands and an issue price."
+    },
+    {
+      "rule": "R6-first-day-inferred",
+      "range": "2013-12-13..2014-06-12",
+      "reason": "G-6: the original 2013-12-13 first-day notices (沪〔2013〕20号 / 深证会〔2013〕142号) were not retrieved, so this segment is an inference; it is not encoded because the asymmetric R6 rule is unrepresentable anyway."
+    },
+    {
+      "rule": "R2-pre-2023-02-17",
+      "range": "1996-12-16..2023-02-16",
+      "reason": "The risk-warning 5% text is attested only at version level; the frozen evidence has no effective date for the versions before 2023-02-17 (G-3 keeps the SH 2020-12 .doc bytes but no text). Not encoded, so main-board ST derivations before 2023-02-17 are rule_missing/unknown instead of a 5% guess."
+    },
+    {
+      "rule": "SH-risk-warning-low-price",
+      "range": "all",
+      "reason": "§8.1's #395 follow-up: an SH risk-warning stock whose previous close is <= 0.10 yuan uses a one-tick band instead of a percentage band. price_limit_rules has one band_bp/band_side pair and no low-price condition, so this exception is not encoded; a derived limit for such a bar is a percentage-band answer and must be read as approximate until the contract carries the condition."
+    }
+  ],
+  "price_limit_rules": [
+    {
+      "rule_id": "r1-sh-main-normal-10pct",
+      "market": "sh",
+      "board": "main",
+      "status_class": "normal",
+      "listing_phase": "seasoned",
+      "band_bp": 1000,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "1996-12-16",
+      "effective_to": null,
+      "basis_ref": "R1: tier=APPROVED_SOURCE; doc=上海证券交易所《交易规则》涨跌幅限制条款（现行版与历史版本）; start=1996-12-16 无通知原文，以官方 .day 主板行情锚定（1996-12-01..12-13 越界率 7.21%，1996-12-16 起 0.42%），tier=OWNER_RISK_ACCEPTED; rounding=half_up (R9: 沪 3.3.17, 行情侧 99.94%); evidence=#395 2026-10-26 评论 / D-44(2); url/sha256=私有取证报告，不随仓库分发",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r1-sz-main-normal-10pct",
+      "market": "sz",
+      "board": "main",
+      "status_class": "normal",
+      "listing_phase": "seasoned",
+      "band_bp": 1000,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "1996-12-16",
+      "effective_to": null,
+      "basis_ref": "R1: tier=APPROVED_SOURCE; doc=深圳证券交易所《交易规则》涨跌幅限制条款（现行版与历史版本）; start=1996-12-16 无通知原文，与沪市共用同一 .day 主板行情分段锚定（越界率 7.21% -> 0.42%），tier=OWNER_RISK_ACCEPTED; rounding=half_up (R9: 深 3.3.19); evidence=#395 2026-10-26 评论 / D-44(2); url/sha256=私有取证报告，不随仓库分发",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r2-sh-main-st-5pct-until-2026-07-05",
+      "market": "sh",
+      "board": "main",
+      "status_class": "st",
+      "listing_phase": "seasoned",
+      "band_bp": 500,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "2023-02-17",
+      "effective_to": "2026-07-06",
+      "basis_ref": "R2 段一: tier=APPROVED_SOURCE; doc=上海证券交易所《交易规则》(2023 版) 风险警示股票涨跌幅条款; effective=2023-02-17 起（全面注册制规则施行日）; 2020-2023 条文缺口按 2020-12《风险警示板股票交易管理办法》与相邻版本推断，tier=OWNER_RISK_ACCEPTED，推断段因缺生效月日未落行（见 not_encoded）；2026-07-06 起为 10%，见下一行; rounding=half_up (R9: 沪 3.3.17); evidence=#395 2026-10-26 评论 / D-44(1)(5)",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r2-sz-main-st-5pct-until-2026-07-05",
+      "market": "sz",
+      "board": "main",
+      "status_class": "st",
+      "listing_phase": "seasoned",
+      "band_bp": 500,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "2023-02-17",
+      "effective_to": "2026-07-06",
+      "basis_ref": "R2 段一: tier=APPROVED_SOURCE(5% 值) + OWNER_RISK_ACCEPTED(推断); doc=深交所 2026 版《交易规则》修订说明「由 5% 调整为 10%」+ 2023 版相邻条文; effective=2023-02-17 起; 该段条文属推断（G-4：2023 版全文在已废止库检索不到，由 2026 修订说明反推），标注为推断; rounding=half_up (R9: 深 3.3.19); evidence=#395 2026-10-26 评论 / D-44(1)(5)",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r2-sh-main-st-10pct-from-2026-07-06",
+      "market": "sh",
+      "board": "main",
+      "status_class": "st",
+      "listing_phase": "seasoned",
+      "band_bp": 1000,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "2026-07-06",
+      "effective_to": null,
+      "basis_ref": "R2 段二: tier=APPROVED_SOURCE; doc=上海证券交易所 2026 版《交易规则》起草说明「主板风险警示股票涨跌幅由 5% 调整为 10%」; effective=2026-07-06 起; 行情侧：主板 3,473 只中 197 只上半年呈 5% 带，换规则后 101 只突破 5.2%、52 只触及 10% 带、0 只越过 10%; rounding=half_up (R9: 沪 3.3.17); evidence=#395 2026-10-26 评论 / D-44(1)",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r2-sz-main-st-10pct-from-2026-07-06",
+      "market": "sz",
+      "board": "main",
+      "status_class": "st",
+      "listing_phase": "seasoned",
+      "band_bp": 1000,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "2026-07-06",
+      "effective_to": null,
+      "basis_ref": "R2 段二: tier=APPROVED_SOURCE; doc=深圳证券交易所 2026 版《交易规则》修订说明「主板风险警示股票涨跌幅由 5% 调整为 10%」; effective=2026-07-06 起; 行情侧切换点精确落在 2026-07-06，0 只越过 10%; rounding=half_up (R9: 深 3.3.19); evidence=#395 2026-10-26 评论 / D-44(1)",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r3-sz-gem-normal-10pct-until-2020-08-21",
+      "market": "sz",
+      "board": "gem",
+      "status_class": "normal",
+      "listing_phase": "seasoned",
+      "band_bp": 1000,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "2009-10-30",
+      "effective_to": "2020-08-24",
+      "basis_ref": "R3: tier=APPROVED_SOURCE(10% 条款) + OWNER_RISK_ACCEPTED(起点与缺口); doc=深交所创业板《交易规则》(2011 版) 涨跌幅条款; start=2009-10-30 无原文，以创业板 .day 行情锚定（2020-01-01..08-21 全部 <=10.2%，触及 10% 限制价 67 次、越界 0），tier=OWNER_RISK_ACCEPTED; gap=2009-10-30..2011-01-16 属推断（G-5），标注为推断; rounding=half_up (R9: 深 3.3.19); evidence=#395 2026-10-26 评论 / D-44(2)",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r4-sz-gem-all-20pct-from-2020-08-24",
+      "market": "sz",
+      "board": "gem",
+      "status_class": "all",
+      "listing_phase": "seasoned",
+      "band_bp": 2000,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "2020-08-24",
+      "effective_to": null,
+      "basis_ref": "R4: tier=APPROVED_SOURCE; doc=深交所《创业板交易特别规定》2.1 + 施行衔接通知; effective=2020-08-24 起; 风险警示（ST）与非 ST 同为 20%，故 status_class=all; rounding=half_up (R9: 深 3.3.19); 行情侧：2020-08-24 后触及 20% 限制价 12 次、对 10% 越界 83 次、越界 0; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r4-sz-gem-all-first-5-days-none-from-2020-08-24",
+      "market": "sz",
+      "board": "gem",
+      "status_class": "all",
+      "listing_phase": "first5_days",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2020-08-24",
+      "effective_to": null,
+      "basis_ref": "R4: tier=APPROVED_SOURCE; doc=深交所《创业板交易特别规定》2.1「新股上市后前 5 个交易日不设涨跌幅限制」+ 施行衔接通知; effective=2020-08-24 起; band_side=none 是已知的「无限制」，不是 unknown; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r4-sz-gem-all-first-day-none-from-2020-08-24",
+      "market": "sz",
+      "board": "gem",
+      "status_class": "all",
+      "listing_phase": "first_day",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2020-08-24",
+      "effective_to": null,
+      "basis_ref": "R4: tier=APPROVED_SOURCE; doc=深交所《创业板交易特别规定》2.1（上市首日属于前 5 个交易日，无涨跌幅限制）+ 施行衔接通知; band_side=none; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r5-sh-star-all-20pct-from-2019-07-22",
+      "market": "sh",
+      "board": "star",
+      "status_class": "all",
+      "listing_phase": "seasoned",
+      "band_bp": 2000,
+      "band_side": "both",
+      "rounding": "half_up",
+      "effective_from": "2019-07-22",
+      "effective_to": null,
+      "basis_ref": "R5: tier=APPROVED_SOURCE; doc=上交所《科创板股票交易特别规定》第十八条; effective=2019-07-22 起; 科创板风险警示与非风险警示同为 20%，故 status_class=all; rounding=half_up (R9: 沪 3.3.17); evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r5-sh-star-all-first-5-days-none-from-2019-07-22",
+      "market": "sh",
+      "board": "star",
+      "status_class": "all",
+      "listing_phase": "first5_days",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2019-07-22",
+      "effective_to": null,
+      "basis_ref": "R5: tier=APPROVED_SOURCE; doc=上交所《科创板股票交易特别规定》第十八条「新股上市后前 5 个交易日不设涨跌幅限制」; effective=2019-07-22 起; band_side=none 是已知的「无限制」; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r5-sh-star-all-first-day-none-from-2019-07-22",
+      "market": "sh",
+      "board": "star",
+      "status_class": "all",
+      "listing_phase": "first_day",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2019-07-22",
+      "effective_to": null,
+      "basis_ref": "R5: tier=APPROVED_SOURCE; doc=上交所《科创板股票交易特别规定》第十八条（上市首日属于前 5 个交易日，无涨跌幅限制）; band_side=none; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r6-sh-main-all-first-5-days-none-from-2023-02-17",
+      "market": "sh",
+      "board": "main",
+      "status_class": "all",
+      "listing_phase": "first5_days",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2023-02-17",
+      "effective_to": null,
+      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; effective=2023-02-17 起; 替代 2014-06-13..2023-02-16 的 44%/36% 首日段（该段在单 band 结构下无法表达，见 not_encoded）; 行情侧：2025-2026 主板越过 10% 的 22 根 bar 全部落在上市后第 1-4 个交易日; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r6-sh-main-all-first-day-none-from-2023-02-17",
+      "market": "sh",
+      "board": "main",
+      "status_class": "all",
+      "listing_phase": "first_day",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2023-02-17",
+      "effective_to": null,
+      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; 上市首日属于前 5 个交易日，band_side=none; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r6-sz-main-all-first-5-days-none-from-2023-02-17",
+      "market": "sz",
+      "board": "main",
+      "status_class": "all",
+      "listing_phase": "first5_days",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2023-02-17",
+      "effective_to": null,
+      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; effective=2023-02-17 起; 替代 2014-06-13..2023-02-16 的 44%/36% 首日段（该段在单 band 结构下无法表达，见 not_encoded）; 行情侧：2025-2026 主板越过 10% 的 22 根 bar 全部落在上市后第 1-4 个交易日; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r6-sz-main-all-first-day-none-from-2023-02-17",
+      "market": "sz",
+      "board": "main",
+      "status_class": "all",
+      "listing_phase": "first_day",
+      "band_bp": null,
+      "band_side": "none",
+      "rounding": "half_up",
+      "effective_from": "2023-02-17",
+      "effective_to": null,
+      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; 上市首日属于前 5 个交易日，band_side=none; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    }
+  ],
+  "min_tick_rules": [
+    {
+      "rule_id": "r8-sh-tick-0.01",
+      "market": "sh",
+      "board": "all",
+      "effective_from": "1996-12-16",
+      "effective_to": null,
+      "tick_units": 1,
+      "price_scale": 2,
+      "basis_ref": "R8: tier=APPROVED_SOURCE; doc=上交所《交易规则》3.3.11（A 股最小价格变动单位 0.01 元）+ 官方 .day 价格为整数分; 注意 B 股两市口径不同，B 股不在 M2 股票池; effective=1996-12-16 起（与最早可派生的涨跌幅规则同日）; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    },
+    {
+      "rule_id": "r8-sz-tick-0.01",
+      "market": "sz",
+      "board": "all",
+      "effective_from": "1996-12-16",
+      "effective_to": null,
+      "tick_units": 1,
+      "price_scale": 2,
+      "basis_ref": "R8: tier=APPROVED_SOURCE; doc=深交所《交易规则》3.3.11（A 股最小价格变动单位 0.01 元）+ 官方 .day 价格为整数分; 注意 B 股两市口径不同，B 股不在 M2 股票池; effective=1996-12-16 起（与最早可派生的涨跌幅规则同日）; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_status": "verified"
+    }
+  ]
+}

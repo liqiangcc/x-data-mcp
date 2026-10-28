@@ -375,20 +375,24 @@ min_tick_rules(rule_id, market, board, effective_from, effective_to,
 
 ### 8.2 规则清单（M2 需要覆盖的时段）与出处状态
 
-| # | 规则 | 生效区间 | 出处（`basis_ref` 目标） | 状态 |
+| # | 规则 | 生效区间 | 出处（`basis_ref` 目标） | 状态（D-44，2026-10-26） |
 |---|---|---|---|---|
-| R1 | 沪深主板 ±10% | 1996-12-16 起 | 交易所交易规则/公告原文 | **pending**（原文未抓） |
-| R2 | 主板风险警示股票 ±5% | 现行 | 交易所交易规则「风险警示股票」条款 | **pending** |
-| R3 | 创业板 ±10% | 2009-10-30…2020-08-21 | 深交所创业板交易规则（当时版本） | **pending** |
-| R4 | 创业板 ±20%，新股前 5 个交易日无涨跌幅限制 | 2020-08-24 起 | 深交所《创业板交易特别规定》 | **pending** |
-| R5 | 科创板 ±20%，新股前 5 个交易日无限制 | 2019-07-22 起 | 上交所《科创板股票交易特别规定》 | **pending** |
-| R6 | 主板新股首日 44% 等历史分段 | 2014-01-01 起（更早分段待考） | 交易所公告 | **pending** |
-| R7 | 1990–1996 上海多次调整、1992-05-21 放开 | 1990-12-19…1996-12-15 | 交易所档案/公告 | **pending（很可能 NOT_AVAILABLE）** |
-| R8 | 最小价格变动单位 0.01 元（A 股） | 全期 | 交易所规则 + 实测（`.day` 价格为整数分） | **pending（规则）/ 实测支持** |
-| R9 | 取整：四舍五入到 0.01 元 | 全期 | 实测（E-12：HALF_UP 1.76% vs floor 0.95%） | **实测支持，规则原文待补** |
+| R1 | 沪深主板 ±10% | 1996-12-16 起 | 交易所《交易规则》涨跌幅条款；起点无原文，以 `.day` 行情锚定 | **`APPROVED_SOURCE`（比例）+ 起点 `OWNER_RISK_ACCEPTED`** |
+| R2 | 主板风险警示股票涨跌幅 | 5% 截至 2026-07-05；10% 2026-07-06 起 | 交易所 2023/2026 版《交易规则》与修订说明；深市 5% 条文为推断（G-4） | **`APPROVED_SOURCE`，两行；深市 5% 段标「推断」+ `OWNER_RISK_ACCEPTED`** |
+| R3 | 创业板 ±10% | 2009-10-30…2020-08-21 | 深交所创业板《交易规则》(2011 版)；起点与 2009-10-30…2011-01-16 缺口为推断 | **`OWNER_RISK_ACCEPTED`（起点/缺口）** |
+| R4 | 创业板 ±20%，新股前 5 个交易日无涨跌幅限制 | 2020-08-24 起 | 深交所《创业板交易特别规定》2.1 + 施行衔接通知 | **`APPROVED_SOURCE`** |
+| R5 | 科创板 ±20%，新股前 5 个交易日无限制 | 2019-07-22 起 | 上交所《科创板股票交易特别规定》第十八条 | **`APPROVED_SOURCE`** |
+| R6 | 主板新股前 5 个交易日无限制（2023-02-17 起）；2014-06-13…2023-02-16 首日 44%/36% | 2023-02-17 起；旧段为 2014-06-13 起 | 全面注册制主板交易规则；旧段交易所公告 | **`APPROVED_SOURCE`**；旧段因单 `band_bp` 无法表达 ±44%/36% 的不对称、且 `limit-v1` 缺发行价输入，**不落行**（§8.6） |
+| R7 | 1990–1996 上海多次调整、1992-05-21 放开 | 1990-12-19…1996-12-15 | 交易所档案/公告 | **`NOT_AVAILABLE`：不落行，1996-12-16 前一律 `unknown`** |
+| R8 | 最小价格变动单位 0.01 元（A 股） | 1996-12-16 起（与最早可派生规则同日） | 两市《交易规则》3.3.11 + 实测（`.day` 价格为整数分） | **`APPROVED_SOURCE`** |
+| R9 | 取整：四舍五入到最小变动单位 | 全期 | 沪 3.3.17／深 3.3.19 + 实测（E-12：匹配率 99.94%） | **`APPROVED_SOURCE`，落在每行 `rounding=half_up`** |
 | R10 | 北交所 ±30% | — | — | 不在首期（BSE 不在池） |
 
-**结论**：M2 的规则表结构可落地，但**规则内容依赖一个独立的「交易规则来源准入」取证任务（S-9）**；在此之前，所有涨跌停派生返回 `unknown`，并带 `reason='rule_pending'`。这是本设计最硬的阻塞项之一，必须如实写进 AC 与 Issue。
+**结论**：规则内容已由 D-44 准入（S-9 关闭，D-59 复核确认），实现已入库：R1–R9 的生效段以
+仓库内版本化规则数据维护（`src/trading_rules/a7-d44-v1.json`），由日更 `derived:trading_rules`
+写入 `price_limit_rules`/`min_tick_rules` 并登记版本。**仍然缺的**不是规则，而是 ST 状态
+（#308 写入器）：1996-12-16 前与 2023-02-17 前的主板 ST 段没有规则 → `unknown`；ST 未知时
+只有 `status_class='all'` 的板块/时段能给出确定值（§8.5）。
 
 ### 8.3 派生算法
 
@@ -413,10 +417,35 @@ min_tick_rules(rule_id, market, board, effective_from, effective_to,
 | 缺失项 | 结果 |
 |---|---|
 | 规则行缺失 / `basis_status='pending'` | `unknown` + `rule_missing`/`rule_pending` |
-| ST 状态未知（主板） | `unknown` + `st_unknown`（显式诊断时给 `{5%,10%}` 候选） |
+| ST 状态未知（主板等 ST 与非 ST 幅度不同的板块/时段） | `unknown` + `st_unknown`，候选集来自规则表（如 `{5%,10%}`） |
+| ST 状态未知但规则行与状态无关（`status_class='all'`，如创业板 2020-08-24 起、科创板） | 涨跌停 `known`；`status_class` 保持 `null`，`status_unknown_band_invariant=true` |
 | 上市日未知 | `unknown` + `listing_unknown` |
 | 前收缺失 | `unknown` + `no_prev_close` |
 | 规则命中 ≥2 行 | `unknown` + `rule_ambiguous`（配置错误，测试必须拦住） |
+
+**ST 未知不得当作非 ST**：两条状态无关的规则行即使幅度恰好相同（例如 2026-07-06 起主板
+ST 与普通同为 10%），也仍是两行、两份 `basis_ref`，不能借用其中一行的出处回答未知状态；
+只有一条规则行本身匹配所有状态（`status_class='all'`）时才是确定值。实现见
+`src/research/price_limit.rs` 的 `invariant_band` 与 `status_unknown_band_invariant`。
+
+### 8.6 规则书入库与日更写路径（A-7 实现）
+
+- **格式**：`src/trading_rules/a7-d44-v1.json`，`schema='trading-rule-book/1'`，含
+  `price_limit_rules`/`min_tick_rules`（与表同名列）、`not_available` 与 `not_encoded`
+  （显式声明不落行的规则及原因）。规则行只放在这份版本化数据里，代码不含幅度常量。
+- **校验**（加载与写入都会执行）：区间半开且正、`basis_ref` 非空且写明
+  `APPROVED_SOURCE`/`OWNER_RISK_ACCEPTED` 档位、「推断」/「行情锚定」行必须是
+  `OWNER_RISK_ACCEPTED`、`rule_id` 唯一、同一精确 scope 的 verified 区间不重叠、四个可派生
+  板块（沪主板、深主板、创业板、科创板）都有规则与最小变动单位行、R7 必须在
+  `not_available` 中声明且没有任何规则行早于 1996-12-16。
+- **日更**：`derived:trading_rules` 读取规则书 → `commit_trading_rules` 整集替换两表并登记
+  `derived_dataset_versions('price_limit_rules','price_limit_rules')`。内容（含出处与档位）
+  不变时返回 `no_change`，不重写版本行、不重复发版本；失败语义沿用 M2 derived item（本 item
+  失败只影响本 item，任务进入 `partially_failed`；提交结果不确定时走 `needs_verification`）。
+- **未表达项**：主板首日 44%/36% 不对称段（单 `band_bp`+`band_side` 无法表达，且
+  `limit-v1` 没有发行价输入）、沪市风险警示股前收 ≤0.10 元时的一档最小变动单位例外。两者
+  都在规则文件的 `not_encoded` 里声明；对应日期返回 `unknown`（前收缺失/规则缺失），不做
+  百分比近似。接入需要先改契约，不在本次实现内。
 
 ---
 

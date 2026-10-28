@@ -196,6 +196,11 @@ pub struct PriceLimitReport {
     pub board: Option<Board>,
     pub listing_phase: Option<ListingPhase>,
     pub status_class: Option<StatusClass>,
+    /// `true` when the status is unknown but the band is identical in every
+    /// status class, so the limit is still known. The status itself stays
+    /// unknown (`status_class` is `None`): this flag must not be read as
+    /// "classified as normal".
+    pub status_unknown_band_invariant: bool,
     pub limit_up_units: Option<i64>,
     pub limit_down_units: Option<i64>,
     /// The last 不复权 bar before `as_of`, in the series' price scale.
@@ -243,6 +248,7 @@ impl PriceLimitReport {
             board: None,
             listing_phase: None,
             status_class: None,
+            status_unknown_band_invariant: false,
             limit_up_units: None,
             limit_down_units: None,
             prev_close_units: None,
@@ -339,40 +345,57 @@ pub fn price_limit(
     let phase = phase_result.ok();
     answer.listing_phase = phase;
 
-    let status = match status_class(board, member.status) {
-        Ok(status) => status,
-        Err(reason) => {
-            answer.reason = Some(reason);
-            if reason == PriceLimitReason::StUnknown {
-                answer.candidates =
-                    candidates(&book, market, board.rule_board(), phase, temporal.as_of);
+    // An unknown status must never be read as `normal`. It is answerable only
+    // when every concrete status class lands on the same rule for this
+    // board/phase/day (e.g. GEM after 2020-08-24 and STAR, where ST and
+    // non-ST share the band). Then the *limit* is known while the status is
+    // still unknown: `status_class` stays `None` and the flag says why.
+    let rule = match status_class(board, member.status) {
+        Ok(status) => {
+            answer.status_class = Some(status);
+            let phase = match phase_result {
+                Ok(phase) => phase,
+                Err(reason) => {
+                    answer.reason = Some(reason);
+                    return Ok(answer);
+                }
+            };
+            answer.listing_phase = Some(phase);
+            match book.price_rule(market, board.rule_board(), status, phase, temporal.as_of) {
+                RuleLookup::Found(rule) => rule,
+                RuleLookup::Missing => {
+                    answer.reason = Some(PriceLimitReason::RuleMissing);
+                    return Ok(answer);
+                }
+                RuleLookup::Pending => {
+                    answer.reason = Some(PriceLimitReason::RulePending);
+                    return Ok(answer);
+                }
+                RuleLookup::Ambiguous(_) => {
+                    answer.reason = Some(PriceLimitReason::RuleAmbiguous);
+                    return Ok(answer);
+                }
             }
-            return Ok(answer);
         }
-    };
-    answer.status_class = Some(status);
-
-    let phase = match phase_result {
-        Ok(phase) => phase,
+        Err(PriceLimitReason::StUnknown) => {
+            let invariant = phase.and_then(|phase| {
+                invariant_band(&book, market, board.rule_board(), phase, temporal.as_of)
+            });
+            match invariant {
+                Some(rule) => {
+                    answer.status_unknown_band_invariant = true;
+                    rule
+                }
+                None => {
+                    answer.reason = Some(PriceLimitReason::StUnknown);
+                    answer.candidates =
+                        candidates(&book, market, board.rule_board(), phase, temporal.as_of);
+                    return Ok(answer);
+                }
+            }
+        }
         Err(reason) => {
             answer.reason = Some(reason);
-            return Ok(answer);
-        }
-    };
-    answer.listing_phase = Some(phase);
-
-    let rule = match book.price_rule(market, board.rule_board(), status, phase, temporal.as_of) {
-        RuleLookup::Found(rule) => rule,
-        RuleLookup::Missing => {
-            answer.reason = Some(PriceLimitReason::RuleMissing);
-            return Ok(answer);
-        }
-        RuleLookup::Pending => {
-            answer.reason = Some(PriceLimitReason::RulePending);
-            return Ok(answer);
-        }
-        RuleLookup::Ambiguous(_) => {
-            answer.reason = Some(PriceLimitReason::RuleAmbiguous);
             return Ok(answer);
         }
     };
@@ -533,10 +556,50 @@ fn status_class(board: Board, status: RiskStatus) -> Result<StatusClass, PriceLi
         }
         RiskStatus::DelistingArrangement => Ok(StatusClass::DelistingArrangement),
         RiskStatus::TerminatedOrDelisted => Err(PriceLimitReason::NotListed),
+        // `Unknown` is not `Normal`. A caller may still get a known limit when
+        // the rule table answers the same for every status class; that is
+        // decided by `invariant_band`, never by assuming non-ST.
         RiskStatus::Suspended | RiskStatus::MarkerOnlyUnresolved | RiskStatus::Unknown => {
             Err(PriceLimitReason::StUnknown)
         }
     }
+}
+
+/// The concrete status classes a stored status can resolve to. `All` is not a
+/// status a security has; it is a wildcard on the rule side.
+const CONCRETE_STATUSES: [StatusClass; 4] = [
+    StatusClass::Normal,
+    StatusClass::St,
+    StatusClass::StarSt,
+    StatusClass::DelistingArrangement,
+];
+
+/// The single rule that every concrete status class resolves to on this
+/// board/phase/day, or `None` when the status changes the answer (or any class
+/// has no rule at all). Used only while the stored status is unknown: a
+/// status-agnostic row (`status_class='all'`) makes the limit knowable without
+/// guessing the status. Two rows that merely share a band are *not* enough:
+/// citing one of them would borrow a status-specific `basis_ref` for an
+/// unknown status.
+fn invariant_band(
+    book: &RuleBook,
+    market: RuleMarket,
+    board: RuleBoard,
+    phase: ListingPhase,
+    as_of: NaiveDate,
+) -> Option<&PriceLimitRule> {
+    let mut found: Option<&PriceLimitRule> = None;
+    for status in CONCRETE_STATUSES {
+        let RuleLookup::Found(rule) = book.price_rule(market, board, status, phase, as_of) else {
+            return None;
+        };
+        match found {
+            Some(first) if first.rule_id != rule.rule_id => return None,
+            Some(_) => {}
+            None => found = Some(rule),
+        }
+    }
+    found
 }
 
 fn listing_phase(

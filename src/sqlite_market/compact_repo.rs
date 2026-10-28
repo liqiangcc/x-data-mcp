@@ -165,6 +165,16 @@ impl SqliteCompactMarket {
         self.tx(|c| super::suspensions::commit_suspensions(c, write))
     }
 
+    /// Replace the admitted rule book and register its version in one
+    /// transaction (issue-391 §8.1/§12.1). The daily `derived:trading_rules`
+    /// item drives this; identical content is a `no_change` outcome.
+    pub(crate) fn commit_trading_rules(
+        &self,
+        write: &super::rules::TradingRulesWrite<'_>,
+    ) -> Result<super::rules::TradingRulesCommit, Error> {
+        self.tx(|c| super::rules::commit_trading_rules(c, write))
+    }
+
     /// The stored raw-bar spans on a read connection (issue-391 §4.1), as
     /// candidate migration leads for the main table.
     pub(crate) fn raw_bar_spans(

@@ -150,6 +150,21 @@ impl MarketBackend {
         }
     }
 
+    /// Replace the admitted rule book (issue-391 §8.1/§12.1). The
+    /// `derived:trading_rules` item drives this; an unchanged book reports
+    /// `no_change` instead of minting a new version.
+    pub(crate) fn commit_trading_rules(
+        &self,
+        write: &super::rules::TradingRulesWrite<'_>,
+    ) -> Result<super::rules::TradingRulesCommit, Error> {
+        match self {
+            Self::Compact(m) => m.commit_trading_rules(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "price_limit_rules requires the compact market schema".into(),
+            )),
+        }
+    }
+
     /// Every stored A-share raw daily series' span (issue-391 §4.1). The
     /// `derived:security_master` item uses them only as candidate migration
     /// leads; the read connection keeps the full scan off the write lock.

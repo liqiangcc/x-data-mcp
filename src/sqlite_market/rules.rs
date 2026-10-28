@@ -17,11 +17,11 @@ use std::collections::BTreeSet;
 
 use chrono::NaiveDate;
 use rusqlite::{Connection, params};
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use super::derived::{self, DerivedVersionRow};
-use super::{evidence_store, integrity, storage};
+use super::{evidence_store, integrity, series_commit, storage};
 use crate::compact_market::{self, Digest, EvidenceKind};
 use crate::market_storage::Error;
 use crate::trading_rules::{
@@ -408,6 +408,63 @@ fn read_day(value: i64) -> Result<NaiveDate, Error> {
 
 fn read_opt_day(value: Option<i64>) -> Result<Option<NaiveDate>, Error> {
     value.map(read_day).transpose()
+}
+
+/// One whole-dataset rule commit driven by the daily `derived:trading_rules`
+/// item (issue-391 §12.1). The book is repository data admitted by D-44, not
+/// a generation input; the generation binding only records which run first
+/// wrote this content, so a content-identical run leaves it alone.
+pub(crate) struct TradingRulesWrite<'a> {
+    pub book: &'a RuleBook,
+    pub task_id: &'a str,
+    pub item_id: &'a str,
+    pub generation_id: &'a str,
+    pub generation_manifest_sha256: &'a str,
+    pub member_sha256: &'a str,
+    pub security_event_sha256: &'a str,
+    pub generation_evidence: &'a Value,
+}
+
+/// The item's outcome: the registration it wrote, plus whether the content was
+/// already stored. `no_change` is what stops a daily run from minting a new
+/// version (and a new evidence bundle) for an unchanged rule book.
+pub(crate) struct TradingRulesCommit {
+    pub registration: Option<DerivedVersionRow>,
+    pub no_change: bool,
+}
+
+pub(crate) fn commit_trading_rules(
+    c: &Connection,
+    write: &TradingRulesWrite<'_>,
+) -> Result<TradingRulesCommit, Error> {
+    write.book.validate().map_err(rule_error)?;
+    let digest = rules_digest(write.book);
+    // The readback is ordered by table key rather than by the book's vector
+    // order, so compare the order-independent digest, not the vec equality.
+    if let Some(existing) = derived::read_version(c, DATASET_KIND, trading_rules::DATASET_KEY)?
+        && existing.content_digest == digest
+        && rules_digest(&read_trading_rules(c)?) == digest
+    {
+        // Same content: keep the existing registration, its evidence and its
+        // binding untouched instead of re-stamping version metadata.
+        return Ok(TradingRulesCommit {
+            registration: Some(existing),
+            no_change: true,
+        });
+    }
+    let binding = series_commit::put_generation_binding(
+        c,
+        write.generation_id,
+        write.generation_manifest_sha256,
+        write.member_sha256,
+        write.security_event_sha256,
+        write.generation_evidence,
+    )?;
+    let registration = replace_trading_rules(c, write.book, binding, write.task_id, write.item_id)?;
+    Ok(TradingRulesCommit {
+        registration,
+        no_change: false,
+    })
 }
 
 #[cfg(test)]
