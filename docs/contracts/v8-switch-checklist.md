@@ -3,7 +3,7 @@
 **状态**：已执行（2026-10-27，最小切换；2026-10-28 preview.38 起单进程三 socket，见 §9.7）。
 当前部署为 `generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
 入口与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 24（见 [STATUS](../STATUS.md)）；
-隧道改指 `research.sock`（Ops-D）与 Devin 实测（Ops-C）仍未做，见 §9。
+隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），结论见 §2.3。
 契约本身见 [generic-data-v8](generic-data-v8.md)。
 
 已合并并随 preview.38 部署：`data_service --entry research|ops|maint`（缺省 `ops`）、
@@ -106,13 +106,35 @@ maint 清单含 `backfill_data`/`republish_data`/`retry_task`/`cancel_task`/`ver
 > 持有 `DatabaseLease` 与写协调器」。写边界与对应测试写在
 > [generic-data-v8](generic-data-v8.md) §2.1（`tests/service/local_runtime/write_boundary.rs`）。
 
-### 2.3 Devin 实测（#387 的 Q3）
+### 2.3 AI 客户端实测（#387 的 Q3）
 
-编排入口 `text=summary` 偏离 MCP 规范的 SHOULD。部署前必须用 Devin 跑一次真实日更，
-确认：(a) 摘要字段够 Skill 判断；(b) 客户端不会把 `structuredContent` 与摘要同时塞进
-上下文；(c) 大响应不会被客户端静默截断。**未实测不得部署**——若结论是摘要不够用，
-把 `ops` 的缺省改回 `full` 是部署日可做的开关（`X_DATA_MCP_TEXT_MODE=full`），
-但要在部署记录里写明。
+原定 Devin 实测；Devin 不可用，owner 2026-10-28 决定改用 pi 1.3.0 在私有栈实测（不碰生产）。
+实测分两条客户端路径：pi 默认 MCP exposure `codemode`（XDM-87 生产日更走的路径）与
+`exposure:"direct"` + `--tools` 的直接工具路径。
+
+**结论：`ops` 入口保持 `full`，`summary` 不能作为缺省**（D-36 的「实测不通过就退回」分支）。
+依据：
+
+- (a) 摘要字段：直接工具路径下 `summary` 只给 ≤300 B 指针；`get_task_progress`（page_size=1000）
+  看不到 16 个 `REVISION_UNVERIFIED` 实体与 `failed_by_reason`，`list_data_versions` 看不到
+  `version_id`，`get_data_availability`/`query_data` 即使 page_size=1 也拿不到行数据。
+  同一组日更需求用 `summary` 要 40 次工具调用（靠 ≤2,048 B 小页回退），行数据仍不可得；
+  `full` 为 8 次且全部可见。
+- (b) 摘要与 `structuredContent` 同时进上下文：直接工具路径**不会**（有 `content` 时只用文本）；
+  codemode 路径**会**——脚本收到完整 `CallToolResult`（`content` + `structuredContent`），
+  实测同时打印时两者都进入模型上下文。`summary` 在 codemode 路径不减少上下文。
+- (c) 大响应截断：两条路径都**不静默**。直接工具超过 20 KiB 时给
+  `Warning: truncated output (original token count: …)` 与完整输出临时文件路径（实测 4.69 MB
+  响应截到约 20.6 KiB）；codemode 把 4.69 MB 返回值截到约 40,235 字符（10,000 tokens），
+  同样带 warning、`…N tokens truncated…` 与完整输出文件路径，可恢复。
+
+证据等级：上述 (a)(b)(c) 均为 pi 1.3.0 实测（服务端 preview.38、私有 socket、只读调用；
+完整报告在仓库外）。「MCP 工具即使服务端没有 `outputSchema` 也走 `structuredContent` 分支」
+是读 bundle 源码的推断，与实测一致。未验证：其他客户端、生产 socket、并发/长时间行为。
+
+建议：要缩小上下文应在 Skill/脚本层做有界投影，不要依赖 `text=summary`；重开 `summary`
+评估前，摘要至少携带 Skill 依赖字段（`unfinished` 实体与 reason、`version_id` 等），
+并在两条路径复测。
 
 ### 2.4 下游 `x` 仓库核对（P-02 已撤销，剩两项）
 
@@ -299,7 +321,7 @@ Rust 测试由 CI 证明；部署主机上不编译。
 |---|---|---|---|
 | B-1 | §2.1 租约模型：单进程多 socket / 只读租约 / 分时启停 | 决定 §3 能否上线 | 已裁决（2026-10-28，D-56）：单进程多 socket |
 | B-2 | §2.2 maint 写工具归属 | `x-data-mcp-maint` 是否可上线 | 已裁决（2026-10-28，D-56）：与 2.1 同裁决，maint 保留 9 工具、写租约只由该进程持有 |
-| B-3 | §2.3 Devin 实测（Q3） | `text=summary` 能否作为缺省 | 未实测 |
+| B-3 | §2.3 AI 客户端实测（Q3） | `text=summary` 能否作为缺省 | 已完成（2026-10-28，pi 实测）：**不能**；`ops` 保持 `full` |
 | B-4 | §2.4 `x` 仓库两项核对 | 下游兼容 | 只读核对已做一次，部署日复测 |
 | B-5 | `market.daily` 是否补 `adjustment` 选项（[generic-data-v8](generic-data-v8.md) §12.2） | 研究入口只能读前复权 | 未裁决 |
 | B-6 | `metadata.adjustment` 是否补齐 `algorithm_version`/`price_scale`（§12.3） | 下游无法从响应判断精度与算法 | 未裁决 |
@@ -329,21 +351,20 @@ owner 2026-10-27 裁决：v8 先走**最小切换**，只保留现有 `x-data-mc
 
 - `x-data-mcp-research` / `x-data-mcp-maint` 单元与 `research.sock` / `maint.sock`。
 - 隧道改指 `research.sock`。
-- Devin 实测（§2.3）。
+- ~~Devin 实测（§2.3）~~：已改为 AI 客户端（pi）实测（2026-10-28），见 §2.3。
 - §2.1 单写者租约、§2.2 maint 写工具归属、§2.6 三单元常驻成本。
 
 > **已裁决（2026-10-28，D-56）**：§2.1／§2.2／§2.6 三项已定——§2.1 选单进程多 socket；
 > §2.2 与它同裁决（maint 九个工具保留、写租约只由这一个进程持有、worker 只在 ops）；
 > §2.6 先测量再定 `MemoryMax`。因此不再起 research/maint 两个单元，改为 §3 的「一个 data 单元、三个
-> socket」；第二阶段从 PR-1 开始按 §9.6 执行。隧道改指 `research.sock` 与 Devin 实测仍需
-> 另行批准，不在 PR-1 内。
+> socket」；第二阶段从 PR-1 开始按 §9.6 执行。隧道改指 `research.sock` 仍需另行批准，不在 PR-1 内；实测已改用 pi（见 §2.3）。
 
 ### 9.3 第二阶段的前提条件
 
 1. **已完成（2026-10-28，D-56）**：§2.1 与 §2.2 已由 owner 裁决——单进程多 socket，
    maint 与 2.1 同裁决（9 工具保留，写租约只由这一个进程持有，worker 只在 ops 入口）。
 2. §2.6 的三单元常驻内存实测完成并给出 `MemoryMax`（已裁决为「先测量再定值」）。
-3. Devin 实测确认 `text=summary` 是否可作缺省；在此之前 `ops` 保持 `full`。
+3. **已完成（2026-10-28）**：AI 客户端（pi）实测确认 `text=summary` 不可作缺省，`ops` 保持 `full`，见 §2.3。
 4. 最小切换在 `ops` 入口上连续运行，日更 Skill 无 `SKILL_CONTRACT_MISMATCH`。
 
 ### 9.5 下游 `x`（XDM-66 核对结论）
@@ -380,7 +401,7 @@ XDM-73 备忘（仓库外，2026-10-28）§6 的实施顺序已获批准，从�
 | 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 已合并（#438） |
 | 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 已完成（XDM-84，2026-10-28；报告在仓库外） |
 | 5 | Ops-B：生产同进程三 socket，隧道不动 | 已执行（2026-10-28，随 preview.38，见 §9.7） |
-| 6 | Ops-C：Devin 实测（§2.3） | 未开始 |
+| 6 | Ops-C：AI 客户端实测（§2.3；Devin 不可用，改用 pi） | 已完成（2026-10-28；结论：`ops` 保持 `full`） |
 | 7 | Ops-D：隧道改指 `research.sock`（另行批准） | 未开始 |
 | 8 | Ops-E：maint 启用（仅本机 operator） | 未开始 |
 

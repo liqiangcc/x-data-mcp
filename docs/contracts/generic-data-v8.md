@@ -8,7 +8,7 @@ M2 的 6 个解析事实数据集（§4.6 矩阵，`market.security_master` 等�
 （历史：2026-10-27 部署窗口）在**同一 `capability_revision`** 下上线：M2 不加工具、不升
 revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 [#391](../tasks/issue-391-m2-security-master.md) §12.5）。
-隧道改指 `research.sock`（Ops-D）与 Devin 实测（Ops-C）仍未做，
+隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（结论见 [v8 切换清单](v8-switch-checklist.md) §2.3），
 见 [v8-switch-checklist](v8-switch-checklist.md) §9。
 
 设计依据：v8 设计 [#387](../tasks/issue-387-v8-ai-tool-surface.md)。凡本文标注「实现已核」的
@@ -466,7 +466,7 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 | # | 项 | 为什么未验证 | 取证方法 |
 |---|---|---|---|
 | U-1 | 各客户端是否把 `structuredContent` 注入模型上下文 | 需要真实客户端会话 | 隧道 + ChatGPT/Claude/Devin 各跑一次同一 `query_data` |
-| U-2 | Devin 在 `text=summary` 下是否被截断、摘要字段是否够用 | 官方未规定；只有 Skill 的经验 | 部署前用 Devin 跑一次 v8 编排入口（Q3） |
+| U-2 | Devin 在 `text=summary` 下是否被截断、摘要字段是否够用 | 官方未规定；只有 Skill 的经验 | 已用 pi 1.3.0 实测（2026-10-28）：摘要字段不够、截断不静默；`ops` 保持 `full`（[v8 切换清单](v8-switch-checklist.md) §2.3） |
 | U-3 | 全市场截面（T2）的真实字节 | CI 只有夹具 | 私有栈实测一次并贴 Issue |
 | U-4 | 单进程三 socket 的内存与冷启动影响 | 需要编译产物 | 私有栈实测（§2.6；D-56 已定「先测量再设 `MemoryMax`」） |
 | U-5 | 隧道侧实际看到的研究入口工具数 | 隧道配置不在仓库 | 改指 `research.sock` 后 `tools/list` 复核 |

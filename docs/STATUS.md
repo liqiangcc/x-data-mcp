@@ -140,8 +140,9 @@ preview.37 部署窗口一致。
 代码（main）注册 24 data tools：三个入口 `research`/`ops`/`maint` 由
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
 `outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
-隧道改指 `research.sock`（Ops-D）与 Devin 实测（Ops-C）仍未做，步骤见
-[v8 切换清单](contracts/v8-switch-checklist.md) §9.6。
+隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），
+结论是 `ops` 入口保持 `full`、`summary` 不作缺省，见
+[v8 切换清单](contracts/v8-switch-checklist.md) §2.3 与 §9.6。
 
 ## 数据
 
