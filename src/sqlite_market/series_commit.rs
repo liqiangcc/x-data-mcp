@@ -470,6 +470,7 @@ fn commit_factor_set(
     forward: &Commit,
     raw: &crate::market_data::RawBatch,
 ) -> Result<(), Error> {
+    let _span = crate::stage_trace::span("daily.commit.factor_set");
     if raw.factors.entity != forward.entity {
         return Err(integrity("factor set belongs to another entity"));
     }
@@ -478,13 +479,16 @@ fn commit_factor_set(
             .ok_or_else(|| integrity("paired daily commit lost its forward head"))?;
     // The registration row is the read model's handle; the commit only needs
     // the write to have happened (a non-empty set always registers).
-    let _ = derived::replace_adjustment_events(
-        c,
-        &raw.factors,
-        head.source_binding_digest,
-        forward.task_id,
-        forward.item_id,
-    )?;
+    let _ = {
+        let _span = crate::stage_trace::span("daily.commit.adjustment_events");
+        derived::replace_adjustment_events(
+            c,
+            &raw.factors,
+            head.source_binding_digest,
+            forward.task_id,
+            forward.item_id,
+        )?
+    };
     // §12.1: the same gbbq decode also carries the entity's capital facts, and
     // they are written in the same transaction as the prices they belong to.
     // The set's entity must be this series' — a mismatched batch is a wiring
@@ -492,13 +496,16 @@ fn commit_factor_set(
     if raw.capital.entity != forward.entity {
         return Err(integrity("capital set belongs to another entity"));
     }
-    let _ = security::replace_capital_events(
-        c,
-        &raw.capital,
-        head.source_binding_digest,
-        forward.task_id,
-        forward.item_id,
-    )?;
+    let _ = {
+        let _span = crate::stage_trace::span("daily.commit.capital_events");
+        security::replace_capital_events(
+            c,
+            &raw.capital,
+            head.source_binding_digest,
+            forward.task_id,
+            forward.item_id,
+        )?
+    };
     Ok(())
 }
 
@@ -512,6 +519,7 @@ fn commit_raw_side(
     forward: &Commit,
     raw: &crate::market_data::RawBatch,
 ) -> Result<(), Error> {
+    let _span = crate::stage_trace::span("daily.commit.raw_side");
     let head = series::read_series_adjusted(c, forward.entity, forward.period, Adjustment::Raw)?;
     let price_scale = head
         .as_ref()
@@ -719,6 +727,16 @@ fn commit_series_inner(
     finish: ItemFinish,
     shape: series::SeriesShape,
 ) -> Result<Receipt, Error> {
+    // XDM-81: the per-口径 split of the writer's in-transaction cost. The
+    // paired daily commit runs this twice (forward, then raw), so the two
+    // spans are the write-path half of the item budget the analysis needed.
+    let _span = crate::stage_trace::span_named(
+        "daily.commit.series.",
+        match w.adjustment {
+            crate::market_data::Adjustment::Raw => "raw",
+            crate::market_data::Adjustment::Forward => "forward",
+        },
+    );
     compact_market::epoch_date(w.range_start_day).map_err(integrity)?;
     compact_market::epoch_date(w.range_end_day).map_err(integrity)?;
     if w.range_start_day > w.range_end_day {

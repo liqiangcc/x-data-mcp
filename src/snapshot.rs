@@ -1,11 +1,10 @@
 //! Local byte verification is NOT official semantics, authorization or consistency approval.
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs::File,
-    io::{self, Read},
+    io,
     path::{Component, Path, PathBuf},
 };
 
@@ -118,13 +117,7 @@ pub fn inspect(
                 "inverted/future acquisition interval",
             ));
         }
-        if input.bytes == 0
-            || input.sha256.len() != 64
-            || !input
-                .sha256
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if input.bytes == 0 || !crate::hash::is_sha256(&input.sha256) {
             return Err(InspectionError::Invalid(
                 "empty file or noncanonical sha256",
             ));
@@ -141,28 +134,13 @@ pub fn inspect(
         if !path.metadata()?.is_file() {
             return Err(InspectionError::Invalid("artifact is not a regular file"));
         }
-        let mut file = File::open(path)?;
+        let file = File::open(path)?;
         if !file.metadata()?.is_file() {
             return Err(InspectionError::Invalid("artifact is not a regular file"));
         }
-        let mut hash = Sha256::new();
-        let mut bytes = 0u64;
-        let mut buffer = [0u8; 65536];
-        loop {
-            let n = file.read(&mut buffer)?;
-            if n == 0 {
-                break;
-            }
-            bytes = bytes
-                .checked_add(n as u64)
-                .ok_or(InspectionError::Invalid("file size overflow"))?;
-            hash.update(&buffer[..n]);
-        }
-        let digest: String = hash
-            .finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        // One streaming pass with the shared bounded digest: the day archive
+        // is ~550 MB and must never be materialized (XDM-81).
+        let (bytes, digest) = crate::hash::digest_reader(file)?;
         if bytes != input.bytes || digest != input.sha256 {
             return Err(InspectionError::Mismatch(input.role));
         }
