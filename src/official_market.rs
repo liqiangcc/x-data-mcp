@@ -209,6 +209,10 @@ pub struct TdxMarketSource {
     /// that carries the role always has it, and a source built without one
     /// keeps the M2 dataset items fail-closed (issue-391 §12.1).
     base: Option<FileInput>,
+    /// Central-directory indexes of this source's archives, shared by every
+    /// `MaterializeSession` opened over it (XDM-82). Cloned sources (one per
+    /// task) share the same indexes.
+    archives: SharedArchives,
 }
 
 impl TdxMarketSource {
@@ -245,6 +249,7 @@ impl TdxMarketSource {
                 .iter()
                 .find(|f| f.role == FileRole::BaseIndustry)
                 .cloned(),
+            archives: SharedArchives::default(),
         })
     }
 
@@ -277,6 +282,7 @@ impl TdxMarketSource {
                 .iter()
                 .find(|f| f.role == FileRole::BaseIndustry)
                 .cloned(),
+            archives: SharedArchives::default(),
         })
     }
     /// Service install hook: only when `X_DATA_MCP_OFFICIAL_MANIFEST`
@@ -321,20 +327,49 @@ impl TdxMarketSource {
         Ok(archive)
     }
 
-    /// Open a shared-decode session over this source: each archive's
-    /// central directory is parsed at most once (lazily, on first member
-    /// read) and the gbbq member is read, CRC-verified and decoded at most
-    /// once, so a multi-symbol worker run pays one index build and one
-    /// decode instead of one per symbol. The session borrows the source —
-    /// there is no global or cross-process cache, and a changed snapshot
-    /// can only enter through a newly inspected source instance, which
-    /// yields a new session.
+    /// Open a per-worker-turn session over this source: the gbbq member is
+    /// read, CRC-verified and decoded at most once per session, and each
+    /// archive's central directory is indexed lazily through the source's
+    /// shared index cache — one parse per verified source instead of one per
+    /// session (XDM-82). A changed snapshot enters only through a newly
+    /// inspected source instance, which starts with empty indexes.
     pub fn materialize_session(&self) -> MaterializeSession<'_> {
         MaterializeSession {
             source: self,
             gbbq: std::cell::OnceCell::new(),
-            archives: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
+    }
+
+    /// The verified central-directory index of one role archive, built once
+    /// per source and shared by every session over it.
+    ///
+    /// The key is the canonical archive path plus the manifest-pinned
+    /// archive digest: a cache hit can only ever serve bytes that digest
+    /// named, so a new generation (new manifest, new digests) starts from an
+    /// empty index and the byte/prefix continuity proofs stay fail-closed.
+    /// A poisoned cache is read-only bookkeeping only; the read degrades to
+    /// an uncached index instead of failing.
+    fn archive_index(&self, input: &FileInput) -> Result<ArchiveIndexSlot, SourceError> {
+        let path = self.archive_path(input)?;
+        let key = (path.clone(), input.sha256.clone());
+        let mut entries = match self.archives.entries.lock() {
+            Ok(entries) => entries,
+            Err(_) => {
+                return Ok(std::sync::Arc::new(std::sync::Mutex::new(
+                    ArchiveIndex::open(&path)?,
+                )));
+            }
+        };
+        if let Some(index) = entries.get(&key) {
+            return Ok(index.clone());
+        }
+        let index = std::sync::Arc::new(std::sync::Mutex::new(ArchiveIndex::open(&path)?));
+        #[cfg(test)]
+        self.archives
+            .builds
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        entries.insert(key, index.clone());
+        Ok(index)
     }
 
     /// Materialize the snapshot's complete `.day` history for one security
@@ -434,6 +469,61 @@ impl ArchiveIndex {
     }
 }
 
+/// Process-scoped central-directory indexes of one inspected source.
+///
+/// Building one `ArchiveIndex` parses every central-directory entry *and*
+/// seeks to each member's local header (`zip` 2.4.2
+/// `central_header_to_zip_file` → `find_data_start`); for the 12,210-member
+/// `.day` archive that is ≈200 MB of reads per build (XDM-82 private-stack
+/// measurement). The scan used to live on `MaterializeSession`, i.e. one
+/// scan per worker turn — one per ≤100-item task, ~52 per full-market
+/// update run. The indexes belong to the verified source instead, which
+/// lives as long as its generation.
+///
+/// The cache key is the canonical archive path plus the manifest-pinned
+/// archive digest, so an entry only ever serves bytes the inspected
+/// manifest named. Retired generations must not keep open handles (their
+/// bytes are unlinked; an open handle would retain the space):
+/// `GenerationSource::sweep` drops the sessions — and with them these
+/// indexes — as soon as the store stops listing the generation.
+/// One archive's lazily built index, shared by every reader of a source.
+type ArchiveIndexSlot = std::sync::Arc<std::sync::Mutex<ArchiveIndex>>;
+
+/// Cache entries: `(canonical archive path, pinned archive digest)` → index.
+type SharedIndexMap = std::collections::HashMap<(PathBuf, String), ArchiveIndexSlot>;
+
+#[derive(Clone, Default)]
+struct SharedArchives {
+    entries: std::sync::Arc<std::sync::Mutex<SharedIndexMap>>,
+    /// Test-only bookkeeping: how many index builds this source paid for.
+    #[cfg(test)]
+    builds: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl std::fmt::Debug for SharedArchives {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let entries = self
+            .entries
+            .lock()
+            .map(|entries| entries.len())
+            .unwrap_or(0);
+        f.debug_struct("SharedArchives")
+            .field("entries", &entries)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+impl TdxMarketSource {
+    /// How many central-directory scans this source actually paid for; the
+    /// cache tests assert a warm session adds none.
+    fn archive_index_builds(&self) -> usize {
+        self.archives
+            .builds
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 /// `(market digit, code)` → every gbbq record for that security, in decode
 /// order. The category split is a *view* applied at lookup time: the daily
 /// item needs the category-1 slice for prices and the 2/3/5/7/8/9/10 slice
@@ -451,15 +541,11 @@ struct DecodedGbbq {
     by_security: GbbqBySecurity,
 }
 
-/// Lazily opened central-directory indexes keyed by canonical archive path.
-type ArchiveCache = std::collections::HashMap<PathBuf, ArchiveIndex>;
-
 /// Per-source materialization channel; see `TdxMarketSource::materialize_session`.
 pub struct MaterializeSession<'a> {
     source: &'a TdxMarketSource,
+    /// The one-time gbbq decode, bounded to this session's worker turn.
     gbbq: std::cell::OnceCell<DecodedGbbq>,
-    /// Each archive is opened and scanned at most once per session.
-    archives: std::cell::RefCell<ArchiveCache>,
 }
 
 impl MaterializeSession<'_> {
@@ -470,33 +556,31 @@ impl MaterializeSession<'_> {
 
     /// Read the archive members through a fresh session over the same
     /// inspected source. Used by parallel preparation workers: each thread
-    /// gets its own `RefCell`-backed index cache and gbbq decode instead of
-    /// sharing one session across threads.
+    /// gets its own gbbq decode, while the verified archive indexes are
+    /// shared through the source instead of re-scanned per thread.
     pub fn fork(&self) -> MaterializeSession<'_> {
         self.source.materialize_session()
     }
 
-    /// Read exactly one archive member through the session's shared
-    /// central-directory index: the archive is opened and its names scanned
-    /// at most once per session, and member lookup is O(1). Absent or
-    /// ambiguous members and any decompression/CRC failure are source
-    /// failures; the manifest-pinned archive digest is what `inspect()`
-    /// already verified.
+    /// Read exactly one archive member through the source's verified
+    /// central-directory index. Absent or ambiguous members and any
+    /// decompression/CRC failure are source failures; the manifest-pinned
+    /// archive digest is what `inspect()` already verified. Concurrent
+    /// readers of one archive serialize on its index (member reads are
+    /// milliseconds; the parse they replace was ~200 MB of reads).
     fn member_bytes(
         &self,
         input: &FileInput,
         candidates: &[String],
     ) -> Result<(String, Vec<u8>), SourceError> {
-        let path = self.source.archive_path(input)?;
-        let mut archives = self.archives.borrow_mut();
-        let index = match archives.entry(path.clone()) {
-            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::hash_map::Entry::Vacant(e) => e.insert(ArchiveIndex::open(&path)?),
-        };
-        let mut found: Vec<(&String, usize)> = Vec::new();
+        let index = self.source.archive_index(input)?;
+        let mut index = index
+            .lock()
+            .map_err(|_| SourceError::Invocation("archive index cache poisoned".into()))?;
+        let mut found: Vec<(String, usize)> = Vec::new();
         for name in candidates {
             if let Some(indices) = index.members.get(name) {
-                found.extend(indices.iter().map(|i| (name, *i)));
+                found.extend(indices.iter().map(|entry| (name.clone(), *entry)));
             }
         }
         let [(member, member_index)] = found.as_slice() else {
@@ -505,15 +589,16 @@ impl MaterializeSession<'_> {
                 found.len()
             )));
         };
+        let (member, member_index) = (member.clone(), *member_index);
         let mut entry = index
             .archive
-            .by_index(*member_index)
+            .by_index(member_index)
             .map_err(|e| SourceError::Invocation(format!("member open failed: {e}")))?;
         let mut bytes = Vec::with_capacity(entry.size() as usize);
         entry
             .read_to_end(&mut bytes)
             .map_err(|e| SourceError::Invocation(format!("member bytes failed CRC: {e}")))?;
-        Ok(((*member).clone(), bytes))
+        Ok((member, bytes))
     }
 
     /// Ensure the gbbq member is decoded and return the shared state.
@@ -3045,5 +3130,215 @@ impl<R: MarketRepository> crate::gap_verification::SourceGapVerifier for TdxGapV
         };
         basis.basis_sha256 = basis.content_digest();
         Ok(basis)
+    }
+}
+
+/// XDM-82: the process-scoped archive index cache must be invisible to the
+/// data. Every test here compares the *bytes* a session produces with the
+/// cache cold, warm, forked, and keyed by a different manifest digest.
+#[cfg(test)]
+mod archive_cache_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn sha(bytes: &[u8]) -> String {
+        crate::hash::sha256(bytes)
+    }
+
+    fn day_record(date: u32, close: u32, volume: u32) -> [u8; 32] {
+        let mut record = [0u8; 32];
+        record[0..4].copy_from_slice(&date.to_le_bytes());
+        for (index, price) in [close, close, close, close].iter().enumerate() {
+            record[4 + index * 4..8 + index * 4].copy_from_slice(&price.to_le_bytes());
+        }
+        record[20..24].copy_from_slice(&0.0f32.to_bits().to_le_bytes());
+        record[24..28].copy_from_slice(&volume.to_le_bytes());
+        record
+    }
+
+    fn gbbq_record(market: u8, code: &str, date_raw: u32, category: u8, c: [f32; 4]) -> [u8; 29] {
+        let mut clear = [0u8; 29];
+        clear[0] = market;
+        clear[1..1 + code.len()].copy_from_slice(code.as_bytes());
+        clear[8..12].copy_from_slice(&date_raw.to_le_bytes());
+        clear[12] = category;
+        for (index, value) in c.iter().enumerate() {
+            clear[13 + index * 4..17 + index * 4].copy_from_slice(&value.to_le_bytes());
+        }
+        crate::gbbq::encrypt_record(&clear)
+    }
+
+    fn gbbq_member(records: &[[u8; 29]]) -> Vec<u8> {
+        let mut bytes = (records.len() as u32).to_le_bytes().to_vec();
+        for record in records {
+            bytes.extend_from_slice(record);
+        }
+        bytes
+    }
+
+    fn write_zip(path: &std::path::Path, members: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, bytes) in members {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        "2026-09-12T00:00:00Z".parse().unwrap()
+    }
+
+    /// Three role-bound archives with one security, one qfq-bearing event.
+    fn source(day: &[u8], gbbq: &[u8]) -> (tempfile::TempDir, TdxMarketSource) {
+        let dir = tempfile::tempdir().unwrap();
+        type RoleFixture<'a> = (&'a str, &'a str, &'a str, Vec<(&'a str, &'a [u8])>);
+        let roles: [RoleFixture<'_>; 3] = [
+            (
+                "base_industry",
+                "base.zip",
+                "http://www.tdx.com.cn/products/data/data/dbf/base.zip",
+                vec![("base.dbf", b"unused-by-daily-source".as_slice())],
+            ),
+            (
+                "day",
+                "hsjday.zip",
+                "https://data.tdx.com.cn/vipdoc/hsjday.zip",
+                vec![("sh\\lday\\sh600006.day", day)],
+            ),
+            (
+                "gbbq",
+                "gbbq.zip",
+                "http://www.tdx.com.cn/products/data/data/dbf/gbbq.zip",
+                vec![("gbbq", gbbq)],
+            ),
+        ];
+        let mut files = Vec::new();
+        for (role, name, url, members) in roles {
+            let path = dir.path().join(name);
+            write_zip(&path, &members);
+            let bytes = std::fs::read(&path).unwrap();
+            files.push(serde_json::json!({
+                "role": role,
+                "relative_path": name,
+                "source_url": url,
+                "acquisition_started_at": "2026-09-11T01:00:00Z",
+                "acquisition_completed_at": "2026-09-11T02:00:00Z",
+                "last_modified": null,
+                "etag": null,
+                "bytes": bytes.len(),
+                "sha256": sha(&bytes),
+            }));
+        }
+        let manifest = serde_json::to_vec(
+            &serde_json::json!({"schema":"x-data-mcp.official-file-input.v1","files":files}),
+        )
+        .unwrap();
+        let root = dir.path().to_path_buf();
+        let source = TdxMarketSource::inspect(&root, &manifest, now()).unwrap();
+        (dir, source)
+    }
+
+    fn bars() -> Vec<u8> {
+        [
+            day_record(20250715, 1129, 100),
+            day_record(20250716, 1131, 110),
+            day_record(20250717, 1134, 120),
+        ]
+        .concat()
+    }
+
+    #[test]
+    fn a_warm_session_serves_the_same_bytes_as_a_cold_one() {
+        let gbbq = gbbq_member(&[gbbq_record(1, "600006", 20250716, 1, [0.0, 0.0, 0.0, 5.0])]);
+        let (_dir, source) = source(&bars(), &gbbq);
+        let cold = source
+            .materialize_session()
+            .materialize_pair("sh.600006")
+            .unwrap();
+        // Day and gbbq indexes only: the unread base archive stays unopened.
+        assert_eq!(source.archive_index_builds(), 2);
+        let warm = source
+            .materialize_session()
+            .materialize_pair("sh.600006")
+            .unwrap();
+        // The next worker turn reuses the verified indexes instead of
+        // scanning the archive again, and produces identical bytes.
+        assert_eq!(source.archive_index_builds(), 2);
+        assert_eq!(
+            serde_json::to_vec(&cold.raw).unwrap(),
+            serde_json::to_vec(&warm.raw).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_vec(&cold.forward).unwrap(),
+            serde_json::to_vec(&warm.forward).unwrap()
+        );
+        assert_eq!(cold.factors, warm.factors);
+        assert_eq!(cold.capital, warm.capital);
+        // The 2025-07-16 allotment rewrites earlier bars, so equal outputs
+        // are not equal-by-accident on the price column.
+        assert_ne!(cold.raw.bars[0].close, cold.forward.bars[0].close);
+        // A fork (parallel preparation worker) shares the same indexes.
+        let worker = source.materialize_session();
+        let forked_pair = worker.fork().materialize_pair("sh.600006").unwrap();
+        assert_eq!(source.archive_index_builds(), 2);
+        assert_eq!(
+            serde_json::to_vec(&forked_pair.forward).unwrap(),
+            serde_json::to_vec(&cold.forward).unwrap()
+        );
+    }
+
+    #[test]
+    fn cached_member_bytes_match_a_freshly_built_index() {
+        let gbbq = gbbq_member(&[]);
+        let (_dir, source) = source(&bars(), &gbbq);
+        let session = source.materialize_session();
+        let cached = session
+            .member_bytes(&source.day, &["sh\\lday\\sh600006.day".to_string()])
+            .unwrap();
+        let path = source.archive_path(&source.day).unwrap();
+        let mut fresh = ArchiveIndex::open(&path).unwrap();
+        let mut entry = fresh.archive.by_index(0).unwrap();
+        let mut uncached = Vec::new();
+        entry.read_to_end(&mut uncached).unwrap();
+        assert_eq!(cached.0, "sh\\lday\\sh600006.day");
+        assert_eq!(cached.1, uncached);
+        assert_eq!(source.archive_index_builds(), 1);
+    }
+
+    #[test]
+    fn the_cache_key_carries_the_manifest_archive_digest() {
+        let gbbq = gbbq_member(&[]);
+        let (_dir, source) = source(&bars(), &gbbq);
+        let cold = source
+            .materialize_session()
+            .materialize_pair("sh.600006")
+            .unwrap();
+        assert_eq!(source.archive_index_builds(), 2);
+        // A different verified digest at the same canonical path is a
+        // different key: the cache never answers one generation's digest
+        // with another's index. The bars match (same file bytes), but the
+        // provenance of that "other generation" names its own digest — the
+        // digest is part of the identity, not just a cache detail.
+        let mut other_generation = source.clone();
+        other_generation.day.sha256 = sha(b"a different pinned archive");
+        let other = other_generation
+            .materialize_session()
+            .materialize_pair("sh.600006")
+            .unwrap();
+        assert_eq!(source.archive_index_builds(), 3);
+        assert_eq!(other.forward.bars, cold.forward.bars);
+        // Falling back to the pinned digest reuses the original entry.
+        let again = source
+            .materialize_session()
+            .materialize_pair("sh.600006")
+            .unwrap();
+        assert_eq!(source.archive_index_builds(), 3);
+        assert_eq!(
+            serde_json::to_vec(&again.forward).unwrap(),
+            serde_json::to_vec(&cold.forward).unwrap()
+        );
     }
 }

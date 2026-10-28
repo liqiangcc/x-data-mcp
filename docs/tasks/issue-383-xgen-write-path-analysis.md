@@ -159,3 +159,109 @@ X_DATA_MCP_RUN_PREPARE_WORKERS=1  # 单线程 prepare，串行可读
 3. **内存**：把 480 MiB 上限留在 SLO 里，但补一条「峰值不得随 artifact 大小线性增长」的断言。
 4. **度量**：`daily.commit.series.raw` 与 `.forward` 的差值可直接验证「raw 侧 qfq 依赖」的成本，
    若 raw ≈ forward，说明 raw 侧可复用 forward 的中间量。
+
+## 8. XDM-82：prepare 侧实测与 O3 落地
+
+本节回答 §7 建议 1（O3 方案选择）与建议 4（raw vs forward 差值），并记录本轮实现。§1–§7 保持原样。
+
+### 8.1 口径
+
+| 项 | 值 |
+|---|---|
+| 代码 | `origin/main` `a23798af23fe60103123e378469662a163889a48`（`0.2.0-preview.37`，Preview package CI run 40639791564，asset sha256 已校验） |
+| 运行方式 | 只解包 CI 产物运行，**不编译**；私有栈（data + acquire 两进程、unix socket），`X_DATA_MCP_STAGE_TRACE=1` 写 stderr |
+| 机器 | 2 vCPU / 1.9 GiB RAM，load average ≈5.5（共享负载，**不是独占窗口**），磁盘可用 11 GiB；另有 MemAvailable<300 MB 的看门狗，本轮未触发 |
+| 窗口 | **100-item 跨代窗口**：base `gen-54553656-20261015`（bar 至 2026-10-15）→ `gen-9d9e38d7-20261019`（bar 至 2026-10-19），`end_date=2026-10-19`（append 窗口） |
+| 库 | 私有栈全新 init，窗口期 69 MiB；每个 gen 目录 546–552 MB |
+| prepare 池 | 默认 2（2 vCPU），未设 `X_DATA_MCP_RUN_PREPARE_WORKERS` |
+
+“实测”= 本轮 span / strace / `/proc/<pid>/io`；“推断”= 由实测数字向全量窗口线性外推，未在 aws-node 复测。
+
+### 8.2 一个 100-item 跨代 append 任务（trace 实测）
+
+| span | 值 |
+|---|---|
+| 任务 wall / server_window | 28.5 s / 15.37 s |
+| accept 总 | **10,893 ms**，其中 `svc.bound.active_verified_id` **10,723 ms**（首次调用的 generation 字节校验） |
+| `daily.run_items.total.parallel` | 17,584 ms |
+| `daily.prepare.item` | n=100，sum 8,082 ms |
+| `daily.prepare.acquire_typed` | n=100，sum 8,009 ms，**p50 7.67 ms**，max 7,124 ms（首 item，单线程 `ThreadId(3)`） |
+| `daily.prepare_batch.base_reads` | **281 ms / 100 项**（整个 chunk 一次事务） |
+| `daily.prepare_batch.states` | 15 ms |
+| `daily.commit_batch` | 2,690 ms |
+| 其中 `item_payload` | 2,304 ms |
+| `factor_set` / `raw_side` | 725 / 688 ms |
+| `daily.commit.series.forward` / `.raw` | **620 / 553 ms** |
+| `adjustment_events` / `capital_events` | 261 / 431 ms |
+| `coord.write.held` | 4,542 ms / 10 次 |
+| `rpc.get_task_progress` | 6,229 ms / 44 次 |
+
+对照窗口（同代码、同机器）：首次采集 100 项 `series.raw` 3,969 ms vs `series.forward` 3,916 ms，`raw_side`
+6,500 ms、`factor_set` 435 ms；同代 nochange 100 项 wall 10.83 s、accept 265 ms、`acquire_typed` p50
+5.53 ms / max 6,741 ms、`commit_batch` 2,473 ms、`item_payload` 2,275 ms、`factor_set` 1,147 ms（首次
+`get_data_capabilities` 12,331 ms）。
+
+结论一：**§3 O3 的“base bars / 全历史重复读取”不是瓶颈**——`base_reads` 281 ms、`base_bars` 与
+`binding` 均未进入前五；`acquire_typed` 在首个 item 的 warm-up 之后是 5–9 ms/item，这是真实的单 item 读取
++ 校验成本，不是跨 item 重复。
+结论二：**raw 侧没有重复计算 qfq**——`series.raw` 553 ms < `series.forward` 620 ms（首采窗口同样
+3,969 vs 3,916 ms），两者只差一次自己的序列写入；把 forward 的中间量共享给 raw 的收益 ≈ 0。
+结论三：commit 侧仍是大头（item_payload 2,304 + factor_set 725 + raw_side 688 ms / 100 项），且与
+`coord.write.held`、`get_task_progress` 的等待并存，属写路径与调度，不属于本轮 prepare 去重范围。
+
+### 8.3 真正被重复的 I/O：每个任务的 archive 索引重建（实测 + 代码定位）
+
+对窗口内一个 update item 做 strace（同一进程已跑过若干任务）：
+
+| 读取 | 实测 |
+|---|---|
+| `hsjday.zip` | **199.68 MB**，约 24,438 次 8 KiB read，顺序 + 反复 seek |
+| `gbbq.zip` | 3.68 MB / 473 次 read |
+| seek 目标 | 各 member 的 local header offset（0、208944、417775…）与中央目录尾（548.56/549.37 MB） |
+| `hsjday.zip` 规模 | 549 MB、12,210 entries、中央目录 0.81 MB |
+
+`zip 2.4.2` 的 `ZipArchive::new` → `central_header_to_zip_file` → `find_data_start` 会对**每个** central
+header 都 seek 读一次 local header，再由 `BufReader`（8 KiB）把读位置跳回中央目录；即每个 entry ≈ 2 次
+8 KiB 缓冲填充 → 12,210 × 16 KiB ≈ 200 MB。这段成本挂在 `MaterializeSession` 的
+`archives: RefCell<HashMap<PathBuf, ArchiveIndex>>` 上，而 session 的生命周期是**一个 worker turn**
+（一个 ≤100-item 任务，`EXEC_CHUNK = 100`）。全量 5,200 项 ≈ 52 个任务 → **≈10.4 GB/轮**
+（推断，按实测 199.68 MB/任务 × 52；同一 gen 即使 page cache 命中，仍要付 0.1–0.3 s CPU/任务的解析，
+实测热缓存下 1-item 任务整条读取仅 0.565 s、read_bytes 8 KB 但 rchar 203.7 MB）。
+
+单 item 冷/热对照（`/proc/<pid>/io`，同一 item 连续 6 次）：12.5 s / 135 MB → 4.9 s / 72 MB → 0.57 s / 8 KB
+→ 2.6 s / 28 MB → 1.5 s / 0.8 MB → 13.6 s / 66 MB。波动来自共享负载下的 page cache 驱逐，也说明
+这 200 MB 每次都要重新走一遍解析，不能靠 cache 兜底。
+
+### 8.4 O3 落地：source 级 archive 索引缓存
+
+- `src/official_market.rs`：`TdxMarketSource` 新增 `SharedArchives`（`Arc<Mutex<HashMap<(规范路径,
+  manifest 固定的 archive sha256), Arc<Mutex<ArchiveIndex>>>>>`）；`MaterializeSession` 不再持有
+  per-session 索引表，`member_bytes` 走 `source.archive_index()`。因此同一 verified source 的多个
+  session（含 `fork()` 的并行 worker）只付一次 200 MB 解析。
+- **缓存键含 generation 身份**：键是 archive 的规范路径 + manifest 固定的 archive sha256；source 本身只
+  能由 `inspect()`/`verify_installed` 通过后的 manifest 构造，所以键里同时钉住了 generation（manifest sha）
+  与角色归档的字节摘要。换 gen / 换 coverage 只能经新的 source 实例进入，缓存从空开始，不存在“旧索引回答
+  新 generation”的路径；命中与否只影响 I/O，仍由同一个 `zip::ZipArchive::by_index` 解压同一批字节，CRC
+  与解压失败语义不变（fail-closed 保持）。
+- **生命周期**：retire 会 `remove_dir_all` 删代字节，而索引持有打开的 `File`——若不回收，已删除的 549 MB
+  会被句柄钉住直到进程重启（会破坏磁盘门禁）。`GenerationSource::sweep` 现在同时
+  `retain_installed`：把 store 不再列出的 generation 的 session（及其索引句柄）从进程缓存移除；执行中的任务
+  持有自己的 session clone，不受影响，退役代之后的 `open` 仍 fail-closed。
+- **未缓存**：gbbq 解码仍每 session 一次（3.68 MB + 解析），避免每个历史 generation 常驻一份全市场事件表；
+  raw/forward 的中间量共享按 §8.2 结论不做。
+
+预期效果（推断）：同一 generation 的第 2 个任务起，日更从 ≈204 MB 读降到 ≈3.7 MB（仅 gbbq），全量一轮
+≈10.4 GB → ≈0.2 GB；同时省掉每任务 0.1–0.3 s 的索引解析。首个任务仍付一次 200 MB。**未测**：aws-node
+上 5,200 项端到端 SLO 变化、首任务冷读、以及 gbbq 缓存是否值得，都需要独占窗口复测。
+
+### 8.5 一致性测试（不能本机编译，随 CI 验证）
+
+- `src/official_market.rs::archive_cache_tests`：冷 session 与热 session 产出的 `raw`/`forward` 序列化字节
+  完全相同、`factors`/`capital` 相等，且 qfq 确实改写了历史 bar（排除“相等但没算”）；`fork()` 的 worker
+  session 不再新增索引构建；缓存成员字节与**全新** `ArchiveIndex` 读取逐字节相同；把 source 的 day digest
+  改成另一个值时缓存不命中（证明键含版本摘要），改回后重新命中且输出不变。
+- `tests/service/official_market.rs::warm_archive_index_acquires_byte_identical_update_input`：同一 source
+  连跑两次 `TdxRangeProvider::acquire`（冷/热索引），`UpdateBatchItem` 的 batch 序列化字节、`candidate_digest`、
+  `candidate_sha256`、`base_integrity_sha256`、continuity 前缀字节、`combined` 记录全部相同，`prepare`
+  决策同为 `Candidate`——commit 层由这些输入算出 content digest → `version_id`，输入逐字节相同即版本 id 不变。
+- `src/data_supply/generation.rs::sweep_tests`：退役 generation 的 session 缓存条目被移除，installed 的保留。

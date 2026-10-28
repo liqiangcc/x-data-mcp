@@ -139,8 +139,8 @@ impl GenerationSource {
         let Ok(ids) = self.store.installed_ids() else {
             return;
         };
-        for generation_id in ids {
-            let _ = self.store.sweep_pins(&generation_id, |holder| {
+        for generation_id in &ids {
+            let _ = self.store.sweep_pins(generation_id, |holder| {
                 let Some(task_id) = holder.strip_prefix("task:") else {
                     return true;
                 };
@@ -150,7 +150,23 @@ impl GenerationSource {
                 }
             });
         }
+        // XDM-82: forget the byte view of every generation the store no
+        // longer lists. A cached session owns its source's process-scoped
+        // archive indexes, whose open file handles would otherwise keep a
+        // retired generation's unlinked bytes allocated until a restart.
+        // Live tasks hold their own session clone, so this only drops the
+        // idle cache entry; a later open of a retired id still fails closed.
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.retain(|generation_id, _| keeps_installed(generation_id, &ids));
+        }
     }
+}
+
+/// The eviction rule behind `sweep`: a cached session is kept only while the
+/// generation store still lists its generation. Split out so it is testable
+/// without a generation store.
+fn keeps_installed(generation_id: &String, installed: &[String]) -> bool {
+    installed.contains(generation_id)
 }
 
 /// A live generation-bound session: immutable directory, byte-verified
@@ -250,5 +266,25 @@ pub fn uniform_binding<'a>(
         None => Err(BindingRefusal::Missing),
         Some(None) => Err(BindingRefusal::Null),
         Some(Some(id)) => Ok(id),
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::keeps_installed;
+
+    /// XDM-82: the session cache (and with it the source's open archive
+    /// handles) must not outlive the generation it belongs to.
+    #[test]
+    fn retired_generations_leave_the_session_cache() {
+        let mut sessions = std::collections::HashMap::new();
+        for id in ["gen-1", "gen-2", "gen-retired"] {
+            sessions.insert(id.to_string(), id.len());
+        }
+        let installed = vec!["gen-1".to_string(), "gen-2".to_string()];
+        sessions.retain(|generation_id, _| keeps_installed(generation_id, &installed));
+        let mut kept: Vec<String> = sessions.keys().cloned().collect();
+        kept.sort();
+        assert_eq!(kept, vec!["gen-1".to_string(), "gen-2".to_string()]);
     }
 }

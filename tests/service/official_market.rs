@@ -1973,6 +1973,85 @@ fn update_continuity_append_materializes_only_tail() {
     ));
 }
 
+// XDM-82: the source-level archive index cache is an I/O dedupe, not a
+// behavior change. Two sessions over the same verified source — the first
+// paying the central-directory scan, the second reusing it — must acquire
+// byte-identical update inputs (and therefore the same candidate digest,
+// which is what the commit layer turns into the series version id).
+#[test]
+fn warm_archive_index_acquires_byte_identical_update_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let market = opened(&dir);
+    let mut snap = valid_snapshot();
+    let base = publish_base(&market, &snap);
+    let bars: Vec<u8> = [
+        day_record(20250715, [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(20250716, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(20250717, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(20250718, [1134, 1140, 1132, 1139], 0.0, 130),
+    ]
+    .concat();
+    reday(&mut snap, &[("sh\\lday\\sh600006.day", bars.as_slice())]);
+    let src = make_source(&snap);
+    // Cold: this session builds both role indexes itself.
+    let cold = {
+        let session = src.materialize_session();
+        acquire(&update_provider(&session), &base)
+    };
+    // Warm: the next worker turn re-reads the same verified generation.
+    let warm = {
+        let session = src.materialize_session();
+        acquire(&update_provider(&session), &base)
+    };
+    assert_eq!(
+        serde_json::to_vec(&cold.batch).unwrap(),
+        serde_json::to_vec(&warm.batch).unwrap()
+    );
+    assert_eq!(
+        x_data_mcp::market_update::candidate_digest(&cold.batch).unwrap(),
+        x_data_mcp::market_update::candidate_digest(&warm.batch).unwrap()
+    );
+    assert_eq!(
+        cold.evidence.candidate_sha256,
+        warm.evidence.candidate_sha256
+    );
+    assert_eq!(
+        cold.evidence.base_integrity_sha256,
+        warm.evidence.base_integrity_sha256
+    );
+    assert_eq!(
+        cold.evidence.continuity.as_ref().unwrap().day_prefix_bytes,
+        warm.evidence.continuity.as_ref().unwrap().day_prefix_bytes
+    );
+    assert_eq!(
+        serde_json::to_vec(&cold.combined.as_ref().unwrap().record).unwrap(),
+        serde_json::to_vec(&warm.combined.as_ref().unwrap().record).unwrap()
+    );
+    // Same prepare decision, so the same version id/records reach the head.
+    let cold_decision = x_data_mcp::market_update::prepare(
+        &base,
+        &cold.batch,
+        &whole_range(),
+        Some(&cold.evidence),
+    )
+    .unwrap();
+    let warm_decision = x_data_mcp::market_update::prepare(
+        &base,
+        &warm.batch,
+        &whole_range(),
+        Some(&warm.evidence),
+    )
+    .unwrap();
+    assert!(matches!(
+        cold_decision,
+        x_data_mcp::market_update::Decision::Candidate(_)
+    ));
+    assert!(matches!(
+        warm_decision,
+        x_data_mcp::market_update::Decision::Candidate(_)
+    ));
+}
+
 #[test]
 fn update_continuity_ignores_other_securities_events() {
     let dir = tempfile::tempdir().unwrap();
