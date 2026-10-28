@@ -1553,7 +1553,8 @@ mod tests {
         // Same length, different bytes: only the digest can catch it, so the
         // resume check must reject it and fetch the mirror's bytes instead.
         let mut tampered = pinned.clone();
-        tampered[tampered.len() / 2] ^= 1;
+        let middle = tampered.len() / 2;
+        tampered[middle] ^= 1;
         std::fs::write(stage.join("hsjday.zip"), &tampered).unwrap();
         service.fetch_role(&task, role, &mut detail).unwrap();
         assert_eq!(std::fs::read(stage.join("hsjday.zip")).unwrap(), pinned);
