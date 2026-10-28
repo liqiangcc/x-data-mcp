@@ -342,3 +342,69 @@ fn entry_names_parse_and_the_dev_surface_is_not_deployable() {
     assert_eq!(EntryKind::All.name(), "all");
     assert!(EntryKind::All.allows("not_a_tool"));
 }
+
+/// v8 phase 2 §2.2(c) (D-56): the write boundary is by process, not by socket
+/// name, so the entry tables must state exactly which tools write and the
+/// tunnel-exposed research entry must stay out of that set.
+#[test]
+fn write_tools_are_explicit_and_never_reach_the_research_entry() {
+    let write_set = |entry: EntryKind| -> BTreeSet<&'static str> {
+        registry::entries()
+            .iter()
+            .filter(|tool| tool.writes() && entry.allows(tool.name))
+            .map(|tool| tool.name)
+            .collect()
+    };
+    assert_eq!(
+        write_set(EntryKind::Maint),
+        BTreeSet::from([
+            "backfill_data",
+            "republish_data",
+            "retry_task",
+            "cancel_task",
+            "verify_data_gap",
+            "run_worker_once",
+        ]),
+        "maint keeps its operator writes (§2.2(c))"
+    );
+    assert_eq!(
+        write_set(EntryKind::Ops),
+        BTreeSet::from([
+            "start_collection",
+            "update_data",
+            "run_market_update",
+            "verify_publication_result",
+            "verify_stopped_writes",
+        ]),
+        "ops is the automatic orchestration surface"
+    );
+    assert!(write_set(EntryKind::Research).is_empty());
+
+    // `operator_only` still marks exactly the human-only controls.
+    let operator_only: BTreeSet<&'static str> = registry::entries()
+        .iter()
+        .filter(|tool| tool.operator_only)
+        .map(|tool| tool.name)
+        .collect();
+    // `inspect_verification_task` is only registered on Linux.
+    let expected: BTreeSet<&str> = if cfg!(target_os = "linux") {
+        BTreeSet::from(["inspect_verification_task", "run_worker_once"])
+    } else {
+        BTreeSet::from(["run_worker_once"])
+    };
+    assert_eq!(operator_only, expected);
+    assert!(EntryKind::Maint.allows("run_worker_once"));
+
+    // The startup guard is itself exercised: a research allowlist that names a
+    // writing tool refuses to start instead of serving it.
+    EntryKind::Research.validate().unwrap();
+    let error = EntryKind::Research
+        .validate_names(&["query_data", "backfill_data"])
+        .unwrap_err();
+    assert!(error.contains("write tool backfill_data"), "{error}");
+    assert!(
+        EntryKind::Maint
+            .validate_names(&["backfill_data", "backfill_data"])
+            .is_err()
+    );
+}
