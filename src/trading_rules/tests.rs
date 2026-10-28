@@ -291,9 +291,14 @@ fn nothing_covers_a_day_before_the_r7_boundary() {
     assert!(
         book.price_limits
             .iter()
-            .chain(&book.min_ticks)
             .all(|rule| rule.effective_from >= first),
-        "R7 is NOT_AVAILABLE: no rule row may start before 1996-12-16"
+        "R7 is NOT_AVAILABLE: no price-limit row may start before 1996-12-16"
+    );
+    assert!(
+        book.min_ticks
+            .iter()
+            .all(|rule| rule.effective_from >= first),
+        "R7 is NOT_AVAILABLE: no min-tick row may start before 1996-12-16"
     );
     for as_of in [day(1990, 12, 19), day(1996, 12, 13)] {
         assert!(matches!(
@@ -326,20 +331,25 @@ fn nothing_covers_a_day_before_the_r7_boundary() {
 #[test]
 fn every_row_names_its_tier_and_inferred_rows_say_so() {
     let book = rule_book().unwrap();
-    for rule in book.price_limits.iter().chain(&book.min_ticks) {
-        let basis = &rule.basis_ref;
+    // The two tables have different row types; check the same invariant on
+    // both without trying to chain their iterators.
+    let check = |rule_id: &str, basis: &str| {
         assert!(
             basis.contains("APPROVED_SOURCE") || basis.contains("OWNER_RISK_ACCEPTED"),
-            "{} has no provenance tier",
-            rule.rule_id
+            "{rule_id} has no provenance tier"
         );
         if basis.contains("推断") || basis.contains("行情锚定") {
             assert!(
                 basis.contains("OWNER_RISK_ACCEPTED"),
-                "{} is inferred/anchor-based but not owner-risk accepted",
-                rule.rule_id
+                "{rule_id} is inferred/anchor-based but not owner-risk accepted"
             );
         }
+    };
+    for rule in &book.price_limits {
+        check(&rule.rule_id, &rule.basis_ref);
+    }
+    for rule in &book.min_ticks {
+        check(&rule.rule_id, &rule.basis_ref);
     }
     let sz_st = book
         .price_limits
