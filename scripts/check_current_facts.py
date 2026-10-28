@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-EXPECTED_PACKAGE_VERSION = "0.2.0-preview.37"
+EXPECTED_PACKAGE_VERSION = "0.2.0-preview.38"
 EXPECTED_LEGACY_SCHEMA = 18
 # Fresh `init` output schema (code constant). The DEPLOYED schema is a
 # deployment fact and is read from docs/STATUS.md (see DEPLOYED_SCHEMA_ROW):
@@ -15,21 +15,24 @@ EXPECTED_LEGACY_SCHEMA = 18
 EXPECTED_COMPACT_SCHEMA = 24
 # Registry/code fact (v8 PR-2 adds list_catalog_facets: 23 -> 24).
 EXPECTED_DATA_TOOLS = 24
-# The deployed instance reports v7 / 23 tools after the v7 switch:
-# documentation "current" regions describe deployment facts, so stale-claim
+# Documentation "current" regions describe deployment facts, so stale-claim
 # checks compare against the deployed constants, not the code constants. A
 # sentence that explicitly says it is stating the code fact (代码/未部署) is
 # checked against the registry instead.
+# Since Ops-B (preview.38) one data_service process serves three sockets; the
+# prose fact "N data tools" still counts the orchestration entry `ops` on
+# mcp.sock (the only entry x and the daily Skill talk to). Per-entry counts
+# live in the STATUS 服务 table and are checked by entry_tool_counts().
 EXPECTED_DEPLOYED_DATA_TOOLS = 15
 EXPECTED_ACQUIRE_TOOLS = 10
 
 # --- deployed data entries (v8 phase 2, D-56) ------------------------------
 # The production data unit serves one entry per socket. The deployed entry set
-# is a deployment fact: today it is only `ops` on run/mcp.sock; the Ops-B
-# deploy-day commit flips it to all three entries together with STATUS's 服务
-# table and the unit ExecStart (v8-switch-checklist §9.6). Per-entry tool counts
-# come from the source allowlists, not from this list.
-DEPLOYED_DATA_ENTRIES = ("ops",)
+# is a deployment fact: since Ops-B (preview.38, v8-switch-checklist §9.7) one
+# data_service process binds run/mcp.sock (ops), run/research.sock (research)
+# and run/maint.sock (maint). Per-entry tool counts come from the source
+# allowlists, not from this list.
+DEPLOYED_DATA_ENTRIES = ("ops", "research", "maint")
 ENTRY_ALLOWLIST_CONST = {
     "research": "RESEARCH_TOOLS",
     "ops": "OPS_TOOLS",
@@ -861,6 +864,17 @@ def main() -> int:
             EXPECTED_DEPLOYED_DATA_TOOLS == entry_counts.get(only),
             f"constant {EXPECTED_DEPLOYED_DATA_TOOLS}, {only} allowlist "
             f"{entry_counts.get(only)}",
+        )
+    else:
+        # Several entries are deployed; the prose fact "N data tools" stays
+        # bound to the orchestration entry `ops`, so it cannot drift from the
+        # registry either. The per-entry counts are checked in the STATUS 服务
+        # table below and by check_deploy_facts.check_deployed_entries().
+        check(
+            "EXPECTED_DEPLOYED_DATA_TOOLS matches the ops entry allowlist",
+            EXPECTED_DEPLOYED_DATA_TOOLS == entry_counts.get("ops"),
+            f"constant {EXPECTED_DEPLOYED_DATA_TOOLS}, ops allowlist "
+            f"{entry_counts.get('ops')}",
         )
 
     acquire = (ROOT / "src/acquire/mcp.rs").read_text(encoding="utf-8")

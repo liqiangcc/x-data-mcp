@@ -3,12 +3,13 @@
 ## 决策与适用范围
 
 2026-09-12 用户要求现在考虑扩展，并授权按“工具按业务动作稳定、数据类别通过类型化参数扩展”
-开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署：`mcp.sock` 的
+开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署：一个 `data_service`
+进程服务三个 socket——`mcp.sock` 的
 `ops` 入口注册 15 data tools（capability revision `generic-data-v8`，含只读
 `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，文本模式 `full`，
-market 单版本序列：version_id=内容 hex，latest-only），
-acquire socket 注册 10 acquisition tools；生产只有 `ops` 入口，`research`/`maint`
-入口未部署（v8 第二阶段）。已部署实例为 compact schema 24，代码（main）同为 schema 24
+market 单版本序列：version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口
+（只读研究面，工具数 5），`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
+acquire socket 注册 10 acquisition tools；隧道仍指 `mcp.sock`。已部署实例为 compact schema 24，代码（main）同为 schema 24
 （M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024），注册 24 data tools（三个入口）。部署版本、
 generation 与数据量等机器事实只在 [STATUS](STATUS.md) 维护，本文不复述。通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场

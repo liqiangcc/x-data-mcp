@@ -6,7 +6,8 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-10-28（preview.37 部署后回填）。本轮实测来源：
+最后核实：2026-10-28（preview.37 实测值回填；preview.38 只换二进制、未重建库，schema、
+generation 与数据量沿用该轮实测）。本轮实测来源：
 `/opt/x-data-mcp-preview/reports/preview37-phaseg-deployment.json`（`deploy_phase_g.sh
 --force-git-transport`）、`python3` + `sqlite3`（`file:…?mode=ro`，**含 WAL**：未 checkpoint 的
 提交只在 `-wal` 里，读 `immutable=1` 会看到 checkpoint 前的旧计数）读 `state/preview.sqlite`、
@@ -24,24 +25,35 @@ systemd 单元细节、热 generation 计数）标注为「历史」。部署后
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | 2 vCPU（1 个物理核 × 2 超线程，Xeon Platinum 8259CL；`/proc/cpuinfo` 无 `sha_ni`），MemTotal 1,905,872 kB（约 1.82GiB）+ 8GiB swap（2×4GiB，实测已用 2.5GiB），根盘 77G（已用 50G、余 27G）；`/tmp` 是 953MB 的 tmpfs（占内存，实测已用 625MB） | `lscpu`、`grep -c processor /proc/cpuinfo`、`grep sha_ni /proc/cpuinfo`（无匹配）、`free -m`、`swapon --show`、`df -h / /tmp` |
 | 本机工具链 | 本机禁止本地 Rust 编译：执行 `rustc --version` 被主机策略拦截并返回「Local Rust compilation is forbidden on this host (1.9 GB RAM)」，仅允许 `cargo fmt`。因此本机工具链版本未复核；部署二进制的构建版本见「构建」行 | 实测拦截提示 |
-| 部署版本 | `v0.2.0-preview.37`，commit `49422db26be2da79ff39c7522897d25fcb6055bb` | `current/manifest.json` 的 `version`/`git_sha`（与部署报告 `code_sha` 一致）、`readlink current` |
+| 部署版本 | `v0.2.0-preview.38` | 部署窗口的合并提交；完整 SHA 与 `current/manifest.json` 由切换记录填入（本 PR 在切换窗口开始前保持 OPEN，由 Claude 合并后执行） |
+| preview.38 之前 | preview.37 @ `49422db26be2da79ff39c7522897d25fcb6055bb`（历史；被 preview.38 取代，二进制目录保留作回滚点） | `reports/preview37-phaseg-deployment.json`、回填 PR 的 `readlink current`、历史 `releases/` 目录 |
 | preview.37 之前 | v0.2.0-preview.36 @ `fcb86ab065e87f9ef7655fd87b8e224517bd8f1b`（历史；被 preview.37 取代） | `reports/preview36-phaseg-deployment.json`、历史 `readlink` |
-| 部署时间 | **2026-10-28T00:21:26Z**（UTC），`scripts/deploy_phase_g.sh --force-git-transport`：停 data/acquire → 归档旧 schema 24 库 → 从 release 提交读取期望 schema 后 `task_sqlite init` 全新库 → 起两个单元 → socket/工具数/schema 检查 → 写部署报告 `/opt/x-data-mcp-preview/reports/preview37-phaseg-deployment.json`（`status: DEPLOYED`，`before.schema=24`，`production: NOT_PRODUCTION_READY`）。**fresh init，不做原地升级**；部署窗口的设置：`X_DATA_MCP_TEXT_MODE=full`、`X_DATA_MCP_RUN_PREPARE_WORKERS=1`（v2 日更的准备线程串行，放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1，待独占实测） | 部署报告 JSON、`journalctl -u x-data-mcp-data/-acquire`、`readlink`/`stat` |
-| 部署时间（历史） | 2026-10-27T12:15:43Z，`scripts/deploy_phase_g.sh --force-git-transport`（本机 gh 2.62 读不到 release asset digest，改走 `refs/dist` 的 git transport，与历次一致）：停 data/acquire → 归档 schema 21 库 → `task_sqlite init21` 全新 init 到 schema 24 → 起两个单元 → socket/工具数/schema 检查 → 写报告 `reports/preview36-phaseg-deployment.json`。每个已部署的发布目录按完整 SHA 命名，旧目录保留作回滚点。本次是全新库部署，不是热切换 | 部署报告 JSON、`readlink`/`stat`、`journalctl` |
-| 数据库 schema | 已部署：schema 24（preview.37 从 release 提交读期望 schema 后全新 init，`pragma user_version` 读回 24，库 **1,790,316,544 B**；preview.36 时同为 schema 24、库 1,732,116,480 B）；代码：schema 24（M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`（当时只建表；写入路径由 M2 PR-3…PR-8 接线，preview.37 起部署）；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
+| 部署时间 | **2026-10-28 切换窗口（Op-B）**，`scripts/switch_binary.sh` **只换二进制**（dry-run 后 `--execute`）：不重建库、不归档、不改 schema——库仍是 preview.37 的 schema 24 库（`state/preview.sqlite`，**1,790,316,544 B**）。切换后给 data 单元装两个 drop-in：`exec-start.conf` 把 `ExecStart` 换成一个进程绑定三个 socket（`mcp.sock`→`ops`、`research.sock`→`research`、`maint.sock`→`maint`，尾部保留 `--poll-ms 1000`）、`memory.conf` 设 cgroup `MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`（依据 XDM-84 独占测量，报告在仓库外）。逐 socket 就绪探针与回滚步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9.7；实际时刻、探针 JSON 与报告路径由切换记录填入 | 切换窗口的 `switch_binary.sh` 报告、`journalctl -u x-data-mcp-data`、`systemctl cat`/`systemctl show -p MemoryHigh`、`stat state/preview.sqlite` |
+| 部署时间（历史 preview.37） | 2026-10-28T00:21:26Z（UTC），`scripts/deploy_phase_g.sh --force-git-transport`：停 data/acquire → 归档旧 schema 24 库 → 从 release 提交读取期望 schema 后 `task_sqlite init` 全新库 → 起两个单元 → socket/工具数/schema 检查 → 写部署报告 `/opt/x-data-mcp-preview/reports/preview37-phaseg-deployment.json`（`status: DEPLOYED`，`before.schema=24`，`production: NOT_PRODUCTION_READY`）。**fresh init，不做原地升级**；部署窗口的设置：`X_DATA_MCP_TEXT_MODE=full`、`X_DATA_MCP_RUN_PREPARE_WORKERS=1`（v2 日更的准备线程串行，放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1，待独占实测） | 部署报告 JSON、`journalctl -u x-data-mcp-data/-acquire`、`readlink`/`stat` |
+| 部署时间（历史 preview.36） | 2026-10-27T12:15:43Z，`scripts/deploy_phase_g.sh --force-git-transport`（本机 gh 2.62 读不到 release asset digest，改走 `refs/dist` 的 git transport，与历次一致）：停 data/acquire → 归档 schema 21 库 → `task_sqlite init21` 全新 init 到 schema 24 → 起两个单元 → socket/工具数/schema 检查 → 写报告 `reports/preview36-phaseg-deployment.json`。每个已部署的发布目录按完整 SHA 命名，旧目录保留作回滚点。本次是全新库部署，不是热切换 | 部署报告 JSON、`readlink`/`stat`、`journalctl` |
+| 数据库 schema | 已部署：schema 24（preview.38 与上一轮预览共用同一个库，**只换二进制、未重建也未归档**：`pragma user_version` 读回 24，库 **1,790,316,544 B**；该库由上一轮部署从 release 提交读期望 schema 后全新 init；preview.36 时同为 schema 24、库 1,732,116,480 B）；代码：schema 24（M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`（当时只建表；写入路径由 M2 PR-3…PR-8 接线，preview.37 起部署）；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
 | 构建 | rustc 1.99.1 (58cf8f9c3 2026-10-13)，ubuntu-24.04，最低 glibc 2.39 | `current/manifest.json` |
-| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/49422db26be2da79ff39c7522897d25fcb6055bb`（preview.37，按完整 SHA 命名）；上一个目录是 `releases/fcb86ab065e87f9ef7655fd87b8e224517bd8f1b`（preview.36，保留作回滚点）。目录数量与总字节本轮未复核（历史 2026-10-24：6 个目录共 348MiB） | `readlink current`（实测）、`ls -l`、历史 `du -sh releases/*` |
+| 部署目录 | `/opt/x-data-mcp-preview/current` → preview.38 的发布目录（按完整 SHA 命名，SHA 由切换记录填入）；上一个目录是 `releases/49422db…`（preview.37，保留作回滚点）。目录数量与总字节本轮未复核（历史 2026-10-24：6 个目录共 348MiB） | `readlink`（切换记录）、历史 `du -sh releases/*` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
 | ecs-node | 服务已 stop 并 disable，数据保留为冷备（含 generation `a49c314b…` 的字节） | 同上 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `get_data_capabilities` |
 
-v8 最小切换（preview.36，2026-10-27T12:15:43Z 部署完成）：`x-data-mcp-data` 以 `--entry ops`
+preview.38（2026-10-28 切换窗口，Op-B）只换二进制：schema 仍是 24、库不重建（沿用
+preview.37 的 `state/preview.sqlite`），`capability_revision` 仍是 `generic-data-v8`，工具面不变。
+变的是 data 单元的形状：**一个 `data_service` 进程服务三个 socket**——`run/mcp.sock`（`ops`，
+编排入口，x 与日更 Skill 的连接不变）、`run/research.sock`（`research`，只读研究面）、
+`run/maint.sock`（`maint`，仅本机 operator 用，不暴露隧道）。三入口的工具数为 ops 15、
+research 5、maint 9（权威值见「服务」表）。文本模式 `full`、`--poll-ms 1000`、
+`X_DATA_MCP_RUN_PREPARE_WORKERS=1` 都沿用；cgroup 上限
+`MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M` 按 XDM-84 的 w=1 独占测量设值
+（报告在仓库外；`memory.conf` 删除后即回退默认无上限）。**隧道仍指 `run/mcp.sock`**
+（Ops-D 未做），研究面外部行为不变。
+
+v8 最小切换（preview.36，2026-10-27T12:15:43Z 部署完成；历史）：`x-data-mcp-data` 以 `--entry ops`
 运行 `mcp.sock` 的 15 个工具（live `tools/list`），文本模式 `X_DATA_MCP_TEXT_MODE=full`
 （systemd drop-in），`capability_revision=generic-data-v8`（live `get_data_capabilities`）；
 库按 D-08 归档 schema 21 后全新 init 到 schema 24，并从 active generation `c184e9c4…`
-重建（数据量见「数据」段）。生产只有 `ops` 入口，`research`/`maint` 入口与隧道改指
-`research.sock` 推迟到 v8 第二阶段（D-53、[v8 切换清单](contracts/v8-switch-checklist.md) §9）。
-preview.37（2026-10-27 收盘后的部署窗口）在**同一个 `generic-data-v8`** 下上线 M2：
+重建（数据量见「数据」段）。preview.37（2026-10-27 收盘后的部署窗口）在**同一个 `generic-data-v8`** 下上线 M2：
 工具面、`capability_revision`、schema 编号都不变，增加的是 6 个 dataset（§「M2 随
 preview.37 部署」）与 `research-snapshot.v2` 导出。所以客户端不需要重新握手 revision，
 但仍须按 `get_data_capabilities` 的 dataset 列表发现新数据（设计 §12.5 的裁决）。
@@ -110,29 +122,32 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`） | 15 | capability `generic-data-v8`（含只读 `get_yearly_base_years`）；`X_DATA_MCP_TEXT_MODE=full`；drop-in 设置 `X_DATA_MCP_GENERATION_ROOT` 与 `X_DATA_MCP_RUN_PREPARE_WORKERS=1`（preview.37 部署窗口起，v2 日更的准备线程串行；放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1） |
+| `x-data-mcp-data` | `data_service`（单进程、三 socket） | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 15 / 5 / 9 | capability `generic-data-v8`（含只读 `get_yearly_base_years`）；`X_DATA_MCP_TEXT_MODE=full`；drop-in：`exec-start.conf`（三 socket `ExecStart`，尾部保留 `--poll-ms 1000`）、`poll-interval.conf`（`--poll-ms 1000`）、`memory.conf`（`MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`）、`X_DATA_MCP_GENERATION_ROOT`、`X_DATA_MCP_RUN_PREPARE_WORKERS=1`（preview.37 起，v2 日更的准备线程串行；放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1）；`maint` 只在本机使用、不经隧道 |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 设置了 `X_DATA_MCP_TDX_FETCH=current/scripts/tdx_fetch.py` |
 | `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire；`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 **120s**（2026-10-24T16:56:58Z 由 10s 改为 120s，`deadline=time.monotonic()+120`；但单元未设 `TimeoutStartSec`，systemd 默认 90s 也覆盖 `ExecStartPre`，所以实际生效上限是 **90s**），单元为 `Restart=always` / `RestartSec=10`；data 服务停止时隧道会因 stdio 子进程退出而自行退出 |
 
 访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
 
-运行面（2026-10-28 owner 批准）：data 单元新增 drop-in `poll-interval.conf`，`ExecStart` 追加 `--poll-ms 1000`——原默认 100 ms 的空闲轮询约占 8% CPU（2 vCPU），改后约 1.4%；新任务接手延迟 ≤1 s。删除该文件并 `daemon-reload` 后重启即回退默认值。
+运行面（2026-10-28 owner 批准）：data 单元新增 drop-in `poll-interval.conf`，`ExecStart` 追加 `--poll-ms 1000`——原默认 100 ms 的空闲轮询约占 8% CPU（2 vCPU），改后约 1.4%；新任务接手延迟 ≤1 s。删除该文件并 `daemon-reload` 后重启即回退默认值。preview.38 的三 socket `ExecStart` 写在 `exec-start.conf` 里，仍以 `--poll-ms 1000` 结尾（`scripts/data_unit_layout.py` 原样保留尾部参数），内存上限写在 `memory.conf`；两者的回滚步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9.7。
 
 工具数与能力版本的 live MCP 只读复核（preview.37 部署窗口，回填到部署记录）：`mcp.sock` 的
 `tools/list` 返回 15 个工具，`get_data_capabilities` 返回
-`capability_revision=generic-data-v8`；acquire socket 返回 10 个工具。
+`capability_revision=generic-data-v8`；acquire socket 返回 10 个工具。preview.38 切换窗口的逐 socket
+探针：`research.sock`→`query_data`、`mcp.sock`→`plan_market_update`、`maint.sock`→`compute_metrics`，
+三者工具数 5/15/9、`capability_revision` 均为 `generic-data-v8`；隧道仍连 `mcp.sock`，x 契约断言与
+preview.37 部署窗口一致。
 
 代码（main）注册 24 data tools：三个入口 `research`/`ops`/`maint` 由
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
-`outputSchema`。生产只部署 `ops` 入口（15 个工具）；`research`/`maint` 单元与隧道
-改指 `research.sock` 的步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9
-（第二阶段）。
+`outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
+隧道改指 `research.sock`（Ops-D）与 Devin 实测（Ops-C）仍未做，步骤见
+[v8 切换清单](contracts/v8-switch-checklist.md) §9.6。
 
 ## 数据
 
 **preview.37 部署后的重建已执行完成**（2026-10-28T00:22–00:40Z）：全新 schema 24 库，按
 [M2 部署清单](tasks/m2-deploy-checklist.md) 从 active generation 重建（目录 + 日线 + 年线 +
-v2 plan/run 派生 + 年线重聚合）。下表是本轮实测。重建在生产机上执行但**非独占**（多个开发
+v2 plan/run 派生 + 年线重聚合）。**preview.38 只换二进制、未重建库，下表的 generation 计数与字节未变（切换窗口未重测）。** 下表是本轮实测。重建在生产机上执行但**非独占**（多个开发
 agent 同时在跑），下述耗时不作门禁证据。标注「历史」的行是更早的对照值（2026-10-24 补采或
 preview.36 重建）。
 
@@ -221,7 +236,7 @@ preview.36 重建）。
 
 ## 进行中
 
-- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**生产仍是 preview.37 的单 socket 部署（`mcp.sock`），单进程三 socket 尚未上线**。详见 [SLO](SLO.md) 备注与
+- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**生产已随 preview.38 换成单进程三 socket（`mcp.sock`/`research.sock`/`maint.sock`，见「服务」表）**。详见 [SLO](SLO.md) 备注与
   [DECISIONS](decisions.md) D-52/D-57。
 - **GOAL-008 性能**：PR #323 已于 2026-10-11 squash 合并（`8a446b1`），发布 v0.2.0-preview.31，2026-10-12 部署。
   - 全市场验收（XP-015，perf `3b11231`，aws 私有栈，浅链，53 批，trace-OFF，每负载单次）：年线首次 310.6s、日线跨代 Append 104.2s（合成截断夹具）、年线重聚合 328.3s、日线同代 NoChange 78.0s，write-loop 均 <600s，读回全部 PASS（见 [SLO](SLO.md)）。第三类「保留的真实 mixed Append/Full/fail-closed」**未运行**（retained gen-1 字节永久不可得）；`AGENTS.md` 记载的离线 harness 结果仅作旁证，不作替代。

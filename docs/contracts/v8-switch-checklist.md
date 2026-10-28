@@ -1,11 +1,12 @@
 # generic-data-v8 部署日切换清单
 
-**状态**：已执行（2026-10-27，最小切换）。当前部署为 `generic-data-v8` /
-15 data tools（`mcp.sock` 的 `ops` 入口）/ compact schema 24（见 [STATUS](../STATUS.md)）；
-research/maint 单元、隧道切换与 §2.1/§2.2/§2.6 推迟到第二阶段，见 §9。
+**状态**：已执行（2026-10-27，最小切换；2026-10-28 preview.38 起单进程三 socket，见 §9.7）。
+当前部署为 `generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
+入口与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 24（见 [STATUS](../STATUS.md)）；
+隧道改指 `research.sock`（Ops-D）与 Devin 实测（Ops-C）仍未做，见 §9。
 契约本身见 [generic-data-v8](generic-data-v8.md)。
 
-实现已合并、部署未批准的部分：`data_service --entry research|ops|maint`（缺省 `ops`）、
+已合并并随 preview.38 部署：`data_service --entry research|ops|maint`（缺省 `ops`）、
 三张静态 allowlist、`tools/list` 不再内联 `outputSchema`、capabilities 紧凑目录 + 详版、
 `query_data` 的 v2 列式布局、任务面 v2、入参归一化。仓库内**不**创建 systemd 单元、
 **不**改隧道、**不**改生产主机——本文所有生产步骤都需 owner 逐条批准。
@@ -376,12 +377,56 @@ XDM-73 备忘（仓库外，2026-10-28）§6 的实施顺序已获批准，从�
 | 0 | 裁决记录：本清单 §2／§3／§9 与 D-56 | 已落地（D-56） |
 | 1 | PR-1：`data_service` 重复 `<socket> --entry <kind>`、一次启动检查、N 个 endpoint、共享 lease／backend／generation／gate、每个 listener 独立 allowlist、worker 只在 ops 跑一次、任一 bind 失败整体不启动 | 已合并（#434） |
 | 2 | PR-2：写边界策略（maint 9 工具、worker 只在 ops、共用 gate）的文档与测试 | 已合并（#437，见 [generic-data-v8](generic-data-v8.md) §2.1） |
-| 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 已实现，待审；不部署、不翻「当前状态」 |
-| 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 未开始 |
-| 5 | Ops-B：生产同进程三 socket，隧道不动 | 未开始 |
+| 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 已合并（#438） |
+| 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 已完成（XDM-84，2026-10-28；报告在仓库外） |
+| 5 | Ops-B：生产同进程三 socket，隧道不动 | 已执行（2026-10-28，随 preview.38，见 §9.7） |
 | 6 | Ops-C：Devin 实测（§2.3） | 未开始 |
 | 7 | Ops-D：隧道改指 `research.sock`（另行批准） | 未开始 |
 | 8 | Ops-E：maint 启用（仅本机 operator） | 未开始 |
 
 PR-1 的旧单 socket 调用方式（`data_service <db> <socket> [--entry k]`）保持可用，回退只需用旧
 unit 与旧二进制；隧道的 runbook（§4）与生产 unit 仍按 §3 的「每条需 owner 批准」执行。
+
+### 9.7 Ops-B 实际执行记录（2026-10-28，preview.38）
+
+owner 2026-10-28 批准：发布 preview.38（main 已含 #434 单进程多 socket、#437 写边界、
+#438 部署/探针、#439 archive 索引复用、#435 acquire 流式），**schema 仍是 24**，用
+`scripts/switch_binary.sh` 只换二进制（不重建库），之后给 data 单元加 drop-in 改成三 socket，
+并加内存上限。**隧道不动**（仍指 `mcp.sock`）。
+
+实际步骤（每一步的证据写进切换记录）：
+
+1. `scripts/switch_binary.sh` 先 dry-run（确认目标 `ExecStart`、报告路径可写），再 `--execute`
+   切到 preview.38，data/acquire 重启。**先换二进制再改单元**：三 socket `ExecStart` 要让
+   preview.38 的 `data_service` 才认识（2026-10-28T10:04Z 的事故即由此而来，见下）。
+2. `systemctl daemon-reload` 后装两个 data 单元 drop-in：
+   - `exec-start.conf`：`ExecStart` 改为一个进程绑三个 socket（顺序 ops → research → maint），
+     尾部保留 `--poll-ms 1000`：
+     `data_service <db> run/mcp.sock --entry ops run/research.sock --entry research run/maint.sock --entry maint --poll-ms 1000`；
+   - `memory.conf`：`MemoryHigh=384M`、`MemoryMax=640M`、`MemorySwapMax=512M`（依据 XDM-84
+     的 w=1 独占测量；这组上限不覆盖 w=2）。
+   `poll-interval.conf`、`X_DATA_MCP_GENERATION_ROOT`、`X_DATA_MCP_RUN_PREPARE_WORKERS=1`、
+   `X_DATA_MCP_TEXT_MODE=full` 保持不动。
+3. 重启 `x-data-mcp-data`，逐 socket 就绪探针：
+   `scripts/wait_service_ready.py run/research.sock --entry research --expect-tool query_data`、
+   `run/mcp.sock --entry ops --expect-tool plan_market_update`、
+   `run/maint.sock --entry maint --expect-tool compute_metrics`。
+4. 工具面断言：`research` 5、`ops` 15、`maint` 9 个工具，三者 `capability_revision` 均为
+   `generic-data-v8`；`maint` 的 `run_worker_once` 在 ops worker 忙时返回 `worker_busy`
+   （同一进程内共用一个 gate）。
+5. x 契约断言（§9.5 四项，隧道仍连 `mcp.sock`）。
+6. 记录 `systemctl show -p MemoryHigh -p MemoryMax -p MemorySwapMax` 与 `MemoryCurrent` 观测值。
+
+回滚（按粒度，详见 §7）：
+
+- 单元形状：删 `exec-start.conf` 与 `memory.conf` → `daemon-reload` → 重启 data，恢复单
+  `mcp.sock`（`ops`，由 `poll-interval.conf` 提供 `--poll-ms 1000`）的旧 `ExecStart`；库不变。
+- 二进制：`switch_binary.sh` 切回 preview.37——同一个 schema 24 库，不需要换库。
+- 先退单元形状再退二进制：旧单 socket `ExecStart` 在 preview.38 上仍然有效，顺序不会把
+  服务卡在「新单元 + 旧二进制」的组合上。
+
+事故记录（2026-10-28T10:04–10:09Z）：在**已装三 socket drop-in、但二进制仍是 preview.37**
+的单元上重启，data 服务约 5 分钟反复启动失败（preview.37 的 `data_service` 只认
+`<db> <sock> [--entry k]` 的单 socket 形状，多 socket 参数被拒）；已删 drop-in 回滚到单 socket，
+服务恢复。**教训：改单元参数前先确认已部署的二进制支持它**——§9.7 把「换二进制」放在
+「改单元」之前的顺序，就是这条事故的直接结论。
