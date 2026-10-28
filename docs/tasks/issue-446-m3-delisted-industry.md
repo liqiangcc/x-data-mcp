@@ -762,7 +762,7 @@ v2 的文件集不变，新增：
 
 ## 15. 本机与 CI 验证方式
 
-- 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑文档检查与 `python3 scripts/prepush_check.py`。
+- 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
 - 本机能跑：`git diff --check`、`cargo fmt --check`、`python3 scripts/check_current_facts.py`、`python3 scripts/check_daily_sync_eval.py`、`python3 scripts/check_deploy_facts.py`、`python3 scripts/check_public_hygiene.py`，以及 CI 里对应的 `python3 -B -m unittest`（`test_runtime_peer.py` 需 sudo，跳过并注明）。
 - Rust 正确性只能由 PR 上的 GitHub Actions 证明；没有 CI 结果时一律写「未运行」。
 - 每个实现 PR 的 CI 验证方式（写进 PR 正文）：
