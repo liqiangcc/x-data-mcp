@@ -116,6 +116,8 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 
 访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
 
+运行面（2026-10-28 owner 批准）：data 单元新增 drop-in `poll-interval.conf`，`ExecStart` 追加 `--poll-ms 1000`——原默认 100 ms 的空闲轮询约占 8% CPU（2 vCPU），改后约 1.4%；新任务接手延迟 ≤1 s。删除该文件并 `daemon-reload` 后重启即回退默认值。
+
 工具数与能力版本的 live MCP 只读复核（preview.37 部署窗口，回填到部署记录）：`mcp.sock` 的
 `tools/list` 返回 15 个工具，`get_data_capabilities` 返回
 `capability_revision=generic-data-v8`；acquire socket 返回 10 个工具。

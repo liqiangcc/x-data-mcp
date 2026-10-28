@@ -34,6 +34,8 @@
    单元环境里有 `X_DATA_MCP_RUN_PREPARE_WORKERS=1`。
 6. 写部署报告到 `reports/preview37-phaseg-deployment.json`。
 
+运维事实（2026-10-28 owner 批准）：data 单元另加 drop-in `poll-interval.conf`，`ExecStart` 追加 `--poll-ms 1000`——原默认 100 ms 的空闲轮询约占 8% CPU，改后约 1.4%；新任务接手延迟 ≤1 s。删除该文件并 `daemon-reload` 后重启即回退默认值。
+
 ## 2. 重建步骤与预计耗时
 
 预计值与 preview.36 同量级（采集 11–16 min、plan/run 约 10 min、年线约 8 min，不可读窗口约
