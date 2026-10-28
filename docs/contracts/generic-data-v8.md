@@ -381,6 +381,11 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 `X_DATA_MCP_TEXT_MODE=full|summary|off` 覆盖入口缺省；未知值让 `data_service` 拒绝启动
 （`src/bin/data_service.rs:83-86`）。`structuredContent` 始终是完整载荷，不受分级影响。
 
+**当前生产的事实**：上表的代码缺省未改，`ops`/`maint` 仍是 `summary`；生产单元通过
+`X_DATA_MCP_TEXT_MODE=full` 覆盖（[STATUS](../STATUS.md) 的「服务」表与部署记录）。
+2026-10-28 AI 客户端（pi）实测否决 `summary` 缺省（[v8 切换清单](v8-switch-checklist.md) §2.3）；
+按 D-36 的「实测不通过就退回」，把 `ops`/`maint` 的代码缺省改为 `full` 是待做的后续代码改动。
+
 ## 8. 错误码
 
 沿用 v7 的错误码，新增/明确：
@@ -466,7 +471,7 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 | # | 项 | 为什么未验证 | 取证方法 |
 |---|---|---|---|
 | U-1 | 各客户端是否把 `structuredContent` 注入模型上下文 | 需要真实客户端会话 | 隧道 + ChatGPT/Claude/Devin 各跑一次同一 `query_data` |
-| U-2 | Devin 在 `text=summary` 下是否被截断、摘要字段是否够用 | 官方未规定；只有 Skill 的经验 | 已用 pi 1.3.0 实测（2026-10-28）：摘要字段不够、截断不静默；`ops` 保持 `full`（[v8 切换清单](v8-switch-checklist.md) §2.3） |
+| U-2 | Devin 在 `text=summary` 下是否被截断、摘要字段是否够用 | 官方未规定；只有 Skill 的经验 | 已用 pi 1.3.0 实测（2026-10-28）：摘要字段不够、截断不静默；生产保持 `full` 覆盖，代码缺省改动待跟踪（[v8 切换清单](v8-switch-checklist.md) §2.3） |
 | U-3 | 全市场截面（T2）的真实字节 | CI 只有夹具 | 私有栈实测一次并贴 Issue |
 | U-4 | 单进程三 socket 的内存与冷启动影响 | 需要编译产物 | 私有栈实测（§2.6；D-56 已定「先测量再设 `MemoryMax`」） |
 | U-5 | 隧道侧实际看到的研究入口工具数 | 隧道配置不在仓库 | 改指 `research.sock` 后 `tools/list` 复核 |

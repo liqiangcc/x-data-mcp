@@ -141,7 +141,9 @@ preview.37 部署窗口一致。
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
 `outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
 隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），
-结论是 `ops` 入口保持 `full`、`summary` 不作缺省，见
+结论是 `summary` 不能作为 `ops`/`maint` 缺省。当前生产靠上表的
+`X_DATA_MCP_TEXT_MODE=full` 覆盖入口缺省（代码缺省仍是 `summary`）；按 D-36 的
+「实测不通过就退回」，把代码缺省改为 `full` 列为后续跟踪，见
 [v8 切换清单](contracts/v8-switch-checklist.md) §2.3 与 §9.6。
 
 ## 数据
