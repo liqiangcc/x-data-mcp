@@ -6,14 +6,14 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-10-27（preview.37 部署日提交）。部署段按部署窗口的动作填写；**重建后的
-数据量与实测耗时由部署后的小 PR 回填**（preview.36 的实测值保留为「历史」）。preview.37 之前的
-最近一次实测来源：
-`/opt/x-data-mcp-preview/reports/preview36-phaseg-deployment.json`（`deploy_phase_g.sh
---force-git-transport`）、`python3` + `sqlite3`（`file:…?mode=ro`）读 `state/preview.sqlite`
-与 `generations/acquire.sqlite`、`readlink`/`stat`/`du`、live MCP 只读工具、x 消费侧契约断言
-与全量 daily 导出统计。部署前（2026-10-24T17:19Z O2 补采终态）的数值保留为「历史」对照；
-本轮未重新测量的行（主机、系统、资源、足迹总量、systemd 单元细节）标注为「历史」。
+最后核实：2026-10-28（preview.37 部署后回填）。本轮实测来源：
+`/opt/x-data-mcp-preview/reports/preview37-phaseg-deployment.json`（`deploy_phase_g.sh
+--force-git-transport`）、`python3` + `sqlite3`（`file:…?mode=ro`，**含 WAL**：未 checkpoint 的
+提交只在 `-wal` 里，读 `immutable=1` 会看到 checkpoint 前的旧计数）读 `state/preview.sqlite`、
+`readlink`/`stat`/`ls -l`、部署窗口内的 MCP/x 消费侧验证（[M2 部署清单](tasks/m2-deploy-checklist.md) §3）。
+preview.36 及更早的实测值保留为「历史」对照；本轮未重新测量的行（主机、系统、资源、足迹总量、
+systemd 单元细节、热 generation 计数）标注为「历史」。部署后重建在生产机上执行但**非独占**，
+下述耗时不作门禁证据。
 「推断」标记表示由实测数据推出、但没有独立测量的结论。
 
 ## 部署
@@ -24,13 +24,13 @@
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | 2 vCPU（1 个物理核 × 2 超线程，Xeon Platinum 8259CL；`/proc/cpuinfo` 无 `sha_ni`），MemTotal 1,905,872 kB（约 1.82GiB）+ 8GiB swap（2×4GiB，实测已用 2.5GiB），根盘 77G（已用 50G、余 27G）；`/tmp` 是 953MB 的 tmpfs（占内存，实测已用 625MB） | `lscpu`、`grep -c processor /proc/cpuinfo`、`grep sha_ni /proc/cpuinfo`（无匹配）、`free -m`、`swapon --show`、`df -h / /tmp` |
 | 本机工具链 | 本机禁止本地 Rust 编译：执行 `rustc --version` 被主机策略拦截并返回「Local Rust compilation is forbidden on this host (1.9 GB RAM)」，仅允许 `cargo fmt`。因此本机工具链版本未复核；部署二进制的构建版本见「构建」行 | 实测拦截提示 |
-| 部署版本 | `v0.2.0-preview.37` | 部署窗口的合并提交；完整 SHA 与 `current/manifest.json` 由回填 PR 填入（回填 PR 读 `current/manifest.json`、`readlink current`） |
+| 部署版本 | `v0.2.0-preview.37`，commit `49422db26be2da79ff39c7522897d25fcb6055bb` | `current/manifest.json` 的 `version`/`git_sha`（与部署报告 `code_sha` 一致）、`readlink current` |
 | preview.37 之前 | v0.2.0-preview.36 @ `fcb86ab065e87f9ef7655fd87b8e224517bd8f1b`（历史；被 preview.37 取代） | `reports/preview36-phaseg-deployment.json`、历史 `readlink` |
-| 部署时间 | 2026-10-27 收盘后的部署窗口，`scripts/deploy_phase_g.sh --force-git-transport`：停 data/acquire → 归档旧 schema 24 库 → 从 release 提交读取期望 schema 后 `task_sqlite init` 全新库 → 起两个单元 → socket/工具数/schema 检查 → 写部署报告。**fresh init，不做原地升级**；具体时刻、报告路径与耗时由部署后回填 PR 填入 | 部署日提交的 [M2 部署清单](tasks/m2-deploy-checklist.md)；回填 PR 读部署报告 JSON、`readlink`/`stat`、`journalctl` |
+| 部署时间 | **2026-10-28T00:21:26Z**（UTC），`scripts/deploy_phase_g.sh --force-git-transport`：停 data/acquire → 归档旧 schema 24 库 → 从 release 提交读取期望 schema 后 `task_sqlite init` 全新库 → 起两个单元 → socket/工具数/schema 检查 → 写部署报告 `/opt/x-data-mcp-preview/reports/preview37-phaseg-deployment.json`（`status: DEPLOYED`，`before.schema=24`，`production: NOT_PRODUCTION_READY`）。**fresh init，不做原地升级**；部署窗口的设置：`X_DATA_MCP_TEXT_MODE=full`、`X_DATA_MCP_RUN_PREPARE_WORKERS=1`（v2 日更的准备线程串行，放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1，待独占实测） | 部署报告 JSON、`journalctl -u x-data-mcp-data/-acquire`、`readlink`/`stat` |
 | 部署时间（历史） | 2026-10-27T12:15:43Z，`scripts/deploy_phase_g.sh --force-git-transport`（本机 gh 2.62 读不到 release asset digest，改走 `refs/dist` 的 git transport，与历次一致）：停 data/acquire → 归档 schema 21 库 → `task_sqlite init21` 全新 init 到 schema 24 → 起两个单元 → socket/工具数/schema 检查 → 写报告 `reports/preview36-phaseg-deployment.json`。每个已部署的发布目录按完整 SHA 命名，旧目录保留作回滚点。本次是全新库部署，不是热切换 | 部署报告 JSON、`readlink`/`stat`、`journalctl` |
-| 数据库 schema | 已部署：schema 24（preview.37 从 release 提交读期望 schema 后全新 init，`pragma user_version` 读回 24；preview.36 时同为 schema 24，库 1,732,116,480 B）；代码：schema 24（M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`（当时只建表；写入路径由 M2 PR-3…PR-8 接线，preview.37 起部署）；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
+| 数据库 schema | 已部署：schema 24（preview.37 从 release 提交读期望 schema 后全新 init，`pragma user_version` 读回 24，库 **1,790,316,544 B**；preview.36 时同为 schema 24、库 1,732,116,480 B）；代码：schema 24（M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`（当时只建表；写入路径由 M2 PR-3…PR-8 接线，preview.37 起部署）；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
 | 构建 | rustc 1.99.1 (58cf8f9c3 2026-10-13)，ubuntu-24.04，最低 glibc 2.39 | `current/manifest.json` |
-| 部署目录 | `/opt/x-data-mcp-preview/current` → preview.37 的发布目录（按完整 SHA 命名，SHA 由回填 PR 填入）；上一个目录是 `releases/fcb86ab…`（preview.36，保留作回滚点）。目录数量与总字节本轮未复核（历史 2026-10-24：6 个目录共 348MiB） | `readlink`（回填 PR）、历史 `du -sh releases/*` |
+| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/49422db26be2da79ff39c7522897d25fcb6055bb`（preview.37，按完整 SHA 命名）；上一个目录是 `releases/fcb86ab065e87f9ef7655fd87b8e224517bd8f1b`（preview.36，保留作回滚点）。目录数量与总字节本轮未复核（历史 2026-10-24：6 个目录共 348MiB） | `readlink current`（实测）、`ls -l`、历史 `du -sh releases/*` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
 | ecs-node | 服务已 stop 并 disable，数据保留为冷备（含 generation `a49c314b…` 的字节） | 同上 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `get_data_capabilities` |
@@ -116,8 +116,8 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 
 访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
 
-工具数与能力版本的 live MCP 只读复核在部署完成后回填到部署记录：`mcp.sock` 的
-`tools/list` 应返回 15 个工具，`get_data_capabilities` 应返回
+工具数与能力版本的 live MCP 只读复核（preview.37 部署窗口，回填到部署记录）：`mcp.sock` 的
+`tools/list` 返回 15 个工具，`get_data_capabilities` 返回
 `capability_revision=generic-data-v8`；acquire socket 返回 10 个工具。
 
 代码（main）注册 24 data tools：三个入口 `research`/`ops`/`maint` 由
@@ -128,37 +128,43 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 
 ## 数据
 
-**preview.37 部署窗口**：全新 schema 24 库，按 [M2 部署清单](tasks/m2-deploy-checklist.md)
-从 active generation 重建（目录 + 日线 + 年线 + v2 plan/run 派生 + 年线重聚合）。**重建后的
-数据量、耗时与 M2 数据集行数由部署后的小 PR 回填**；在那之前不写未测量的数字。
-
-下表是 **preview.36 重建后的实测**（2026-10-27，历史；preview.37 重建后由回填 PR 更新）。
-重建在生产机上执行但**非独占**（3 个开发 agent 同时在跑），下述耗时不作门禁证据。标注
-「历史」的行是部署前（2026-10-24T17:19Z）对照值。
+**preview.37 部署后的重建已执行完成**（2026-10-28T00:22–00:40Z）：全新 schema 24 库，按
+[M2 部署清单](tasks/m2-deploy-checklist.md) 从 active generation 重建（目录 + 日线 + 年线 +
+v2 plan/run 派生 + 年线重聚合）。下表是本轮实测。重建在生产机上执行但**非独占**（多个开发
+agent 同时在跑），下述耗时不作门禁证据。标注「历史」的行是更早的对照值（2026-10-24 补采或
+preview.36 重建）。
 
 | 项 | 事实 | 来源 |
 |---|---|---|
 | active generation | `c184e9c4b816dfc068d4d6e2eaedcf5e1742ad2979b0e54be2af798b54995d91`（2026-10-24T17:01:34Z 激活，重建后仍为 active）；最新集中行情日 **2026-10-23** | `generations/active-generation.json`、live `sync_status`、重建读回 |
 | 热 generation | **5/6**：1 active + 4 superseded（`9d9e38d7`、`f289c612`、`8b8614c3`、`54553656`）；另有 10 个 evidence_only。本次部署只读该代做重建、未做 acquire，热计数沿用最近一次只读实测（2026-10-26），部署后未重测 | `generations/acquire.sqlite`（按 `state` 计数）、`src/acquire/service.rs:39,456,1058-1084` |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 24（`pragma user_version=24`），**1,732,116,480 B**；旧 schema 21 库改名归档为 `state/preview.sqlite.v21-archived-20261027T121543Z`（保留，不迁移） | `ls -l`、`pragma user_version`、部署报告 |
-| catalog | `catalog-1793103386695615549`，**5,226** 条 | `catalog_head`/`catalog_members` 只读查询、live `get_data_availability` |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 24（`pragma user_version=24`），**1,790,316,544 B**；preview.36 的 schema 24 库改名归档为 `state/preview.sqlite.v24-archived-20261028T002126Z`（1,732,116,480 B，保留，不迁移），更早的 schema 21 归档 `state/preview.sqlite.v21-archived-20261027T121543Z`（1,185,640,448 B）也在 | `stat`、`pragma user_version`、部署报告 `archived_db` |
+| catalog | `catalog-1793146923967808901`，**5,226** 条 | `catalog_head`/`catalog_members` 只读查询 |
 | 日线 | 不复权 **5,224** 条序列 + 前复权 **5,224** 条序列（`qfq-exact-v1`，6dp）；最新集中行情日 2026-10-23 | `market_series`（`period=1`）只读查询、重建读回 |
-| 年线 | **5,224** 个 published | `market_series`（`period=2`）只读查询 |
+| 年线 | **5,224** 个 published（每实体一条 yearly 序列，`yearly_series_lineage` 同数） | `market_series`（`period=2`）只读查询 |
 | 基准指数 | **9** 条；`sh.000001` 剔除 16 根、`sz.399001` 剔除 9 根 OHLC 矛盾的 bar（D-51） | 指数序列只读查询、live `market.index` universe、D-51 |
 | 交易日历 | **8,793** 天（1990-12-19 … 2026-10-23） | 日历表只读查询 |
 | 复权事件 | **56,514** 行，**5,126** 个因子集 | 因子事件表只读查询 |
 | 缺失 | `sh.688827`、`sz.001381`（官方 hsjday `.day` 缺成员，预期）保持 absent：catalog 中存在，日线/年线均无 series | `catalog_members` 反连接 `market_series` 只读查询 |
-| M2 数据集 | preview.37 起由日更 run 维护（上表「M2 随 preview.37 部署」）：`market.security_master`、`market.capital_events` 重建后有版本，`market.suspensions` 断言出 `unresolved_gap` 行就登记版本；`market.risk_warnings`、`market.price_limit_rules`、`market.security_names` 在来源未准入时 0 行/`absent`。**行数部署后回填** | 只读查询 `derived_dataset_versions` 与各表计数（回填 PR） |
-| 重建耗时（生产，非独占） | 历史（preview.36）：全量采集 write-loop **844s**；v2 `plan_market_update`/`run_market_update` **41s**（5 个 eligible 实体 + 10 个派生 item 全部成功）；年线 **302s**。preview.37 的内部 item 是 **14** 个（9 指数 + 日历 + 4 个 M2），耗时**部署后回填** | 重建驱动记录（回填 PR） |
-| 任务与事件 | 历史（preview.35 时点）：579 个任务：529 succeeded、49 partially_failed、1 failed；`market_events` 83,545 行。重建后的任务/事件计数本轮未复核 | `tasks`、`market_events` 只读查询（历史） |
+| M2 数据集 | preview.37 起由日更 run 维护：`security_master` **5,503** 行 / 5,503 实体（`security-master-assembly-v1`）、`capital_events` **122,370** 行 / 5,224 实体（category 2: 3,816、3: 3,268、5: 107,703、7: 17、8: 126、9: 7,166、10: 274）、`suspension_intervals` **65,516** 段（全部 `unresolved_gap`，`confirmed` 0，`suspension-gap-v1`）、`code_migrations` **1**（`candidate`）；`risk_warning_intervals`、`price_limit_rules`、`min_tick_rules`、`security_name_history` 均 **0** 行（来源未准入/未接入，只记 `pending_source`）。`security_master`/`suspensions` 在 `derived_dataset_versions` 里各登记 1 个版本；`base.dbf` 字节相同的重复行已按 D-55 合并（`000020`、`200020`），合并数记在 item evidence 的 `duplicates_collapsed` | 只读查询 `derived_dataset_versions`、各表计数 |
+| 重建耗时（生产，非独占） | 本轮（preview.37）：全量采集 write-loop **667s**（53 个 `start_collection` 块任务，00:22:05→00:32:54Z；其中 2 个 `partially_failed`——5,226 considered / 5,224 succeeded / 2 absent）；v2 `plan_market_update`/`run_market_update` **84s**（00:33:01→00:34:18Z，5 个 eligible 实体 + 14 个派生 item——9 指数 + 日历 + 4 个 M2——全部成功）；年线重聚合 **320s**（53 个任务，00:34:22→00:39:38Z）。历史（preview.36）：全量采集 write-loop 844s；v2 plan/run 41s（5 eligible + 10 派生）；年线 302s | 重建驱动记录、`tasks`（`created_at`/`last_progress_at`）、回填 PR |
+| 任务与事件 | 本轮：**108** 个任务——1 个 catalog 采集 + 53 个日线 collect（51 succeeded、2 `partially_failed`）+ 1 个 v2 日更 run + 53 个年线任务，全部结束，无 `running`；`market_events` **15,691** 行。历史（preview.35 时点）：579 个任务（529 succeeded、49 partially_failed、1 failed）、`market_events` 83,545 行 | `tasks`、`market_events` 只读查询 |
 | 退役记录 | 历史：`87322997…` 2026-10-19 退役；`2d5851a4…` 2026-10-24T16:57:16Z 退役（548M→16K）；`a119629b…` 2026-10-24T17:52Z 退役（574M→16K）；更早 4 个 2026-10-13 退役为 evidence_only | `generations/acquire.sqlite`、历史 `du -sb` |
 
-验证（preview.36，2026-10-27 实测；preview.37 的同类验证见部署清单 §3）：
+验证（preview.37 部署窗口实测）：
 
 - x 消费侧契约断言通过：`sh.600006` 的 2025 年数据——manifest 1 条、status `present`、
   `metadata.adjustment = {confirmed, qfq}`、close 为十进制字符串（按 6dp 精度去尾零）。
 - `market.index` universe 返回 9 个实体。
-- 全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行）。
+- 6 个 M2 数据集在 ops 入口可读回（`contract_version:"v2"` + `filter.kind:"daily"`）：
+  `market.security_master 5,503` 行、`market.capital_events 122,370` 行、
+  `market.suspensions 65,516` 段、`market.security_names 0`；
+  `market.risk_warnings` / `market.price_limit_rules` 返回 `manifest.status=absent` + 0 行，
+  并带各自的 `limitations`（来源未准入）。
+- 库内读回（只读 SQL，含 WAL）与导出/缓存无关的计数：catalog 5,226、日线前复权 5,224、
+  年线 5,224、日历 8,793、复权事件 56,514、指数 9、主表 5,503、停牌 65,516。
+- 历史（preview.36）：全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行）；preview.37
+  重建后未重跑导出。
 
 
 部署后首次增量更新（2026-10-12 收盘后，跨代 Append，验证 GOAL-008 关闭条件）：2026-10-13 执行——Skill 会话先完成新 generation `2d5851a4…` 的 acquire→verify→activate（06:52Z），随后用 Skill 逐页枚举 5,228 个目录成员做增量，27 分钟内未提交任何 `update_data`，速度不足被叫停；10-09 与 10-12 的追加改由程序化驱动 `prod_append_v6.py`（PR #347，2026-10-13 合并，脚本在 `evidence/perf-g8/s5/prod_append_v6.py`）完成：daily write-loop 311.4s（53 块、5,224 项）+ 年线重聚合 239.9s（53 任务），读回零差异（published 5,224、落后恰 12 家 fail-closed、staged_records=0）。同日第二次同步（10-13 收盘后）：Skill 会话完成新 generation `a119629b…` 的 acquire→verify→activate（10:35Z）后，对 27 个实体自行提交了 10-13 的 `update_data`（成功），随后被操作员叫停；其余实体的追加仍由程序化驱动完成（幂等跳过已更新的 27 家）：daily write-loop 173.1s（52 块、5,197 项，published 5,184 + 13 fail-closed）+ 年线重聚合 259.1s（53 任务，含 Skill 已更新实体的年线补齐），读回 staged_records=0。事件计数：first_publish 10,448；append 10,331；replace 92；no_change 25；yearly_rederive 10,423。
@@ -183,9 +189,9 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 
 ## 新鲜度
 
-| 项 | 事实（2026-10-27 部署后回填） | 来源 |
+| 项 | 事实（2026-10-28 preview.37 部署后回填） | 来源 |
 |---|---|---|
-| 最后任务 | 历史（preview.35 时点）：2026-10-24T17:18:42Z 受理、17:18:43.9Z 完成 `market.yearly` 的 `update_data`（`explicit-yearly-task-v1`），41/41 succeeded；库内共 579 个任务。重建后的任务计数本轮未复核 | `tasks`、`market_series`（历史） |
+| 最后任务 | 本轮：53 个年线任务中最后一个于 2026-10-28T00:39:38Z 完成（`explicit-yearly-task-v1`），之后无新任务；库内共 108 个任务（见「数据」表） | `tasks` 只读查询 |
 | 落后交易日 | **无**：日线/年线 head 均为 2026-10-23（`last_day=20749`），即最近一个已收盘交易日。历史：补采前 head 为 2026-10-19，10-20..10-23 四个交易日的缺口已由 2026-10-24 补采补齐（补采时间线见下） | `market_series`、重建读回 |
 | 官方输入 | 历史（2026-10-24T17:26Z 实测，该代仍为 active）：`curl -sI` 与 active generation `c184e9c4` 的 `snapshot-manifest.json` 逐项相同：base 16,245,958 B / `"6adc3a88-f7e4c6"` / `Sat, 24 Oct 2026 04:56:40 GMT`；gbbq 6,288,317 B / `"6adc3a88-5ff3bd"` / 同上；hsjday 550,096,488 B / `"6adb13be-20c9ce68"` / `Fri, 23 Oct 2026 07:58:54 GMT`。重建未重新 acquire，本轮未再 `curl -sI` 比对 | `curl -sI <三个官方 URL>`（历史）、`generations/generations/c184e9c4…/snapshot-manifest.json` |
 | 容量 | hot **5/6**（1 active + 4 superseded；权威值见「数据」表的「热 generation」行）：下一次 acquire 可直接受理（5 < 6）。本次部署未做 acquire，计数未在部署后重测 | `generations/acquire.sqlite`、`src/acquire/service.rs:39,456` |
@@ -205,9 +211,9 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 |---|---|---|
 | `/opt/x-data-mcp-preview` 全树 | 历史 4.2GiB（2026-10-24T17:55Z 清理后）；preview.36 部署后已变化：新库 1,732,116,480 B + 旧 schema 21 归档库，本轮未重测全树 | 历史 `du -sh .`、`du -sb .` |
 | generations | 历史 2.7GiB：5 个带字节代（active `c184e9c4` 572,634,818；superseded `9d9e38d7` 571,591,556、`f289c612` 571,549,313、`8b8614c3` 574,645,314、`54553656` 574,839,345）；另 10 个代目录各约 4KB（只有清单/决策/证据，无代字节） | 历史 `du -sb generations/generations/*` |
-| state | 本轮实测：`preview.sqlite` **1,732,116,480 B**（fresh schema 24）+ 旧库归档 `preview.sqlite.v21-archived-20261027T121543Z`（约 1,185,640,448 B，保留）。历史：两份 v20 归档库已移出 `/opt` 到 `/root/x-data-archive/` 并 gzip | `ls -l state/`、部署报告 |
-| releases | 历史 348MiB，6 个发布目录（2026-10-24）；本次新增 `releases/fcb86ab…`，数量与总量本轮未复核 | 历史 `du -sh releases/*` |
-| reports | 历史 2.8MiB；新增 `preview36-phaseg-deployment.json`，总量未复核 | 历史 `du -sh reports`、`ls -l reports/` |
+| state | 本轮实测：`preview.sqlite` **1,790,316,544 B**（fresh schema 24）+ preview.36 的库归档 `preview.sqlite.v24-archived-20261028T002126Z`（1,732,116,480 B）+ 更早的 `preview.sqlite.v21-archived-20261027T121543Z`（1,185,640,448 B）（均保留）。历史：两份 v20 归档库已移出 `/opt` 到 `/root/x-data-archive/` 并 gzip | `ls -l state/`、`stat`、部署报告 |
+| releases | 历史 348MiB，6 个发布目录（2026-10-24）；本轮新增 `releases/49422db…`（preview.37），`releases/fcb86ab…`（preview.36）保留作回滚点；数量与总量本轮未复核 | 历史 `du -sh releases/*`、`readlink current` |
+| reports | 历史 2.8MiB；本轮新增 `preview37-phaseg-deployment.json`（550 B，与 preview.36 同尺寸），总量未复核 | 历史 `du -sh reports`、`ls -l reports/` |
 | `/tmp` | 历史：tmpfs 953MB，已用 19MB（2%）；2026-10-24T17:49Z 清理了 10-23 的调试残留（约 606MB） | 历史 `df -h /tmp`、`du -sh /tmp/*` |
 | 根盘 | 历史：77G，已用 49G，余 28G（`/tmp` 是内存盘，不计入） | 历史 `df -h /` |
 
