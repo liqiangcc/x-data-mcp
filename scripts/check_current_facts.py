@@ -22,6 +22,19 @@ EXPECTED_DATA_TOOLS = 24
 # checked against the registry instead.
 EXPECTED_DEPLOYED_DATA_TOOLS = 15
 EXPECTED_ACQUIRE_TOOLS = 10
+
+# --- deployed data entries (v8 phase 2, D-56) ------------------------------
+# The production data unit serves one entry per socket. The deployed entry set
+# is a deployment fact: today it is only `ops` on run/mcp.sock; the Ops-B
+# deploy-day commit flips it to all three entries together with STATUS's 服务
+# table and the unit ExecStart (v8-switch-checklist §9.6). Per-entry tool counts
+# come from the source allowlists, not from this list.
+DEPLOYED_DATA_ENTRIES = ("ops",)
+ENTRY_ALLOWLIST_CONST = {
+    "research": "RESEARCH_TOOLS",
+    "ops": "OPS_TOOLS",
+    "maint": "MAINT_TOOLS",
+}
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v8"
 # The strict Skills describe the DEPLOYED contract (v8 after the minimal switch).
 # The same deployed revision keys the strict-Skill checks and the
@@ -210,6 +223,9 @@ HOT_SUPERSEDED = re.compile(r"(\d+)\s*superseded\b", re.IGNORECASE)
 STATUS_CURRENT_MARKER = re.compile(
     r"当前|现为|目前|下一次|\bnow\b|热\s*generation|\bhot\b", re.IGNORECASE
 )
+# A 服务 table row may put several sockets/entries in the 入口 cell
+# (`run/mcp.sock`（`--entry ops`）...); each entry owns its own tool count.
+SERVICE_ENTRY_SPEC = re.compile(r"--entry\s+([a-z]+)")
 DEPLOYED_VERSION_MARKER = re.compile(
     r"部署版本|当前部署|已部署|serverInfo\.version|server_version"
 )
@@ -502,13 +518,20 @@ def status_consistency_errors(
     data_tools: int,
     acquire_tools: int,
     code_data_tools: int | None = None,
+    entry_counts: dict[str, int] | None = None,
 ) -> list[tuple[int, str, str]]:
     """docs/STATUS.md must not contradict itself (P1-1, item 7c).
 
     One authoritative row per fact: "| 热 generation | N/M", "| 部署版本 |", and
     the 服务 table's 工具数 column. Current-state restatements elsewhere must
     agree; historical segments (历史 / 当时 / timeline arrows) are exempt.
+
+    A 服务 table row may list several sockets/entries (v8 phase 2): each
+    `--entry k` in the 入口 cell is checked against entry k's allowlist size,
+    and a row without `--entry` keeps the old aggregate check against
+    `data_tools` (the deployed surface).
     """
+    counts = entry_counts if entry_counts is not None else entry_tool_counts()
     found: list[tuple[int, str, str]] = []
     hot = cap = None
     hot_line = 0
@@ -655,6 +678,35 @@ def status_consistency_errors(
         if expected is None:
             continue
         numbers = [cell for cell in cells[1:] if re.fullmatch(r"\d+", cell)]
+        if unit == "x-data-mcp-data" and len(cells) >= 4:
+            entries = SERVICE_ENTRY_SPEC.findall(cells[2])
+            if entries:
+                declared = [int(n) for n in re.findall(r"\d+", cells[3])]
+                if not declared:
+                    found.append(
+                        (lineno, "status-service-tool-count",
+                         f"no numeric 工具数 cell for {unit}")
+                    )
+                    continue
+                for entry, count in zip(entries, declared):
+                    if entry not in counts:
+                        found.append(
+                            (lineno, "status-service-entry",
+                             f"{unit} declares unknown --entry {entry}")
+                        )
+                    elif count != counts[entry]:
+                        found.append(
+                            (lineno, "status-service-tool-count",
+                             f"{unit} --entry {entry} 工具数 {count} "
+                             f"(registry: {counts[entry]})")
+                        )
+                if len(declared) != len(entries):
+                    found.append(
+                        (lineno, "status-service-tool-count",
+                         f"{unit} declares {len(entries)} entries but {len(declared)} "
+                         f"工具数 values ({cells[3]!r})")
+                    )
+                continue
         if not numbers:
             found.append(
                 (lineno, "status-service-tool-count", f"no numeric 工具数 cell for {unit}")
@@ -696,6 +748,34 @@ def top_current_region(text: str, start_heading: str | None) -> str:
 def rust_u32_const(text: str, name: str) -> int | None:
     m = re.search(rf"pub\s+const\s+{name}\s*:\s*\w+\s*=\s*(\d+)\s*;", text)
     return int(m.group(1)) if m else None
+
+
+def rust_entry_allowlists(text: str) -> dict[str, list[str]]:
+    """The per-entry tool allowlists declared in `src/data_supply/registry.rs`.
+
+    These are the source of truth for "how many tools does entry X serve":
+    the deployed entry set is a deployment fact, the allowlist sizes are code.
+    """
+    allowlists: dict[str, list[str]] = {}
+    for entry, const in ENTRY_ALLOWLIST_CONST.items():
+        m = re.search(
+            rf"pub\s+const\s+{const}\s*:\s*&\[&str\]\s*=\s*&\[(.*?)\n\];",
+            text,
+            re.DOTALL,
+        )
+        if m:
+            allowlists[entry] = re.findall(r'"([^"]+)"', m.group(1))
+    return allowlists
+
+
+def entry_tool_counts() -> dict[str, int]:
+    """Allowlist sizes from the repository's registry.rs (cached per process)."""
+    if not hasattr(entry_tool_counts, "_cache"):
+        registry = (ROOT / "src/data_supply/registry.rs").read_text(encoding="utf-8")
+        entry_tool_counts._cache = {
+            entry: len(names) for entry, names in rust_entry_allowlists(registry).items()
+        }
+    return entry_tool_counts._cache
 
 
 def data_tool_names(text: str) -> list[str]:
@@ -759,6 +839,29 @@ def main() -> int:
         len(set(data_names)) == len(data_names),
         f"duplicates: {sorted({n for n in data_names if data_names.count(n) > 1})}",
     )
+
+    # Per-entry allowlists (v8 phase 2): the deployed entry set is a deployment
+    # fact, each entry's tool count is a code fact read from the registry.
+    allowlists = rust_entry_allowlists(registry)
+    entry_counts = {entry: len(names) for entry, names in allowlists.items()}
+    check(
+        "registry declares every entry allowlist",
+        set(allowlists) == set(ENTRY_ALLOWLIST_CONST),
+        f"parsed {sorted(allowlists)}",
+    )
+    check(
+        "deployed data entries are known registry entries",
+        set(DEPLOYED_DATA_ENTRIES) <= set(allowlists),
+        f"deployed {DEPLOYED_DATA_ENTRIES}, registry {sorted(allowlists)}",
+    )
+    if len(DEPLOYED_DATA_ENTRIES) == 1:
+        only = DEPLOYED_DATA_ENTRIES[0]
+        check(
+            "EXPECTED_DEPLOYED_DATA_TOOLS matches the deployed entry allowlist",
+            EXPECTED_DEPLOYED_DATA_TOOLS == entry_counts.get(only),
+            f"constant {EXPECTED_DEPLOYED_DATA_TOOLS}, {only} allowlist "
+            f"{entry_counts.get(only)}",
+        )
 
     acquire = (ROOT / "src/acquire/mcp.rs").read_text(encoding="utf-8")
     acquire_names = acquire_tool_names(acquire)
@@ -953,6 +1056,7 @@ def main() -> int:
                 EXPECTED_DEPLOYED_DATA_TOOLS,
                 registry_acquire_tools,
                 code_data_tools=registry_data_tools,
+                entry_counts=entry_counts,
             ),
         )
 
@@ -963,7 +1067,8 @@ def main() -> int:
     print(
         f"current-facts OK: {EXPECTED_PACKAGE_VERSION}, fresh compact schema "
         f"{EXPECTED_COMPACT_SCHEMA} (deployed {deployed_schema}; legacy upgrade "
-        f"source schema {EXPECTED_LEGACY_SCHEMA}), {EXPECTED_DATA_TOOLS} data tools, "
+        f"source schema {EXPECTED_LEGACY_SCHEMA}), {EXPECTED_DATA_TOOLS} data tools "
+        f"(deployed entries {', '.join(f'{e}={entry_counts[e]}' for e in DEPLOYED_DATA_ENTRIES)}), "
         f"{EXPECTED_ACQUIRE_TOOLS} acquisition tools, "
         f"{len(CURRENT_DOCS)} current docs + {len(CURRENT_REGIONS)} current "
         f"regions + "

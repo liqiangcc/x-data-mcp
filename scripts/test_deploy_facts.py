@@ -3,11 +3,13 @@ import datetime
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from check_current_facts import CURRENT_DOCS as FACTS_CURRENT_DOCS
 from check_deploy_facts import (
     CURRENT_DOCS,
     check_current_host,
+    check_deployed_entries,
     check_status_md,
     top_current_region,
 )
@@ -178,6 +180,77 @@ class StatusMd(unittest.TestCase):
             )
             errors, _ = check_status_md(path, datetime.date(2026, 10, 10))
             self.assertEqual(errors, [])
+
+
+SERVICE_TABLE = """## 服务
+
+| systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
+|---|---|---|---|---|
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`） | 15 | capability `generic-data-v8` |
+| `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | — |
+"""
+
+COUNTS = {"research": 5, "ops": 15, "maint": 9}
+
+
+class DeployedEntries(unittest.TestCase):
+    """v8 phase 2: the 服务 table states the deployed entries and their counts."""
+
+    def test_single_ops_row_passes(self):
+        self.assertEqual(check_deployed_entries(SERVICE_TABLE, COUNTS), [])
+
+    def test_row_without_entry_means_the_implicit_ops_socket(self):
+        text = SERVICE_TABLE.replace("`run/mcp.sock`（`--entry ops`）", "`run/mcp.sock`")
+        self.assertEqual(check_deployed_entries(text, COUNTS), [])
+
+    def test_count_must_match_that_entrys_allowlist(self):
+        text = SERVICE_TABLE.replace("| 15 |", "| 21 |")
+        errors = check_deployed_entries(text, COUNTS)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("allowlist: 15", errors[0])
+
+    def test_entry_outside_the_deployed_set_is_flagged(self):
+        text = SERVICE_TABLE.replace(
+            "`run/mcp.sock`（`--entry ops`）",
+            "`run/mcp.sock`（`--entry ops`）、`run/research.sock`"
+            "（`--entry research`）",
+        ).replace("| 15 |", "| 15 / 5 |")
+        errors = check_deployed_entries(text, COUNTS)
+        self.assertTrue(any("not deployed" in e and "research" in e for e in errors), errors)
+
+    def test_deployed_entry_missing_from_the_table_is_flagged(self):
+        # The only data row declares research: the deployed ops entry is gone.
+        text = SERVICE_TABLE.replace(
+            "`run/mcp.sock`（`--entry ops`）", "`run/research.sock`（`--entry research`）"
+        )
+        errors = check_deployed_entries(text, COUNTS)
+        self.assertTrue(any("omits deployed data entry ops" in e for e in errors), errors)
+        self.assertTrue(any("not deployed" in e for e in errors), errors)
+
+    def test_no_data_row_at_all_is_an_error(self):
+        text = SERVICE_TABLE.replace("`x-data-mcp-data`", "`x-data-mcp-legacy`")
+        errors = check_deployed_entries(text, COUNTS)
+        self.assertTrue(any("no x-data-mcp-data row" in e for e in errors), errors)
+
+    def test_multi_entry_row_passes_once_the_deploy_day_constant_flips(self):
+        text = SERVICE_TABLE.replace(
+            "`run/mcp.sock`（`--entry ops`）",
+            "`run/mcp.sock`（`--entry ops`）、`run/research.sock`"
+            "（`--entry research`）、`run/maint.sock`（`--entry maint`）",
+        ).replace("| 15 |", "| 15 / 5 / 9 |")
+        # Still the pre-Ops-B deployment: the extra entries are not deployed.
+        self.assertTrue(check_deployed_entries(text, COUNTS))
+        with mock.patch(
+            "check_deploy_facts.DEPLOYED_DATA_ENTRIES",
+            ("ops", "research", "maint"),
+        ):
+            self.assertEqual(check_deployed_entries(text, COUNTS), [])
+
+    def test_repository_status_passes(self):
+        text = (Path(__file__).resolve().parent.parent / "docs/STATUS.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(check_deployed_entries(text), [])
 
 
 class CurrentHost(unittest.TestCase):

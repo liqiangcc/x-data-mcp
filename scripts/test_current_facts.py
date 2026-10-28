@@ -497,6 +497,29 @@ class StatusConsistency(unittest.TestCase):
         )
         self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
 
+    def test_multi_entry_service_row_checks_each_entrys_allowlist(self):
+        # v8 phase 2: one data unit, several sockets/entries. Each `--entry k`
+        # in the 入口 cell is checked against entry k's source allowlist.
+        multi = STATUS_OK.replace(
+            "| `run/mcp.sock` | 15 |",
+            "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
+            "（`--entry research`）、`run/maint.sock`（`--entry maint`） "
+            "| 15 / 5 / 9 |",
+        )
+        self.assertEqual(status_claims(multi), [])
+        wrong = multi.replace("| 15 / 5 / 9 |", "| 15 / 6 / 9 |")
+        self.assertEqual(rules(status_claims(wrong)), ["status-service-tool-count"])
+        unknown = multi.replace("`--entry maint`", "`--entry devops`")
+        self.assertEqual(rules(status_claims(unknown)), ["status-service-entry"])
+
+    def test_multi_entry_row_count_length_must_match_entries(self):
+        text = STATUS_OK.replace(
+            "| `run/mcp.sock` | 15 |",
+            "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
+            "（`--entry research`） | 15 |",
+        )
+        self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
+
     def test_prose_tool_count_is_checked(self):
         text = STATUS_OK.replace(
             "data socket `tools/list` 返回 15 个工具",

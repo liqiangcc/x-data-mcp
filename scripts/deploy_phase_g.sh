@@ -3,8 +3,18 @@
 # evidence report. Companion to deploy_preview.sh (legacy single-service
 # topology); this script targets the #262/#259 production shape:
 #
-#   x-data-mcp-data.service     data_service <db> <mcp.sock>
+#   x-data-mcp-data.service     data_service <db> <sock> [--entry k] [<sock> ...] [tail]
 #   x-data-mcp-acquire.service  acquire_service <generation-root> <acquire.sock>
+#
+# v8 phase 2 (D-56) lets one data unit serve several sockets/entries. The
+# installed ExecStart is parsed by scripts/data_unit_layout.py, which accepts
+# both the old single-socket shape and the repeated `<socket> --entry <kind>`
+# shape, and keeps tail options such as the production `--poll-ms 1000`
+# drop-in verbatim. Readiness probes every parsed socket with that entry's
+# expected tool (research->query_data, ops->plan_market_update,
+# maint->compute_metrics; scripts/wait_service_ready.py owns the mapping).
+# This script never installs or rewrites a unit: the three-socket body is
+# printed for the owner-approved change.
 #
 # Fresh compact-schema install semantics (#259 FRESH_REBUILD_REQUIRED): the
 # existing market database is NEVER upgraded in place and NEVER deleted —
@@ -57,8 +67,17 @@ SHA=""
 RELEASE_DIR=""
 DB=""
 DB_ARCHIVED=""
-SOCK_DATA=""
 SOCK_ACQ=""
+# Parsed data-unit layout: "entry=socket" specs, the sockets alone (owner
+# markers, target rendering) and the preserved trailing options.
+DATA_ENDPOINTS=()
+DATA_SOCKETS=()
+DATA_TAIL_ARGS=()
+DATA_UNIT_BIN=""
+DATA_UNIT_DB=""
+DATA_UNIT_TAIL=()
+DATA_UNIT_ENTRIES=()
+DATA_UNIT_SOCKETS=()
 ACQ_ROOT=""
 schema_before=""
 current_before=""
@@ -129,12 +148,26 @@ fail() {
 unit_exec_start() { systemctl cat "$1" 2>/dev/null | sed -nE 's/^ExecStart=//p' | head -1 || true; }
 
 required_units() {
+    # Generated multi-socket body (v8 phase 2 §3). The tail keeps the
+    # production drop-in's `--poll-ms 1000`; XDM_DATA_UNIT_TAIL overrides it.
+    local tail=${XDM_DATA_UNIT_TAIL:---poll-ms 1000} target
+    target=$(python3 "$SCRIPTS_DIR/data_unit_layout.py" --render \
+        --binary "$DEPLOY_ROOT/current/bin/data_service" \
+        --db "$DEPLOY_ROOT/state/preview.sqlite" \
+        --endpoint "ops=$DEPLOY_ROOT/run/mcp.sock" \
+        --endpoint "research=$DEPLOY_ROOT/run/research.sock" \
+        --endpoint "maint=$DEPLOY_ROOT/run/maint.sock" \
+        --tail "$tail") \
+        || { echo "cannot render the data unit ExecStart" >&2; exit 2; }
     cat <<EOF
 Required units (install once, then re-run):
 
 /etc/systemd/system/$DATA_SERVICE
   [Service]
-  ExecStart=$DEPLOY_ROOT/current/bin/data_service $DEPLOY_ROOT/state/preview.sqlite $DEPLOY_ROOT/run/mcp.sock
+  ExecStart=$target
+  ExecStartPre=$DEPLOY_ROOT/current/scripts/wait_service_ready.py $DEPLOY_ROOT/run/mcp.sock --timeout 120 --expect-tool plan_market_update
+  ExecStartPre=$DEPLOY_ROOT/current/scripts/wait_service_ready.py $DEPLOY_ROOT/run/research.sock --timeout 120 --expect-tool query_data
+  ExecStartPre=$DEPLOY_ROOT/current/scripts/wait_service_ready.py $DEPLOY_ROOT/run/maint.sock --timeout 120 --expect-tool compute_metrics
   Restart=on-failure
 
 /etc/systemd/system/$ACQ_SERVICE
@@ -175,11 +208,18 @@ if [[ -z "$data_exec" || -z "$acq_exec" ]]; then
     required_units >&2
     exit 2
 fi
-DB=$(awk '{print $2}' <<<"$data_exec")
-SOCK_DATA=$(awk '{print $3}' <<<"$data_exec")
+layout=$(python3 "$SCRIPTS_DIR/data_unit_layout.py" --exec-start "$data_exec" --format sh) \
+    || fail "cannot parse $DATA_SERVICE ExecStart as <db> <socket> [--entry k] ... [tail]"
+eval "$layout"
+DB=$DATA_UNIT_DB
+DATA_TAIL_ARGS=("${DATA_UNIT_TAIL[@]}")
+for i in "${!DATA_UNIT_SOCKETS[@]}"; do
+    DATA_SOCKETS+=("${DATA_UNIT_SOCKETS[$i]}")
+    DATA_ENDPOINTS+=("${DATA_UNIT_ENTRIES[$i]}=${DATA_UNIT_SOCKETS[$i]}")
+done
 ACQ_ROOT=$(awk '{print $2}' <<<"$acq_exec")
 SOCK_ACQ=$(awk '{print $3}' <<<"$acq_exec")
-[[ -n "$DB" && -n "$SOCK_DATA" && -n "$ACQ_ROOT" && -n "$SOCK_ACQ" ]] \
+[[ -n "$DB" && ${#DATA_SOCKETS[@]} -gt 0 && -n "$ACQ_ROOT" && -n "$SOCK_ACQ" ]] \
     || fail "could not parse db/socket paths from unit ExecStart lines"
 [[ "$data_exec" == *"/current/bin/data_service"* ]] \
     || fail "$DATA_SERVICE ExecStart does not use the current symlink"
@@ -226,6 +266,12 @@ else
 fi
 svc_before=$(systemctl show "$DATA_SERVICE" "$ACQ_SERVICE" -p Id,ActiveState 2>/dev/null || true)
 
+# Target three-socket body for the owner-approved unit change: keep the
+# sockets the installed unit already has and add the missing standard entries,
+# preserving every parsed tail option (e.g. --poll-ms 1000).
+target_exec=$(python3 "$SCRIPTS_DIR/data_unit_layout.py" --exec-start "$data_exec" --target) \
+    || fail "cannot render the target data unit ExecStart"
+
 if [[ "$DRY_RUN" == "1" ]]; then
     cat <<EOF
 DRY-RUN phase-g deploy $TAG
@@ -234,16 +280,20 @@ DRY-RUN phase-g deploy $TAG
   release dir:     $RELEASE_DIR
   current ->       $current_before
   data service:    $data_exec
+  data endpoints:  ${DATA_ENDPOINTS[*]}
+  data tail args:  ${DATA_TAIL_ARGS[*]-}
+  data target:     $target_exec
+                   (printed only; the unit change is owner-approved, never here)
   acquire service: $acq_exec
   market db:       $DB (user_version=$schema_before)
   acquire root:    $ACQ_ROOT
-  sockets:         $SOCK_DATA  $SOCK_ACQ
+  acquire socket:  $SOCK_ACQ
   plan: fetch+verify tarball -> stage release dir -> archive existing db
         aside (never migrated/deleted) -> task_sqlite init21 fresh db ->
-        stop both services -> switch current -> start both -> socket +
-        schema=<release COMPACT_SCHEMA_VERSION> + tools smoke -> report;
-        failures after mutation restore
-        previous release + archived db + old services
+        stop both services -> switch current -> start both -> readiness
+        probe per data socket + acquire socket -> schema + tools smoke ->
+        report; failures after mutation restore previous release + archived
+        db + old services
 EOF
     exit 0
 fi
@@ -307,9 +357,11 @@ if [[ -f "$DB" ]]; then
     mv "$DB" "$DB_ARCHIVED" || fail "archive existing market db"
     rm -f "$DB-shm" "$DB-wal" || true
 fi
-# The data socket's owner marker binds the previous database inode; the
-# fresh init21 file is a new identity, so rebind deliberately.
-rm -f "$SOCK_DATA.owner.json" || fail "clear stale endpoint owner"
+# Each data socket's owner marker binds the previous database inode; the
+# fresh init21 file is a new identity, so rebind every endpoint deliberately.
+for socket in "${DATA_SOCKETS[@]}"; do
+    rm -f "$socket.owner.json" || fail "clear stale endpoint owner ($socket)"
+done
 init_out=$("$RELEASE_DIR/bin/task_sqlite" init21 "$DB") || fail "task_sqlite init21"
 [[ "$init_out" == *"task schema $EXPECTED_SCHEMA ready"* ]] \
     || fail "init21 did not report schema $EXPECTED_SCHEMA"
@@ -323,21 +375,32 @@ step=switch
 ln -sfn "$RELEASE_DIR" "$DEPLOY_ROOT/current" || fail "switch current"
 systemctl start "$DATA_SERVICE" || fail "start $DATA_SERVICE"
 systemctl start "$ACQ_SERVICE" || fail "start $ACQ_SERVICE"
-# Readiness is the MCP handshake on each socket (scripts/wait_service_ready.py),
+# Readiness is the MCP handshake on every socket (scripts/wait_service_ready.py),
 # never a fixed sleep or a bare socket-file test: a cold data service binds the
 # endpoint only after registry_sweep + series_startup_check (~31s on 2026-10-23).
+# `--endpoint entry=socket` makes the probe also assert that entry's tool
+# (research=query_data, ops=plan_market_update, maint=compute_metrics).
 READY_TIMEOUT=${XDM_READY_TIMEOUT:-120}
-python3 "$SCRIPTS_DIR/wait_service_ready.py" "$SOCK_DATA" --timeout "$READY_TIMEOUT" \
-    --expect-tool plan_market_update || fail "data socket did not become ready"
+probe_args=(--timeout "$READY_TIMEOUT")
+for spec in "${DATA_ENDPOINTS[@]}"; do probe_args+=(--endpoint "$spec"); done
+python3 "$SCRIPTS_DIR/wait_service_ready.py" "${probe_args[@]}" \
+    || fail "data socket(s) did not become ready"
 python3 "$SCRIPTS_DIR/wait_service_ready.py" "$SOCK_ACQ" --timeout "$READY_TIMEOUT" \
     --expect-tool acquire_generation || fail "acquire socket did not become ready"
 systemctl is-active --quiet "$DATA_SERVICE" || fail "$DATA_SERVICE not active"
 systemctl is-active --quiet "$ACQ_SERVICE" || fail "$ACQ_SERVICE not active"
 
-# --- 4. smoke: both sockets answer MCP tools/list -----------------------------
+# --- 4. smoke: every socket answers MCP tools/list ---------------------------
 step=smoke
-python3 - "$SOCK_DATA" "$SOCK_ACQ" "$RELEASE_DIR" <<'PY' || fail "dual-socket MCP smoke"
+python3 - "${DATA_ENDPOINTS[@]}" -- "$SOCK_ACQ" "$RELEASE_DIR" <<'PY' || fail "MCP socket smoke"
 import json, subprocess, select, sys
+
+args = sys.argv[1:]
+split = args.index("--")
+data_specs = args[:split]
+acq_sock, release = args[split + 1:]
+ENTRY_TOOLS = {"research": "query_data", "ops": "plan_market_update",
+               "maint": "compute_metrics"}
 
 def rpc(client, method, params, i):
     client.stdin.write(json.dumps(dict(jsonrpc="2.0", id=i, method=method, params=params)) + "\n")
@@ -357,13 +420,17 @@ def tools(sock, rel):
         if client.poll() is None:
             client.kill()
 
-data_tools = tools(sys.argv[1], sys.argv[3])
-acq_tools = tools(sys.argv[2], sys.argv[3])
-need_data = {"update_data", "start_collection", "get_data_availability", "query_data"}
+need_ops = {"update_data", "start_collection", "get_data_availability", "query_data"}
 need_acq = {"check_official_updates", "acquire_generation", "activate_generation"}
-missing = (need_data - data_tools) | (need_acq - acq_tools)
-assert not missing, f"missing tools: {missing}"
-print("data tools ok, acquire tools ok")
+for spec in data_specs:
+    entry, _, sock = spec.partition("=")
+    served = tools(sock, release)
+    assert ENTRY_TOOLS[entry] in served, f"{entry} socket lacks {ENTRY_TOOLS[entry]}"
+    if entry == "ops":
+        assert not need_ops - served, f"ops socket missing tools: {need_ops - served}"
+acq_tools = tools(acq_sock, release)
+assert not need_acq - acq_tools, f"acquire socket missing tools: {need_acq - acq_tools}"
+print(f"data tools ok ({len(data_specs)} socket(s)), acquire tools ok")
 PY
 
 step=report

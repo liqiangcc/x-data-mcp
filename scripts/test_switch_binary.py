@@ -13,6 +13,7 @@ tempdir root with three stand-ins, so no real switch ever happens:
     helper from test_wait_service_ready.py, so scripts/wait_service_ready.py
     runs unmodified and its JSON is what lands in the report.
 """
+import contextlib
 import hashlib
 import json
 import os
@@ -41,9 +42,18 @@ TAG_SHORT = "preview30"
 
 sys.path.insert(0, str(REPO / "scripts"))
 from test_wait_service_ready import FakeService, mcp_handler  # noqa: E402
+import data_unit_layout as layout  # noqa: E402
 
 SYSTEMCTL_STUB = """#!/usr/bin/env bash
 # Test stand-in for systemctl: log argv, honour one injected failure, never act.
+# `cat` is a read for ExecStart parsing, not an action, so it is not logged;
+# XDM_TEST_DATA_UNIT supplies the data unit body once a test needs one.
+if [[ "$1" == cat ]]; then
+    if [[ -n "${XDM_TEST_DATA_UNIT:-}" && "$2" == *-data.service ]]; then
+        cat "$XDM_TEST_DATA_UNIT"
+    fi
+    exit 0
+fi
 printf '%s\\n' "$*" >>"${XDM_TEST_SYSTEMCTL_LOG:-/dev/null}"
 if [[ -n "${XDM_TEST_SYSTEMCTL_FAIL:-}" && "$*" == *"$XDM_TEST_SYSTEMCTL_FAIL"* ]]; then
     exit 1
@@ -142,7 +152,8 @@ class ExecuteHarness:
     """A tempdir deploy root plus PATH stubs for gh/systemctl and real sockets."""
 
     def __init__(self, tmp: Path, data_tools=("plan_market_update",),
-                 acquire_tools=("acquire_generation",)):
+                 acquire_tools=("acquire_generation",), unit_exec=None,
+                 entry_tools=None):
         self.tmp = tmp
         self.root = deploy_root(tmp)
         self.assets = release_fixture(tmp, SHA)
@@ -153,6 +164,27 @@ class ExecuteHarness:
         self.log = tmp / "systemctl.log"
         self.data_tools = data_tools
         self.acquire_tools = acquire_tools
+        self.unit_exec = unit_exec
+        self.entry_tools = entry_tools or {}
+        self.unit_file = None
+        if unit_exec is not None:
+            self.set_unit(unit_exec)
+
+    def set_unit(self, unit_exec):
+        self.unit_exec = unit_exec
+        self.unit_file = self.tmp / "data.service"
+        self.unit_file.write_text(f"[Service]\nExecStart={unit_exec}\n")
+
+    def endpoints(self):
+        if self.unit_exec is None:
+            return [("ops", self.root / "run" / "mcp.sock")]
+        parsed = layout.parse(self.unit_exec)["endpoints"]
+        return [(e["entry"], Path(e["socket"])) for e in parsed]
+
+    def tools_for(self, entry):
+        if entry == "ops":
+            return self.data_tools
+        return self.entry_tools.get(entry, ())
 
     def env(self, **extra):
         env = {
@@ -160,14 +192,21 @@ class ExecuteHarness:
             "XDM_TEST_RELEASE_DIR": str(self.assets),
             "XDM_TEST_SYSTEMCTL_LOG": str(self.log),
         }
+        if self.unit_file is not None:
+            env["XDM_TEST_DATA_UNIT"] = str(self.unit_file)
         env.update(extra)
         return env
 
     def run(self, *args, **extra_env):
-        with FakeService(self.root / "run" / "mcp.sock",
-                         mcp_handler(tools=self.data_tools)), \
-             FakeService(self.root / "run" / "acquire.sock",
-                         mcp_handler(tools=self.acquire_tools)):
+        with contextlib.ExitStack() as stack:
+            for entry, path in self.endpoints():
+                stack.enter_context(
+                    FakeService(path, mcp_handler(tools=self.tools_for(entry)))
+                )
+            stack.enter_context(
+                FakeService(self.root / "run" / "acquire.sock",
+                            mcp_handler(tools=self.acquire_tools))
+            )
             return run_script(self.root, *args, env_extra=self.env(**extra_env))
 
     def reports(self):
@@ -199,7 +238,7 @@ class SwitchBinary(unittest.TestCase):
                 "DRY: mv -T",
                 "DRY: systemctl start",
                 "wait_service_ready.py",
-                "--expect-tool plan_market_update",
+                "--endpoint ops=",
                 "--expect-tool acquire_generation",
             ):
                 self.assertIn(marker, out)
@@ -322,6 +361,8 @@ class ReportSchema(unittest.TestCase):
             self.assertEqual(probe["data"]["socket"], str(harness.root / "run" / "mcp.sock"))
             self.assertEqual(probe["data"]["tool"], "plan_market_update")
             self.assertIsInstance(probe["data"]["elapsed_ms"], int)
+            self.assertEqual(set(probe["data_entries"]), {"ops"})
+            self.assertEqual(probe["data_entries"]["ops"]["tool"], "plan_market_update")
             self.assertEqual(probe["acquire"]["socket"], str(harness.root / "run" / "acquire.sock"))
             self.assertEqual(probe["acquire"]["tool"], "acquire_generation")
             self.assertEqual((harness.root / "current").readlink(),
@@ -421,10 +462,18 @@ class ReadinessWiring(unittest.TestCase):
         for path in DEPLOY_SCRIPTS:
             text = path.read_text()
             self.assertIn("wait_service_ready.py", text, path)
-            self.assertIn("--expect-tool plan_market_update", text, path)
             # Waiting budget must be >=120s (the old 100/200 x 0.1s is gone).
             self.assertIn("XDM_READY_TIMEOUT:-120", text, path)
             self.assertEqual(subprocess.run(["bash", "-n", str(path)]).returncode, 0, path)
+        # deploy_phase_g generates the three-socket unit probes (checklist §3).
+        deploy = DEPLOY.read_text()
+        for tool in ("plan_market_update", "query_data", "compute_metrics"):
+            self.assertIn(f"--expect-tool {tool}", deploy)
+        self.assertIn('probe_args+=(--endpoint "$spec")', deploy)
+        # switch_binary probes every parsed socket with that entry's tool.
+        switch = SCRIPT.read_text()
+        self.assertIn('data_args+=(--endpoint "$spec")', switch)
+        self.assertIn("--expect-tool acquire_generation", switch)
         # Only the two-MCP topology has an acquisition socket.
         for path in TWO_MCP_SCRIPTS:
             self.assertIn("--expect-tool acquire_generation", path.read_text(), path)
@@ -454,7 +503,7 @@ class ReadinessWiring(unittest.TestCase):
         self.assertNotIn("--expect-tool acquire_generation || true", switch)
         deploy = DEPLOY.read_text()
         for needle in (
-            '--expect-tool plan_market_update || fail "data socket did not become ready"',
+            '|| fail "data socket(s) did not become ready"',
             '--expect-tool acquire_generation || fail "acquire socket did not become ready"',
         ):
             self.assertIn(needle, deploy)
@@ -563,8 +612,169 @@ class TunnelDropinTemplate(unittest.TestCase):
                 f"{root}/run/mcp.sock --timeout 120 --expect-tool plan_market_update",
                 proc.stderr,
             )
+            # The generated body is the phase-2 three-socket shape and keeps
+            # the production --poll-ms tail.
+            exec_lines = [
+                line.strip() for line in proc.stderr.splitlines()
+                if line.strip().startswith("ExecStart=")
+            ]
+            self.assertEqual(len(exec_lines), 2, exec_lines)  # data + acquire
+            data_line = exec_lines[0]
+            for fragment in (
+                f"{root}/run/mcp.sock --entry ops",
+                f"{root}/run/research.sock --entry research",
+                f"{root}/run/maint.sock --entry maint",
+                "--poll-ms 1000",
+            ):
+                self.assertIn(fragment, data_line)
+            for fragment in (
+                "--expect-tool query_data",
+                "--expect-tool compute_metrics",
+            ):
+                self.assertIn(fragment, proc.stderr)
             # A dry run that stops at the preconditions wrote nothing.
             self.assertFalse(root.exists())
+
+
+
+def multi_socket_exec(root: Path, tail="--poll-ms 1000") -> str:
+    """The phase-2 unit shape: one db, three sockets, production poll tail."""
+    return (
+        f"{root}/current/bin/data_service {root}/state/preview.sqlite "
+        f"{root}/run/mcp.sock --entry ops "
+        f"{root}/run/research.sock --entry research "
+        f"{root}/run/maint.sock --entry maint {tail}"
+    ).strip()
+
+
+def run_dry_with_unit(tmp: Path, root: Path, unit_exec: str, *args):
+    stub_bin = tmp / "stub-bin"
+    stub_bin.mkdir(parents=True)
+    write_stub(stub_bin / "systemctl", SYSTEMCTL_STUB)
+    unit = tmp / "data.service"
+    unit.write_text(f"[Service]\nExecStart={unit_exec}\n")
+    env = dict(
+        os.environ,
+        PATH=f"{stub_bin}{os.pathsep}{os.environ['PATH']}",
+        XDM_DEPLOY_ROOT=str(root),
+        XDM_READY_TIMEOUT="5",
+        XDM_TEST_DATA_UNIT=str(unit),
+    )
+    return subprocess.run(
+        ["bash", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=180
+    )
+
+
+class MultiSocketUnitShape(unittest.TestCase):
+    """v8 phase 2 PR-3: parse the installed shape, keep the drop-in tail.
+
+    Production's data unit carries `--poll-ms 1000` from poll-interval.conf.
+    Switching the binary must not silently drop it from the printed target
+    body, and readiness must cover every socket the unit binds.
+    """
+
+    def test_dry_run_parses_every_socket_and_keeps_the_tail(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            root = deploy_root(tmp)
+            proc = run_dry_with_unit(tmp, root, multi_socket_exec(root), TAG, SHA)
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            self.assertIn(
+                f"data endpoints -> ops={root}/run/mcp.sock "
+                f"research={root}/run/research.sock "
+                f"maint={root}/run/maint.sock",
+                proc.stdout,
+            )
+            self.assertIn("data tail args -> --poll-ms 1000", proc.stdout)
+            target = [
+                line for line in proc.stdout.splitlines()
+                if line.strip().startswith("data target ->")
+            ]
+            self.assertEqual(len(target), 1, proc.stdout)
+            # The rendered target keeps the same sockets and the exact tail.
+            self.assertIn("--poll-ms 1000", target[0])
+            for fragment in (
+                "mcp.sock --entry ops",
+                "research.sock --entry research",
+                "maint.sock --entry maint",
+            ):
+                self.assertIn(fragment, target[0])
+
+    def test_single_socket_unit_with_tail_still_gets_the_three_socket_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            root = deploy_root(tmp)
+            # The old shape plus the production drop-in tail: the parser must
+            # keep the tail while the printed target adds research/maint.
+            unit_exec = (
+                f"{root}/current/bin/data_service {root}/state/preview.sqlite "
+                f"{root}/run/mcp.sock --poll-ms 1000"
+            )
+            proc = run_dry_with_unit(tmp, root, unit_exec, TAG, SHA)
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            self.assertIn("data endpoints -> ops=", proc.stdout)
+            self.assertIn("data tail args -> --poll-ms 1000", proc.stdout)
+            target = [
+                line for line in proc.stdout.splitlines()
+                if line.strip().startswith("data target ->")
+            ][0]
+            for fragment in (
+                "mcp.sock --entry ops",
+                "research.sock --entry research",
+                "maint.sock --entry maint",
+                "--poll-ms 1000",
+            ):
+                self.assertIn(fragment, target)
+
+    def test_execute_probes_all_three_sockets_and_reports_each_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            harness = ExecuteHarness(
+                tmp,
+                entry_tools={
+                    "research": ("query_data", "get_data_availability"),
+                    "maint": ("compute_metrics", "cancel_task"),
+                },
+            )
+            harness.set_unit(multi_socket_exec(harness.root))
+            proc = harness.run(TAG, SHA, "--execute")
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            rep = harness.read_report()
+            self.assertEqual(rep["status"], "PASS")
+            entries = rep["readiness_probe"]["data_entries"]
+            self.assertEqual(set(entries), {"ops", "research", "maint"})
+            self.assertEqual(entries["ops"]["tool"], "plan_market_update")
+            self.assertEqual(entries["research"]["tool"], "query_data")
+            self.assertEqual(entries["research"]["tools"], 2)
+            self.assertEqual(entries["maint"]["tool"], "compute_metrics")
+            # `data` stays the orchestration socket for older readers.
+            self.assertEqual(entries["ops"]["socket"], str(harness.root / "run" / "mcp.sock"))
+            s6 = [s for s in rep["steps"] if s["step"] == "S6"][0]
+            self.assertIn("3 socket(s)", s6["evidence"])
+
+    def test_execute_fails_when_one_entry_surface_is_wrong(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            # research.sock answers with the ops tool only: the probe must fail
+            # the whole S6 and roll the symlink back, not accept "some socket".
+            harness = ExecuteHarness(
+                tmp,
+                entry_tools={"research": ("plan_market_update",),
+                             "maint": ("compute_metrics",)},
+            )
+            harness.set_unit(multi_socket_exec(harness.root))
+            proc = harness.run(TAG, SHA, "--execute")
+            self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+            self.assertIn("FAILED_AT_S6", proc.stderr)
+            rep = harness.read_report()
+            self.assertEqual(rep["readiness_probe"]["data"], None)
+            self.assertEqual(rep["readiness_probe"]["data_entries"], {})
+            self.assertEqual(rep["rollback_outcome"], "restored_previous_release")
+            self.assertIn("query_data", proc.stderr)
+            self.assertEqual(
+                (harness.root / "current").readlink(),
+                harness.root / "releases" / PREV,
+            )
 
 
 if __name__ == "__main__":

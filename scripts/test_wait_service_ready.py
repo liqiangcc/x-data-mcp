@@ -152,6 +152,8 @@ class WaitServiceReady(unittest.TestCase):
             self.assertIsInstance(payload["elapsed_ms"], int)
             self.assertGreaterEqual(payload["elapsed_ms"], 0)
             self.assertEqual(payload["tool"], "plan_market_update")
+            self.assertEqual(payload["tools"], 2)
+            self.assertIsNone(payload["entry"])
             self.assertEqual(svc.methods, ["initialize", "tools/list"])
 
     def test_success_without_expect_tool_skips_tools_list(self):
@@ -160,8 +162,105 @@ class WaitServiceReady(unittest.TestCase):
             with FakeService(path, mcp_handler()) as svc:
                 proc = run_probe(str(path), "--timeout", "10")
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIsNone(json.loads(proc.stdout)["tool"])
+            payload = json.loads(proc.stdout)
+            self.assertIsNone(payload["tool"])
+            self.assertIsNone(payload["tools"])
             self.assertEqual(svc.methods, ["initialize"])
+
+    def test_entry_selects_that_entry_s_tool(self):
+        cases = {
+            "research": "query_data",
+            "ops": "plan_market_update",
+            "maint": "compute_metrics",
+        }
+        with tempfile.TemporaryDirectory() as td:
+            path = self.socket_path(td)
+            for entry, tool in cases.items():
+                with self.subTest(entry=entry), FakeService(
+                    path, mcp_handler(tools=[tool, "unrelated"])
+                ):
+                    proc = run_probe(str(path), "--timeout", "10", "--entry", entry)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    payload = json.loads(proc.stdout)
+                    self.assertEqual(payload["entry"], entry)
+                    self.assertEqual(payload["tool"], tool)
+                    self.assertEqual(payload["tools"], 2)
+
+    def test_entry_expects_its_own_tool_not_some_other_entry_s(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self.socket_path(td)
+            # An ops surface is not a research surface even though both are
+            # served by the same process; the probe must fail on the tool.
+            with FakeService(path, mcp_handler(tools=["plan_market_update"])):
+                proc = run_probe(str(path), "--timeout", "10", "--entry", "research")
+            self.assertEqual(proc.returncode, 2, proc.stdout)
+            self.assertIn("query_data", proc.stderr)
+
+    def test_explicit_expect_tool_overrides_entry(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self.socket_path(td)
+            with FakeService(path, mcp_handler(tools=["plan_market_update", "query_data"])):
+                proc = run_probe(str(path), "--timeout", "10", "--entry", "research",
+                                 "--expect-tool", "plan_market_update")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)["tool"], "plan_market_update")
+
+    def test_multi_endpoint_probes_each_socket_in_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            ops = Path(td) / "mcp.sock"
+            research = Path(td) / "research.sock"
+            maint = Path(td) / "maint.sock"
+            with FakeService(ops, mcp_handler(tools=["plan_market_update"])) as ops_svc, \
+                 FakeService(research, mcp_handler(tools=["query_data"])) as res_svc, \
+                 FakeService(maint, mcp_handler(tools=["compute_metrics"])) as maint_svc:
+                proc = run_probe(
+                    "--timeout", "10",
+                    "--endpoint", f"ops={ops}",
+                    "--endpoint", f"research={research}",
+                    "--endpoint", f"maint={maint}",
+                )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            records = [json.loads(line) for line in proc.stdout.strip().splitlines()]
+            self.assertEqual([r["entry"] for r in records], ["ops", "research", "maint"])
+            self.assertEqual([r["socket"] for r in records], [str(ops), str(research), str(maint)])
+            self.assertEqual(
+                [r["tool"] for r in records],
+                ["plan_market_update", "query_data", "compute_metrics"],
+            )
+            self.assertEqual([r["tools"] for r in records], [1, 1, 1])
+            self.assertEqual(ops_svc.methods, ["initialize", "tools/list"])
+            self.assertEqual(res_svc.methods, ["initialize", "tools/list"])
+            self.assertEqual(maint_svc.methods, ["initialize", "tools/list"])
+
+    def test_multi_endpoint_fails_whole_probe_on_one_bad_socket(self):
+        with tempfile.TemporaryDirectory() as td:
+            good = Path(td) / "mcp.sock"
+            bad = Path(td) / "research.sock"
+            with FakeService(good, mcp_handler(tools=["plan_market_update"])), \
+                 FakeService(bad, mcp_handler(tools=["plan_market_update"])):
+                proc = run_probe("--timeout", "10",
+                                 "--endpoint", f"ops={good}",
+                                 "--endpoint", f"research={bad}")
+            self.assertEqual(proc.returncode, 2, proc.stdout)
+            self.assertEqual(proc.stdout, "")
+            self.assertIn(str(bad), proc.stderr)
+            self.assertIn("query_data", proc.stderr)
+
+    def test_endpoint_argument_errors(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self.socket_path(td)
+            for args in (
+                (str(path), "--endpoint", f"ops={path}"),
+                ("--endpoint", f"nope={path}"),
+                ("--endpoint", "ops"),
+                ("--endpoint", f"ops={path}", "--endpoint", f"ops={path}.2"),
+                ("--endpoint", f"ops={path}", "--endpoint", f"research={path}"),
+                ("--endpoint", f"ops={path}", "--entry", "ops"),
+                ("--entry", "devops", str(path)),
+            ):
+                with self.subTest(args=args):
+                    proc = run_probe(*args)
+                    self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
 
     def test_waits_for_a_late_socket(self):
         # Regression guard: a socket that appears after the old 10s/20s
