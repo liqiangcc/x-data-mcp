@@ -183,34 +183,51 @@ fn three_entries_in_one_process_match_the_single_socket_surfaces_byte_for_byte()
     assert_eq!(query["result"]["structuredContent"]["code"], "unknown_tool");
 
     // A tool served by two entries answers with the same payload bytes on
-    // both. The top-level `content[0].text` is entry-specific by design
-    // (D-36: ops/maint use a bounded summary), so the comparison is on the
-    // tool result itself.
-    let shared = json!({
+    // both. Two entry-independent fields are excluded: `content[0].text` is
+    // entry-specific by design (D-36: ops/maint use a bounded summary), and
+    // `snapshot_id`/`snapshot_time` identify one read, not one entry.
+    let payload = |line: &str| -> Vec<u8> {
+        let value: Value = serde_json::from_str(line).unwrap();
+        let mut content = value["result"]["structuredContent"].clone();
+        if let Some(object) = content.as_object_mut() {
+            for key in ["snapshot_id", "snapshot_time"] {
+                if object.contains_key(key) {
+                    object.insert(key.into(), Value::Null);
+                }
+            }
+        }
+        serde_json::to_vec(&json!({
+            "isError": value["result"]["isError"],
+            "content": content
+        }))
+        .unwrap()
+    };
+    let mut research_session = Session::new(&research);
+    research_session.raw(json!({"jsonrpc":"2.0","id":8,"method":"initialize","params":{}}));
+    let mut ops_session = Session::new(&ops);
+    ops_session.raw(json!({"jsonrpc":"2.0","id":8,"method":"initialize","params":{}}));
+    // A successful read: same shape, no per-entry field.
+    let shared = json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"query_data","arguments":{
         "dataset": "market.daily",
         "contract_version": "v2",
         "selection": {"kind": "single", "entity": "sh.600000"},
         "filter": {"kind": "daily", "start_date": "2025-01-01", "end_date": "2025-12-31"}
-    });
-    let request = json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"query_data","arguments":shared}});
-    let payload = |line: &str| -> (bool, Vec<u8>) {
-        let value: Value = serde_json::from_str(line).unwrap();
-        (
-            value["result"]["isError"].as_bool().unwrap(),
-            serde_json::to_vec(&value["result"]["structuredContent"]).unwrap(),
-        )
-    };
-    let mut research_session = Session::new(&research);
-    research_session.raw(json!({"jsonrpc":"2.0","id":8,"method":"initialize","params":{}}));
-    let from_research = research_session.raw(request.clone());
-    let mut ops_session = Session::new(&ops);
-    ops_session.raw(json!({"jsonrpc":"2.0","id":8,"method":"initialize","params":{}}));
-    let from_ops = ops_session.raw(request);
+    }}});
     assert_eq!(
-        payload(&from_research),
-        payload(&from_ops),
+        payload(&research_session.raw(shared.clone())),
+        payload(&ops_session.raw(shared)),
         "query_data payload differs by entry"
     );
+    // A rejected request: the error payload is byte-identical as well.
+    let invalid = json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_data","arguments":{}}});
+    let rejected = research_session.raw(invalid.clone());
+    assert_eq!(
+        payload(&rejected),
+        payload(&ops_session.raw(invalid)),
+        "query_data error payload differs by entry"
+    );
+    let value: Value = serde_json::from_str(&rejected).unwrap();
+    assert_eq!(value["result"]["isError"], json!(true));
     drop(research_session);
     drop(ops_session);
 
