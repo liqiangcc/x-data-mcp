@@ -494,6 +494,8 @@ fn shared_execution_gate_keeps_invalid_wire_validation_and_read_access() {
 
 #[path = "local_runtime/lifecycle.rs"]
 mod lifecycle;
+#[path = "local_runtime/write_boundary.rs"]
+mod write_boundary;
 
 #[test]
 fn real_proxy_exits_on_service_eof_even_when_client_stdin_stays_open() {

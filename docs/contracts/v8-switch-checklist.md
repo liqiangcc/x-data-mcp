@@ -102,7 +102,8 @@ maint 清单含 `backfill_data`/`republish_data`/`retry_task`/`cancel_task`/`ver
 > `run_worker_once`），写租约只由这**一个进程**持有；worker 只在 ops 入口运行一次，maint 的
 > `run_worker_once` 与 ops worker 共用 `WorkerGate`，不能并行执行。maint 是仅本机的
 > operator 入口，不暴露隧道。写边界由「socket 名必须叫 mcp」改为「同一数据库只有一个进程
-> 持有 `DatabaseLease` 与写协调器」。
+> 持有 `DatabaseLease` 与写协调器」。写边界与对应测试写在
+> [generic-data-v8](generic-data-v8.md) §2.1（`tests/service/local_runtime/write_boundary.rs`）。
 
 ### 2.3 Devin 实测（#387 的 Q3）
 
@@ -374,7 +375,7 @@ XDM-73 备忘（仓库外，2026-10-28）§6 的实施顺序已获批准，从�
 |---|---|---|
 | 0 | 裁决记录：本清单 §2／§3／§9 与 D-56 | 已落地（D-56） |
 | 1 | PR-1：`data_service` 重复 `<socket> --entry <kind>`、一次启动检查、N 个 endpoint、共享 lease／backend／generation／gate、每个 listener 独立 allowlist、worker 只在 ops 跑一次、任一 bind 失败整体不启动 | 已合并（#434） |
-| 2 | PR-2：写边界策略（maint 9 工具、worker 只在 ops、共用 gate）的文档与测试 | 未开始 |
+| 2 | PR-2：写边界策略（maint 9 工具、worker 只在 ops、共用 gate）的文档与测试 | 已合并（#437，见 [generic-data-v8](generic-data-v8.md) §2.1） |
 | 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 已实现，待审；不部署、不翻「当前状态」 |
 | 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 未开始 |
 | 5 | Ops-B：生产同进程三 socket，隧道不动 | 未开始 |
