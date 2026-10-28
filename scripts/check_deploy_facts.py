@@ -16,6 +16,12 @@ checks:
    the measurement environment of benchmark notes) are allowed. The region
    set is imported from check_current_facts.py so the two linters cannot
    drift apart.
+4. The STATUS 服务 table must declare the deployed data entry set and each
+   entry's tool count. The deployed set is the deployment fact from
+   check_current_facts.DEPLOYED_DATA_ENTRIES (`ops` until the Ops-B deploy-day
+   commit, v8 phase 2 §9.6); the per-entry counts come from the source
+   allowlists, so one unit with several sockets/entries can be stated without
+   duplicating numbers in this linter.
 
 Exit 0 with only warnings; exit 1 on errors.
 """
@@ -24,7 +30,12 @@ import re
 import sys
 from pathlib import Path
 
-from check_current_facts import CURRENT_DOCS
+from check_current_facts import (
+    CURRENT_DOCS,
+    DEPLOYED_DATA_ENTRIES,
+    SERVICE_ENTRY_SPEC,
+    entry_tool_counts,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -129,6 +140,71 @@ def check_current_host(root: Path = ROOT) -> list[str]:
     return errors
 
 
+DATA_UNIT = "x-data-mcp-data"
+
+
+def check_deployed_entries(
+    text: str, counts: dict[str, int] | None = None
+) -> list[str]:
+    """The STATUS 服务 table must state the deployed entries and their counts.
+
+    One data unit may serve several `<socket> --entry <kind>` endpoints (v8
+    phase 2), so a row can list several entries; a row without `--entry` means
+    the pre-phase-2 single socket and therefore the implicit `ops` entry.
+    """
+    errors: list[str] = []
+    counts = counts if counts is not None else entry_tool_counts()
+    rows: list[tuple[int, list[str], list[int]]] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip().strip("`") for cell in stripped.strip("|").split("|")]
+        if not cells or cells[0] != DATA_UNIT:
+            continue
+        entries = (
+            SERVICE_ENTRY_SPEC.findall(cells[2]) if len(cells) >= 4 else []
+        ) or ["ops"]
+        declared = [int(n) for n in re.findall(r"\d+", cells[3])] if len(cells) >= 4 else []
+        rows.append((lineno, entries, declared))
+    if not rows:
+        errors.append(f"docs/STATUS.md has no {DATA_UNIT} row in the 服务 table")
+        return errors
+    seen: set[str] = set()
+    for lineno, entries, declared in rows:
+        seen.update(entries)
+        if len(declared) != len(entries):
+            errors.append(
+                f"docs/STATUS.md:{lineno}: {DATA_UNIT} declares "
+                f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} "
+                f"but {len(declared)} 工具数 value(s)"
+            )
+        for entry, count in zip(entries, declared):
+            if entry not in counts:
+                errors.append(
+                    f"docs/STATUS.md:{lineno}: {DATA_UNIT} declares unknown "
+                    f"--entry {entry}"
+                )
+            elif count != counts[entry]:
+                errors.append(
+                    f"docs/STATUS.md:{lineno}: {DATA_UNIT} --entry {entry} "
+                    f"工具数 {count} (allowlist: {counts[entry]})"
+                )
+        for entry in entries:
+            if entry not in DEPLOYED_DATA_ENTRIES and entry in counts:
+                errors.append(
+                    f"docs/STATUS.md:{lineno}: {DATA_UNIT} declares entry "
+                    f"{entry}, not deployed (deployed: "
+                    f"{', '.join(DEPLOYED_DATA_ENTRIES)})"
+                )
+    for entry in DEPLOYED_DATA_ENTRIES:
+        if entry not in seen:
+            errors.append(
+                f"docs/STATUS.md: the 服务 table omits deployed data entry {entry}"
+            )
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
     warnings: list[str] = []
@@ -136,6 +212,8 @@ def main() -> int:
     errors += e
     warnings += w
     errors += check_current_host()
+    if STATUS_MD.is_file():
+        errors += check_deployed_entries(STATUS_MD.read_text(encoding="utf-8"))
     for warning in warnings:
         print(f"WARN: {warning}")
     for error in errors:

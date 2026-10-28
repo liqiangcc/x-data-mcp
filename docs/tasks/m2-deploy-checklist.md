@@ -110,3 +110,47 @@ M2 读回（`query_data`，`contract_version:"v2"`，`filter.kind:"daily"`）：
   `state/preview.sqlite.v21-archived-20261027T121543Z` 必须一起退，只退二进制会因 schema
   不匹配拒绝启动（[v8 切换清单](../contracts/v8-switch-checklist.md) §9）。
 - 回滚后同样要重跑 §3 的验证，并在同一个 PR 里更新 STATUS。
+
+## 5. 第二阶段运维步骤（草案，未执行）
+
+v8 第二阶段（D-56 单进程多 socket）的运维顺序草案，来源是 XDM-73 备忘 §6；本清单只记录
+**窗口内要做的事**，不是部署日提交，也不改变 [STATUS](../STATUS.md) 的当前事实。执行前每个
+`[批准]` 项都需 owner 单独确认；生产 data 单元在 Ops-A 完成前保持单 `ops` socket。
+
+### 5.1 Ops-A：私有栈三 socket 内存实测
+
+- 在私有栈（不是 `/opt` 生产根）用与生产相同的发布目录与库副本起**一个** `data_service`，
+  `ExecStart` 为 `<db> run/mcp.sock --entry ops run/research.sock --entry research
+  run/maint.sock --entry maint --poll-ms 1000`；`X_DATA_MCP_RUN_PREPARE_WORKERS=1`。
+- 三条就绪探针逐 socket 通过：`wait_service_ready.py run/mcp.sock --entry ops`（15 工具）、
+  `--entry research`（5）、`--entry maint`（9）；同一进程只取一次写租约。
+- 按 XDM-59 的方法记录：空闲 `MemoryCurrent`、一次真实 v2 日更的 `MemoryCurrent` 峰值、
+  一次 research 大查询的峰值、`MemAvailable` 最低值、冷/热启动耗时。测量环境、数据规模、
+  并发与代码版本一并记录，结果不带入生产预算。
+- 只有实测给出每个入口峰值后，才写 `[批准]` 的 `MemoryHigh`/`MemoryMax`；测完停私有栈，
+  释放端口、socket 与租约。生产不受影响。
+
+### 5.2 Ops-B：生产同进程三 socket，隧道不动
+
+- 前置：Ops-A 完成并批准内存值；`scripts/deploy_phase_g.sh` / `switch_binary.sh` 的
+  PR 已合并（它们解析并生成多 socket `ExecStart`，保留 `--poll-ms` 等尾部参数）。
+- `[批准]` 改 data 单元（或 drop-in）为三个 socket：`mcp.sock` 仍是 `ops` 入口，
+  新增 `research.sock`/`maint.sock`；三条 `ExecStartPre` 就绪探针各断言自己入口的工具。
+  `run/` 下 socket 的属主/权限与 data 单元同用户；旧 socket 先确认无进程使用，不 `rm` 活 socket。
+- `[批准]` 以单进程绑定三个 socket 后逐个核对：`research.sock` 恰好 5 个工具、
+  `mcp.sock` 15 个、`maint.sock` 9 个，三者 `capability_revision == generic-data-v8`，
+  `get_data_capabilities({})` ≤1,500 B，head 计数与窗口前基线一致；同一库上第二个
+  `data_service` 必须因租约拒绝启动，`maint.sock` 的 `run_worker_once` 在 worker 忙时返回
+  `worker_busy`。
+- **隧道不动**：`x-data-mcp-tunnel` 仍指 `run/mcp.sock`，研究面外部行为不变；Devin 实测
+  （Ops-C）与隧道改指 `research.sock`（Ops-D）另行批准，不在本步骤。
+- 回滚：退掉新增 socket 参数（回到单 `mcp.sock` 的旧 `ExecStart`）并重启 data；库不变。
+  多 socket 是同一进程，任一 bind 失败进程整体不启动，不会有半个入口在服务。
+
+### 5.3 记录
+
+- 每一步在部署记录里写：实际 `ExecStart`、每条探针的 JSON（`entry`/`tool`/`tools`/
+  `elapsed_ms`）、`MemoryCurrent` 观测值、回滚点。
+- 部署日提交才把 [STATUS](../STATUS.md)「服务」表与
+  [v8 切换清单](../contracts/v8-switch-checklist.md) §3/§9.6 的「已部署入口」翻成三入口；
+  本草案与脚本改动都不翻。

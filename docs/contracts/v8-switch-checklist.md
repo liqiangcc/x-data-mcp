@@ -162,8 +162,15 @@ Skill 失去 plan/run。研究入口是加法，回滚只需把隧道指回 `mcp
 
 | 单元 | `ExecStart` | `ExecStartPre` |
 |---|---|---|
-| `x-data-mcp-data` | `data_service <db> run/mcp.sock --entry ops run/research.sock --entry research run/maint.sock --entry maint` | `wait_service_ready.py run/mcp.sock --timeout 120 --expect-tool plan_market_update`；`wait_service_ready.py run/research.sock --timeout 120 --expect-tool query_data`；`wait_service_ready.py run/maint.sock --timeout 120 --expect-tool cancel_task` |
+| `x-data-mcp-data` | `data_service <db> run/mcp.sock --entry ops run/research.sock --entry research run/maint.sock --entry maint` + 生产 drop-in 的尾部参数 `--poll-ms 1000` | `wait_service_ready.py run/mcp.sock --timeout 120 --expect-tool plan_market_update`；`wait_service_ready.py run/research.sock --timeout 120 --expect-tool query_data`；`wait_service_ready.py run/maint.sock --timeout 120 --expect-tool compute_metrics` |
 | `x-data-mcp-acquire` | 不变 | 不变 |
+
+描述符与生成器必须保留 `ExecStart` 的尾部参数：生产 drop-in `poll-interval.conf` 在 socket
+列表之后追加 `--poll-ms 1000`（owner 批准，降空闲 CPU）。`scripts/data_unit_layout.py` 解析
+新旧两种单元形状并原样保留尾部；`scripts/deploy_phase_g.sh` 与 `scripts/switch_binary.sh`
+的就绪探针按解析出的每个 `${entry}=${socket}` 逐个检查（入口→工具映射由
+`scripts/wait_service_ready.py` 维护：`research`→`query_data`、`ops`→`plan_market_update`、
+`maint`→`compute_metrics`）。
 
 执行顺序（每步确认后再下一步）：
 
@@ -366,9 +373,9 @@ XDM-73 备忘（仓库外，2026-10-28）§6 的实施顺序已获批准，从�
 | 步骤 | 内容 | 状态 |
 |---|---|---|
 | 0 | 裁决记录：本清单 §2／§3／§9 与 D-56 | 已落地（D-56） |
-| 1 | PR-1：`data_service` 重复 `<socket> --entry <kind>`、一次启动检查、N 个 endpoint、共享 lease／backend／generation／gate、每个 listener 独立 allowlist、worker 只在 ops 跑一次、任一 bind 失败整体不启动 | 代码在本分支，未合并 |
+| 1 | PR-1：`data_service` 重复 `<socket> --entry <kind>`、一次启动检查、N 个 endpoint、共享 lease／backend／generation／gate、每个 listener 独立 allowlist、worker 只在 ops 跑一次、任一 bind 失败整体不启动 | 已合并（#434） |
 | 2 | PR-2：写边界策略（maint 9 工具、worker 只在 ops、共用 gate）的文档与测试 | 未开始 |
-| 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 未开始 |
+| 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 已实现，待审；不部署、不翻「当前状态」 |
 | 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 未开始 |
 | 5 | Ops-B：生产同进程三 socket，隧道不动 | 未开始 |
 | 6 | Ops-C：Devin 实测（§2.3） | 未开始 |

@@ -21,8 +21,18 @@
 # `code_sha` the commit, plus `status`, `started_at`/`finished_at`,
 # `failed_at`, `previous_release`, `current_release`, `rollback_outcome`,
 # `production`. `steps` holds one {step, status, elapsed_ms, evidence} record
-# per S1–S7 and `readiness_probe` holds the JSON the probe itself printed.
+# per S1–S7 and `readiness_probe` holds the probe JSON it printed:
+# `data` is the ops socket's record (the orchestration entry), `data_entries`
+# maps every probed data entry to its record, `acquire` is the acquire socket.
 # A dry-run writes nothing into ROOT: it prints the report path it would use.
+#
+# S6 readiness covers every socket the installed data unit serves, not just
+# `run/mcp.sock`: since v8 phase 2 (D-56) one data unit can bind several
+# `<socket> --entry <kind>` pairs. The unit ExecStart is parsed with
+# scripts/data_unit_layout.py, which accepts the old single-socket shape too
+# and keeps tail options such as `--poll-ms 1000`. When the unit is not
+# readable this script falls back to the single ops socket at
+# `$ROOT/run/mcp.sock`, which is what the pre-phase-2 topology served.
 #
 # usage: switch_binary.sh <v0.2.0-preview.N> <S:40-hex> [--execute] [--report <path>]
 # env:   XDM_DEPLOY_ROOT (default /opt/x-data-mcp-preview)
@@ -56,6 +66,10 @@ VER=${TAG#v}
 TARBALL="x-data-mcp-${VER}-linux-x86_64.tar.gz"
 # Same short-tag rule as deploy_phase_g.sh: v0.2.0-preview.36 -> preview36.
 TAG_SHORT=$(sed -E 's/^v[0-9.]+-//; s/\.//g' <<<"$TAG")
+DATA_SERVICE=${XDM_DATA_SERVICE:-x-data-mcp-data.service}
+DATA_ENDPOINTS=()
+DATA_TAIL_ARGS=()
+DATA_TARGET=""
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # Milliseconds without `date +%s%3N`: some coreutils builds (uutils) print full
 # nanoseconds for %3N, which would corrupt every elapsed_ms in the report.
@@ -134,18 +148,26 @@ import json, pathlib, sys
 (path, tag, sha, status, started, finished, failed_at, previous, current,
  outcome, steps_file, probe_data, probe_acquire) = sys.argv[1:]
 
-def probe(path):
+def probes(path):
+    """Probe stdout: one JSON object per socket, in argument order."""
     p = pathlib.Path(path)
     if not p.is_file():
-        return None
-    try:
-        return json.loads(p.read_text())
-    except json.JSONDecodeError:
-        return None
+        return []
+    records = []
+    for line in p.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            return []
+    return records
 
 steps_path = pathlib.Path(steps_file)
 steps = [json.loads(line) for line in steps_path.read_text().splitlines() if line.strip()] \
     if steps_path.is_file() else []
+data_entries = {r["entry"] or "ops": r for r in probes(probe_data) if isinstance(r, dict)}
+data_acquire = probes(probe_acquire)
 report = {"status": status,
           "kind": "binary-only switch (no DB migration, no rebuild)",
           "release": tag,
@@ -157,8 +179,9 @@ report = {"status": status,
           "current_release": current or None,
           "rollback_outcome": outcome or None,
           "steps": steps,
-          "readiness_probe": {"data": probe(probe_data),
-                              "acquire": probe(probe_acquire)},
+          "readiness_probe": {"data": data_entries.get("ops"),
+                              "data_entries": data_entries,
+                              "acquire": data_acquire[0] if data_acquire else None},
           "production": "NOT_PRODUCTION_READY"}
 pathlib.Path(path).write_text(json.dumps(report, indent=2) + "\n")
 PY
@@ -212,13 +235,38 @@ p_preconditions() {
     if [[ ! -d "$ROOT/releases/${PREV##*/}" ]]; then
         fail "previous release dir missing: $PREV"
     fi
+    # Parse the installed unit's ExecStart; no `run` wrapper: this is a read.
+    local data_exec layout i
+    data_exec=$(systemctl cat "$DATA_SERVICE" 2>/dev/null \
+        | sed -nE 's/^ExecStart=//p' | head -1 || true)
+    if [[ -n "$data_exec" ]]; then
+        layout=$(python3 "$SCRIPTS_DIR/data_unit_layout.py" --exec-start "$data_exec" --format sh) \
+            || fail "cannot parse $DATA_SERVICE ExecStart: $data_exec"
+        eval "$layout"
+        DATA_TAIL_ARGS=("${DATA_UNIT_TAIL[@]}")
+        for i in "${!DATA_UNIT_SOCKETS[@]}"; do
+            DATA_ENDPOINTS+=("${DATA_UNIT_ENTRIES[$i]}=${DATA_UNIT_SOCKETS[$i]}")
+        done
+        DATA_TARGET=$(python3 "$SCRIPTS_DIR/data_unit_layout.py" \
+            --exec-start "$data_exec" --target) \
+            || fail "cannot render the target data unit ExecStart"
+    else
+        DATA_ENDPOINTS=("ops=$ROOT/run/mcp.sock")
+        DATA_TAIL_ARGS=()
+        echo "== $DATA_SERVICE ExecStart not readable; assuming the single ops socket"
+    fi
     echo "current -> $PREV"
     echo "new     -> $NEW"
     echo "report  -> $REPORT"
+    echo "data endpoints -> ${DATA_ENDPOINTS[*]}"
+    echo "data tail args -> ${DATA_TAIL_ARGS[*]-}"
+    if [[ -n "${DATA_TARGET:-}" ]]; then
+        echo "data target -> $DATA_TARGET (owner-approved unit change; not installed here)"
+    fi
     echo "OPERATOR MUST HAVE CONFIRMED via MCP (PLAN-H2 P1-P4): no inflight acquisition,"
     echo "no non-terminal data task, baseline catalog/daily/yearly head counts recorded,"
     echo "state/preview.sqlite size and -wal/-shm presence noted for post-switch compare."
-    end_step "current -> $PREV; new -> $NEW; report -> $REPORT"
+    end_step "current -> $PREV; new -> $NEW; report -> $REPORT; data -> ${DATA_ENDPOINTS[*]}"
 }
 
 # --- S1. fetch + verify ------------------------------------------------------
@@ -301,13 +349,15 @@ s6_start() {
     begin_step S6 "start (data then acquire), wait for readiness, verify is-active and symlink"
     run systemctl start x-data-mcp-data
     run systemctl start x-data-mcp-acquire
-    # Readiness is the MCP handshake on the socket (scripts/wait_service_ready.py),
-    # never a fixed sleep or a bare socket-file test: a cold data service binds the
-    # endpoint only after registry_sweep + series_startup_check (~31s on 2026-10-23).
+    # Readiness is the MCP handshake on every parsed data socket and on the
+    # acquire socket (scripts/wait_service_ready.py), never a fixed sleep or a
+    # bare socket-file test: a cold data service binds the endpoint only after
+    # registry_sweep + series_startup_check (~31s on 2026-10-23).
     READY_TIMEOUT=${XDM_READY_TIMEOUT:-120}
+    data_args=(--timeout "$READY_TIMEOUT")
+    for spec in "${DATA_ENDPOINTS[@]}"; do data_args+=(--endpoint "$spec"); done
     if [[ $EXECUTE == 1 ]]; then
-        python3 "$SCRIPTS_DIR/wait_service_ready.py" "$ROOT/run/mcp.sock" \
-            --timeout "$READY_TIMEOUT" --expect-tool plan_market_update \
+        python3 "$SCRIPTS_DIR/wait_service_ready.py" "${data_args[@]}" \
             >"$WORK/readiness.data.json"
         python3 "$SCRIPTS_DIR/wait_service_ready.py" "$ROOT/run/acquire.sock" \
             --timeout "$READY_TIMEOUT" --expect-tool acquire_generation \
@@ -315,9 +365,9 @@ s6_start() {
         systemctl is-active --quiet x-data-mcp-data
         systemctl is-active --quiet x-data-mcp-acquire
         [[ "$(readlink "$ROOT/current")" == "$NEW" ]]
-        end_step "data+acquire ready via probe; is-active data,acquire; current -> $NEW"
+        end_step "data (${#DATA_ENDPOINTS[@]} socket(s)) + acquire ready via probe; is-active data,acquire; current -> $NEW"
     else
-        echo "DRY: python3 $SCRIPTS_DIR/wait_service_ready.py $ROOT/run/mcp.sock --timeout $READY_TIMEOUT --expect-tool plan_market_update"
+        echo "DRY: python3 $SCRIPTS_DIR/wait_service_ready.py ${data_args[*]}  # each entry asserts its tool"
         echo "DRY: python3 $SCRIPTS_DIR/wait_service_ready.py $ROOT/run/acquire.sock --timeout $READY_TIMEOUT --expect-tool acquire_generation"
         end_step "dry-run: services not started"
     fi
@@ -326,7 +376,8 @@ s6_start() {
 # --- S7. operator next steps -------------------------------------------------
 s7_next_steps() {
     begin_step S7 "next steps (operator, read-only via MCP, BEFORE any write task)"
-    echo "   capability revisions generic-data-v8/x-data-acquire-v1; tools 15/10;"
+    echo "   capability revisions generic-data-v8/x-data-acquire-v1;"
+    echo "   entry tool counts research 5 / ops 15 / maint 9, acquire 10;"
     echo "   sync_status idle and active generation unchanged; pending_roles present;"
     echo "   head counts equal baseline; sample query_data reads unchanged."
     say "ROLLBACK plan on any mismatch (S2 failure aborts before touching prod; S6/S7 failure):"
