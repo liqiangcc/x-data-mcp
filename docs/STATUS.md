@@ -221,10 +221,8 @@ preview.36 重建）。
 
 ## 进行中
 
-- **SLO 临时豁免**：第 1 行（同代无变化 `update_data`，write-loop <600s）按 D-54、第 2 行（跨代有变化，<600s）
-  按 D-52 **临时豁免中**；两项测量都不是独占（load average 约 6，另有开发 agent 并发），门槛不变。
-  解除条件：XDM-64「v2 分块并发」完成并独占重测 <600s。详见 [SLO](SLO.md) 备注与
-  [DECISIONS](decisions.md) D-52/D-54。
+- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**生产仍是 preview.37 的单 socket 部署（`mcp.sock`），单进程三 socket 尚未上线**。详见 [SLO](SLO.md) 备注与
+  [DECISIONS](decisions.md) D-52/D-57。
 - **GOAL-008 性能**：PR #323 已于 2026-10-11 squash 合并（`8a446b1`），发布 v0.2.0-preview.31，2026-10-12 部署。
   - 全市场验收（XP-015，perf `3b11231`，aws 私有栈，浅链，53 批，trace-OFF，每负载单次）：年线首次 310.6s、日线跨代 Append 104.2s（合成截断夹具）、年线重聚合 328.3s、日线同代 NoChange 78.0s，write-loop 均 <600s，读回全部 PASS（见 [SLO](SLO.md)）。第三类「保留的真实 mixed Append/Full/fail-closed」**未运行**（retained gen-1 字节永久不可得）；`AGENTS.md` 记载的离线 harness 结果仅作旁证，不作替代。
   - **最坏链深未做全量实测**：错开的提前全量重写（每实体阈值 64–127）后最坏链深 ≤127，年线批中位 10.3s，按 53 批外推约 548–588s，余量约 2–9%；日线在深链上的有效实测缺失。
