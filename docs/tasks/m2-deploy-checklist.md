@@ -81,6 +81,20 @@ M2 读回（`query_data`，`contract_version:"v2"`，`filter.kind:"daily"`）：
 - 部署报告里写明 `X_DATA_MCP_RUN_PREPARE_WORKERS=1`；回填 PR 把它记进
   [STATUS](../STATUS.md) 的「服务」表。
 
+**已知限制（XDM-74 补测，2026-10-27；不是本次部署引入的回归，验证时不要当失败）**：
+
+- **退市日只有 TDX 整理期口径**：重建后 `market.security_master` 里 `delisting_date` 有值
+  **152** 行（来源全部 `tdx_arrangement`），其余 `unknown`。交易所上市/退市名单（A-1/A-2）未准入，
+  主表比 catalog **多 279 个实体**（沪主板 118 / 深主板 116 / 创业板 42 / 科创板 3）——它们当日
+  没有 bar 且退市日未知，被当成仍在册；`universe(as_of=2026-10-23)` 因此是 5,351 而 catalog 是
+  5,226。导出快照的成员带 `delisting_unknown` 标记（`src/research/universe.rs:508`），严格口径
+  可据此排除。
+- **代码复用/拆分仍 pending**：`600018` 只有 1 行（2006-10-26 起），没有拆分，
+  `ambiguous_code_reuse=0`；A-1/A-2 接入前，这不算「已验证无复用」。
+- **`market.suspensions` 只返回覆盖 `as_of` 的缺口**：`as_of` 落在区间内才出该行
+  （`row.covers(as_of)`，`src/sqlite_supply/m2.rs:150-157`）；按日期范围验证时**必须给 `as_of`**，
+  范围内的其它缺口只在 `temporal.unknown_known_at_rows` 里计数，返回 0 行不代表没有缺口。
+
 部署后按实测回填 [STATUS](../STATUS.md)（版本 SHA、部署时刻、数据量、耗时、M2 行数），
 并跑 `python3 scripts/check_current_facts.py`。
 

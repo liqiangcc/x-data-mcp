@@ -93,6 +93,19 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 `manifest.status=absent` 而不是「空数据集」。`market.capital_events` 另有 per-entity 写入，
 不依赖这四个 item。研究快照导出（`research-snapshot.v2`，7 个 M2 文件）随 preview.37 部署。
 
+**M2 已知限制（XDM-74 补测，2026-10-27，私有栈）**：
+
+- **退市日只有 TDX 整理期口径**：主表里 `delisting_date` 有值的 **152** 行（来源全部
+  `tdx_arrangement`），其余 `unknown`。交易所上市/退市名单（A-1/A-2）未准入，因此主表比 catalog
+  **多 279 个实体**（沪主板 118 / 深主板 116 / 创业板 42 / 科创板 3），这批当日都没有 bar 且退市日
+  未知，被当成仍在册（`universe(as_of=2026-10-23)` 5,351 vs catalog 5,226）。导出快照的成员带
+  `delisting_unknown` 标记（`src/research/universe.rs:508`），严格口径可据此排除。
+- **代码复用/拆分仍 pending**：`600018` 只有 1 行（2006-10-26 起），没有拆分；
+  `ambiguous_code_reuse=0`。A-1/A-2 接入前的复用判定与拆分都是待办，不是已验证结论。
+- **`market.suspensions` 按 `as_of` 返回**：只有 `as_of` 落在缺口区间内才返回该行
+  （`row.covers(as_of)`，`src/sqlite_supply/m2.rs:150-157`）；按日期范围查时**必须给 `as_of`**，
+  否则只会看到默认时点覆盖的缺口，范围内的其它缺口只在 `temporal.unknown_known_at_rows` 里计数。
+
 ## 服务
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
