@@ -439,9 +439,11 @@ pub(crate) fn commit_trading_rules(
 ) -> Result<TradingRulesCommit, Error> {
     write.book.validate().map_err(rule_error)?;
     let digest = rules_digest(write.book);
+    // The readback is ordered by table key rather than by the book's vector
+    // order, so compare the order-independent digest, not the vec equality.
     if let Some(existing) = derived::read_version(c, DATASET_KIND, trading_rules::DATASET_KEY)?
         && existing.content_digest == digest
-        && read_trading_rules(c)? == *write.book
+        && rules_digest(&read_trading_rules(c)?) == digest
     {
         // Same content: keep the existing registration, its evidence and its
         // binding untouched instead of re-stamping version metadata.

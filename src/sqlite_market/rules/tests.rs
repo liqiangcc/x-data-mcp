@@ -322,7 +322,10 @@ fn the_first_run_publishes_and_an_identical_run_is_no_change() {
     // the task/evidence that published the content.
     assert_eq!(kept.task_id, "task-1");
     assert_eq!(kept.updated_at, published.updated_at);
-    assert_eq!(read_trading_rules(&fixture.c).unwrap(), book);
+    assert_eq!(
+        rules_digest(&read_trading_rules(&fixture.c).unwrap()),
+        rules_digest(&book)
+    );
 }
 
 #[test]
@@ -337,5 +340,8 @@ fn a_changed_rule_book_publishes_a_new_version() {
         second.registration.unwrap().version_id,
         first.registration.unwrap().version_id
     );
-    assert_eq!(read_trading_rules(&fixture.c).unwrap(), book);
+    assert_eq!(
+        rules_digest(&read_trading_rules(&fixture.c).unwrap()),
+        rules_digest(&book)
+    );
 }

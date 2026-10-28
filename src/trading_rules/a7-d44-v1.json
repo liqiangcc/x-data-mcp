@@ -51,7 +51,7 @@
       "rounding": "half_up",
       "effective_from": "1996-12-16",
       "effective_to": null,
-      "basis_ref": "R1: tier=APPROVED_SOURCE; doc=上海证券交易所《交易规则》涨跌幅限制条款（现行版与历史版本）; start=1996-12-16 无通知原文，以官方 .day 主板行情分段锚定（1996-12-01..12-13 越界率 7.21%，1996-12-16 起 0.42%），tier=OWNER_RISK_ACCEPTED; rounding=half_up (R9: 沪 3.3.17, 行情侧 99.94%); evidence=#395 2026-10-26 评论 / D-44(2); url/sha256=私有取证报告，不随仓库分发",
+      "basis_ref": "R1: tier=APPROVED_SOURCE; doc=上海证券交易所《交易规则》涨跌幅限制条款（现行版与历史版本）; start=1996-12-16 无通知原文，以官方 .day 主板行情锚定（1996-12-01..12-13 越界率 7.21%，1996-12-16 起 0.42%），tier=OWNER_RISK_ACCEPTED; rounding=half_up (R9: 沪 3.3.17, 行情侧 99.94%); evidence=#395 2026-10-26 评论 / D-44(2); url/sha256=私有取证报告，不随仓库分发",
       "basis_status": "verified"
     },
     {

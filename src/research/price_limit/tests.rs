@@ -379,10 +379,12 @@ impl Fixture {
 
         let rows = vec![
             lifecycle(Exchange::Sz, "000001", days[0], 0),
-            lifecycle(Exchange::Sz, "000002", days[0], 0),
+            // Listed long before the fixture window: the R2 tests need a
+            // seasoned main-board row, not a first-five-days one.
+            lifecycle(Exchange::Sz, "000002", day(2020, 1, 2), 0),
             lifecycle(Exchange::Sz, "000003", days[0], 0),
             lifecycle(Exchange::Sz, "000004", days[9], 0),
-            lifecycle(Exchange::Sz, "000005", days[0], 0),
+            lifecycle(Exchange::Sz, "000005", day(2020, 1, 2), 0),
             lifecycle(Exchange::Sz, "000006", days[6], 0),
             lifecycle(Exchange::Sz, "300001", days[0], 0),
             lifecycle(Exchange::Sz, "300002", days[9], 0),
