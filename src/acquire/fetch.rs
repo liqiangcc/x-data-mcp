@@ -184,13 +184,18 @@ impl Fetcher for Mirror {
     }
     fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error> {
         let path = self.file(url)?;
-        let bytes = std::fs::read(&path).map_err(|e| Error::Failed(e.to_string()))?;
-        std::fs::write(dest, &bytes).map_err(|e| Error::Failed(e.to_string()))?;
+        // Stream through one fixed buffer instead of `fs::read`: the day
+        // archive is ~550 MB and a whole-file read is what pinned the
+        // acquire switch at its memory cap (XDM-81).
+        let source = std::fs::File::open(&path).map_err(|e| Error::Failed(e.to_string()))?;
+        let mut target = std::fs::File::create(dest).map_err(|e| Error::Failed(e.to_string()))?;
+        let (bytes, sha256) = crate::hash::copy_digest(source, &mut target)
+            .map_err(|e| Error::Failed(e.to_string()))?;
         let head = self.head(url)?;
         Ok(FetchResult {
             head,
-            bytes: bytes.len() as u64,
-            sha256: crate::hash::sha256(&bytes),
+            bytes,
+            sha256,
         })
     }
 }
@@ -250,6 +255,28 @@ mod tests {
         let tried = exe.parent().unwrap().join(PACKAGED_HELPER);
         assert!(message.contains(&tried.display().to_string()), "{message}");
         assert!(!message.contains("CARGO_MANIFEST_DIR"), "{message}");
+    }
+
+    /// A mirror fetch copies every byte and reports the identity the old
+    /// whole-file read produced, for a payload larger than the streaming
+    /// buffer — the 550 MB day archive shape (XDM-81).
+    #[test]
+    fn mirror_fetch_streams_the_whole_artifact() {
+        let source = tempfile::tempdir().unwrap();
+        let bytes: Vec<u8> = (0..3 * crate::hash::STREAM_BUFFER + 7)
+            .map(|i| (i % 251) as u8)
+            .collect();
+        std::fs::write(source.path().join("hsjday.zip"), &bytes).unwrap();
+        let target = tempfile::tempdir().unwrap();
+        let dest = target.path().join("hsjday.zip");
+        let mirror = Mirror::new(source.path());
+        let fetched = mirror
+            .fetch("https://data.tdx.com.cn/vipdoc/hsjday.zip", &dest)
+            .unwrap();
+        assert_eq!(fetched.bytes, bytes.len() as u64);
+        assert_eq!(fetched.sha256, crate::hash::sha256(&bytes));
+        assert_eq!(fetched.head.content_length, Some(bytes.len() as u64));
+        assert_eq!(std::fs::read(&dest).unwrap(), bytes);
     }
 
     /// The helper owns the head/fetch wire shape: numeric `status`,

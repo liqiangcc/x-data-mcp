@@ -620,7 +620,9 @@ impl AcquireService {
         if let (Some(sha), Some(bytes)) = (recorded["sha256"].as_str(), recorded["bytes"].as_u64())
             && dest.is_file()
             && std::fs::metadata(&dest)?.len() == bytes
-            && crate::hash::sha256(&std::fs::read(&dest)?) == sha
+            // Streamed, not `fs::read`: the day archive is ~550 MB, and the
+            // resume check must not be the peak of the switch (XDM-81).
+            && crate::hash::digest_file(&dest)?.1 == sha
         {
             return Ok(());
         }
@@ -1500,5 +1502,64 @@ fn probe_coverage(
     }
     if stale {
         failures.push("day_recency:freshest bar outside acquisition tolerance".into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `fetch_role` resume check re-hashes the staged artifact with the
+    /// streaming digest (XDM-81). This pins both directions: a staged copy
+    /// that still matches its pin is kept, and a same-length tampered copy is
+    /// refetched instead of being accepted as the pinned bytes.
+    #[test]
+    fn resume_keeps_a_matching_staged_artifact_and_refetches_a_tampered_one() {
+        let mirror = tempfile::tempdir().unwrap();
+        let pinned = vec![7u8; 3 * crate::hash::STREAM_BUFFER + 1];
+        std::fs::write(mirror.path().join("hsjday.zip"), &pinned).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let service =
+            AcquireService::open(root.path(), Source::Mirror(mirror.path().into())).unwrap();
+        let task = store::Task {
+            task_id: "task".into(),
+            request_id: "req".into(),
+            kind: KIND_TASK.into(),
+            state: ST_RUNNING.into(),
+            generation_id: None,
+            stage: None,
+            bytes_done: 0,
+            error: None,
+            detail: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let role = ROLES.iter().find(|r| r.key == "day").unwrap();
+        let stage = service.store.create_stage("req").unwrap();
+
+        // A crash between the artifact write and the stage commit leaves the
+        // staged copy in place with its pin already recorded.
+        std::fs::write(stage.join("hsjday.zip"), &pinned).unwrap();
+        let mut detail = json!({"files": {"day": {
+            "sha256": crate::hash::sha256(&pinned), "bytes": pinned.len() as u64,
+        }}});
+        service.fetch_role(&task, role, &mut detail).unwrap();
+        assert_eq!(std::fs::read(stage.join("hsjday.zip")).unwrap(), pinned);
+        assert_eq!(
+            detail["files"]["day"]["sha256"],
+            json!(crate::hash::sha256(&pinned))
+        );
+
+        // Same length, different bytes: only the digest can catch it, so the
+        // resume check must reject it and fetch the mirror's bytes instead.
+        let mut tampered = pinned.clone();
+        tampered[tampered.len() / 2] ^= 1;
+        std::fs::write(stage.join("hsjday.zip"), &tampered).unwrap();
+        service.fetch_role(&task, role, &mut detail).unwrap();
+        assert_eq!(std::fs::read(stage.join("hsjday.zip")).unwrap(), pinned);
+        assert_eq!(
+            detail["files"]["day"]["sha256"],
+            json!(crate::hash::sha256(&pinned))
+        );
     }
 }

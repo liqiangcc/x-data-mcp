@@ -1620,6 +1620,10 @@ fn update_batch_item(
     };
     let expected_revision = head.state_revision;
     let committed = {
+        // XDM-81: everything one item writes inside the chunk transaction
+        // (savepoint → series/raw commit → factor set → release), so a
+        // trace can separate it from `item_start`/`item_finish`.
+        let _item_span = crate::stage_trace::span("daily.commit_batch.item_payload");
         c.execute_batch("SAVEPOINT update_batch_item")
             .map_err(storage)?;
         // The arms run inside a closure so a `?` early-return becomes the
