@@ -16,6 +16,14 @@
   strict Skill 会话遇 revision 不匹配即停止。生产只有 `ops` 入口，
   `research`/`maint` 入口未部署（v8 第二阶段）。
 
+M2 随 preview.37 上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
+`market.security_master`、`market.risk_warnings`、`market.suspensions`、
+`market.price_limit_rules` 由**同一次日更 run 的 4 个内部派生 item** 维护
+（见下文「内部派生 item」）；交易所上市/退市名单、历史 ST（#308）、停复牌公告、
+涨跌停规则原文未接入时按 `pending_source` 记录，`risk_warnings`/`trading_rules`
+写 0 行、读取仍为 `absent`。因此日更成功后，M2 数据集的新鲜度与日线同步，
+不需要单独跑任务（详见 [STATUS](STATUS.md)「M2 随 preview.37 部署」）。
+
 已部署实例为 fresh compact schema 24；代码（main）同为 schema 24（M1 的 schema 22 +
 M2 PR-1 的 023 + M2 PR-2 的 024），三个入口合计注册 24 个工具；
 显式 init 的新库按代码的 schema 建立；`SCHEMA_VERSION=18` 仅为 legacy
@@ -212,8 +220,11 @@ Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目
 
 v7 起全市场日更改由 `plan_market_update`/`run_market_update` 完成（步骤与失败
 路由见 [generic-data-v8](contracts/generic-data-v8.md) §7）。同一次日线 run 里，
-worker 还会追加 10 个服务器内部派生 item（9 个指数基准 + 交易日历）；它们的
-item 级结果只用于报告（`entity`/`period` 为 null），不进入实体补漏清单。
+worker 还会追加 **14** 个服务器内部派生 item（9 个指数基准 + 交易日历 + 4 个 M2
+全市场数据集：`derived:security_master`、`derived:risk_warnings`、
+`derived:suspensions`、`derived:trading_rules`）；它们的 item 级结果只用于报告
+（`entity`/`period` 为 null），不进入实体补漏清单。4 个 M2 item 在来源未准入时
+**成功且写 0 行**（evidence 里带 `pending_sources`），只有 `error` 才是失败。
 
 ### 全新数据库
 

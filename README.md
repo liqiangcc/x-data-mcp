@@ -53,6 +53,14 @@ research 5 / ops 15 / maint 9），显式 `task_sqlite init` 的新库按代码�
 工具数量不是稳定契约，客户端仍须以运行实例 `tools/list` 与
 `get_data_capabilities` 为准。
 
+M2 随 preview.37 上线：6 个解析事实数据集（`market.security_master`、
+`market.capital_events`、`market.suspensions`、`market.risk_warnings`、
+`market.price_limit_rules`、`market.security_names`）在 `query_data` v2 上可读，
+日更 run 的内部 item 维护其中四个全市场数据集；交易所名单、历史 ST（#308）、
+停复牌公告与涨跌停规则原文未接入时按 `pending_source` 记录，读取结果按
+`absent`/0 行如实返回（详见 [STATUS](docs/STATUS.md)「M2 随 preview.37 部署」）。
+同一部署带上 `research-snapshot.v2` 研究快照导出。
+
 已实现并在真实 generation 上执行过：immutable generation 生命周期
 （acquire → byte verify → consistency verify → 条件 activate）、
 generation-bound daily/yearly update，catalog/daily/yearly/query/verification
