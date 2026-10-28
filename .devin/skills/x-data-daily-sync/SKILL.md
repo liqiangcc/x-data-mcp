@@ -33,7 +33,7 @@ allowed-tools:
 
 本 Skill 只编排结构化事实。禁止：shell/exec/SSH/curl/SQLite/读写本地文件、`run_worker_once`、自行签发任何验证结论、解析自由文本判断状态。所有调用只使用上方 allowlist 内的 MCP 工具；工具在本会话不可用（名称不符或 server 未注册）→ 立即停止并报告 `SKILL_CONTRACT_MISMATCH`。
 
-参数一律按 `tools/list` 中该工具的 `inputSchema` 传：schema 声明 `contract_version` 时必须为 `"v1"`；schema 未声明的字段一律不传（输入对象 `deny_unknown_fields`，多余字段即拒绝）。`update_data`/`start_collection`/`acquire_generation`/`verify_generation`/`activate_generation` 各自使用独立且唯一的 `request_id`；`plan_market_update` 只读、不建任务，`run_market_update` 每次受理需要一个独立且唯一的 `request_id`。
+参数一律按 `tools/list` 中该工具的 `inputSchema` 传：schema 声明 `contract_version` 时必须为 `"v1"`（唯一例外是 §4 的 M2 数据集回读：这些数据集只在 v2 面可读，显式传 `"v2"`）；schema 未声明的字段一律不传（输入对象 `deny_unknown_fields`，多余字段即拒绝）。`update_data`/`start_collection`/`acquire_generation`/`verify_generation`/`activate_generation` 各自使用独立且唯一的 `request_id`；`plan_market_update` 只读、不建任务，`run_market_update` 每次受理需要一个独立且唯一的 `request_id`。
 
 每个 MCP server 首次使用前按客户端要求调用一次 `mcp_list_tools`。该结果只用于确认 server
 可发现；registry 很大导致输出截断时，**不得读取 overflow 文件、不得使用 shell/exec，
@@ -150,6 +150,13 @@ pending 就必须停止。
 停止并报告**（generation 不可读，无法确定目标交易日），不要继续 run。`eligible` 即本次
 run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不进 run）。
 
+复核 plan 时若 `eligible` 只剩目标日无源 bar 的实体（停牌/无成交），**即视为完成，不再
+为它们发 run**。plan 的 eligible 只看已发布 head 的 `last_day`：`last_day >= target_day`
+进 `already_current`（`src/data_supply/plan.rs:603-606`），否则进 items（`:633`），不查
+目标日有没有源 bar。这类实体在 run 里按成功收尾、不产生失败项，所以同一状态再 plan 仍会
+把它们算进 `eligible`——这是观察到的判定事实，不是「源无 bar 即成功」的新契约。识别方法：
+`get_data_availability` 的 `last_record` < `target_day`。
+
 ### 3.2 日线 run + 轮询到终态
 
 `run_market_update`（`{"dataset":"market.daily","contract_version":"v1",
@@ -177,15 +184,21 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 实体，不进入 §3.3 的补漏清单**，按 `error` 原样报告即可（不 `retry_task`、不用
 `update_data` 补）。
 
-四个 M2 item 的判定与指数/日历略有不同，别把「未接入来源」当失败：
+四个 M2 item 的判定与指数/日历略有不同，别把「未接入来源」当失败。先注意
+`get_task_progress` v1/v2 只列 `unfinished`：成功项没有 per-item evidence（v2 的
+`publication_versions`/`range_results` 在 plan/run 任务上也是空的），`get_task` v2 也只
+给失败样本；所以 M2 的取值一律按 §4 用 `list_data_versions` 回读，不要从进度面读
+`row_count`/`version_id`/`pending_sources`。失败判定仍看进度面的 `error`/`status`：
 
-- **`evidence.pending_sources` 非空但 `error` 为空 = 成功**。
-  `derived:risk_warnings`（#308 未准入）与 `derived:trading_rules`（A-7 未准入）
-  正常就是 `row_count:0`、`version_id:null` 加一个 `pending_sources` 条目；
-  `derived:security_master` 会写主表并把交易所名单/简称历史列为 pending；
-  `derived:suspensions` 只出 `unresolved_gap`（`confirmed` 需公告准入）。
-- 只有 item 的 `error` 非空（或 `status=failed`）才算失败。`security_master`
-  失败时，`derived:suspensions` 可能因缺主表或主表绑定属于另一代而 fail-closed
+- **只有 item 的 `error` 非空（或 `status=failed`）才算失败**；来源未接入的 item 按成功
+  收尾，只写 0 行并在服务端 item 结果里记 `pending_sources`。
+  `derived:risk_warnings`（#308 未准入）与 `derived:trading_rules`（A-7 未准入）正常就是
+  这种 0 行成功；`derived:security_master` 会写主表并把交易所名单/简称历史列为 pending；
+  `derived:suspensions` 只出 `unresolved_gap`（`confirmed` 需公告准入）。对应写路径见
+  `src/data_supply/derived.rs:284`（security_master）、`:345`（risk_warnings）、
+  `:372`（suspensions）、`:407`（trading_rules；来源未准入时只返回 `pending_sources`、
+  不写 `market.price_limit_rules`）。`security_master` 失败时，`derived:suspensions`
+  可能因缺主表或主表绑定属于另一代而 fail-closed
   （也可能用本代已有的主表继续成功）；两个 item 都按各自 `error` 原样报告，
   不要只报一个，也不要重试。
 - **没有规则时涨跌停派生是 `unknown`，这是正确结果**，不要用 `price_limit_rules`
@@ -298,6 +311,10 @@ request_id 规则相同）。
 `partially_failed` 在全市场是**正常**收尾。逐 item 检查 outcome：
 
 - `published` / `no_change` → 正常。
+- 新股在 catalog 里、官方快照里没有对应 `.day` 成员时，`start_collection` 的 per-item
+  `error` 为 `member absent or ambiguous: expected exactly one of [...] found 0`（源成员定位，
+  `src/official_market.rs:586-590`）→ **预期 fail-closed**：不重试、不绕过，等官方快照
+  收录后再走本路径。
 - per-item `needs_verification`（含 `NEEDS_VERIFICATION`/`NOT_VERIFIED`/`SOURCE_NOT_VERIFIED`）或窗口内无源 bar → **预期 fail-closed 类别**：除权实体与停牌/退市尾部在全市场日更中常规出现。**不重试、不绕过**，继续后续 chunk；`REVISION_UNVERIFIED` 类按 §3.3 走显式 `update_data` 前向窗口补齐（这是唯一需要动作的失败类）。
 - 任务级失败、受理拒绝（整个调用被拒）、大面积同类 per-item 失败（系统性迹象）→ **停止**并报告，不继续提交剩余 chunk。
 
@@ -343,11 +360,24 @@ request_id。**推荐每个子批用新的唯一 request_id**，事后才能按 
 - 复用 §3.0/§3.1 的 catalog `version_id` 与实体枚举；对 market.daily 继续按 ≤100 实体分批调用 `get_data_availability`
   （`selection:{"kind":"batch","entities":[…]}`），确认 coverage/freshness/gap 事实。
 - `query_data` 抽样若干实体最新交易日数据（`selection:{"kind":"single"|"batch"}`，`filter:{"kind":"daily",...}`，`version:{"kind":"latest_per_entity"}`）。
-- M2 数据集随日更 run 更新，不单独跑任务：从 run 的 14 个内部 item evidence 里报告
-  `derived:security_master`/`derived:suspensions` 的 `row_count` 与 `version_id`，
-  以及 `derived:risk_warnings`/`derived:trading_rules` 的 `pending_sources`（只报告，
-  不当失败）。
-- 汇报：active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。
+- M2 数据集随日更 run 更新，不单独跑任务。`get_task_progress` v1/v2 只列 `unfinished`，
+  成功项没有 per-item evidence（v2 的 `publication_versions`/`range_results` 在 plan/run
+  任务上也是空的），`get_task` v2 也只给失败样本；所以 run 终态后对各目标 dataset 用
+  `list_data_versions` 只读回读，报告最新 `version_id` 与 `published_at`
+  （`published_at` 落在本次 run 的 `get_task.created_at` ~ 终态 `last_progress_at` 窗口内
+  即算本次产出）：
+  `market.security_master`/`market.risk_warnings`/`market.suspensions` 用
+  `{"contract_version":"v2","selection":{"kind":"universe"}}`；
+  `market.price_limit_rules` 用 `{"contract_version":"v2","selection":{"kind":"market"}}`。
+  内部 item 与 dataset 的对应：`derived:security_master`→`market.security_master`、
+  `derived:risk_warnings`→`market.risk_warnings`、`derived:suspensions`→`market.suspensions`、
+  `derived:trading_rules`→`market.price_limit_rules`。写路径分派以
+  `src/data_supply/derived.rs:284`/`:345`/`:372`/`:407` 为准（其中 `derived:trading_rules`
+  来源未准入时只返回 `pending_sources`、不写 `market.price_limit_rules`）；dataset 名称枚举
+  见 `src/data_supply/plan.rs:171-176`、`src/data_supply/wire.rs:72-77`。
+  未准入的数据集回读为 `row_count=0`、`versions=[]`
+  （`market.risk_warnings` 的 #308、`market.price_limit_rules` 的 A-7）：只报告，不算失败。
+- 汇报：active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。收尾时复核 plan：`eligible` 只剩 `last_record` < `target_day` 的停牌实体即视为完成，不再为它们发 run（§3.1）。
 
 可选：派生 `market.yearly` — 走 §3.4/§3.5/§3.6（plan/run + 显式重推），
 `selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
