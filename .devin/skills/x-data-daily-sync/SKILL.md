@@ -194,8 +194,11 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
   收尾，只写 0 行并在服务端 item 结果里记 `pending_sources`。
   `derived:risk_warnings`（#308 未准入）与 `derived:trading_rules`（A-7 未准入）正常就是
   这种 0 行成功；`derived:security_master` 会写主表并把交易所名单/简称历史列为 pending；
-  `derived:suspensions` 只出 `unresolved_gap`（`confirmed` 需公告准入）。`security_master`
-  失败时，`derived:suspensions` 可能因缺主表或主表绑定属于另一代而 fail-closed
+  `derived:suspensions` 只出 `unresolved_gap`（`confirmed` 需公告准入）。对应写路径见
+  `src/data_supply/derived.rs:284`（security_master）、`:345`（risk_warnings）、
+  `:372`（suspensions）、`:407`（trading_rules；来源未准入时只返回 `pending_sources`、
+  不写 `market.price_limit_rules`）。`security_master` 失败时，`derived:suspensions`
+  可能因缺主表或主表绑定属于另一代而 fail-closed
   （也可能用本代已有的主表继续成功）；两个 item 都按各自 `error` 原样报告，
   不要只报一个，也不要重试。
 - **没有规则时涨跌停派生是 `unknown`，这是正确结果**，不要用 `price_limit_rules`
@@ -368,8 +371,11 @@ request_id。**推荐每个子批用新的唯一 request_id**，事后才能按 
   `market.price_limit_rules` 用 `{"contract_version":"v2","selection":{"kind":"market"}}`。
   内部 item 与 dataset 的对应：`derived:security_master`→`market.security_master`、
   `derived:risk_warnings`→`market.risk_warnings`、`derived:suspensions`→`market.suspensions`、
-  `derived:trading_rules`→`market.price_limit_rules`（`src/data_supply/plan.rs:171-176`、
-  `src/data_supply/wire.rs:72-77`）。未准入的数据集回读为 `row_count=0`、`versions=[]`
+  `derived:trading_rules`→`market.price_limit_rules`。写路径分派以
+  `src/data_supply/derived.rs:284`/`:345`/`:372`/`:407` 为准（其中 `derived:trading_rules`
+  来源未准入时只返回 `pending_sources`、不写 `market.price_limit_rules`）；dataset 名称枚举
+  见 `src/data_supply/plan.rs:171-176`、`src/data_supply/wire.rs:72-77`。
+  未准入的数据集回读为 `row_count=0`、`versions=[]`
   （`market.risk_warnings` 的 #308、`market.price_limit_rules` 的 A-7）：只报告，不算失败。
 - 汇报：active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。收尾时复核 plan：`eligible` 只剩 `last_record` < `target_day` 的停牌实体即视为完成，不再为它们发 run（§3.1）。
 
