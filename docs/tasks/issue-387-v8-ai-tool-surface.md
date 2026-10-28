@@ -445,7 +445,7 @@ D-29 说「MCP 的 `export_data` 放进 v8 一起设计」。本设计的设计�
 | research | `full` | `text` == `structuredContent` 的同一份 compact JSON。响应本身已经是列式（T1 16 KB、T2 ≈140 KB），重复的代价从 130 KB 级降到 16–140 KB 级，且这是 ChatGPT/Claude 的**唯一**通道 |
 | ops | `summary` | payload ≤2 KB → `text` == 完整 JSON（小响应没必要省）；>2 KB → 有界摘要：`{"ok":true,"tool":…,"counts":{…},"next_cursor":…,"row_count":…,"refs":{…},"detail":"see structuredContent"}`（≤300 B），且**必含 Skill 已依赖的字段**（`status`/计数/`next_cursor`） |
 | maint | `summary` | 同 ops；运维是人在本机看 `structuredContent` |
-> 更新（D-36，XDM-94）：2026-10-28 AI 客户端（pi）实测否决 `summary` 作 `ops`/`maint` 缺省，
+> 更新（D-36，PR #447）：2026-10-28 AI 客户端（pi）实测否决 `summary` 作 `ops`/`maint` 缺省，
 > 代码缺省已改为全入口 `full`，`summary` 仅作显式选项；现行契约见
 > [generic-data-v8](../contracts/generic-data-v8.md) §7。下表保留为当时的设计记录。
 

@@ -87,21 +87,21 @@ M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 
 （`contract_version:"v2"` + `filter.kind:"daily"`，未登记版本返回 `manifest.status=absent` 与
 0 行）。producer 情况按来源分别如实记录：
 
-| 数据集 | 写入路径 | 未接入的来源（`pending_source`） |
+| 数据集 | 写入路径 | 未接入/未实现的来源（`pending_source`） |
 |---|---|---|
-| `market.security_master` | 日更 run 的 `derived:security_master` item | 交易所上市/退市名单、日期化简称历史（#308）；主表用 TDX `base.dbf` + `infoharbor_spec.cfg` + `gbbq` 组装，缺的来源在大表里按 `unknown`/`unbounded` 表达 |
+| `market.security_master` | 日更 run 的 `derived:security_master` item | 交易所上市/退市名单（待准入）、日期化简称历史（D-61）；主表用 TDX `base.dbf` + `infoharbor_spec.cfg` + `gbbq` 组装，缺的来源在大表里按 `unknown`/`unbounded` 表达 |
 | `market.capital_events` | 日线提交的同事务写入（`gbbq` 非 cat1 类别，D-41/D-50 准入后）；全量采集与日更都走这条路径 | 无 |
-| `market.suspensions` | 日更 run 的 `derived:suspensions` item | 停复牌公告（`confirmed` 行为 0，只出 `unresolved_gap`） |
-| `market.risk_warnings` | 日更 run 的 `derived:risk_warnings` item | 历史 ST（#308 未准入）：写入 0 行，只记 `pending_source` |
-| `market.price_limit_rules` | 日更 run 的 `derived:trading_rules` item | 规则原文（A-7 未准入）：写入 0 行，只记 `pending_source`；没有规则时涨跌停派生一律 `unknown` |
-| `market.security_names` | 暂无写入器 | 日期化简称历史（#308）；表随 schema 23 存在，导出的 `security_names.parquet` 是合法的 0 行文件 |
+| `market.suspensions` | 日更 run 的 `derived:suspensions` item | 停复牌公告写入器（D-49/D-60 已准入：沪市 2008 起可 `confirmed`，深市首期无 `confirmed`）：`confirmed` 行为 0，只出 `unresolved_gap` |
+| `market.risk_warnings` | 日更 run 的 `derived:risk_warnings` item | 历史 ST 写入器（#308，D-58 已按市场分档准入）：写入 0 行，只记 `pending_source` |
+| `market.price_limit_rules` | 日更 run 的 `derived:trading_rules` item | 规则行入库（A-7 已由 D-44 关闭，D-59 确认；剩余实现，PR-5）：写入 0 行，只记 `pending_source`；没有规则时涨跌停派生一律 `unknown` |
+| `market.security_names` | 暂无写入器 | 日期化简称历史（D-61：仅深交所 `SSGSGMXX`/`tab2` 准入，沪市/北交所 `NOT_AVAILABLE`）；表随 schema 23 存在，导出的 `security_names.parquet` 是合法的 0 行文件 |
 
 四个全市场 M2 数据集由**日更 plan-run** 的内部 item 维护（`derived:security_master`、
 `derived:risk_warnings`、`derived:suspensions`、`derived:trading_rules`，见
 [日更说明](daily-sync.md) 与 `src/task_control/derived.rs`）：全新库重建时，第 3 步的 v2
 `plan_market_update`/`run_market_update` 在实体 item 之后执行这四个 item。
 `derived:security_master` 与 `derived:suspensions` 会登记版本（`derived_dataset_versions`）；
-`derived:risk_warnings`/`derived:trading_rules` 在来源未准入时写 0 行、不登记版本，读取仍是
+`derived:risk_warnings`/`derived:trading_rules` 在写入器与规则入库未实现时写 0 行、不登记版本，读取仍是
 `manifest.status=absent` 而不是「空数据集」。`market.capital_events` 另有 per-entity 写入，
 不依赖这四个 item。研究快照导出（`research-snapshot.v2`，7 个 M2 文件）随 preview.37 部署。
 
@@ -141,7 +141,7 @@ preview.37 部署窗口一致。
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
 `outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
 隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），
-结论是 `summary` 不能作为 `ops`/`maint` 缺省。代码（XDM-94）已按 D-36 的
+结论是 `summary` 不能作为 `ops`/`maint` 缺省。代码（PR #447）已按 D-36 的
 「实测不通过就退回」把所有入口的文本模式缺省改为 `full`，`summary` 只作显式选项；
 当前生产仍靠上表的 `X_DATA_MCP_TEXT_MODE=full` 覆盖，代码缺省改动**待随下个 release
 部署**（drop-in 是否删除属部署事项），见
@@ -167,7 +167,7 @@ preview.36 重建）。
 | 交易日历 | **8,793** 天（1990-12-19 … 2026-10-23） | 日历表只读查询 |
 | 复权事件 | **56,514** 行，**5,126** 个因子集 | 因子事件表只读查询 |
 | 缺失 | `sh.688827`、`sz.001381`（官方 hsjday `.day` 缺成员，预期）保持 absent：catalog 中存在，日线/年线均无 series | `catalog_members` 反连接 `market_series` 只读查询 |
-| M2 数据集 | preview.37 起由日更 run 维护：`security_master` **5,503** 行 / 5,503 实体（`security-master-assembly-v1`）、`capital_events` **122,370** 行 / 5,224 实体（category 2: 3,816、3: 3,268、5: 107,703、7: 17、8: 126、9: 7,166、10: 274）、`suspension_intervals` **65,516** 段（全部 `unresolved_gap`，`confirmed` 0，`suspension-gap-v1`）、`code_migrations` **1**（`candidate`）；`risk_warning_intervals`、`price_limit_rules`、`min_tick_rules`、`security_name_history` 均 **0** 行（来源未准入/未接入，只记 `pending_source`）。`security_master`/`suspensions` 在 `derived_dataset_versions` 里各登记 1 个版本；`base.dbf` 字节相同的重复行已按 D-55 合并（`000020`、`200020`），合并数记在 item evidence 的 `duplicates_collapsed` | 只读查询 `derived_dataset_versions`、各表计数 |
+| M2 数据集 | preview.37 起由日更 run 维护：`security_master` **5,503** 行 / 5,503 实体（`security-master-assembly-v1`）、`capital_events` **122,370** 行 / 5,224 实体（category 2: 3,816、3: 3,268、5: 107,703、7: 17、8: 126、9: 7,166、10: 274）、`suspension_intervals` **65,516** 段（全部 `unresolved_gap`，`confirmed` 0，`suspension-gap-v1`）、`code_migrations` **1**（`candidate`）；`risk_warning_intervals`、`price_limit_rules`、`min_tick_rules`、`security_name_history` 均 **0** 行（ST/停牌/规则/简称的来源准入已按 D-58/D-59/D-60/D-61 裁决，写入器与规则入库未实现，只记 `pending_source`）。`security_master`/`suspensions` 在 `derived_dataset_versions` 里各登记 1 个版本；`base.dbf` 字节相同的重复行已按 D-55 合并（`000020`、`200020`），合并数记在 item evidence 的 `duplicates_collapsed` | 只读查询 `derived_dataset_versions`、各表计数 |
 | 重建耗时（生产，非独占） | 本轮（preview.37）：全量采集 write-loop **667s**（53 个 `start_collection` 块任务，00:22:05→00:32:54Z；其中 2 个 `partially_failed`——5,226 considered / 5,224 succeeded / 2 absent）；v2 `plan_market_update`/`run_market_update` **84s**（00:33:01→00:34:18Z，5 个 eligible 实体 + 14 个派生 item——9 指数 + 日历 + 4 个 M2——全部成功）；年线重聚合 **320s**（53 个任务，00:34:22→00:39:38Z）。历史（preview.36）：全量采集 write-loop 844s；v2 plan/run 41s（5 eligible + 10 派生）；年线 302s | 重建驱动记录、`tasks`（`created_at`/`last_progress_at`）、回填 PR |
 | 任务与事件 | 本轮：**108** 个任务——1 个 catalog 采集 + 53 个日线 collect（51 succeeded、2 `partially_failed`）+ 1 个 v2 日更 run + 53 个年线任务，全部结束，无 `running`；`market_events` **15,691** 行。历史（preview.35 时点）：579 个任务（529 succeeded、49 partially_failed、1 failed）、`market_events` 83,545 行 | `tasks`、`market_events` 只读查询 |
 | 退役记录 | 历史：`87322997…` 2026-10-19 退役；`2d5851a4…` 2026-10-24T16:57:16Z 退役（548M→16K）；`a119629b…` 2026-10-24T17:52Z 退役（574M→16K）；更早 4 个 2026-10-13 退役为 evidence_only | `generations/acquire.sqlite`、历史 `du -sb` |
@@ -181,7 +181,7 @@ preview.36 重建）。
   `market.security_master 5,503` 行、`market.capital_events 122,370` 行、
   `market.suspensions 65,516` 段、`market.security_names 0`；
   `market.risk_warnings` / `market.price_limit_rules` 返回 `manifest.status=absent` + 0 行，
-  并带各自的 `limitations`（来源未准入）。
+  并带各自的 `limitations`（当时来源未准入）。
 - 库内读回（只读 SQL，含 WAL）与导出/缓存无关的计数：catalog 5,226、日线前复权 5,224、
   年线 5,224、日历 8,793、复权事件 56,514、指数 9、主表 5,503、停牌 65,516。
 - 历史（preview.36）：全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行）；preview.37
