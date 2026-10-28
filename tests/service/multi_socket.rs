@@ -183,8 +183,9 @@ fn three_entries_in_one_process_match_the_single_socket_surfaces_byte_for_byte()
     assert_eq!(query["result"]["structuredContent"]["code"], "unknown_tool");
 
     // A tool served by two entries answers with the same payload bytes on
-    // both. Two entry-independent fields are excluded: `content[0].text` is
-    // entry-specific by design (D-36: ops/maint use a bounded summary), and
+    // both. Two entry-independent fields are excluded: `content[0].text` can
+    // be entry-specific when `X_DATA_MCP_TEXT_MODE=summary` is set explicitly
+    // (D-36; the code default is `full` for every entry), and
     // `snapshot_id`/`snapshot_time` identify one read, not one entry.
     let payload = |line: &str| -> Vec<u8> {
         let value: Value = serde_json::from_str(line).unwrap();

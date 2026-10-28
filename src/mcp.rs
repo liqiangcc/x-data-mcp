@@ -688,8 +688,8 @@ fn handle_tool_call<H: ToolHandler>(api: &H, id: Value, params: Value) -> Value 
 /// How the model-visible `content[0].text` is built (v8 §5.4, AC-V8-12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextMode {
-    /// `text` is the same compact JSON as `structuredContent` (research, and
-    /// the stdio/dev surface).
+    /// `text` is the same compact JSON as `structuredContent`. This is the
+    /// default for every entry (v8 §5.4, D-36).
     Full,
     /// Payloads above `SUMMARY_FULL_LIMIT` get a bounded summary; small
     /// payloads keep the full JSON.
@@ -709,17 +709,20 @@ impl TextMode {
     }
 }
 
-/// Entry default plus the `X_DATA_MCP_TEXT_MODE` override. Research is the
-/// only entry whose clients may see text alone (ChatGPT/Claude), so it keeps
-/// the full JSON; ops/maint are local/Agent surfaces and get the summary.
-pub fn resolve_text_mode(entry: Option<&str>, env: Option<&str>) -> TextMode {
+/// Entry default plus the `X_DATA_MCP_TEXT_MODE` override.
+///
+/// Every entry defaults to [`TextMode::Full`]: the Ops-C measurement on
+/// 2026-10-28 (pi 1.3.0) vetoed `summary` as a default for the ops/maint
+/// entries — a summary-only `text` left the operator surface without the
+/// payload the agent needed, so the real runs fell back to the full JSON
+/// (v8 rollout checklist §2.3 layer 3, D-36). `summary` stays available as an
+/// explicit opt-in through `X_DATA_MCP_TEXT_MODE=summary`, and `off` is kept
+/// for local throughput scripts.
+pub fn resolve_text_mode(_entry: Option<&str>, env: Option<&str>) -> TextMode {
     if let Some(mode) = env.and_then(TextMode::parse) {
         return mode;
     }
-    match entry {
-        Some("ops") | Some("maint") => TextMode::Summary,
-        _ => TextMode::Full,
-    }
+    TextMode::Full
 }
 
 /// Payloads at or below this size are cheaper to send whole than to describe.

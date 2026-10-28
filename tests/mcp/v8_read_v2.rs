@@ -380,19 +380,35 @@ fn text_grading_full_summary_and_off() {
 
 #[test]
 fn text_mode_defaults_by_entry_and_env_override() {
+    // D-36: the Ops-C measurement vetoed `summary` as a default, so every
+    // entry sends the full JSON unless the environment asks otherwise.
     assert_eq!(resolve_text_mode(None, None), TextMode::Full);
     assert_eq!(resolve_text_mode(Some("research"), None), TextMode::Full);
-    assert_eq!(resolve_text_mode(Some("ops"), None), TextMode::Summary);
-    assert_eq!(resolve_text_mode(Some("maint"), None), TextMode::Summary);
+    assert_eq!(resolve_text_mode(Some("ops"), None), TextMode::Full);
+    assert_eq!(resolve_text_mode(Some("maint"), None), TextMode::Full);
     assert_eq!(resolve_text_mode(Some("ops"), Some("full")), TextMode::Full);
+    assert_eq!(
+        resolve_text_mode(Some("ops"), Some("summary")),
+        TextMode::Summary,
+        "summary stays available as an explicit opt-in"
+    );
+    assert_eq!(
+        resolve_text_mode(Some("maint"), Some("summary")),
+        TextMode::Summary
+    );
     assert_eq!(
         resolve_text_mode(Some("research"), Some("off")),
         TextMode::Off
     );
+    assert_eq!(resolve_text_mode(Some("ops"), Some("off")), TextMode::Off);
     assert_eq!(
         resolve_text_mode(Some("research"), Some("nonsense")),
         TextMode::Full,
         "an unknown value falls back to the entry default; data_service refuses it at startup"
+    );
+    assert_eq!(
+        resolve_text_mode(Some("ops"), Some("nonsense")),
+        TextMode::Full
     );
     assert_eq!(TextMode::parse("summary"), Some(TextMode::Summary));
 }

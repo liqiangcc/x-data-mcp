@@ -122,9 +122,11 @@ impl Session {
         let text = result["content"][0]["text"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(text).unwrap();
         if parsed.get("detail").and_then(Value::as_str) == Some("see structuredContent") {
-            // ops entry: payloads above the summary threshold carry a bounded
-            // summary in text by design (v8 §5.4); structuredContent stays
-            // complete and is what this helper returns.
+            // Only reachable when a test explicitly asks for
+            // `X_DATA_MCP_TEXT_MODE=summary` (the code default is `full` for
+            // every entry, D-36): payloads above the summary threshold carry a
+            // bounded summary in text; structuredContent stays complete and is
+            // what this helper returns.
             assert!(text.len() <= 300, "summary is {} B: {text}", text.len());
             assert!(parsed.get("status").is_some(), "{parsed}");
         } else {

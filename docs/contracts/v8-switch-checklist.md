@@ -114,14 +114,15 @@ maint 清单含 `backfill_data`/`republish_data`/`retry_task`/`cancel_task`/`ver
 
 **结论：`summary` 不能作为 ops/maint 的缺省。** 准确表述分三层：
 
-1. **代码入口缺省**：`ops`/`maint` = `summary`，`research`（及 stdio/dev）= `full`
-   （`src/mcp.rs:719-721` 的 `resolve_text_mode`，[generic-data-v8](generic-data-v8.md) §7）。
-   不带覆盖部署时，`ops` 实际给 `summary`。
+1. **代码入口缺省**：当时（PR #445）`ops`/`maint` = `summary`，`research`（及 stdio/dev）= `full`。
+   **已落地**：`resolve_text_mode` 现在对所有入口缺省 `full`，`summary` 只是显式选项
+   （`src/mcp.rs:721-726`，[generic-data-v8](generic-data-v8.md) §7）。
 2. **当前生产**：由 systemd drop-in 设 `X_DATA_MCP_TEXT_MODE=full` 覆盖入口缺省
-   （[STATUS](../STATUS.md) 的「服务」表与部署记录；preview.36 起保持）。
-3. **后续跟踪**：D-36 写明「实测不通过就退回原样输出（`full`）」。按本次实测，把
-   **`ops`/`maint` 的代码缺省改为 `full`** 是待做的后续代码改动；本 PR 不改代码，
-   生产继续用环境变量覆盖。
+   （[STATUS](../STATUS.md) 的「服务」表与部署记录；preview.36 起保持）。代码缺省改动
+   **待随下个 release 部署**，drop-in 本 PR 不动（部署后是否删除属部署事项）。
+3. **后续跟踪**：**已落地（代码缺省 `full`，待随下个 release 部署）**。D-36 写明
+   「实测不通过就退回原样输出（`full`）」，按本次实测把 `ops`/`maint` 的代码缺省改为
+   `full`；`summary` 保留为显式选项，不删代码。
 
 依据：
 
@@ -320,7 +321,7 @@ Rust 测试由 CI 证明；部署主机上不编译。
 |---|---|---|---|
 | 隧道 | 研究入口异常、客户端不兼容 | drop-in 指回 `mcp.sock`，重启隧道 | 无 |
 | 单元 | 研究/maint socket 起不来或吃内存 | `systemctl stop` 整个 `x-data-mcp-data` 退回单 socket 旧 unit；三个 socket 同进程，不能单独停一个 | 无 |
-| 入口 | ops 入口 `text=summary` 不可用 | `X_DATA_MCP_TEXT_MODE=full` 重启 `x-data-mcp-data` | 无 |
+| 入口 | 文本模式输出不可用（如显式设了 `X_DATA_MCP_TEXT_MODE=summary`） | 去掉 drop-in 里的 `X_DATA_MCP_TEXT_MODE`（代码缺省即 `full`）或设 `full`，重启 `x-data-mcp-data` | 无 |
 | 二进制 + 库 | v8 形状有 P1 事故 | 上一版 release + 归档的 schema 21 库一起退 | 库回滚到归档点；期间的采集需重放 |
 
 只切回二进制会因 schema 不匹配拒绝启动（§0.4），**不能**只退二进制。
@@ -331,7 +332,7 @@ Rust 测试由 CI 证明；部署主机上不编译。
 |---|---|---|---|
 | B-1 | §2.1 租约模型：单进程多 socket / 只读租约 / 分时启停 | 决定 §3 能否上线 | 已裁决（2026-10-28，D-56）：单进程多 socket |
 | B-2 | §2.2 maint 写工具归属 | `x-data-mcp-maint` 是否可上线 | 已裁决（2026-10-28，D-56）：与 2.1 同裁决，maint 保留 9 工具、写租约只由该进程持有 |
-| B-3 | §2.3 AI 客户端实测（Q3） | `text=summary` 能否作为缺省 | 已完成（2026-10-28，pi 实测）：**不能**；生产继续用 `X_DATA_MCP_TEXT_MODE=full` 覆盖代码缺省，改代码缺省为 `full` 属后续跟踪 |
+| B-3 | §2.3 AI 客户端实测（Q3） | `text=summary` 能否作为缺省 | 已完成（2026-10-28，pi 实测）：**不能**；代码缺省已改为 `full`（XDM-94），`summary` 保留为显式选项，待随下个 release 部署 |
 | B-4 | §2.4 `x` 仓库两项核对 | 下游兼容 | 只读核对已做一次，部署日复测 |
 | B-5 | `market.daily` 是否补 `adjustment` 选项（[generic-data-v8](generic-data-v8.md) §12.2） | 研究入口只能读前复权 | 未裁决 |
 | B-6 | `metadata.adjustment` 是否补齐 `algorithm_version`/`price_scale`（§12.3） | 下游无法从响应判断精度与算法 | 未裁决 |
@@ -374,7 +375,7 @@ owner 2026-10-27 裁决：v8 先走**最小切换**，只保留现有 `x-data-mc
 1. **已完成（2026-10-28，D-56）**：§2.1 与 §2.2 已由 owner 裁决——单进程多 socket，
    maint 与 2.1 同裁决（9 工具保留，写租约只由这一个进程持有，worker 只在 ops 入口）。
 2. §2.6 的三单元常驻内存实测完成并给出 `MemoryMax`（已裁决为「先测量再定值」）。
-3. **已完成（2026-10-28）**：AI 客户端（pi）实测确认 `text=summary` 不可作缺省；生产继续用 `X_DATA_MCP_TEXT_MODE=full` 覆盖代码缺省，把 `ops`/`maint` 代码缺省改为 `full` 属后续跟踪，见 §2.3。
+3. **已完成（2026-10-28）**：AI 客户端（pi）实测确认 `text=summary` 不可作缺省；代码缺省已改为全入口 `full`（XDM-94），`summary` 仅作显式选项，待随下个 release 部署，见 §2.3。
 4. 最小切换在 `ops` 入口上连续运行，日更 Skill 无 `SKILL_CONTRACT_MISMATCH`。
 
 ### 9.5 下游 `x`（XDM-66 核对结论）
@@ -411,7 +412,7 @@ XDM-73 备忘（仓库外，2026-10-28）§6 的实施顺序已获批准，从�
 | 3 | PR-3：部署／探针／文档（`deploy_phase_g.sh`、`switch_binary.sh`、`wait_service_ready.py` 多 socket） | 已合并（#438） |
 | 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 已完成（XDM-84，2026-10-28；报告在仓库外） |
 | 5 | Ops-B：生产同进程三 socket，隧道不动 | 已执行（2026-10-28，随 preview.38，见 §9.7） |
-| 6 | Ops-C：AI 客户端实测（§2.3；Devin 不可用，改用 pi） | 已完成（2026-10-28；结论：`summary` 不可作缺省，生产保持 `full` override，代码缺省改动待跟踪） |
+| 6 | Ops-C：AI 客户端实测（§2.3；Devin 不可用，改用 pi） | 已完成（2026-10-28；结论：`summary` 不可作缺省；代码缺省已改为 `full`（XDM-94），`summary` 改为显式选项） |
 | 7 | Ops-D：隧道改指 `research.sock`（另行批准） | 未开始 |
 | 8 | Ops-E：maint 启用（仅本机 operator） | 未开始 |
 

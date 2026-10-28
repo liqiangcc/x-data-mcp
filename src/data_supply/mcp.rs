@@ -1241,10 +1241,11 @@ impl ToolHandler for DataApi {
     fn tools(&self) -> Value {
         self.public_tools()
     }
-    /// text grading (v8 §5.4, AC-V8-12): research keeps the full JSON,
-    /// ops/maint send a bounded summary for large payloads. The environment
-    /// switch overrides the entry default; `data_service` refuses to start on
-    /// an unknown value, so an invalid value here only means "not deployed".
+    /// text grading (v8 §5.4, AC-V8-12, D-36): every entry sends the full
+    /// JSON in `text` by default. The environment switch overrides that default
+    /// (`summary` stays an explicit opt-in); `data_service` refuses to start
+    /// on an unknown value, so an invalid value here only means "not
+    /// deployed".
     fn text_mode(&self) -> crate::mcp::TextMode {
         crate::mcp::resolve_text_mode(
             self.entry.map(|entry| entry.name()),
