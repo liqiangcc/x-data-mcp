@@ -3194,7 +3194,8 @@ mod archive_cache_tests {
     /// Three role-bound archives with one security, one qfq-bearing event.
     fn source(day: &[u8], gbbq: &[u8]) -> (tempfile::TempDir, TdxMarketSource) {
         let dir = tempfile::tempdir().unwrap();
-        let roles: [(&str, &str, &str, Vec<(&str, &[u8])>); 3] = [
+        type RoleFixture<'a> = (&'a str, &'a str, &'a str, Vec<(&'a str, &'a [u8])>);
+        let roles: [RoleFixture<'_>; 3] = [
             (
                 "base_industry",
                 "base.zip",
@@ -3311,14 +3312,16 @@ mod archive_cache_tests {
     fn the_cache_key_carries_the_manifest_archive_digest() {
         let gbbq = gbbq_member(&[]);
         let (_dir, source) = source(&bars(), &gbbq);
-        let _ = source
+        let cold = source
             .materialize_session()
             .materialize_pair("sh.600006")
             .unwrap();
         assert_eq!(source.archive_index_builds(), 2);
         // A different verified digest at the same canonical path is a
         // different key: the cache never answers one generation's digest
-        // with another's index.
+        // with another's index. The bars match (same file bytes), but the
+        // provenance of that "other generation" names its own digest — the
+        // digest is part of the identity, not just a cache detail.
         let mut other_generation = source.clone();
         other_generation.day.sha256 = sha(b"a different pinned archive");
         let other = other_generation
@@ -3326,6 +3329,7 @@ mod archive_cache_tests {
             .materialize_pair("sh.600006")
             .unwrap();
         assert_eq!(source.archive_index_builds(), 3);
+        assert_eq!(other.forward.bars, cold.forward.bars);
         // Falling back to the pinned digest reuses the original entry.
         let again = source
             .materialize_session()
@@ -3333,8 +3337,8 @@ mod archive_cache_tests {
             .unwrap();
         assert_eq!(source.archive_index_builds(), 3);
         assert_eq!(
-            serde_json::to_vec(&other.forward).unwrap(),
-            serde_json::to_vec(&again.forward).unwrap()
+            serde_json::to_vec(&again.forward).unwrap(),
+            serde_json::to_vec(&cold.forward).unwrap()
         );
     }
 }
