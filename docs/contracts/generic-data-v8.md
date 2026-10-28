@@ -82,6 +82,44 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
 ≤11,000 B、编排 15 ≤27,500 B、运维 9 ≤14,500 B；每条描述 ≤240 B；无 `outputSchema`；
 `inputSchema.type` 为 `object`。
 
+### 2.1 写边界（v8 P2 §2.2(c)，D-56）
+
+写受理边界**不是**「socket 必须叫 `mcp`」，而是「同一数据库只有一个进程持有
+`DatabaseLease` 和写协调器」。入口按工具面分工，不按写权限切进程：
+
+- **一个进程、一份租约、一个写协调器。** `data_service` 启动时取一次 lease；compact 库的
+  `WriteCoordinator` 只有一个写连接与一把互斥锁，后面挂着后台 worker 与所有会话。
+  `research`/`ops`/`maint` 的会话共用同一个 backend／tasks 句柄，因此**任何入口的写请求都走
+  同一个 coordinator、同一份租约**；第二个进程在同一库上会在 bind 之前被 lease 拒绝
+  （`tests/service/multi_socket.rs`，`one_process_holds_the_only_write_lease_...`）。
+- **ops 是自动编排入口。** 日更任务由 `plan_market_update`／`run_market_update`／
+  `update_data`／`start_collection` 受埋，后台 worker 只在本进程有 ops listener 时启动
+  （`config.run_worker = entries.contains(Ops)`，`src/bin/data_service.rs`），且整个进程只有一个
+  worker 循环、只服务 ops 会话。没有 ops socket 的进程不自动推任务。
+- **maint 是本机 owner-only 运维入口，保留 9 个工具。** 其中 6 个是写：`backfill_data`、
+  `republish_data`、`retry_task`、`cancel_task`、`verify_data_gap`、`run_worker_once`。maint 不做
+  转投、也不是独立进程；它不暴露隧道，只给本机 operator。
+- **`run_worker_once` 与后台 worker 共用 `WorkerGate`。** 一次 turn 至多推进一个 item；gate 被
+  worker 持有时，任何入口（包括 ops 自己）再调 `run_worker_once` 立即返回 `worker_busy`，不排队
+  也不启动第二个执行；关停中返回 `worker_stopping`。`run_worker_once` 与
+  `inspect_verification_task` 仍为 `operator_only`（`src/data_supply/registry.rs`）。
+- **写请求不因 worker 忙而被拒。** 任务受埋、取消、重试等写经同一个 coordinator 串行提交，
+  不取 `WorkerGate`，也不新增忙时错误：并发时排队而不是返回 `worker_busy`，错误码保持原样
+  （`request_conflict`／`range_conflict`／`task_not_found` 等）。只有 `run_worker_once` 会因 gate
+  忙而得到 `worker_busy`。
+- **幂等与不重复执行。** 同一 `request_id` 的并发受埋在请求绑定上收敛为同一个 task
+  （第二个为 `reused=true`），后继续执行也只走一个 worker turn。
+- **research 不得出现写工具。** research 是唯一隧道暴露面，启动闭合检查除「已注册且不重复」外
+  还要求其 allowlist 不含任何写工具（`EntryKind::validate_names`，`Entry::writes()`），否则拒绝
+  启动而不是静默提供。
+
+写分类的单一来源是 `Entry::writes()`（`src/data_supply/registry.rs`）；按入口的写集合与
+`operator_only` 由 `tests/mcp/v8_tool_surface.rs` 锁定，跨入口并发、`worker_busy`、写不因忙被拒与
+「不重复执行」由 `tests/service/local_runtime/write_boundary.rs` 锁定。
+
+未在此边界内的：`acquire` 入口是独立进程与独立状态库（生成 generation 目录），不写本库；
+本 PR 不验证真实 v2 日更下的时延与峰值，也不改部署单元。
+
 ## 3. 发现面
 
 ### 3.1 `get_data_capabilities`

@@ -112,19 +112,32 @@ impl EntryKind {
     /// appear once. A mismatch refuses to start instead of silently serving a
     /// wider or narrower surface.
     pub fn validate(self) -> Result<(), String> {
-        let Some(names) = self.allowlist() else {
-            return Ok(());
-        };
+        match self.allowlist() {
+            Some(names) => self.validate_names(names),
+            None => Ok(()),
+        }
+    }
+    /// The closure check itself, over an arbitrary list: every name is
+    /// registered exactly once, and the tunnel-exposed research entry never
+    /// lists a writing tool (v8 phase 2 §2.2(c)). Exposed so the startup guard
+    /// is testable without a second static allowlist.
+    pub fn validate_names(self, names: &[&str]) -> Result<(), String> {
         let registered = entries();
         for (index, name) in names.iter().enumerate() {
             if names[..index].contains(name) {
                 return Err(format!("entry {} lists {name} twice", self.name()));
             }
-            if !registered.iter().any(|entry| entry.name == *name) {
+            let Some(tool) = registered.iter().find(|entry| entry.name == *name) else {
                 return Err(format!(
                     "entry {} lists unregistered tool {name}",
                     self.name()
                 ));
+            };
+            // Every write commits through the one process write coordinator
+            // under the single database lease; a writing tool reachable from
+            // the only tunnel-exposed entry would step outside that boundary.
+            if self == Self::Research && tool.writes() {
+                return Err(format!("research entry lists write tool {name}"));
             }
         }
         Ok(())
@@ -163,6 +176,26 @@ impl Entry {
                 | Handler::VerifyStopped
                 | Handler::VerifyPublication
                 | Handler::InspectVerification
+                | Handler::VerifyGap
+                | Handler::RunMarketUpdate
+        )
+    }
+    /// State-changing tools: task acceptance/retry/cancellation, bounded data
+    /// writes and the single worker turn. All of them commit through the one
+    /// process `WriteCoordinator` under the single `DatabaseLease` (v8 phase 2
+    /// §2.2(c)), and the worker turn additionally holds the shared
+    /// `WorkerGate`. Reads, plans and forensics never appear here.
+    pub fn writes(&self) -> bool {
+        matches!(
+            self.handler,
+            Handler::Collection
+                | Handler::Range(_)
+                | Handler::Republish
+                | Handler::Retry
+                | Handler::Cancel
+                | Handler::Worker
+                | Handler::VerifyStopped
+                | Handler::VerifyPublication
                 | Handler::VerifyGap
                 | Handler::RunMarketUpdate
         )
