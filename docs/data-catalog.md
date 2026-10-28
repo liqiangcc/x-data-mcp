@@ -289,9 +289,10 @@ T 日股票池 `universe(as_of=T)`。
 `market.price_limit_rules` 由日更 run 的 4 个内部 item 维护，`market.capital_events` 随每条日线
 提交同事务写入，`market.security_names` 尚无写入器。**来源状态**：交易所上市/退市名单与
 A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、涨跌停规则原文（D-59）与简称
-历史（D-61）已准入，剩余是写入器与规则入库——未实现的部分仍在 item 结果里记为
-`pending_source`，对应数据集写 0 行、不登记版本（读取仍是 `absent`），不把未实现的
-部分伪造成数据。
+历史（D-61）已准入。规则书与 `derived:trading_rules` 的写路径已在代码中实现（仓库内版本化
+规则数据 + 校验；内容不变为 `no_change`），但 preview.37 实例仍是 0 行，下一次发布后才写入。
+其余未实现的部分仍在 item 结果里记为 `pending_source`，对应数据集写 0 行、不登记版本
+（读取仍是 `absent`），不把未实现的部分伪造成数据。
 **历史 ST 写入器未实现时不出行**：`market.risk_warnings` 不用当前名称推断历史，`unresolved`
 也不伪装成已知区间；没有规则时涨跌停派生一律 `unknown`。数据量见 [STATUS](STATUS.md)
 （本文件不写部署数字）。
@@ -351,17 +352,17 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
 | 9 | 历史 ST / \*ST | 缺失·计划中 | 2026-10-28 owner 按市场分档准入（D-58）：**深市** `SSGSGMXX`/`tab2` 的 ST 区间与**沪市 2000-01 起**公告索引的状态事件（事件级）为 `APPROVED_SOURCE`，沪市生效日按 GP29/行情锚定为 `OWNER_RISK_ACCEPTED`，沪市 2000 年前与北交所 `NOT_AVAILABLE`；无公告一律 `unknown`，禁止「无公告 ⇒ 非 ST」。**来源准入不再是阻塞，缺的是写入器**：`market.risk_warnings` 仍**写 0 行**（只记 `pending_source`），读取是 `absent` | #308 | M2（沪市 2000 年前为硬缺口，见 §3.3 偏差 2） | 未满足（准入已裁决、写入器未实现） |
 | 10 | 历史行业 | 部分提供 | 当前行业已提供（catalog 的 TDX 研究行业二级）；**历史区间不可回补**，只能从今天起逐代积累（每代 `tdxhy.cfg` 落变更集，不能靠留 generation 目录）。替代来源（证监会行业分类）需取证 | #1 | M3 | 未满足 → M3；历史部分首期无法达成 |
 | 11 | 停牌 | 部分提供（preview.37 部署） | 官方文件没有停牌标记，`.day` 也没有占位行。A-3 已由 D-49 准入、2026-10-28 定交付口径（D-60）：沪市 **2008 年起**可实现 `confirmed`（结构化事件表，`endStopDate`=复牌日前一自然日），**深市首期没有 `confirmed`**（无结构化源，`BULLETIN_TYPE` 过滤不可用），只到 `unresolved_gap`；深市全域可交易性统一 `unknown`（§3.3 偏差 6）。写入器未实现，`confirmed` 行数仍为 0 | #404（A-3） | M2（标记）/ M3（闭合） | 部分满足（缺口可查；`confirmed` 未实现） |
-| 12 | 涨跌停 | 缺失·计划中 | 结构已就绪（`market.price_limit_rules` 随 preview.37 部署，按生效日期管理、每行带 `basis_ref`/`basis_status`），**A-7 已由 D-44 关闭**（2026-10-26，2026-10-28 复核确认，见 D-59）：规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED` 且标「推断」、R7 `NOT_AVAILABLE`。**剩余只是实现**（规则行入库 PR-5 + 日更 `derived:trading_rules` 写路径），规则未入库前写入 0 行、派生一律 `unknown`；入库后仍需按生效日期的 ST 状态（依赖 #9） | #395（A-7） | M2 | 未满足（规则未入库、写入路径未实现） |
+| 12 | 涨跌停 | 部分提供（规则已入库，待发布；ST 仍缺） | 结构随 preview.37 部署（`market.price_limit_rules`，按生效日期管理、每行带 `basis_ref`/`basis_status`）。**A-7 已由 D-44 关闭**（2026-10-26，2026-10-28 复核确认，见 D-59）：规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED` 且标「推断」、R7 `NOT_AVAILABLE`。规则书（R1–R9 的生效段，含 R2 的 2026-07-06 两段）已作为版本化规则数据入库，日更 `derived:trading_rules` item 写入两表并登记版本（不变为 `no_change`）；preview.37 实例仍是 0 行，下一次发布后生效。剩余偏差：1996-12-16 前（R7）与 2023-02-17 前的主板 ST 段无规则 → `unknown`；ST 状态未知时，仅 `status_class='all'` 的板块/时段（创业板 2020-08-24 起、科创板）有确定值，其余 `unknown`（依赖 #9 写入器） | #395（A-7）、#308（ST） | M2 | 部分满足（规则行已入库；ST 未实现） |
 | 13 | ETF | 缺失·计划中 | 身份只能由交易所名单锚定（新来源待准入，D-25）；`.day` 对 ETF 的价格单位是**厘**（3 位小数）、`volume` 是**份**（≥4.29e9 份时改写为手）、gbbq 还有 cat11（份额折算）未进 QFQ；现有 `cents()` 要求恰好 2dp，3dp 会被**直接拒绝**（`compact_market.rs:812-822`）。owner 2026-10-26 裁决：作为 `market.daily` 的证券类型、按序列记精度、提供不复权 + cat1/cat11 因子，放 M3（D-28） | #246 | M3 | 未满足 → M3 |
 | 14 | 财务数据 | 不在范围 | 首期范围是价量 + 股本/市值，不含财务 | #1 | 不在首期 | — |
 | 15 | 分钟线 | 不在范围 | 首期只做日线；`series_bars.trade_day` 是日序号，分钟线要改主键 | #1 | 不在首期 | — |
 | 16 | 北交所 | 不在范围 | 暂不纳入；规则 S 已把 `f0=2` 显式排除（`scope.rs:10-24`） | #1、#246 | 不在首期 | — |
 
 > M2 相关项（#4 股本、#5 市值、#6 上市日、#7 退市日、#9 历史 ST、#11 停牌、#12 涨跌停）对应的
-> 6 个 dataset 随 preview.37 **已部署**；未登记版本返回 `absent`/0 行。`risk_warnings` 与
-> `price_limit_rules` 的来源准入已裁决、写入器与规则入库未实现时写 0 行（只记
-> `pending_source`），`suspensions` 只有 `unresolved_gap`（A-3 的准入已裁决，写入器未实现）。
-> 详见 §3.1「M2 部署状态」。
+> 6 个 dataset 随 preview.37 **已部署**；未登记版本返回 `absent`/0 行。`risk_warnings` 的来源
+> 准入已裁决、写入器未实现时写 0 行（只记 `pending_source`）；`price_limit_rules` 的规则书与
+> 日更写路径已在代码中实现（preview.37 实例仍 0 行，待发布）；`suspensions` 只有
+> `unresolved_gap`（A-3 的准入已裁决，写入器未实现）。详见 §3.1「M2 部署状态」。
 
 **ETF 的取证结论**（2026-10-26）：
 
@@ -405,13 +406,18 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
    （`data_gap`），不是 `suspended`；沪市 2008 年前同为 `unknown`。** 剩余偏差：
    `unresolved_gap` 只能说明「数据里没有 bar」，不能区分停牌、全天一字板未成交或数据缺失；
    回测要按「未知」剔除或单独报告敏感性。写入器未实现期间两市都只有 `unresolved_gap`。
-7. **涨跌停规则已准入、实现未完成**：A-7 已由 D-44 关闭（2026-10-28 复核确认，D-59）：规则
-   文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED`（必须标「推断」）、
-   R7 `NOT_AVAILABLE`。`price_limit_rules` 的每行仍带 `basis_ref` 与 `basis_status`，未取证的
-   规则只能以 `pending` 入库（provenance），派生时一律不选中。→ **规则行入库前所有日期都是
-   `unknown`，不是 0%，也不是「没有涨跌停」。** 剩余偏差：1996-12-16 之前（R7）永久
-   `unknown`，不能用「无涨跌幅限制」兜底；`daily_raw` 不物化涨跌停列（它是解析事实），需要
-   涨跌停的使用方必须自己带规则重算，并写明所用规则版本。
+7. **涨跌停规则已入库，但 ST 状态仍缺**：A-7 已由 D-44 关闭（2026-10-28 复核确认，D-59）：
+   规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED`（必须标「推断」）、
+   R7 `NOT_AVAILABLE`。规则书（R1–R9 的生效段）已作为版本化数据入库，日更 run 的
+   `derived:trading_rules` item 把规则写入 `market.price_limit_rules`/`min_tick_rules` 并登记版本
+   （内容不变时为 `no_change`，不重复发版本）。每行带 `basis_ref`/`basis_status`；未取证的规则
+   只能以 `pending` 入库，派生时一律不选中。→ **规则存在不等于每个日期都有答案**：1996-12-16
+   之前（R7）永久 `unknown`，不能用「无涨跌幅限制」兜底；主板 ST 段只从 2023-02-17 起有落行，
+   更早的 ST 派生是 `rule_missing`，不用今天的 5% 覆盖历史。ST 状态本身仍是 `unknown`
+   （§3.2 #9 写入器未实现），所以主板等「ST 与非 ST 幅度不同」的板块在未知 ST 下仍返回
+   `unknown`（带 `{5%,10%}` 等候选集）；创业板 2020-08-24 起与科创板由 `status_class='all'`
+   的规则行给出确定值，且不把未知 ST 记为 `normal`。`daily_raw` 不物化涨跌停列（它是解析
+   事实），需要涨跌停的使用方必须自己带规则重算，并写明所用规则版本。
 
 ## 4. 按用途看现在能做什么
 
@@ -434,9 +440,10 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
 - **按股价绝对值筛选**（如「股价 < 5 元」）：只有前复权价，除权后价格与当时价格不同；且 2dp 取整
   在低价段误差大（§2.2 已知限制 1）。
 - **判断涨跌停**：前一日不复权收盘已随 preview.36 部署，`price_limit_rules` 随 preview.37
-  上线；A-7 准入已由 D-44 关闭（D-59），但规则行未入库（写 0 行）；ST 状态已按市场分档准入
-  （D-58）、写入器未实现（§3.2 #9、#12）。三者不全时涨跌停派生返回 `unknown`，不能按 10%
-  自行推算。
+  上线；A-7 已由 D-44 关闭（D-59）且规则书已入库（日更 `derived:trading_rules`），preview.37
+  实例上仍是 0 行，需下一次发布。ST 状态已按市场分档准入（D-58）、写入器未实现（§3.2 #9）：
+  主板等板块在未知 ST 下仍是 `unknown`（ST 与非 ST 幅度不同），只有 `status_class='all'`
+  的板块/时段（创业板 2020-08-24 起、科创板）能给出确定值。不能按 10% 自行推算。
 **做不了**
 
 - 剔除当时处于风险警示的证券：`market.risk_warnings` 仍写 0 行（D-58 已按市场分档准入，

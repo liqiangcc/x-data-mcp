@@ -34,6 +34,16 @@ pub const DATASET_KEY: &str = "price_limit_rules";
 pub const ALGORITHM_VERSION: &str = "limit-v1";
 /// Digest algorithm of the rule dataset.
 pub const DIGEST_FORMAT: &str = "trading-rules-v1";
+/// Schema tag of the versioned rule-book file.
+pub const RULE_BOOK_SCHEMA: &str = "trading-rule-book/1";
+/// No price-limit row may start earlier than this day (D-44 (3), R7 is
+/// `NOT_AVAILABLE`). The loader enforces it so a later edit cannot reintroduce
+/// a "no limit" fallback for 1990-1996 (§8.5).
+pub const FIRST_ADMITTED_DAY: &str = "1996-12-16";
+/// The versioned rule book admitted by D-44 (A-7). It is repository data, not
+/// a generation input: the book changes only by a reviewed commit, which is
+/// exactly what makes it a rule *dataset* rather than a code constant.
+const RULE_BOOK_JSON: &str = include_str!("trading_rules/a7-d44-v1.json");
 
 /// The `market` column. `All` is the wildcard row the design allows; it is
 /// matched explicitly, never treated as "the default".
@@ -423,10 +433,12 @@ pub struct RuleBook {
     pub min_ticks: Vec<MinTickRule>,
 }
 
-/// The rule-source adapter's answer for one generation (issue-391 §8.1,
-/// A-7). `None` is the `pending_source` state, not "no rules": while the
-/// regulation text is unadmitted the dataset keeps zero rows and every band
-/// derivation stays `unknown`/`rule_pending` (§10.1, AC-M2-9).
+/// The rule-source adapter's answer (issue-391 §8.1, A-7). `Pending` is not
+/// "no rules" but "the regulation text is not admitted": the dataset would
+/// then keep zero rows and every band derivation stay `unknown`/`rule_pending`
+/// (§10.1, AC-M2-9). The embedded D-44 book is admitted, so the adapter below
+/// always answers `Admitted`; the variant is kept so the boundary cannot
+/// silently conflate "no rule matched" with "no admitted source".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleSource {
     Admitted(RuleBook),
@@ -436,20 +448,169 @@ pub enum RuleSource {
 
 /// The adapter boundary (§16 PR-8): one function, no trait.
 ///
-/// `Some(book)` is an admitted, generation-frozen rule snapshot. `None` is not
-/// an empty book: it is the `pending_source` state, and the daily item then
-/// writes nothing (there is no rule source to update from).
-pub fn rule_source(book: Option<RuleBook>) -> RuleSource {
-    match book {
-        Some(book) => RuleSource::Admitted(book),
-        None => RuleSource::Pending(crate::security_master::assembly::PendingSource {
-            dataset: DATASET_KIND,
-            source: "exchange_trading_rules",
-            reason: "no admitted rule text is frozen for this generation (S-9/A-7 pending); \
-                     zero rows are written and every band derivation stays unknown \
-                     (rule_pending)",
-        }),
+/// A-7 is admitted (D-44/D-59), so the answer is the embedded, versioned rule
+/// book rather than a `pending_source`. Loading validates the book, so a
+/// malformed repository data file fails the daily item instead of writing a
+/// partial rule set.
+pub fn rule_source() -> Result<RuleSource, RuleError> {
+    Ok(RuleSource::Admitted(rule_book()?))
+}
+
+/// The embedded rule book, parsed and validated by [`rule_book_from_json`].
+pub fn rule_book() -> Result<RuleBook, RuleError> {
+    rule_book_from_json(RULE_BOOK_JSON)
+}
+
+/// One `not_available` / `not_encoded` entry of the rule-book file. The two
+/// lists are provenance: they say which design rules are deliberately absent
+/// and why, so "no row" is an explicit statement rather than an omission.
+#[derive(Debug, Deserialize)]
+struct UnencodableRule {
+    rule: String,
+    range: String,
+    #[serde(default)]
+    status: String,
+    reason: String,
+}
+
+/// The on-disk shape. `price_limit_rules`/`min_tick_rules` use the same field
+/// names as the tables; the rest is provenance that never reaches storage.
+#[derive(Debug, Deserialize)]
+struct RuleBookFile {
+    schema: String,
+    snapshot_id: String,
+    #[serde(default)]
+    notes: Vec<String>,
+    #[serde(default)]
+    not_available: Vec<UnencodableRule>,
+    #[serde(default)]
+    not_encoded: Vec<UnencodableRule>,
+    price_limit_rules: Vec<PriceLimitRule>,
+    min_tick_rules: Vec<MinTickRule>,
+}
+
+/// Parse and validate a versioned rule-book file. The checks are the ones a
+/// data change must not be able to skip (§8.1): structural validity, no
+/// overlapping or duplicate scope, basis provenance present and tiered, no
+/// row before R7's boundary (`1996-12-16`), and every board the read model can
+/// derive actually covered.
+pub fn rule_book_from_json(text: &str) -> Result<RuleBook, RuleError> {
+    let file: RuleBookFile = serde_json::from_str(text).map_err(RuleError::json)?;
+    if file.schema != RULE_BOOK_SCHEMA {
+        return Err(RuleError::Invalid(format!(
+            "rule book schema {:?} is not {RULE_BOOK_SCHEMA}",
+            file.schema
+        )));
     }
+    if file.snapshot_id.trim().is_empty() {
+        return Err(RuleError::Invalid("rule book has no snapshot_id".into()));
+    }
+    if file.notes.is_empty() {
+        return Err(RuleError::Invalid("rule book has no notes".into()));
+    }
+    if file.not_encoded.is_empty() {
+        return Err(RuleError::Invalid(
+            "rule book must name the rules it deliberately omits".into(),
+        ));
+    }
+    for entry in file.not_available.iter().chain(&file.not_encoded) {
+        if entry.rule.trim().is_empty()
+            || entry.range.trim().is_empty()
+            || entry.reason.trim().is_empty()
+        {
+            return Err(RuleError::Invalid(
+                "a not_available/not_encoded entry is incomplete".into(),
+            ));
+        }
+    }
+    let r7 = file.not_available.iter().any(|entry| {
+        entry.rule == "R7" && entry.status == "NOT_AVAILABLE" && entry.range.contains("1996-12-15")
+    });
+    if !r7 {
+        return Err(RuleError::Invalid(
+            "R7 must be declared NOT_AVAILABLE for 1990-12-19..1996-12-15".into(),
+        ));
+    }
+    let book = RuleBook {
+        price_limits: file.price_limit_rules,
+        min_ticks: file.min_tick_rules,
+    };
+    validate_admitted_book(&book)?;
+    Ok(book)
+}
+
+/// The scopes `crate::research::price_limit` can classify (A shares only).
+/// A rule book that omits one of them would answer `rule_missing` on every
+/// query for that board, so the omission must be explicit, not accidental.
+const REQUIRED_SCOPES: [(RuleMarket, RuleBoard); 4] = [
+    (RuleMarket::Sh, RuleBoard::Main),
+    (RuleMarket::Sz, RuleBoard::Main),
+    (RuleMarket::Sz, RuleBoard::Gem),
+    (RuleMarket::Sh, RuleBoard::Star),
+];
+
+/// The admission checks of the frozen book, exposed to tests so each rule can
+/// be violated deliberately. Storage validation (`RuleBook::validate`) runs
+/// first: a book that cannot be written cannot be admitted either.
+pub(crate) fn validate_admitted_book(book: &RuleBook) -> Result<(), RuleError> {
+    book.validate()?;
+    let price_limits = &book.price_limits;
+    let min_ticks = &book.min_ticks;
+    let first = NaiveDate::parse_from_str(FIRST_ADMITTED_DAY, "%Y-%m-%d")
+        .map_err(|error| RuleError::Invalid(error.to_string()))?;
+    for rule in price_limits {
+        if rule.effective_from < first {
+            return Err(RuleError::Invalid(format!(
+                "{} starts before {FIRST_ADMITTED_DAY}; R7 is NOT_AVAILABLE and no \"no limit\" row may fill it",
+                rule.rule_id
+            )));
+        }
+        check_basis(&rule.rule_id, &rule.basis_ref)?;
+    }
+    for rule in min_ticks {
+        check_basis(&rule.rule_id, &rule.basis_ref)?;
+    }
+    for (market, board) in REQUIRED_SCOPES {
+        if !price_limits
+            .iter()
+            .any(|rule| rule.market == market && rule.board == board)
+        {
+            return Err(RuleError::Invalid(format!(
+                "rule book has no price-limit row for {} {}",
+                market.as_str(),
+                board.as_str()
+            )));
+        }
+        if !min_ticks
+            .iter()
+            .any(|rule| rule.market == market && rule.board == RuleBoard::All)
+        {
+            return Err(RuleError::Invalid(format!(
+                "rule book has no min-tick row for {}",
+                market.as_str()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Provenance is mandatory and its tier must be readable: an owner-risk or
+/// inferred row has to say so, otherwise it could be mistaken for a plain
+/// `APPROVED_SOURCE` clause (§8.1, D-44 (2)(5)).
+fn check_basis(rule_id: &str, basis_ref: &str) -> Result<(), RuleError> {
+    let approved = basis_ref.contains("APPROVED_SOURCE");
+    let owner_risk = basis_ref.contains("OWNER_RISK_ACCEPTED");
+    if !approved && !owner_risk {
+        return Err(RuleError::Invalid(format!(
+            "{rule_id} basis_ref names no APPROVED_SOURCE/OWNER_RISK_ACCEPTED tier"
+        )));
+    }
+    if (basis_ref.contains("推断") || basis_ref.contains("行情锚定")) && !owner_risk {
+        return Err(RuleError::Invalid(format!(
+            "{rule_id} basis_ref is inferred/anchor-based but not marked OWNER_RISK_ACCEPTED"
+        )));
+    }
+    Ok(())
 }
 
 /// The outcome of one rule lookup. `Pending` is not `Missing`: the second says

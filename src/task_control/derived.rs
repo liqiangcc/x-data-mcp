@@ -37,7 +37,8 @@ pub const SUSPENSIONS: &str = "derived:suspensions";
 pub const TRADING_RULES: &str = "derived:trading_rules";
 /// Every M2 dataset item, in execution order: the main table first (the
 /// suspension gaps are derived from it), then the datasets whose source is
-/// still pending, then the rules.
+/// still pending, then the rules (admitted by D-44; the item writes the
+/// versioned rule book and reports `no_change` when it is already stored).
 pub const DATASETS: [&str; 4] = [SECURITY_MASTER, RISK_WARNINGS, SUSPENSIONS, TRADING_RULES];
 /// Prefix of the per-benchmark index items (§9.2); the suffix is the entity.
 pub const INDEX_PREFIX: &str = "derived:index:";

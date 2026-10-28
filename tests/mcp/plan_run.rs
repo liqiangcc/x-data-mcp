@@ -681,33 +681,47 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
         gaps,
         ("unresolved_gap".into(), "missing_bar_no_event".into(), 1)
     );
-    // The two pending M2 datasets wrote no rows and record the pending source
-    // on their item evidence (AC-M2-13).
-    for (table, kind) in [
-        ("risk_warning_intervals", "risk_warnings"),
-        ("price_limit_rules", "price_limit_rules"),
-    ] {
-        let rows: i64 = c
-            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(
-            rows, 0,
-            "{kind} keeps zero rows while its source is pending"
-        );
-        let version: i64 = c
-            .query_row(
-                "SELECT count(*) FROM derived_dataset_versions WHERE dataset_kind=?1",
-                [kind],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            version, 0,
-            "{kind} must not register a version without rows"
-        );
-    }
+    // `derived:risk_warnings` still has no admitted source, so it writes no
+    // rows and records the pending source on its item evidence (AC-M2-13).
+    let risk_rows: i64 = c
+        .query_row("SELECT count(*) FROM risk_warning_intervals", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(risk_rows, 0, "risk_warnings keeps zero rows while pending");
+    let risk_version: i64 = c
+        .query_row(
+            "SELECT count(*) FROM derived_dataset_versions WHERE dataset_kind=?1",
+            ["risk_warnings"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        risk_version, 0,
+        "risk_warnings must not register a version without rows"
+    );
+    // `derived:trading_rules` writes the admitted D-44 rule book: both tables
+    // are non-empty and the dataset registers one version (A-7 implementation).
+    let rules: i64 = c
+        .query_row("SELECT count(*) FROM price_limit_rules", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert!(rules > 0, "the admitted rule book writes its rows");
+    let ticks: i64 = c
+        .query_row("SELECT count(*) FROM min_tick_rules", [], |row| row.get(0))
+        .unwrap();
+    assert!(ticks > 0, "the admitted rule book writes its min ticks");
+    let rules_version: (String, i64) = c
+        .query_row(
+            "SELECT version_id,record_count FROM derived_dataset_versions \
+             WHERE dataset_kind='price_limit_rules' AND dataset_key='price_limit_rules'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(rules_version.0.len(), 64);
+    assert_eq!(rules_version.1, rules + ticks);
     for (id, expected_dataset) in [
         ("derived:security_master", "security_master"),
         ("derived:risk_warnings", "risk_warnings"),
@@ -728,17 +742,25 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
             evidence["elapsed_ms"].as_u64().is_some(),
             "{id} records its elapsed time: {evidence}"
         );
-        if matches!(id, "derived:risk_warnings" | "derived:trading_rules") {
+        if matches!(id, "derived:risk_warnings") {
             assert_eq!(evidence["row_count"], 0);
             assert_eq!(evidence["pending_sources"][0]["dataset"], expected_dataset);
             assert!(evidence["pending_sources"][0]["source"].is_string());
         } else {
             // The exchange/suspension announcement source is pending, but the
             // dataset still writes the rows its admitted TDX inputs prove.
-            assert_eq!(evidence["pending_sources"][0]["dataset"], expected_dataset);
+            // `derived:trading_rules` has no pending branch left (A-7 admitted)
+            // and reports `no_change` on a repeat of identical content.
+            if id == "derived:trading_rules" {
+                assert_eq!(evidence["no_change"], false);
+                assert_eq!(evidence["row_count"], rules + ticks);
+                assert_eq!(evidence["pending_sources"], json!([]));
+            } else {
+                assert_eq!(evidence["pending_sources"][0]["dataset"], expected_dataset);
+            }
             assert!(
                 evidence["row_count"].as_i64().is_some_and(|n| n > 0),
-                "{id} wrote its TDX-derived rows: {evidence}"
+                "{id} wrote its admitted rows: {evidence}"
             );
         }
         if id == "derived:security_master" {

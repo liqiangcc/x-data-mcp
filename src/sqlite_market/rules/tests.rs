@@ -270,3 +270,72 @@ fn an_invalid_set_is_rejected_before_any_write() {
             .is_empty()
     );
 }
+
+fn commit(c: &Connection, book: &RuleBook, task_id: &str) -> Result<TradingRulesCommit, Error> {
+    let evidence = json!({"generation_id": "gen-1", "manifest_sha256": "fixture"});
+    commit_trading_rules(
+        c,
+        &TradingRulesWrite {
+            book,
+            task_id,
+            item_id: "derived:trading_rules",
+            generation_id: "gen-1",
+            generation_manifest_sha256: &"0f".repeat(32),
+            member_sha256: &"0c".repeat(32),
+            security_event_sha256: &"0e".repeat(32),
+            generation_evidence: &evidence,
+        },
+    )
+}
+
+fn small_book() -> RuleBook {
+    RuleBook {
+        price_limits: vec![
+            rule("sz-normal", RuleMarket::Sz, 1_000),
+            rule("sh-normal", RuleMarket::Sh, 1_000),
+        ],
+        min_ticks: vec![
+            tick("sz-tick", RuleMarket::Sz),
+            tick("sh-tick", RuleMarket::Sh),
+        ],
+    }
+}
+
+#[test]
+fn the_first_run_publishes_and_an_identical_run_is_no_change() {
+    let fixture = Fixture::new();
+    let book = small_book();
+    let first = commit(&fixture.c, &book, "task-1").unwrap();
+    assert!(!first.no_change);
+    let published = first.registration.expect("a non-empty book registers");
+    assert_eq!(published.task_id, "task-1");
+    assert_eq!(published.record_count, 4);
+
+    let second = commit(&fixture.c, &book, "task-2").unwrap();
+    assert!(
+        second.no_change,
+        "identical content must not mint a version"
+    );
+    let kept = second.registration.expect("the stored version is returned");
+    assert_eq!(kept.version_id, published.version_id);
+    // The registration is left untouched: a no-change run does not re-stamp
+    // the task/evidence that published the content.
+    assert_eq!(kept.task_id, "task-1");
+    assert_eq!(kept.updated_at, published.updated_at);
+    assert_eq!(read_trading_rules(&fixture.c).unwrap(), book);
+}
+
+#[test]
+fn a_changed_rule_book_publishes_a_new_version() {
+    let fixture = Fixture::new();
+    let mut book = small_book();
+    let first = commit(&fixture.c, &book, "task-1").unwrap();
+    book.price_limits[0].band_bp = Some(2_000);
+    let second = commit(&fixture.c, &book, "task-2").unwrap();
+    assert!(!second.no_change);
+    assert_ne!(
+        second.registration.unwrap().version_id,
+        first.registration.unwrap().version_id
+    );
+    assert_eq!(read_trading_rules(&fixture.c).unwrap(), book);
+}
