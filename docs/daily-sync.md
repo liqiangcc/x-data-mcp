@@ -82,7 +82,7 @@ readiness 仍是机器事实入口；本文不替代 runtime readiness。
 | Use case | 完成 acquire、verify、activate、update、query 等单一业务动作 | 调用者工作流策略 |
 | MCP Adapter | 封闭 schema、权限、错误和结果映射 | 跨工具编排 |
 | Capability | 支持矩阵、前置条件、副作用、outcome、runtime/governance readiness | 返回下一工具或 Skill 内容 |
-| Devin Skill | 根据用户目标与结构化状态跨两个 server 编排 | 自行签发兼容性或修订 PASS |
+| 执行 Skill 的 AI 客户端 | 根据用户目标与结构化状态跨两个 server 编排 | 自行签发兼容性或修订 PASS |
 | 文档 | 人类安装、边界和排障 | 作为运行时授权/readiness 来源 |
 
 Tool 返回当前动作的事实：`state`、`state_revision`、`outcome`、`outcome_certainty`、稳定 `refs`、证据引用和 reason codes。Tool/Capability 不返回 `next_actions`、其他工具名、Skill URL 或 Skill 正文。
@@ -185,7 +185,7 @@ Skill 必须：
 - 对 `unknown`、`not_verified`、`conflict`、未授权 revision 和 outcome unknown 保持 fail closed。
 - 正常 background runtime 不调用 `run_worker_once`。
 
-Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目使用，再从同一源打包 pinned Devin Plugin；业务 MCP 不返回 Skill URL/content。
+Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目使用，再从同一源打包为 pinned plugin；业务 MCP 不返回 Skill URL/content。
 
 ## 目标工作流
 
@@ -225,7 +225,9 @@ worker 还会追加 **14** 个服务器内部派生 item（9 个指数基准 + �
 全市场数据集：`derived:security_master`、`derived:risk_warnings`、
 `derived:suspensions`、`derived:trading_rules`）；它们的 item 级结果只用于报告
 （`entity`/`period` 为 null），不进入实体补漏清单。4 个 M2 item 在来源未准入时
-**成功且写 0 行**（evidence 里带 `pending_sources`），只有 `error` 才是失败。
+**成功且写 0 行**（evidence 里带 `pending_sources`），只有 `error` 才是失败；tool 面
+（`get_task_progress`/`get_task`）只暴露失败项，成功项的取值按 Skill §4 用
+`list_data_versions` 回读。
 
 ### 全新数据库
 
@@ -298,7 +300,7 @@ SHA 当作 #131 PASS。
 | 首采 DB ≤2.5GiB、部署 ≤4GiB、首采 ≤20min | 有 | 历史（preview.28 部署包口径）：DB 约 831MB、首采约 340s | 历史 PASS；当前口径待定，见 [SLO](SLO.md)，当前事实见 [STATUS](STATUS.md) |
 | 同代 no-change `update_data`（≤15min、≤4KiB/item、`data_versions +0`） | 有 | preview.27/schema20：5,222 items / 616s / +18.5MB / 0 new versions | PASS |
 | 跨代 envelope / 真实 append·rewrite | 有实测 | cross-gen 约 37min（preview.29 measured baseline，无批准 hard SLO）；#320 后 proven append 可走 typed metadata path，rewrite/unsupported metadata 仍 envelope/fail-closed；typed 全市场生产 timing 待测 | measured / 不外推 |
-| 新 Devin 会话仅 Skill+MCP | Skill 文件存在 | 无独立会话证据 | 未验收 |
+| 全新 AI 客户端会话仅 Skill+MCP | Skill 文件存在 | 无独立会话证据 | 未验收 |
 | 双 MCP 可复现部署 | release 双 binary + `deploy_phase_g.sh` | 历史（preview.29 时期）：双 systemd 服务在运行 | 历史 PASS；当前部署见 [STATUS](STATUS.md) |
 | overall production readiness | capability 恒实报告 false | owner-only declared scope 可观测 | owner-only operational；external distribution not authorized |
 
@@ -311,7 +313,7 @@ SHA 当作 #131 PASS。
 3. Acquisition 每个 crash point 可按 request identity 恢复确定事实。
 4. 从 verified generation 到全市场 daily update 的 changed/unchanged/修订分支均可仅通过 MCP 完成。
 5. Tools/list、capability、handler 和 examples 来自同一 descriptor；广告分支有正向契约测试。
-6. 全新 Devin 会话仅调用项目 Skill 完成 unchanged/changed 流程，不读源码、不用 shell。
+6. 全新 AI 客户端会话仅调用项目 Skill 完成 unchanged/changed 流程，不读源码、不用 shell。
 7. Skill 和服务端 revisions 不匹配时停止，而非猜测兼容。
 8. ECS 2 vCPU/约 2 GiB 环境的本地日更新目标不超过 3 分钟、硬上限 5 分钟；网络下载单独计量。
 
