@@ -569,10 +569,7 @@ impl Fixture {
                 .unwrap();
         for member in members {
             let Some(status) = member.risk else { continue };
-            let exchange = match member.exchange {
-                Exchange::Sh => "sh",
-                Exchange::Sz => "sz",
-            };
+            let exchange = member.exchange.as_str();
             tx.execute(
                 "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
                  raw_status_code,normalized_status,announced_at,known_at,source_kind,\
