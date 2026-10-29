@@ -113,6 +113,9 @@ fn open(db: &Path) -> MarketBackend {
     let tasks = SqliteTasks::new(db);
     if !db.exists() {
         tasks.initialize_compact().unwrap();
+        // The compact backend's lease refuses a world-readable database file.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(db, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
     MarketBackend::open(&tasks).unwrap()
 }
