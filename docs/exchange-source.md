@@ -71,7 +71,10 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
 - 0 行默认失败（`unverified_zero`）：只有「整段窗口晚于今天」这一种显式声明才允许 0 行
   （`EmptyPolicy`）。「0 行」不是「没有事件」的证据（§6.4、`work/evidence-notes.md` U-1）。
 - 计数不一致（`pageHelp.total`/`recordcount` 与收集行数不符、页数不符、重复页）一律
-  `truncated`，入口返回失败；已冻结的页仍按上面的规则入索引。
+  `truncated`，入口返回失败；已冻结的页仍按上面的规则入索引。例外：上交所
+  `GPLB_GP_L` 等 sqlId 的 `pageHelp.total` 恒为 `0`（M2 A-1 实测，A-1/A-2 适配器依赖
+  这一页），因此 `total=0` 按「未声明总数」处理而不是「总数为 0」；页数/重复页校验
+  照旧，0 行仍是 `unverified_zero`。
 - 多段运行（如按季度循环）逐段隔离：成功的段照常写库；失败的段不出行，整体返回
   `partially_failed` 并列出失败窗口。已冻结快照保留。
 - `basis_status` 低于写入门槛时 `bind` 返回 `source_not_admitted`，`Entry` 在发请求前
@@ -112,8 +115,27 @@ additive）。
 登记自己的版本；未登记的版本按 §9.4.1 一律 fail-closed（`unknown_parser`，
 scope 不重建），不会用「不认识就跳过」掩盖字节。
 
-## 6. 本 PR 不含
+## 6. A-1/A-2 消费者（`derived:security_master`）
 
-- 任何具体来源的 parser 与写入器（PR-3/PR-10/PR-11/PR-12）；
+PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费本入口：
+
+- 四个 source_id、七个请求：沪 `sse_listing`（主板 A `STOCK_TYPE=1` / 科创 `=8`）、
+  沪 `sse_delisting`（同上两种 + `COMPANY_STATUS=3`）、深 `szse_listing`
+  （`CATALOGID=1110`）、深 `szse_delisting`（`CATALOGID=1793_ssgs` + `selectModule`
+  `main`/`nm`）。七个请求共用一个 `RunCache`。
+- 来源库位置由 `X_DATA_MCP_SOURCE_STORE` 指定（部署为 `<deploy-state>/source-store`）。
+  未设置时该 item 不失败：交易所分支写 `pending_source`，只落 TDX 事实。
+- 业务字段 parser 版本 `exchange-a1a2-v1` 与来源绑定登记在 item 的结果证据
+  `exchange_source` 里；清单的 `parser_version` 仍是信封版本，因为
+  `--scope exchange` 重放只重建行数/页数索引。**不要**把该证据加进 generation
+  evidence：同一代的 whole-market item 共用同一个 binding digest
+  （`derived:suspensions` 会重算并拒绝跨代主表），追加字段会让其余 item 失败。
+- 失败码沿用本入口（`source_unavailable` / `source_invalid` /
+  `source_not_admitted` / `partially_failed`）；`derived:security_master` 因此失败时，
+  上一版主表保持可读，TDX 日更不受影响。
+
+## 7. 本 PR 不含
+
+- 其余具体来源的 parser 与写入器（PR-10/PR-11/PR-12；PR-3 只接入 A-1/A-2）；
 - 真实联网抓取（CI 全部使用夹具；真实抓取只在私有栈验收）；
 - 部署脚本改动（重放已是部署步骤，`--db` 的接线由 PR-6 的部署改动承载）。
