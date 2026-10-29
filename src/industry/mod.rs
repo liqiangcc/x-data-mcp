@@ -1232,6 +1232,16 @@ pub fn register_generation_members(
     incon.publisher_last_modified = members.incon_publisher_last_modified.map(str::to_string);
     incon.container_sha256 = Some(members.base_zip_sha256.to_string());
     let dictionary_sha256 = store.register(members.incon_bytes, &incon)?.sha256;
+    // The observation log, not the table, says what came before (§5.3): the
+    // registration above is the last line of the manifest, so the previous
+    // `tdxhy.cfg` observation is the last one that is not ours.
+    let previous_member_sha256 = store
+        .records()?
+        .iter()
+        .filter(|record| record.source_id == crate::source_store::TDXHY_SOURCE_ID)
+        .filter(|record| !(record.sha256 == member_sha256 && record.origin == origin))
+        .next_back()
+        .map(|record| record.sha256.clone());
 
     let record = SnapshotRecord {
         member_sha256,
@@ -1254,14 +1264,6 @@ pub fn register_generation_members(
         // (a value only the daily path could set would drift on rebuild).
         notes: None,
     };
-    // The observation log, not the table, says what came before (§5.3).
-    let previous_member_sha256 = store
-        .records()?
-        .iter()
-        .filter(|record| record.source_id == crate::source_store::TDXHY_SOURCE_ID)
-        .filter(|record| !(record.sha256 == member_sha256 && record.origin == origin))
-        .next_back()
-        .map(|record| record.sha256.clone());
     Ok(GenerationSnapshot {
         facts: SnapshotFacts {
             record,
