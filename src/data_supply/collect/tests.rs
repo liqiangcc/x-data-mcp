@@ -104,7 +104,7 @@ fn write_mirror(dir: &Path) {
     let short = one_day();
     let empty: &[u8] = &[];
     let fillers: Vec<String> = (201..=270)
-        .map(|code| format!("sh\\lday\\sh6{code:03}.day"))
+        .map(|code| format!("sh\\lday\\sh600{code:03}.day"))
         .collect();
     let mut members: Vec<(&str, &[u8])> = vec![
         ("sh\\lday\\sh600101.day", full.as_slice()),
