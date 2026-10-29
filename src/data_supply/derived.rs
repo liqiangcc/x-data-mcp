@@ -513,6 +513,19 @@ fn execute(
             },
         )?;
         let record = &snapshot.facts.record;
+        // M3 PR-8: register the industry facts this item produced. Both
+        // evidence digests are read back from the store before the rows are
+        // written (§8.2: irreproducible facts carry verified evidence).
+        if let Some(dictionary_sha256) = record.dictionary_sha256.as_deref() {
+            let facts = crate::generation_gate::industry_fact_rows(
+                &store,
+                &facts.manifest_sha256,
+                &record.store_sha256,
+                dictionary_sha256,
+            )
+            .map_err(|error| Error::Integrity(error.to_string()))?;
+            market.record_generation_facts(&facts)?;
+        }
         return Ok(json!({
             "dataset": item.item_id,
             // The snapshot content identity: the item's version, since the M3

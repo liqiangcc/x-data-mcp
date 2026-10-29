@@ -19,6 +19,7 @@ use crate::{
         ConsistencyStatus, FileFact, MemberBinding,
     },
     generation::{self, Installed},
+    generation_gate::{GateCheck, RetireGate},
     snapshot::{FileInput, FileRole},
 };
 use chrono::Utc;
@@ -84,6 +85,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
+    #[error("retire gate: {0}")]
+    Gate(#[from] crate::generation_gate::GateError),
     #[error("{0}")]
     Refused(&'static str),
 }
@@ -97,6 +100,7 @@ impl Error {
             Self::Fetch(_) => "fetch_error",
             Self::Json(_) => "internal_error",
             Self::Io(_) => "io_error",
+            Self::Gate(_) => "retire_gate_unavailable",
         }
     }
 }
@@ -141,6 +145,12 @@ pub struct AcquireService {
     db: store::Db,
     fetcher: Arc<dyn fetch::Fetcher>,
     mutations: Arc<Mutex<()>>,
+    /// Retirement gate (M3 PR-8): source-store evidence plus the market
+    /// database's rebuildable fact index, read through a read-only
+    /// connection. `None` means the deployment did not configure a market
+    /// database, and retirement is refused rather than deleting bytes
+    /// unchecked.
+    retire_gate: Option<RetireGate>,
 }
 
 struct Role {
@@ -216,6 +226,18 @@ impl AcquireService {
     /// running tasks return to `accepted`, and the generations table is
     /// re-aligned with the on-disk active pointer.
     pub fn open(root: impl Into<PathBuf>, source: Source) -> Result<Self, Error> {
+        Self::open_with_retire_gate(root, source, None)
+    }
+
+    /// Open with the retirement gate configured. The deployment passes the
+    /// market database path (the acquire process never opens it writable;
+    /// see [`RetireGate`]); tests pass a fixture database to exercise the
+    /// gate end to end.
+    pub fn open_with_retire_gate(
+        root: impl Into<PathBuf>,
+        source: Source,
+        retire_gate: Option<RetireGate>,
+    ) -> Result<Self, Error> {
         let store = generation::Store::new(root.into());
         std::fs::create_dir_all(store.staging_dir())?;
         std::fs::create_dir_all(store.generations_dir())?;
@@ -236,6 +258,7 @@ impl AcquireService {
             db,
             fetcher: source.fetcher()?,
             mutations: Arc::new(Mutex::new(())),
+            retire_gate,
         };
         service.reconcile()?;
         Ok(service)
@@ -1033,12 +1056,15 @@ impl AcquireService {
             ));
         }
         match self.retire_bytes_and_mark(row)? {
-            Ok(()) => Ok(wire::RetireReply {
+            Ok(exemptions) => Ok(wire::RetireReply {
                 request_id: request_id.into(),
                 generation_id: generation_id.into(),
                 state: GEN_EVIDENCE_ONLY.into(),
                 reason_code: None,
-                detail: None,
+                // An exempted retire is still a retire; the audit trail names
+                // what it covered so the reply proves the exception was used.
+                detail: (!exemptions.is_empty())
+                    .then(|| format!("exemptions: {}", exemptions.join(","))),
                 reused: false,
             }),
             Err(RetireBlock::Pinned(pins)) => Ok(wire::RetireReply {
@@ -1055,6 +1081,34 @@ impl AcquireService {
                 state: "refused".into(),
                 reason_code: Some("generation_referenced".into()),
                 detail: Some(format!("inflight acquisition task {task_id}")),
+                reused: false,
+            }),
+            Err(RetireBlock::Gate(check)) => Ok(wire::RetireReply {
+                request_id: request_id.into(),
+                generation_id: generation_id.into(),
+                state: "refused".into(),
+                reason_code: check.reason_code().map(str::to_string),
+                detail: Some(check.detail()),
+                reused: false,
+            }),
+            Err(RetireBlock::GateUnavailable(error)) => Ok(wire::RetireReply {
+                request_id: request_id.into(),
+                generation_id: generation_id.into(),
+                state: "refused".into(),
+                reason_code: Some("retire_gate_unavailable".into()),
+                detail: Some(error),
+                reused: false,
+            }),
+            Err(RetireBlock::GateUnconfigured) => Ok(wire::RetireReply {
+                request_id: request_id.into(),
+                generation_id: generation_id.into(),
+                state: "refused".into(),
+                reason_code: Some("retire_gate_unconfigured".into()),
+                detail: Some(
+                    "the acquire service has no market database; retirement checks the \
+                     source-store evidence and generation_facts before deleting bytes"
+                        .into(),
+                ),
                 reused: false,
             }),
         }
@@ -1083,7 +1137,26 @@ impl AcquireService {
             }
             let generation_id = row.generation_id.clone();
             match self.retire_bytes_and_mark(row) {
-                Ok(Ok(())) => retired.push(generation_id),
+                Ok(Ok(_)) => retired.push(generation_id),
+                Ok(Err(RetireBlock::Gate(check))) => {
+                    eprintln!(
+                        "acquire retention: {generation_id} keeps its bytes: {}: {}",
+                        check.reason_code().unwrap_or("retire_gate"),
+                        check.detail()
+                    );
+                }
+                Ok(Err(RetireBlock::GateUnavailable(error))) => {
+                    eprintln!(
+                        "acquire retention: {generation_id} keeps its bytes: \
+                         retire_gate_unavailable: {error}"
+                    );
+                }
+                Ok(Err(RetireBlock::GateUnconfigured)) => {
+                    eprintln!(
+                        "acquire retention: {generation_id} keeps its bytes: \
+                         retire_gate_unconfigured: no market database configured"
+                    );
+                }
                 Ok(Err(_blocked)) => {}
                 Err(e) => {
                     eprintln!("acquire retention: retiring {generation_id} failed: {e}");
@@ -1094,13 +1167,14 @@ impl AcquireService {
     }
 
     /// Shared retire action: a live pin or an accepted/running acquisition
-    /// task blocks the retire (not an error); otherwise the bytes are
-    /// deleted and the row becomes `evidence_only`. Callers own the
+    /// task blocks the retire (not an error); then the retirement gate
+    /// (source-store evidence + derived-fact index) must pass; otherwise the
+    /// bytes are deleted and the row becomes `evidence_only`. Callers own the
     /// active-generation and confirm-token checks.
     fn retire_bytes_and_mark(
         &self,
         row: store::Generation,
-    ) -> Result<Result<(), RetireBlock>, Error> {
+    ) -> Result<Result<Vec<String>, RetireBlock>, Error> {
         let pins = self.store.pins(&row.generation_id)?;
         if !pins.is_empty() {
             return Ok(Err(RetireBlock::Pinned(pins)));
@@ -1111,13 +1185,25 @@ impl AcquireService {
         {
             return Ok(Err(RetireBlock::Inflight(task.task_id)));
         }
+        // M3 PR-8: both the manual retire and the automatic retention end
+        // here, so both go through the same gate. Nothing is deleted before
+        // the source store reads the irreproducible bytes back and the
+        // derived-fact index names every required kind.
+        let Some(gate) = self.retire_gate.as_ref() else {
+            return Ok(Err(RetireBlock::GateUnconfigured));
+        };
+        let exemptions = match gate.check(&row.manifest_sha256) {
+            Ok(check) if !check.passes() => return Ok(Err(RetireBlock::Gate(check))),
+            Ok(check) => check.exemptions,
+            Err(error) => return Ok(Err(RetireBlock::GateUnavailable(error.to_string()))),
+        };
         self.store.retire_bytes(&row.generation_id)?;
         self.db.upsert_generation(&store::Generation {
             state: GEN_EVIDENCE_ONLY.into(),
             updated_at: Utc::now(),
             ..row
         })?;
-        Ok(Ok(()))
+        Ok(Ok(exemptions))
     }
 
     // ---------- status ----------
@@ -1161,6 +1247,13 @@ impl AcquireService {
 enum RetireBlock {
     Pinned(Vec<String>),
     Inflight(String),
+    /// The retirement gate refused: evidence and/or facts are missing.
+    Gate(GateCheck),
+    /// The gate could not be evaluated (store/database unreadable). Never a
+    /// reason to delete bytes.
+    GateUnavailable(String),
+    /// No market database was configured, so the gate has nothing to check.
+    GateUnconfigured,
 }
 
 fn detail_bytes(detail: &Value) -> u64 {

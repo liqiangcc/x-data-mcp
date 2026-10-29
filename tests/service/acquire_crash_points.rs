@@ -10,7 +10,8 @@
 //! `src/generation/mod.rs` (`install_staged`, `activate`, `retire_bytes`)
 //! — see RESULT-PAR-2.md for the full crash-point table.
 use crate::acquire_service::{
-    activate, drive, generation_of, install, open, remirror, sha, today_u32, verify, write_mirror,
+    activate, drive, gate_fixture, generation_of, install, open, open_gated, remirror,
+    satisfy_gate, sha, today_u32, verify, write_mirror,
 };
 use chrono::Utc;
 use std::path::Path;
@@ -934,9 +935,13 @@ fn crash_between_retire_bytes_and_row_update_retries_idempotent() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());
     let root = tempfile::tempdir().unwrap();
-    let service = open(root.path(), mirror.path());
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
     let gen_a = generation_of(&service, &install(&service, "req-p17a").task_id);
     verify(&service, &gen_a);
+    // The gate's evidence must survive the simulated crash: it lives in the
+    // source store and the market index, not in the deleting generation.
+    satisfy_gate(&service, &gate, &gen_a);
     assert_eq!(activate(&service, &gen_a, None).state, "active");
     remirror(mirror.path(), 600007, today_u32());
     let gen_b = generation_of(&service, &install(&service, "req-p17b").task_id);
@@ -963,7 +968,7 @@ fn crash_between_retire_bytes_and_row_update_retries_idempotent() {
     service.generations().retire_bytes(&gen_a).unwrap();
     drop(service);
 
-    let service = open(root.path(), mirror.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
     // Mechanically determinable mid-state: byte checks fail closed,
     // audit artifacts remain, the row is unchanged.
     assert!(

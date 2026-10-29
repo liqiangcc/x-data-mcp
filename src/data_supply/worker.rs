@@ -135,6 +135,10 @@ pub fn run_once(
                     runner.run_item(&candidate.task.task_id, &item.spec.item_id)?;
                 }
             }
+            // M3 PR-8: register the market-derived facts this generation now
+            // has (daily series, capital/adjustment events), so the retirement
+            // gate does not depend on a replay having run.
+            market.register_derived_generation_facts(source.manifest_sha256())?;
             return Ok(Some(control.read_task(&candidate.task.task_id)?));
         }
         return Ok(control.run_selected(candidate, &crate::official_files::BlockedSource)?);
@@ -293,6 +297,11 @@ pub fn run_once(
             &control.run_id,
             &derived,
         )?;
+    }
+    // M3 PR-8: same registration as the first-establishment path; an
+    // unchanged-input update still re-registers the same digest.
+    if let Some(session) = session.as_ref() {
+        market.register_derived_generation_facts(session.source().manifest_sha256())?;
     }
     Ok(Some(control.read_task(&candidate.task.task_id)?))
 }

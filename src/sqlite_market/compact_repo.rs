@@ -209,6 +209,67 @@ impl SqliteCompactMarket {
         })
     }
 
+    /// Register the derived facts one successful writer produced (M3 PR-8,
+    /// `#446` §8.2). The upsert keys on `(generation, role, kind)` and
+    /// refreshes the digest, so a rerun cannot leave a stale digest behind.
+    pub(crate) fn record_generation_facts(
+        &self,
+        facts: &[crate::generation_gate::GenerationFact],
+    ) -> Result<(), Error> {
+        self.tx(|c| super::generation_facts::record_facts(c, facts))
+    }
+
+    /// Replace the whole `generation_facts` index (`replay --scope
+    /// generation_facts`), in one transaction.
+    pub(crate) fn replace_generation_facts(
+        &self,
+        facts: &[crate::generation_gate::GenerationFact],
+    ) -> Result<(), Error> {
+        self.tx(|c| super::generation_facts::replace_facts(c, facts))
+    }
+
+    /// Every stored generation fact, for the replay's `--verify-only`
+    /// comparison.
+    pub(crate) fn read_generation_facts(
+        &self,
+    ) -> Result<Vec<crate::generation_gate::GenerationFact>, Error> {
+        self.read(|c| super::generation_facts::read_facts(c, None))
+    }
+
+    /// The market-derived facts one generation actually wrote, recomputed
+    /// from the derived tables' `source_bindings` (§9.4.2).
+    pub(crate) fn derived_generation_facts(
+        &self,
+        generation: &str,
+    ) -> Result<Vec<crate::generation_gate::GenerationFact>, Error> {
+        self.read(|c| super::generation_facts::derived_facts_for(c, generation))
+    }
+
+    /// Every generation's market-derived facts, the DB half of the
+    /// `generation_facts` replay.
+    pub(crate) fn all_derived_generation_facts(
+        &self,
+    ) -> Result<Vec<crate::generation_gate::GenerationFact>, Error> {
+        self.read(super::generation_facts::all_derived_facts)
+    }
+
+    /// The generation's recorded exemptions, for tests and forensics.
+    pub(crate) fn read_retire_exemptions(
+        &self,
+        generation: &str,
+    ) -> Result<Vec<crate::generation_gate::RetireExemption>, Error> {
+        self.read(|c| super::generation_facts::read_exemptions(c, generation))
+    }
+
+    /// Record one operator exemption; only the `source_store exempt` CLI and
+    /// tests call this, never the retire path.
+    pub(crate) fn record_retire_exemption(
+        &self,
+        exemption: &crate::generation_gate::RetireExemption,
+    ) -> Result<(), Error> {
+        self.tx(|c| super::generation_facts::record_exemption(c, exemption))
+    }
+
     /// The stored raw-bar spans on a read connection (issue-391 §4.1), as
     /// candidate migration leads for the main table.
     pub(crate) fn raw_bar_spans(

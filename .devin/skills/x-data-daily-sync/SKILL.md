@@ -129,6 +129,7 @@ pending 就必须停止。
 4. `verify_generation(request_id=<新值>, generation_id)`：结果必须是 `consistency_verified`；`not_verified` / `conflict` / 其他 → 停止并报告。
 5. 先 `sync_status` 取当前 `active_generation_ref`；`activate_generation(request_id=<新值>, generation_id, expected_previous=<当前 active 或省略>`) 。拒绝/conflict → 停止，旧 active 不变。
 6. 再次 `sync_status` 确认 active 已切换到目标 generation，否则停止。
+7. `retired_generations` 比预期少，可能是 M3 退役门禁（`source_store_evidence_missing`/`derived_facts_missing`）跳过了某个旧代；这是正常保留结果，不是激活失败，不重试激活。`acquire_generation` 返回 `generation_capacity` 时同样只报告 6/6 现状并交给 owner/operator；退役受门禁约束，可能被拒。Skill 不得调用 `retire_generation`，不得删除 generation 目录，也不得写退役豁免：门禁拒绝原样转述缺失清单，交 owner 用 `source_store replay`/`source_store exempt` 处理。
 
 ## 3. 数据更新（v7：日线 plan/run → 日线补漏 → 年线 plan → 年线 run → 年线补漏 → readback）
 

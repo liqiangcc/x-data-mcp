@@ -9,8 +9,10 @@ PR-1a 落地的库格式、入口与当前边界。
 
 - **blob + `manifest.jsonl` 是事实源**。SQLite 里的 `industry_snapshots`、
   `exchange_source_snapshots`、`generation_facts` 是索引，可由来源库重建。
-  这三张索引表与 `industry_assignments`/`retire_exemptions` 由 schema 25（M3 PR-1）建出，
-  当前为空：PR-1 只建结构，写入器在 PR-2/PR-6/PR-8，因此本文描述的写入顺序由那些 PR 断言。
+  这三张索引表与 `industry_assignments`/`retire_exemptions` 由 schema 25（M3 PR-1）建出；
+  写入器在 PR-2/PR-6/PR-8。PR-8 起 `generation_facts` 由行业 item、日更派生路径登记，
+  并可由 `replay --scope generation_facts` 重建；`retire_exemptions` 只由
+  `source_store exempt` 写入，退役路径不会自豁免。
 - 写入顺序固定：blob 落盘、`fsync`、清单追加、`fsync`，之后才允许写索引行。
   「blob 在、清单在、索引缺」是允许的中间态；「索引有行、blob 不可读」不可接受。
 - 读面、重放和退役门禁一律按 sha256 读回校验；不符即
@@ -89,6 +91,8 @@ source_store verify --store <dir> [--scope industry|exchange|generation_facts|al
   [--db <market.sqlite>]
 source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
   [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+source_store exempt --db <market.sqlite> --generation <manifest sha256> \
+  --missing <key> --reason <text> --recorded-by <who> [--owner-approve-evidence]
 ```
 
 输出为单个 JSON 对象；退出码 0 表示 `ok` 或 `store_empty`，1 表示
@@ -98,7 +102,8 @@ source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 排序后的规范化摘要。scope 的写入器到位情况：`exchange` 自 PR-2 起可从清单
 重建 `exchange_source_snapshots`（见 [交易所来源入口](exchange-source.md) §4），
 `industry` 自 PR-6 起可重建 `industry_snapshots`/`industry_assignments`，
-`generation_facts` 仍是 PR-1a 的 `skeleton_no_op`，由 PR-8 实现。`rebuilt` 取值：
+`generation_facts` 自 PR-8 起重建设备退役门禁索引（行业成员 + 已绑定的派生事实）。
+`rebuilt` 取值：
 `skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）。
 空库返回 `store_empty`，不算失败。
 
@@ -106,7 +111,8 @@ source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 不创建数据库；给了以后 scope 在单个事务里替换自己的索引表，写后回读并与
 重算摘要比较，`match` 才算成功，否则输出 `drift` 与前 20 条差异主键。
 `--verify-only` 只重算并比较、不写。重放在服务启动前执行，因此直接取数据库
-租约，不和在线写入竞争。
+租约，不和在线写入竞争。`generation_facts` 的报告多一个 `facts` 计数（重放
+后索引的总行数）；摘要不含登记时间，清空表后重放应得到同一 `summary`。
 
 `industry` 的时间线只由清单里**带发布方 `last_modified` 的登记**构成观测（见
 [行业快照设计](tasks/issue-446-m3-delisted-industry.md) §5.6.1）：相邻且内容相同的
@@ -115,7 +121,22 @@ source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 发布方时间时才取最早获取时间作为唯一一次回退边界。同一内容的多条登记合并成一个
 `industry_snapshots` 行（§5.3），时间与等级取该内容全部登记的最优值。
 
-## 5. 一次性导入（归档索引）
+## 5. 退役豁免
+
+退役门禁（[M3 设计](tasks/issue-446-m3-delisted-industry.md) §8.3）默认拒绝：
+来源库没有按 sha 读回的证据，或 `generation_facts` 缺必需 kind。确有外部原因时，
+owner 用 `source_store exempt` 写一行豁免，再重试退役：
+
+- `--missing` 用门禁报告里的键：`source_store_evidence:<role>:<source_id>` 或
+  `derived_fact:<role>:<fact_kind>`。
+- `--reason` 与 `--recorded-by` 必须非空；时间由命令写入。
+- 来源库证据的豁免必须再加 `--owner-approve-evidence`，否则命令拒绝（退出码 2）。
+- 豁免只覆盖列出的键，不覆盖 active/pin/in-flight 检查；退役成功后回复
+  `detail=exemptions: ...` 指明用到了哪些豁免。
+- 门禁本身绝不写豁免；Skill/自动流程也不得代为豁免（见
+  [日更文档](daily-sync.md)）。
+
+## 6. 一次性导入（归档索引）
 
 `--index` 是 JSONL，一行一份归档批次；`--blobs` 是容器所在目录，索引里的
 `source_path` 必须是其下的相对路径。每行示例（字段含义见代码
@@ -143,7 +164,7 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
 归档的历史获取时间——否则等于声称当时已经用上了这份数据（设计 §5.2）；重复导入
 命中 `already_present`，清单里保留第一次的 `imported_at`，重放因此稳定。
 
-## 6. 部署钩子
+## 7. 部署钩子
 
 `scripts/deploy_phase_g.sh` 在 fresh init 之后、**服务启动之前**调用一次
 `source_store replay --store <state>/source-store --db <market db> --scope all`
@@ -152,7 +173,7 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
 `source_store_replay` 字段且不算失败；非 0 退出（例如 blob sha 读回不符）会让
 部署失败，而不是部署一个「探活通过、历史为空」的实例。回滚不动来源库。
 
-## 7. 验证边界
+## 8. 验证边界
 
 CI 覆盖写序故障注入（fsync/rename 各失败点无悬空清单行）、按 sha 读回不符 →
 `source_store_corrupt`、重复导入不增 blob/行、重放两次摘要相同、空库

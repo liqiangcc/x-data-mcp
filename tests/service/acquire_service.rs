@@ -8,7 +8,17 @@ use std::sync::{Arc, Mutex};
 use x_data_mcp::acquire::fetch::{self, Fetcher};
 use x_data_mcp::acquire::wire;
 use x_data_mcp::acquire::{AcquireApi, AcquireService, Source};
+use x_data_mcp::generation_gate::{
+    GenerationFact, KIND_INDUSTRY_DICTIONARY, KIND_INDUSTRY_SNAPSHOT, REQUIRED_FACTS, ROLE_BASE,
+    RetireExemption, RetireGate,
+};
 use x_data_mcp::mcp::ToolHandler;
+use x_data_mcp::source_store::{
+    INCON_PARSER_VERSION, INCON_SOURCE_ID, Registration, SourceStore, StoreKind,
+    TDXHY_PARSER_VERSION, TDXHY_SOURCE_ID,
+};
+use x_data_mcp::sqlite_market::backend::MarketBackend;
+use x_data_mcp::sqlite_tasks::SqliteTasks;
 
 pub(crate) fn sha(bytes: &[u8]) -> String {
     x_data_mcp::hash::sha256(bytes)
@@ -103,6 +113,116 @@ pub(crate) fn remirror(dir: &Path, code: u32, last_bar: u32) {
 pub(crate) fn open(root: &Path, mirror: &Path) -> AcquireService {
     AcquireService::open(root, Source::Mirror(mirror.into())).unwrap()
 }
+
+/// The retirement gate's two read authorities for a test deployment: the
+/// source store and a fresh compact market database (schema 25).
+pub(crate) struct GateFixture {
+    pub store: SourceStore,
+    pub database: std::path::PathBuf,
+}
+
+pub(crate) fn gate_fixture(root: &Path) -> GateFixture {
+    let database = root.join("market.sqlite");
+    SqliteTasks::new(&database).initialize_compact().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    GateFixture {
+        store: SourceStore::new(root.join("source-store")),
+        database,
+    }
+}
+
+pub(crate) fn open_gated(root: &Path, mirror: &Path, gate: &GateFixture) -> AcquireService {
+    AcquireService::open_with_retire_gate(
+        root,
+        Source::Mirror(mirror.into()),
+        Some(RetireGate::new(gate.store.clone(), gate.database.clone())),
+    )
+    .unwrap()
+}
+
+/// Register one installed generation's irreproducible industry members in the
+/// source store under its manifest sha (gate step 2).
+pub(crate) fn register_evidence(
+    service: &AcquireService,
+    gate: &GateFixture,
+    generation_id: &str,
+) -> Vec<String> {
+    let manifest = manifest_of(service, generation_id);
+    let mut shas = Vec::new();
+    for (source_id, parser, bytes) in [
+        (
+            TDXHY_SOURCE_ID,
+            TDXHY_PARSER_VERSION,
+            format!("1|600006|T090302|||X6102\r\n{manifest}").into_bytes(),
+        ),
+        (
+            INCON_SOURCE_ID,
+            INCON_PARSER_VERSION,
+            format!("T090302|bank\r\n{manifest}").into_bytes(),
+        ),
+    ] {
+        let mut registration = Registration::new(
+            source_id,
+            StoreKind::GenerationMember,
+            format!("generation:{manifest}"),
+            "2026-10-29T00:00:00Z",
+        );
+        registration.parser_version = Some(parser.to_string());
+        shas.push(gate.store.register(&bytes, &registration).unwrap().sha256);
+    }
+    shas
+}
+
+/// Register every required derived fact for one generation (gate step 3).
+pub(crate) fn register_facts(
+    service: &AcquireService,
+    gate: &GateFixture,
+    generation_id: &str,
+    evidence: &[String],
+) {
+    let manifest = manifest_of(service, generation_id);
+    let facts: Vec<GenerationFact> = REQUIRED_FACTS
+        .into_iter()
+        .map(|(role, kind)| GenerationFact {
+            generation_manifest_sha256: manifest.clone(),
+            role: role.into(),
+            fact_kind: kind.into(),
+            fact_digest: sha(format!("{manifest}|{role}|{kind}").as_bytes()),
+            evidence_sha256: match (role, kind) {
+                (ROLE_BASE, KIND_INDUSTRY_SNAPSHOT) => Some(evidence[0].clone()),
+                (_, KIND_INDUSTRY_DICTIONARY) => Some(evidence[1].clone()),
+                _ => None,
+            },
+            parser_version: None,
+            registered_at: "2026-10-29T00:00:00Z".into(),
+        })
+        .collect();
+    let backend = MarketBackend::open(&SqliteTasks::new(&gate.database)).unwrap();
+    backend.record_generation_facts(&facts).unwrap();
+}
+
+pub(crate) fn manifest_of(service: &AcquireService, generation_id: &str) -> String {
+    service
+        .sync_status()
+        .unwrap()
+        .generations
+        .iter()
+        .find(|generation| generation.generation_id == generation_id)
+        .expect("installed generation")
+        .manifest_sha256
+        .clone()
+}
+
+/// Make one installed generation pass the M3 PR-8 gate.
+pub(crate) fn satisfy_gate(service: &AcquireService, gate: &GateFixture, generation_id: &str) {
+    let evidence = register_evidence(service, gate, generation_id);
+    register_facts(service, gate, generation_id, &evidence);
+}
+
 pub(crate) fn drive(service: &AcquireService) {
     for _ in 0..16 {
         if service.worker_once().unwrap().is_none() {
@@ -391,10 +511,12 @@ fn pins_block_retire_and_retire_keeps_evidence_only() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());
     let root = tempfile::tempdir().unwrap();
-    let service = open(root.path(), mirror.path());
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
     let a = install(&service, "req-pin-a");
     let gen_a = generation_of(&service, &a.task_id);
     verify(&service, &gen_a);
+    satisfy_gate(&service, &gate, &gen_a);
     let manifest_sha = service.sync_status().unwrap().generations[0]
         .manifest_sha256
         .clone();
@@ -473,7 +595,8 @@ fn superseded_generations_retire_past_the_retained_window() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());
     let root = tempfile::tempdir().unwrap();
-    let service = open(root.path(), mirror.path());
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
     let mut generations: Vec<String> = vec![];
     let mut previous: Option<String> = None;
     for i in 0..5u32 {
@@ -481,6 +604,7 @@ fn superseded_generations_retire_past_the_retained_window() {
         let acceptance = install(&service, &format!("req-ret-{i}"));
         let next_gen = generation_of(&service, &acceptance.task_id);
         assert_eq!(verify(&service, &next_gen).state, "consistency_verified");
+        satisfy_gate(&service, &gate, &next_gen);
         let reply = activate(&service, &next_gen, previous.as_deref());
         assert_eq!(reply.state, "active", "{reply:?}");
         // Activations 4 and 5 retire the oldest superseded generation each.
@@ -535,11 +659,13 @@ fn pinned_superseded_generation_survives_auto_retention() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());
     let root = tempfile::tempdir().unwrap();
-    let service = open(root.path(), mirror.path());
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
     remirror(mirror.path(), 600060, today_u32());
     let first = install(&service, "req-held-0");
     let g0 = generation_of(&service, &first.task_id);
     verify(&service, &g0);
+    satisfy_gate(&service, &gate, &g0);
     assert_eq!(activate(&service, &g0, None).state, "active");
     let pin = service.generations().pin(&g0, "task:held-auto").unwrap();
 
@@ -549,6 +675,7 @@ fn pinned_superseded_generation_survives_auto_retention() {
         let acceptance = install(&service, &format!("req-held-{i}"));
         let next_gen = generation_of(&service, &acceptance.task_id);
         verify(&service, &next_gen);
+        satisfy_gate(&service, &gate, &next_gen);
         let reply = activate(&service, &next_gen, generations.last().map(String::as_str));
         assert_eq!(reply.state, "active", "{reply:?}");
         // By activation 3 the pinned g0 is the oldest superseded: it is
@@ -580,6 +707,7 @@ fn pinned_superseded_generation_survives_auto_retention() {
     let acceptance = install(&service, "req-held-4");
     let next_gen = generation_of(&service, &acceptance.task_id);
     verify(&service, &next_gen);
+    satisfy_gate(&service, &gate, &next_gen);
     let reply = activate(&service, &next_gen, generations.last().map(String::as_str));
     assert_eq!(reply.state, "active", "{reply:?}");
     assert_eq!(
@@ -593,7 +721,8 @@ fn activation_replay_returns_recorded_retirements_without_retiring_again() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());
     let root = tempfile::tempdir().unwrap();
-    let service = open(root.path(), mirror.path());
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
     let mut generations: Vec<String> = vec![];
     let mut last: Option<wire::ActivateReply> = None;
     for i in 0..4u32 {
@@ -601,6 +730,7 @@ fn activation_replay_returns_recorded_retirements_without_retiring_again() {
         let acceptance = install(&service, &format!("req-replay-{i}"));
         let next_gen = generation_of(&service, &acceptance.task_id);
         verify(&service, &next_gen);
+        satisfy_gate(&service, &gate, &next_gen);
         let reply = service
             .activate_generation(
                 &format!("activate-replay-{i}"),
@@ -1011,4 +1141,223 @@ fn every_advertised_acquire_tool_schema_has_an_object_root() {
         let name = tool["name"].as_str().unwrap();
         assert_eq!(tool["inputSchema"]["type"], json!("object"), "input {name}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// M3 PR-8: retirement gate (source-store evidence + derived facts)
+// ---------------------------------------------------------------------------
+
+/// Bring one generation to `superseded` behind a verified successor, so a
+/// retire is legal except for the gate.
+fn superseded_pair(service: &AcquireService, mirror: &Path) -> (String, String) {
+    let a = install(service, "req-gate-a");
+    let gen_a = generation_of(service, &a.task_id);
+    verify(service, &gen_a);
+    assert_eq!(activate(service, &gen_a, None).state, "active");
+    remirror(mirror, 600107, today_u32());
+    let b = install(service, "req-gate-b");
+    let gen_b = generation_of(service, &b.task_id);
+    verify(service, &gen_b);
+    assert_eq!(activate(service, &gen_b, Some(&gen_a)).state, "active");
+    (gen_a, gen_b)
+}
+
+#[test]
+fn retire_gate_refuses_missing_evidence_then_missing_index() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    let (gen_a, _gen_b) = superseded_pair(&service, mirror.path());
+    let manifest = manifest_of(&service, &gen_a);
+
+    // Nothing registered in the source store: the irreproducible bytes are
+    // not proven saved, so the bytes may not be deleted.
+    let refused = service
+        .retire_generation("req-gate-1", &gen_a, &manifest)
+        .unwrap();
+    assert_eq!(refused.state, "refused");
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("source_store_evidence_missing")
+    );
+    let detail = refused.detail.unwrap();
+    assert!(detail.contains(TDXHY_SOURCE_ID), "{detail}");
+    assert!(detail.contains(INCON_SOURCE_ID), "{detail}");
+
+    // Evidence is in the store but the fact index was never written (or was
+    // rebuilt away): refuse and point at the replay.
+    let evidence = register_evidence(&service, &gate, &gen_a);
+    let refused = service
+        .retire_generation("req-gate-2", &gen_a, &manifest)
+        .unwrap();
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("derived_facts_missing")
+    );
+    let detail = refused.detail.unwrap();
+    assert!(
+        detail.contains("replay --scope generation_facts"),
+        "{detail}"
+    );
+    assert!(detail.contains("capital_events"), "{detail}");
+    assert!(detail.contains("gbbq.zip"), "{detail}");
+
+    register_facts(&service, &gate, &gen_a, &evidence);
+    let retired = service
+        .retire_generation("req-gate-3", &gen_a, &manifest)
+        .unwrap();
+    assert_eq!(retired.state, "evidence_only", "{retired:?}");
+    assert!(retired.reason_code.is_none());
+}
+
+#[test]
+fn retire_gate_refuses_a_blob_that_does_not_read_back() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    let (gen_a, _gen_b) = superseded_pair(&service, mirror.path());
+    let manifest = manifest_of(&service, &gen_a);
+    let evidence = register_evidence(&service, &gate, &gen_a);
+    register_facts(&service, &gate, &gen_a, &evidence);
+    // Tamper after registration: the manifest still names the blob, but the
+    // read-back digest no longer matches.
+    let record = gate
+        .store
+        .records()
+        .unwrap()
+        .into_iter()
+        .find(|record| record.source_id == TDXHY_SOURCE_ID && record.origin.ends_with(&manifest))
+        .unwrap();
+    std::fs::write(gate.store.blob_path(&record.sha256), b"tampered").unwrap();
+    let refused = service
+        .retire_generation("req-gate-corrupt", &gen_a, &manifest)
+        .unwrap();
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("source_store_evidence_missing")
+    );
+    let detail = refused.detail.unwrap();
+    assert!(detail.contains(&record.sha256), "{detail}");
+    assert!(detail.contains("corrupt"), "{detail}");
+}
+
+#[test]
+fn retire_exemption_is_explicit_and_leaves_a_trace() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    let (gen_a, _gen_b) = superseded_pair(&service, mirror.path());
+    let manifest = manifest_of(&service, &gen_a);
+    let _evidence = register_evidence(&service, &gate, &gen_a);
+    let backend = MarketBackend::open(&SqliteTasks::new(&gate.database)).unwrap();
+    for (role, kind) in REQUIRED_FACTS {
+        let key = format!("derived_fact:{role}:{kind}");
+        backend
+            .record_retire_exemption(&RetireExemption {
+                generation_manifest_sha256: manifest.clone(),
+                missing_kind: key,
+                reason: "owner approved: fact tables verified by hand".into(),
+                recorded_by: "owner".into(),
+                recorded_at: "2026-10-29T00:00:00Z".into(),
+            })
+            .unwrap();
+    }
+    drop(backend);
+    let retired = service
+        .retire_generation("req-gate-exempt", &gen_a, &manifest)
+        .unwrap();
+    assert_eq!(retired.state, "evidence_only");
+    let detail = retired.detail.unwrap();
+    assert!(detail.contains("exemptions:"), "{detail}");
+    assert!(
+        detail.contains("derived_fact:gbbq.zip:capital_events"),
+        "{detail}"
+    );
+    // The rows stay after the retire: the exemption is part of the audit.
+    let backend = MarketBackend::open(&SqliteTasks::new(&gate.database)).unwrap();
+    let exemptions = backend.read_retire_exemptions(&manifest).unwrap();
+    assert_eq!(exemptions.len(), REQUIRED_FACTS.len());
+    assert!(exemptions.iter().all(|row| row.recorded_by == "owner"));
+    assert!(
+        exemptions
+            .iter()
+            .all(|row| row.reason.contains("owner approved"))
+    );
+}
+
+/// The gate is shared: the automatic retention skips a generation the same
+/// reason a manual retire refuses it, and satisfying the gate makes both
+/// paths retire it.
+#[test]
+fn automatic_retention_and_manual_retire_use_the_same_gate() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    let mut generations: Vec<String> = vec![];
+    let mut previous: Option<String> = None;
+    for i in 0..5u32 {
+        remirror(mirror.path(), 600120 + i, today_u32());
+        let acceptance = install(&service, &format!("req-shared-{i}"));
+        let next_gen = generation_of(&service, &acceptance.task_id);
+        verify(&service, &next_gen);
+        // Every generation except the oldest passes the gate.
+        if i > 0 {
+            satisfy_gate(&service, &gate, &next_gen);
+        }
+        let reply = activate(&service, &next_gen, previous.as_deref());
+        assert_eq!(reply.state, "active", "{reply:?}");
+        if i == 3 {
+            // The oldest superseded generation fails the gate, so the
+            // activation retires nothing instead of deleting its bytes.
+            assert!(reply.retired_generations.is_empty(), "{reply:?}");
+        }
+        if i == 4 {
+            // Now the gate-passing second-oldest retires; the gate-less
+            // oldest stays superseded.
+            assert_eq!(
+                reply.retired_generations,
+                vec![generations[1].clone()],
+                "{reply:?}"
+            );
+        }
+        generations.push(next_gen.clone());
+        previous = Some(next_gen);
+    }
+    let status = service.sync_status().unwrap();
+    let state_of = |id: &str| {
+        status
+            .generations
+            .iter()
+            .find(|g| g.generation_id == id)
+            .unwrap()
+            .state
+            .clone()
+    };
+    assert_eq!(state_of(&generations[0]), "superseded");
+    assert_eq!(state_of(&generations[1]), "evidence_only");
+
+    // Manual retire of the same generation refuses for the same reason…
+    let manifest = manifest_of(&service, &generations[0]);
+    let refused = service
+        .retire_generation("req-shared-manual", &generations[0], &manifest)
+        .unwrap();
+    assert_eq!(refused.state, "refused");
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("source_store_evidence_missing")
+    );
+    // …and satisfying the gate lets it through.
+    satisfy_gate(&service, &gate, &generations[0]);
+    let retired = service
+        .retire_generation("req-shared-manual-2", &generations[0], &manifest)
+        .unwrap();
+    assert_eq!(retired.state, "evidence_only");
 }

@@ -40,6 +40,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let mut config = Config::default();
     let mut source = Source::Remote;
+    let mut market_database: Option<PathBuf> = None;
     let mut positional = vec![];
     let mut i = 0;
     while i < args.len() {
@@ -62,6 +63,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 source = Source::Mirror(PathBuf::from(dir));
                 i += 2;
             }
+            "--market-db" => {
+                // M3 PR-8: the retirement gate reads the market database's
+                // generation_facts/retire_exemptions through a read-only
+                // connection. Without this the gate refuses retirement
+                // (`retire_gate_unconfigured`) instead of deleting bytes
+                // unchecked.
+                let path = args
+                    .get(i + 1)
+                    .ok_or("--market-db requires a database path")?;
+                market_database = Some(PathBuf::from(path));
+                i += 2;
+            }
             _ => {
                 positional.push(PathBuf::from(arg));
                 i += 1;
@@ -70,12 +83,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if positional.len() != 2 {
         return Err("usage: acquire_service <generation-root> <private-socket> \
-             [--poll-ms <10..60000>] [--mirror <dir>]"
+             [--poll-ms <10..60000>] [--mirror <dir>] [--market-db <market.sqlite>]"
             .into());
     }
     // Open first: creates the private store layout and reconciles durable
     // state before the lease proves single-writer ownership.
-    let service = AcquireService::open(&positional[0], source)?;
+    let retire_gate = market_database.map(|database| {
+        let store = x_data_mcp::industry::source_store_for_database(&database);
+        x_data_mcp::generation_gate::RetireGate::new(store, database)
+    });
+    let service = AcquireService::open_with_retire_gate(&positional[0], source, retire_gate)?;
     let lease = Arc::new(DatabaseLease::acquire(&service.db_path())?);
     let endpoint = Endpoint::bind(&positional[1], &lease)?;
     let gate = Arc::new(WorkerGate::default());

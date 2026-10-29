@@ -90,6 +90,11 @@ pub mod exchange_source;
 
 pub mod acquire;
 
+/// Generation retirement gate (M3 PR-8, issue `#446` §8.3/§9.4.3): the
+/// source-store evidence and derived-fact checks shared by the manual retire
+/// and the automatic retention path.
+pub mod generation_gate;
+
 #[cfg(target_os = "linux")]
 pub mod local_runtime;
 

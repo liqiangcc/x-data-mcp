@@ -4,7 +4,7 @@
 # topology); this script targets the #262/#259 production shape:
 #
 #   x-data-mcp-data.service     data_service <db> <sock> [--entry k] [<sock> ...] [tail]
-#   x-data-mcp-acquire.service  acquire_service <generation-root> <acquire.sock>
+#   x-data-mcp-acquire.service  acquire_service <generation-root> <acquire.sock> [--market-db <db>]
 #
 # v8 phase 2 (D-56) lets one data unit serve several sockets/entries. The
 # installed ExecStart is parsed by scripts/data_unit_layout.py, which accepts
@@ -183,7 +183,7 @@ Required units (install once, then re-run):
 
 /etc/systemd/system/$ACQ_SERVICE
   [Service]
-  ExecStart=$DEPLOY_ROOT/current/bin/acquire_service $DEPLOY_ROOT/state/generations $DEPLOY_ROOT/run/acquire.sock
+  ExecStart=$DEPLOY_ROOT/current/bin/acquire_service $DEPLOY_ROOT/state/generations $DEPLOY_ROOT/run/acquire.sock --market-db $DEPLOY_ROOT/state/preview.sqlite
   Restart=on-failure
 EOF
     tunnel_dropin_template
