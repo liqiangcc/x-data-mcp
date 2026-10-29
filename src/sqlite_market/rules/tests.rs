@@ -24,6 +24,7 @@ fn rule(id: &str, market: RuleMarket, band_bp: i64) -> PriceLimitRule {
         status_class: StatusClass::Normal,
         listing_phase: ListingPhase::Seasoned,
         band_bp: Some(band_bp),
+        min_band_ticks: None,
         band_side: BandSide::Both,
         rounding: Rounding::HalfUp,
         effective_from: day(2020, 1, 1),
@@ -244,6 +245,110 @@ fn an_empty_set_removes_the_rows_and_the_registration() {
             .unwrap()
             .is_none()
     );
+}
+
+/// Schema 25 (issue-446 §9.1, owner 2026-10-29): `min_band_ticks` is a
+/// nullable minimum-band floor in tick units. The storage layer only stores and
+/// round-trips it (the algorithm PR is next): a set value survives the round
+/// trip, a NULL stays NULL, a non-positive floor is refused before the write,
+/// the DDL CHECK is the last line of defence, and the value is part of the
+/// dataset content identity.
+#[test]
+fn min_band_ticks_round_trips_and_a_bad_floor_is_refused() {
+    let fixture = Fixture::new();
+    let mut floored = rule("sh-st-low-price", RuleMarket::Sh, 500);
+    floored.status_class = StatusClass::St;
+    floored.min_band_ticks = Some(1);
+    let book = RuleBook {
+        price_limits: vec![floored, rule("sz-normal", RuleMarket::Sz, 1_000)],
+        min_ticks: vec![tick("sh-tick", RuleMarket::Sh)],
+    };
+    let first = replace_trading_rules(
+        &fixture.c,
+        &book,
+        fixture.binding,
+        "task-rules",
+        "derived:price_limit_rules",
+    )
+    .unwrap()
+    .unwrap();
+    let read = read_trading_rules(&fixture.c).unwrap();
+    assert_eq!(read, book, "min_band_ticks did not round-trip");
+    let floor = |read: &RuleBook, id: &str| {
+        read.price_limits
+            .iter()
+            .find(|rule| rule.rule_id == id)
+            .unwrap()
+            .min_band_ticks
+    };
+    assert_eq!(floor(&read, "sh-st-low-price"), Some(1));
+    assert_eq!(floor(&read, "sz-normal"), None);
+
+    // Validation refuses a non-positive floor before touching the tables, so
+    // the stored set is unchanged.
+    for bad_floor in [0, -1] {
+        let mut bad = book.clone();
+        bad.price_limits[0].min_band_ticks = Some(bad_floor);
+        let error = replace_trading_rules(
+            &fixture.c,
+            &bad,
+            fixture.binding,
+            "task-rules",
+            "derived:price_limit_rules",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("non-positive min_band_ticks"),
+            "{bad_floor}: {error}"
+        );
+    }
+    assert_eq!(read_trading_rules(&fixture.c).unwrap(), book);
+
+    // The DDL CHECK is the last line of defence: a raw INSERT that bypasses
+    // `RuleBook::validate` is still refused.
+    let evidence: Vec<u8> = fixture
+        .c
+        .query_row(
+            "SELECT evidence_digest FROM price_limit_rules WHERE rule_id='sz-normal'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let raw_insert = |id: &str, ticks: Option<i64>, from: i64| {
+        fixture.c.execute(
+            "INSERT INTO price_limit_rules(rule_id,market,board,status_class,listing_phase,\
+             band_bp,min_band_ticks,band_side,rounding,effective_from,effective_to,basis_ref,\
+             basis_status,evidence_digest) \
+             VALUES(?1,'sh','main','normal','seasoned',1000,?2,'both','half_up',?4,NULL,\
+             'fixture','verified',?3)",
+            rusqlite::params![id, ticks, evidence, from],
+        )
+    };
+    assert!(raw_insert("raw-zero", Some(0), 0).is_err(), "CHECK took 0");
+    assert!(
+        raw_insert("raw-negative", Some(-1), 0).is_err(),
+        "CHECK took -1"
+    );
+    assert!(raw_insert("raw-one", Some(1), 0).is_ok());
+    // A different effective date, so the NULL row proves the column is still
+    // optional instead of tripping the unique key.
+    assert!(raw_insert("raw-null", None, 1).is_ok());
+
+    // The floor is content: changing it alone mints a new version.
+    let mut changed = book.clone();
+    changed.price_limits[0].min_band_ticks = Some(2);
+    let second = replace_trading_rules(
+        &fixture.c,
+        &changed,
+        fixture.binding,
+        "task-rules",
+        "derived:price_limit_rules",
+    )
+    .unwrap()
+    .unwrap();
+    assert_ne!(first.version_id, second.version_id);
+    assert_ne!(first.content_digest, second.content_digest);
 }
 
 #[test]

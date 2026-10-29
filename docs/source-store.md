@@ -9,6 +9,8 @@ PR-1a 落地的库格式、入口与当前边界。
 
 - **blob + `manifest.jsonl` 是事实源**。SQLite 里的 `industry_snapshots`、
   `exchange_source_snapshots`、`generation_facts` 是索引，可由来源库重建。
+  这三张索引表与 `industry_assignments`/`retire_exemptions` 由 schema 25（M3 PR-1）建出，
+  当前为空：PR-1 只建结构，写入器在 PR-2/PR-6/PR-8，因此本文描述的写入顺序由那些 PR 断言。
 - 写入顺序固定：blob 落盘、`fsync`、清单追加、`fsync`，之后才允许写索引行。
   「blob 在、清单在、索引缺」是允许的中间态；「索引有行、blob 不可读」不可接受。
 - 读面、重放和退役门禁一律按 sha256 读回校验；不符即

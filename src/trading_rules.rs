@@ -284,6 +284,14 @@ pub struct PriceLimitRule {
     pub status_class: StatusClass,
     pub listing_phase: ListingPhase,
     pub band_bp: Option<i64>,
+    /// Minimum band width in minimum-tick units, `None` when the rule has no
+    /// floor (schema 25; owner 2026-10-29). It expresses "沪市风险警示股前收
+    /// ≤0.10 元按一 tick" and the 深市 generic one-tick floor without a second
+    /// low-price threshold column. This PR only stores and round-trips the
+    /// value: the embedded rule book leaves it `None` and limit-v1 ignores it
+    /// until the algorithm PR lands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_band_ticks: Option<i64>,
     pub band_side: BandSide,
     pub rounding: Rounding,
     pub effective_from: NaiveDate,
@@ -352,6 +360,12 @@ impl PriceLimitRule {
                 )));
             }
             (_, Some(_)) => {}
+        }
+        if self.min_band_ticks.is_some_and(|ticks| ticks < 1) {
+            return Err(RuleError::Invalid(format!(
+                "{} has a non-positive min_band_ticks",
+                self.rule_id
+            )));
         }
         Ok(())
     }

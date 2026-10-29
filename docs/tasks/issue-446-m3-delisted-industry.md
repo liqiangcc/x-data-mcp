@@ -601,11 +601,25 @@ CREATE TABLE retire_exemptions(
 - 写入顺序固定：来源库 blob + 清单 fsync 成功后，才写上述索引行（§9.4.1）；不允许「DB 有行、blob 不可读」。
 - 列名用 `store_sha256` 而不是 `blob_sha256`：它指「来源库中的 blob」，与 `member_sha256`（成员内容身份）区分语义角色；对 `tdxhy.cfg` 抽取物两者应相等，写入与重放时都断言。
 - 索引：`industry_assignments(code, effective_from)`、`exchange_source_snapshots(source_id, as_of)`。
+- `price_limit_rules.min_band_ticks INTEGER NULL`（owner 2026-10-29 裁决，见 decisions 的 2026-10-29 条目与
+  仓库外规则研究报告 §4.3）：以**最小变动单位数**表达最小带宽下限（沪市风险警示股前收 ≤0.10 元按一 tick、
+  深市通用一 tick 下限），避免再加一个低价阈值列。CHECK 为 `NULL OR >= 1`；025 用
+  `ALTER TABLE price_limit_rules ADD COLUMN` 追加，**不重建 023 的表**。PR-1 只加列与存储往返
+  （规则结构体加可空字段、读写往返、内容摘要计入该列），规则书全部保持 NULL，`limit-v1` 算法与
+  规则书取值由紧接着的下一个 PR 改；`research-snapshot.v2` 的 `price_limit_rules.parquet` 列集合
+  本 PR 不动（导出列属 PR-9 的 v3）。
 
 ### 9.3 迁移与回滚
 
 - 只建新表与索引，不改 022/023/024 任何表；旧二进制读 schema 25 → 拒绝（现有 `SCHEMA_VERSION` 检查），回滚只能回到旧二进制 + 旧库（部署前归档）。
 - 空表升级与全新 init 两条路径都要测；`pragma user_version=25`。
+- **PR-1 落地（2026-10-29）**：迁移文件 `migrations/tasks/025_m3_index_tables.sql`，五张表 + 两个索引 + 上述
+  `min_band_ticks` 列；`COMPACT_SCHEMA_VERSION` 24→25、迁移数组长度/顺序断言与
+  `scripts/check_current_facts.py` 的期望 schema 同步；部署脚本仍从 release 读期望 schema
+  （`scripts/deploy_phase_g.sh` 的 `expected_schema` 步骤），fresh init 走 25、旧库按现有版本检查拒绝。
+  只有结构：五张表在两条 init 路径上都建为空表，PR-1 没有写路径，所以「blob/清单先于索引行」这条
+  **由后续写入 PR（PR-2 交易所、PR-6 行业、PR-8 退役门禁）在各自写入器里断言**（每域一个事务）；
+  `industry_assignments → industry_snapshots` 的外键只能保证索引内部的先后，不能替代来源库检查。
 - **全新 init 后必须重放**：`task_sqlite init21` 建出的 25 号库中 M3 表为空，部署脚本在服务起来后、写部署报告前调用一次 `replay_source_store --scope all`（§9.4.2），否则「部署成功」只是「探活通过、历史为空」。
 - **回滚不动来源库**：旧二进制不理解来源库，忽略即可；恢复旧库后来源库只增不改，再次前滚时重放幂等补齐（§9.4.5）。
 - `industry_assignments.known_at NOT NULL`：没有知晓时间的行不允许入库（回填统一用回填日），防止把事件日冒充知晓时间。

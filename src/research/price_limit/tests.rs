@@ -139,6 +139,7 @@ fn rule(
         status_class: status,
         listing_phase: phase,
         band_bp,
+        min_band_ticks: None,
         band_side: side,
         rounding: Rounding::HalfUp,
         effective_from: from,
