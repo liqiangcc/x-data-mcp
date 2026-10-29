@@ -83,14 +83,24 @@ schema_before=""
 current_before=""
 MUTATING=0
 INSTALLED_NEW=0
+REPLAY_REPORT=""
+SOURCE_STORE="$DEPLOY_ROOT/state/source-store"
 WORK=$(mktemp -d "/tmp/deploy-pg-${TAG}-XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
 report() {  # report <status> [rollback_outcome]
     python3 - "$TAG" "$SHA" "$1" "$step" "$current_before" \
-        "$schema_before" "$DB" "$DB_ARCHIVED" "${2:-}" "$REPORTS" "$TAG_SHORT" <<'PY' || true
+        "$schema_before" "$DB" "$DB_ARCHIVED" "${2:-}" "$REPORTS" "$TAG_SHORT" \
+        "$REPLAY_REPORT" <<'PY' || true
 import json, pathlib, sys
-(tag, sha, status, step, prev, sb, db, archived, rollback, reports, short) = sys.argv[1:]
+(tag, sha, status, step, prev, sb, db, archived, rollback, reports, short,
+ replay_path) = sys.argv[1:]
+replay = None
+if replay_path:
+    try:
+        replay = json.loads(pathlib.Path(replay_path).read_text())
+    except (OSError, ValueError):
+        replay = {"status": "report_unreadable", "path": replay_path}
 dep = {"status": status, "code_sha": sha or None, "release": tag,
        "topology": "phase-g two-MCP (data + acquire)",
        "failed_at": step if status.startswith("FAILED_AT_") else None,
@@ -98,6 +108,7 @@ dep = {"status": status, "code_sha": sha or None, "release": tag,
        "market_db": db or None,
        "archived_db": archived or None,
        "before": {"schema": int(sb)} if sb else {},
+       "source_store_replay": replay,
        "rollback_outcome": rollback or None,
        "production": "NOT_PRODUCTION_READY"}
 pathlib.Path(f"{reports}/{short}-phaseg-deployment.json").write_text(
@@ -432,6 +443,22 @@ acq_tools = tools(acq_sock, release)
 assert not need_acq - acq_tools, f"acquire socket missing tools: {need_acq - acq_tools}"
 print(f"data tools ok ({len(data_specs)} socket(s)), acquire tools ok")
 PY
+
+# --- 5. source store replay (M3 PR-1a) ---------------------------------------
+# The fresh database has empty M3 index tables; the source store under the
+# deployment state directory is the only durable copy of facts a fresh init
+# cannot regenerate. Replay after the sockets are ready and before the report,
+# so `store_empty` (before the first import) is a recorded deployment fact and
+# a corrupt store fails the deployment instead of silently deploying empty
+# history. The replay never writes the market database in PR-1a.
+step=replay_source_store
+replay_out=$("$RELEASE_DIR/bin/source_store" replay --store "$SOURCE_STORE" --scope all) \
+    || fail "source_store replay failed"
+printf '%s\n' "$replay_out" > "$WORK/source-store-replay.json"
+REPLAY_REPORT="$WORK/source-store-replay.json"
+replay_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$REPLAY_REPORT") \
+    || fail "source store replay report unreadable"
+echo "source store replay: $replay_status (store $SOURCE_STORE)"
 
 step=report
 report "DEPLOYED"
