@@ -142,3 +142,108 @@ fn manifest_parse_error_names_the_line() {
     assert_eq!(error.code(), "source_store_manifest_invalid");
     assert!(error.to_string().contains("manifest.jsonl:1"), "{error}");
 }
+
+#[test]
+fn concurrent_registers_do_not_interleave_lines_or_duplicate_keys() {
+    use std::sync::{Arc, Barrier};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("store");
+    let threads = 8;
+    let barrier = Arc::new(Barrier::new(threads));
+    let mut handles = Vec::new();
+    for _ in 0..threads {
+        let root = root.clone();
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            let store = SourceStore::new(root);
+            barrier.wait();
+            store.register(BODY, &facts("import:same")).unwrap();
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    let store = SourceStore::new(&root);
+    let records = store.records().unwrap();
+    assert_eq!(records.len(), 1, "one key must register exactly one line");
+    assert_eq!(records[0].sha256, sha());
+
+    // Distinct content from parallel writers: every line is whole and unique.
+    let mut handles = Vec::new();
+    for index in 0..threads {
+        let root = root.clone();
+        let barrier = Arc::clone(&barrier);
+        handles.push(std::thread::spawn(move || {
+            let store = SourceStore::new(root);
+            let body = format!("0|{index:06}|T1001|||X500102\r\n");
+            let registration = facts(&format!("import:distinct:{index}"));
+            barrier.wait();
+            store.register(body.as_bytes(), &registration).unwrap();
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    let records = store.records().unwrap();
+    assert_eq!(records.len(), threads + 1);
+    let shas: std::collections::BTreeSet<&str> = records
+        .iter()
+        .map(|record| record.sha256.as_str())
+        .collect();
+    assert_eq!(shas.len(), records.len(), "no duplicate content keys");
+    for record in &records {
+        // Digest round-trip plus the recorded size agree for every line.
+        let bytes = store.read_verified(&record.sha256).unwrap();
+        assert_eq!(bytes.len() as u64, record.size_bytes);
+    }
+}
+
+#[test]
+fn torn_tail_is_named_and_never_auto_truncated() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SourceStore::new(dir.path().join("store"));
+    store.register(BODY, &facts("import:one")).unwrap();
+    let path = store.manifest_path();
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str("{\"sha256\":\"dead");
+    fs::write(&path, &text).unwrap();
+
+    let error = store.records().unwrap_err();
+    assert_eq!(error.code(), "manifest_torn_tail");
+    assert!(error.to_string().contains("line 2"), "{error}");
+
+    // The write path refuses on the same error and leaves the bytes alone.
+    let before = fs::read(&path).unwrap();
+    let error = store
+        .register(b"0|999999|T1001|||X500102\r\n", &facts("import:two"))
+        .unwrap_err();
+    assert_eq!(error.code(), "manifest_torn_tail");
+    assert_eq!(fs::read(&path).unwrap(), before, "no truncation, no repair");
+}
+
+#[test]
+fn a_final_line_without_newline_is_torn_even_when_it_parses() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SourceStore::new(dir.path().join("store"));
+    fs::create_dir_all(store.root()).unwrap();
+    let record = ManifestRecord {
+        sha256: sha(),
+        source_id: TDXHY_SOURCE_ID.to_string(),
+        store_kind: StoreKind::ArchiveImport,
+        origin: "import:manual".to_string(),
+        acquired_at: "2026-10-28T00:00:00Z".to_string(),
+        publisher_last_modified: None,
+        evidence_grade: Some("A".to_string()),
+        basis_status: None,
+        parser_version: Some(TDXHY_PARSER_VERSION.to_string()),
+        size_bytes: BODY.len() as u64,
+        container_sha256: None,
+        import_batch: None,
+    };
+    let line = serde_json::to_string(&record).unwrap();
+    fs::write(store.manifest_path(), line).unwrap();
+    let error = store.records().unwrap_err();
+    assert_eq!(error.code(), "manifest_torn_tail");
+    assert!(error.to_string().contains("line 1"), "{error}");
+}

@@ -35,12 +35,16 @@ use serde::{Deserialize, Serialize};
 pub mod import;
 pub mod replay;
 
+mod lock;
+
 /// Subdirectory holding the content-addressed blobs.
 pub const BLOBS_DIR: &str = "blobs";
 /// Append-only manifest file name.
 pub const MANIFEST_FILE: &str = "manifest.jsonl";
 /// Staging subdirectory inside the store.
 pub const TMP_DIR: &str = "tmp";
+/// Advisory `flock` file: exclusive for writers, shared for manifest readers.
+pub const LOCK_FILE: &str = ".lock";
 
 /// Logical source id for the `base.zip` member extraction.
 pub const TDXHY_SOURCE_ID: &str = "tdx.base.zip!tdxhy.cfg";
@@ -188,6 +192,11 @@ pub enum StoreError {
     },
     #[error("source_store_manifest_invalid: {0}")]
     Manifest(String),
+    #[error(
+        "manifest_torn_tail: {path} line {line} has no trailing newline; \
+         repair is an explicit owner action (no automatic truncation)"
+    )]
+    ManifestTornTail { path: String, line: usize },
     #[error("source_store_invalid_path: {0}")]
     InvalidPath(String),
 }
@@ -201,6 +210,7 @@ impl StoreError {
             Self::MissingBlob { .. } => "source_store_missing_blob",
             Self::Corrupt { .. } => "source_store_corrupt",
             Self::Manifest(_) => "source_store_manifest_invalid",
+            Self::ManifestTornTail { .. } => "manifest_torn_tail",
             Self::InvalidPath(_) => "source_store_invalid_path",
         }
     }
@@ -258,15 +268,33 @@ impl SourceStore {
         Ok(!self.records()?.is_empty())
     }
 
-    /// Read every manifest line in append order. A missing manifest file is an
-    /// empty store; a malformed line is a hard error with its line number.
+    /// Read every manifest line in append order under a shared lock. A
+    /// missing manifest file is an empty store; a malformed line is a hard
+    /// error with its line number. A final line without `\n` is a torn write
+    /// (`manifest_torn_tail`), never an empty or truncated store: repairing it
+    /// is an explicit owner action (§9.4.5).
     pub fn records(&self) -> Result<Vec<ManifestRecord>, StoreError> {
+        let _lock = self.shared_lock()?;
+        self.records_unlocked()
+    }
+
+    fn records_unlocked(&self) -> Result<Vec<ManifestRecord>, StoreError> {
         let path = self.manifest_path();
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
         };
+        if !bytes.is_empty() && !bytes.ends_with(b"\n") {
+            let line = bytes.iter().filter(|byte| **byte == b'\n').count() + 1;
+            return Err(StoreError::ManifestTornTail {
+                path: path.display().to_string(),
+                line,
+            });
+        }
+        let text = std::str::from_utf8(&bytes).map_err(|error| {
+            StoreError::Manifest(format!("{}: not UTF-8: {error}", path.display()))
+        })?;
         let mut records = Vec::new();
         for (index, line) in text.lines().enumerate() {
             if line.trim().is_empty() {
@@ -284,11 +312,7 @@ impl SourceStore {
     /// Registration keys already present, so a repeated import can report
     /// `already_present` without writing anything.
     pub fn registered_keys(&self) -> Result<BTreeSet<RegistrationKey>, StoreError> {
-        Ok(self
-            .records()?
-            .iter()
-            .map(|r| (r.sha256.clone(), r.source_id.clone(), r.origin.clone()))
-            .collect())
+        Ok(keys(&self.records()?))
     }
 
     pub fn blob_path(&self, sha256: &str) -> PathBuf {
@@ -315,13 +339,17 @@ impl SourceStore {
         facts: &Registration,
         fault: Option<FaultPoint>,
     ) -> Result<RegisterOutcome, StoreError> {
+        // One exclusive lock covers dedupe, blob publish, manifest append and
+        // both fsyncs, so concurrent writers cannot interleave a line or
+        // register the same key twice.
+        let _lock = self.exclusive_lock()?;
         let sha256 = crate::hash::sha256(bytes);
         let key = (
             sha256.clone(),
             facts.source_id.clone(),
             facts.origin.clone(),
         );
-        if self.registered_keys()?.contains(&key) {
+        if keys(&self.records_unlocked()?).contains(&key) {
             return Ok(RegisterOutcome {
                 sha256,
                 written_blob: false,
@@ -376,6 +404,20 @@ impl SourceStore {
         Ok(bytes)
     }
 
+    /// Shared lock for manifest reads; a missing store root is an empty store
+    /// and must not be created by a read.
+    fn shared_lock(&self) -> Result<Option<lock::StoreLock>, StoreError> {
+        if !self.root.is_dir() {
+            return Ok(None);
+        }
+        Ok(Some(lock::shared(&self.root)?))
+    }
+
+    fn exclusive_lock(&self) -> Result<lock::StoreLock, StoreError> {
+        fs::create_dir_all(&self.root)?;
+        Ok(lock::exclusive(&self.root)?)
+    }
+
     fn publish_blob(
         &self,
         sha256: &str,
@@ -384,6 +426,8 @@ impl SourceStore {
     ) -> Result<bool, StoreError> {
         validate_sha256(sha256)?;
         let blobs = self.blobs_dir();
+        let created_blobs = !blobs.is_dir();
+        let created_tmp = !self.tmp_dir().is_dir();
         fs::create_dir_all(&blobs)?;
         let final_path = blobs.join(sha256);
         if final_path.exists() {
@@ -401,6 +445,11 @@ impl SourceStore {
         }
         let tmp = self.tmp_dir();
         fs::create_dir_all(&tmp)?;
+        if created_blobs || created_tmp {
+            // The new directory entries must be durable before any blob in
+            // them is referenced by a manifest line.
+            fsync_dir(&self.root)?;
+        }
         let tmp_path = tmp.join(format!(
             "{sha256}.{}.{}",
             std::process::id(),
@@ -451,9 +500,11 @@ impl SourceStore {
         record: &ManifestRecord,
         fault: Option<FaultPoint>,
     ) -> Result<(), StoreError> {
-        let line = serde_json::to_string(record)
+        let mut line = serde_json::to_string(record)
             .map_err(|error| StoreError::Manifest(error.to_string()))?;
+        line.push('\n');
         fs::create_dir_all(&self.root)?;
+        let created = !self.manifest_path().exists();
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -461,12 +512,18 @@ impl SourceStore {
         if fault == Some(FaultPoint::ManifestAppend) {
             return Err(injected(FaultPoint::ManifestAppend));
         }
+        // One `write_all` under O_APPEND: a concurrent writer can never split
+        // this line, and a torn tail is only possible on a crash.
         file.write_all(line.as_bytes())?;
-        file.write_all(b"\n")?;
         if fault == Some(FaultPoint::ManifestFsync) {
             return Err(injected(FaultPoint::ManifestFsync));
         }
         file.sync_all()?;
+        if created {
+            // The manifest's directory entry must be durable too, not only its
+            // bytes; otherwise a crash can lose the whole file after success.
+            fsync_dir(&self.root)?;
+        }
         Ok(())
     }
 }
@@ -513,6 +570,19 @@ pub fn validate_sha256(value: &str) -> Result<(), StoreError> {
 /// (§9.4.1): the bytes stay registered but no rebuild may claim them.
 pub fn known_parser_version(value: &str) -> bool {
     matches!(value, TDXHY_PARSER_VERSION | INCON_PARSER_VERSION)
+}
+
+fn keys(records: &[ManifestRecord]) -> BTreeSet<RegistrationKey> {
+    records
+        .iter()
+        .map(|record| {
+            (
+                record.sha256.clone(),
+                record.source_id.clone(),
+                record.origin.clone(),
+            )
+        })
+        .collect()
 }
 
 fn fsync_dir(path: &Path) -> io::Result<()> {

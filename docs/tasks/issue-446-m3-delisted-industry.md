@@ -650,7 +650,7 @@ CREATE TABLE retire_exemptions(
 | `size_bytes` / `container_sha256` | 字节数 / 容器 sha256（可空） |
 | `import_batch` | 一次性导入批次 id（可空） |
 
-- **写入顺序（强制）**：写 `tmp/` → `fsync(file)` → `rename` 到 `blobs/<sha256>` → `fsync(dir)` → 追加清单行 → `fsync(manifest)` → **最后**才写 DB 索引行（每域一个事务）。任何一步失败都不写 DB；「blob 在、清单在、DB 索引缺」是允许的中间态，由 §9.4.2 补齐；反过来「DB 有索引、blob 不可读」不可接受，读面与门禁一律 fail-closed。
+- **写入顺序（强制）**：写 `tmp/` → `fsync(file)` → `rename` 到 `blobs/<sha256>` → `fsync(dir)` → 追加清单行 → `fsync(manifest)` → **最后**才写 DB 索引行（每域一个事务）。实现（PR-1a）在 `<store>/.lock` 上用 `flock` 排他锁覆盖整个登记（查重、发布、追加、两次 fsync），读清单取共享锁；清单行「JSON + 换行」一次 `write_all`；末行缺换行 → `manifest_torn_tail`（读/写均 fail-closed，不自动截断）。任何一步失败都不写 DB；「blob 在、清单在、DB 索引缺」是允许的中间态，由 §9.4.2 补齐；反过来「DB 有索引、blob 不可读」不可接受，读面与门禁一律 fail-closed。
 - **权威关系**：blob + 清单是事实源；`industry_snapshots`、`exchange_source_snapshots`、`generation_facts` 是**索引**，可由来源库完整重建。DB 不复制整份清单（不造双真相）；重建后若发现清单里有、DB 没有，属于待补索引；DB 有、清单没有 → `source_store_index_orphan`，拒绝并列出。
 - **不做自动 GC**：内容寻址去重后只增不删；删除只能走 owner 显式批准的 maint 命令并留痕（首期不提供该命令）。
 

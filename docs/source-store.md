@@ -13,6 +13,7 @@ PR-1a 落地的库格式、入口与当前边界。
   「blob 在、清单在、索引缺」是允许的中间态；「索引有行、blob 不可读」不可接受。
 - 读面、重放和退役门禁一律按 sha256 读回校验；不符即
   `source_store_corrupt`，fail-closed，不自动重抓（重抓得到的是新事实）。
+- 清单末行缺换行即 `manifest_torn_tail`；不猜、不截断，等 owner 显式修复。
 - 只增不删、不覆盖。按内容去重；同一字节来自新的证据出处时只追加一条清单行。
 
 ## 2. 位置与布局
@@ -26,11 +27,25 @@ PR-1a 落地的库格式、入口与当前边界。
   blobs/<sha256>       原始字节，内容寻址；只增不删、不覆盖
   manifest.jsonl       只追加清单，一行一条登记
   tmp/                 写入暂存（fsync 后发布进 blobs/）
+  .lock                flock 锁文件（写者排他，读清单共享）
 ```
 
 发布用「临时文件 → `fsync(file)` → hard link 到 `blobs/<sha256>` →
 `fsync(dir)` → 追加清单 → `fsync(manifest)`」。hard link 在目标已存在时失败，
-因此不会覆盖既有 blob；临时名随后删除。任一步失败都不写索引行。
+因此不会覆盖既有 blob；临时名随后删除。任一步失败都不写索引行。首次创建
+`blobs/`、`tmp/`、`manifest.jsonl` 后还会对来源库根目录 `fsync`，保证新目录项
+落盘。
+
+**并发**：`register` 全程持有 `<store>/.lock` 的 `flock` 排他锁（查重、发布
+blob、追加清单与两次 fsync 都在锁内），因此多个写者不会交错写入，也不会把
+同一 `(sha256, source_id, origin)` 登记两次；`replay`/`verify`/`import` 读清单
+时取共享锁。清单行把「JSON + `\n`」拼成一个缓冲、一次 `write_all`（`O_APPEND`），
+单行不会被另一个写者插入。
+
+**残尾（torn tail）**：崩溃可能留下没有换行结尾的末行。读路径识别为
+`manifest_torn_tail`（含行号）并 fail-closed，写路径在取得排他锁后遇到同一
+情况也拒绝写入；**不自动截断**，修复是 owner 的显式操作（与 §9.4.5 的损坏处理
+一致）。
 
 ## 3. 清单字段
 
