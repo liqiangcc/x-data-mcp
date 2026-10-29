@@ -262,16 +262,23 @@ pub(crate) fn facts_from_store(store: &SourceStore) -> Result<Vec<SnapshotFacts>
             .map_err(|error| Error::Integrity(error.to_string()))?;
         let (row_count, members) =
             parse_members(&bytes).map_err(|error| Error::Integrity(error.to_string()))?;
-        let (dictionary, dictionary_sha256) = dictionary_for(store, &records, record)?;
-        let dictionary_present = dictionary.is_some();
+        let paired = dictionary_for(store, &records, record)?;
         snapshots.push(SnapshotFacts {
-            record: snapshot_record(record, row_count, members.len(), dictionary_sha256)?,
+            record: snapshot_record(record, row_count, members.len(), paired.sha256)?,
             members,
-            dictionary: dictionary.unwrap_or_default(),
-            dictionary_present,
+            dictionary_present: paired.names.is_some(),
+            dictionary: paired.names.unwrap_or_default(),
         });
     }
     Ok(snapshots)
+}
+
+/// The dictionary a snapshot pairs with: the parsed names (absent when the
+/// paired `incon.dat` has no `#TDXRSHY` section) and the sha256 of its bytes,
+/// or `None`/`None` when the same source registered no dictionary at all.
+struct PairedDictionary {
+    names: Option<BTreeMap<String, String>>,
+    sha256: Option<String>,
 }
 
 /// The `incon.dat` registered by the same source as `tdxhy` (§5.6).
@@ -279,23 +286,29 @@ fn dictionary_for(
     store: &SourceStore,
     records: &[ManifestRecord],
     tdxhy: &ManifestRecord,
-) -> Result<(Option<BTreeMap<String, String>>, Option<String>), Error> {
+) -> Result<PairedDictionary, Error> {
+    let absent = PairedDictionary {
+        names: None,
+        sha256: None,
+    };
     let Some(key) = pairing_key(&tdxhy.origin) else {
-        return Ok((None, None));
+        return Ok(absent);
     };
     let sibling = records.iter().find(|record| {
         record.source_id == source_store::INCON_SOURCE_ID
             && pairing_key(&record.origin).as_deref() == Some(key.as_str())
     });
     let Some(sibling) = sibling else {
-        return Ok((None, None));
+        return Ok(absent);
     };
     let bytes = store
         .read_verified(&sibling.sha256)
         .map_err(|error| Error::Integrity(error.to_string()))?;
-    let dictionary =
-        parse_dictionary(&bytes).map_err(|error| Error::Integrity(error.to_string()))?;
-    Ok((dictionary, Some(sibling.sha256.clone())))
+    let names = parse_dictionary(&bytes).map_err(|error| Error::Integrity(error.to_string()))?;
+    Ok(PairedDictionary {
+        names,
+        sha256: Some(sibling.sha256.clone()),
+    })
 }
 
 /// The pairing key an origin names, so a `tdxhy.cfg` and the `incon.dat` from

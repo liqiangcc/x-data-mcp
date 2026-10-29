@@ -86,6 +86,22 @@ fn cfg_file(entries: &[(u8, &str, &str, &str)], filler: &str) -> Vec<u8> {
     bytes
 }
 
+/// One fixture file as snapshot facts: grade A, with the shared dictionary.
+fn file(
+    entries: &[(u8, &str, &str, &str)],
+    filler: &str,
+    last_modified: &str,
+    observed: &str,
+) -> SnapshotFacts {
+    snapshot(
+        &cfg_file(entries, filler),
+        Some(last_modified),
+        observed,
+        "A",
+        Some(DICT),
+    )
+}
+
 #[test]
 fn seven_snapshots_with_a_repeated_content_are_six_boundaries() {
     // 7 files; 10-24 and 10-28 are byte-identical, so they are one snapshot
@@ -94,14 +110,14 @@ fn seven_snapshots_with_a_repeated_content_are_six_boundaries() {
         (0u8, "000001", "T1001", "X500102"),
         (1, "600006", "T1001", "X500102"),
     ];
-    let files: [(&[(u8, &str, &str, &str)], &str, &str, &str); 7] = [
-        (
+    let inputs = vec![
+        file(
             &first,
             "830001",
             "Wed, 30 Sep 2026 08:00:00 GMT",
             "2026-09-30T09:00:00Z",
         ),
-        (
+        file(
             &[
                 (0, "000001", "T1001", "X500102"),
                 (1, "600006", "T1001", "X500202"),
@@ -110,7 +126,7 @@ fn seven_snapshots_with_a_repeated_content_are_six_boundaries() {
             "Mon, 12 Oct 2026 08:00:00 GMT",
             "2026-10-12T09:00:00Z",
         ),
-        (
+        file(
             &[
                 (0, "000001", "T1001", "X500102"),
                 (0, "000002", "T1001", "X500102"),
@@ -120,7 +136,7 @@ fn seven_snapshots_with_a_repeated_content_are_six_boundaries() {
             "Tue, 13 Oct 2026 08:00:00 GMT",
             "2026-10-13T09:00:00Z",
         ),
-        (
+        file(
             &[
                 (0, "000001", "T1001", "X500102"),
                 (1, "600006", "T1001", "X500202"),
@@ -129,7 +145,7 @@ fn seven_snapshots_with_a_repeated_content_are_six_boundaries() {
             "Fri, 16 Oct 2026 08:00:00 GMT",
             "2026-10-16T09:00:00Z",
         ),
-        (
+        file(
             &[
                 (0, "000001", "T1001", "X500102"),
                 (1, "600006", "T1001", "X500102"),
@@ -138,7 +154,7 @@ fn seven_snapshots_with_a_repeated_content_are_six_boundaries() {
             "Mon, 19 Oct 2026 08:00:00 GMT",
             "2026-10-19T09:00:00Z",
         ),
-        (
+        file(
             &first,
             "830006",
             "Sat, 24 Oct 2026 08:00:00 GMT",
@@ -146,25 +162,13 @@ fn seven_snapshots_with_a_repeated_content_are_six_boundaries() {
         ),
         // The 7th file repeats the 6th byte for byte: same `member_sha256`, so
         // it is the same snapshot and no second row is written.
-        (
+        file(
             &first,
             "830006",
             "Wed, 28 Oct 2026 08:00:00 GMT",
             "2026-10-28T09:00:00Z",
         ),
     ];
-    let inputs: Vec<SnapshotFacts> = files
-        .iter()
-        .map(|(entries, filler, last_modified, observed)| {
-            snapshot(
-                &cfg_file(entries, filler),
-                Some(*last_modified),
-                observed,
-                "A",
-                Some(DICT),
-            )
-        })
-        .collect();
 
     let rebuild = rebuild(&inputs).unwrap();
     assert_eq!(rebuild.snapshots.len(), 6, "7 files, 6 distinct contents");

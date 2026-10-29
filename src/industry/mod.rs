@@ -369,6 +369,15 @@ pub fn parse_dictionary(bytes: &[u8]) -> Result<Option<BTreeMap<String, String>>
     Ok(Some(dictionary))
 }
 
+/// One distinct snapshot during a rebuild: its record, its interval boundary
+/// (`None` for grade C, which never defines an interval), and its parsed
+/// members + dictionary.
+struct RebuildInput<'a> {
+    record: &'a SnapshotRecord,
+    boundary: Option<(i64, Basis)>,
+    facts: &'a SnapshotFacts,
+}
+
 /// Deterministic rebuild of the snapshot list and the assignment intervals
 /// from a set of snapshot facts. This is the *only* implementation of §5.1:
 /// the daily item and `replay --scope industry` both call it, which is what
@@ -379,11 +388,7 @@ pub fn parse_dictionary(bytes: &[u8]) -> Result<Option<BTreeMap<String, String>>
 /// `(effective_from, ingested_at, member_sha256)` (§9.4.2), so two snapshots
 /// sharing a day are resolved the same way every run.
 pub fn rebuild(inputs: &[SnapshotFacts]) -> Result<Rebuild, Error> {
-    let mut snapshot_records: Vec<(
-        &SnapshotRecord,
-        Option<(i64, Basis)>,
-        Option<&SnapshotFacts>,
-    )> = Vec::with_capacity(inputs.len());
+    let mut snapshot_records: Vec<RebuildInput<'_>> = Vec::with_capacity(inputs.len());
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for facts in inputs {
         if !seen.insert(facts.record.member_sha256.as_str()) {
@@ -392,24 +397,28 @@ pub fn rebuild(inputs: &[SnapshotFacts]) -> Result<Rebuild, Error> {
             continue;
         }
         let boundary = facts.record.boundary()?;
-        snapshot_records.push((&facts.record, boundary, Some(facts)));
+        snapshot_records.push(RebuildInput {
+            record: &facts.record,
+            boundary,
+            facts,
+        });
     }
     snapshot_records.sort_by(|left, right| {
-        left.0
+        left.record
             .ingested_at
-            .cmp(&right.0.ingested_at)
-            .then_with(|| left.0.member_sha256.cmp(&right.0.member_sha256))
+            .cmp(&right.record.ingested_at)
+            .then_with(|| left.record.member_sha256.cmp(&right.record.member_sha256))
     });
 
     let mut segments = Segments::default();
     let mut boundaries: BTreeSet<i64> = BTreeSet::new();
     let mut interval_inputs: Vec<(&SnapshotFacts, i64, Basis)> = Vec::new();
-    for (_, boundary, facts) in &snapshot_records {
-        let (Some((day, basis)), Some(facts)) = (boundary, facts) else {
+    for input in &snapshot_records {
+        let Some((day, basis)) = input.boundary else {
             continue;
         };
-        boundaries.insert(*day);
-        interval_inputs.push((facts, *day, *basis));
+        boundaries.insert(day);
+        interval_inputs.push((input.facts, day, basis));
     }
     // §9.4.2 sort key: (effective_from, ingested_at, sha256). `interval_inputs`
     // inherits snapshot append order from `snapshot_records`, which is already
@@ -434,7 +443,7 @@ pub fn rebuild(inputs: &[SnapshotFacts]) -> Result<Rebuild, Error> {
     Ok(Rebuild {
         snapshots: snapshot_records
             .into_iter()
-            .map(|(record, _, _)| record.clone())
+            .map(|input| input.record.clone())
             .collect(),
         assignments,
         boundaries: boundaries.len(),
