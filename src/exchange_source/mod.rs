@@ -66,7 +66,7 @@ pub use freeze::{
 pub use index::{Rebuild, RebuildProblem, SnapshotRow, rebuild, summary};
 pub use request::{
     BULLETIN_ARCHIVE_START, ExchangeRequest, MAX_SEGMENT_DAYS, PagingFormat, RequestError, Segment,
-    SourceId, quarter_segments,
+    quarter_segments,
 };
 pub use transport::{
     Client, Helper, HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError,

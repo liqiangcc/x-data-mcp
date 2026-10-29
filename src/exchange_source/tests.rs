@@ -286,8 +286,8 @@ fn retries_are_bounded_and_only_for_transient_failures() {
     let client = Client::with_transport(Flaky(flaky.clone()))
         .with_policy(RetryPolicy::bounded(3, Duration::ZERO))
         .without_sleep();
-    let response = client.get(&request).unwrap();
-    assert_eq!(response.status, 200);
+    let answered = client.get(&request).unwrap();
+    assert_eq!(answered.status, 200);
     assert_eq!(flaky.calls(), 3);
     assert!(*flaky.retried_after_failure.lock().unwrap());
 

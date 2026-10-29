@@ -22,6 +22,8 @@ use std::collections::BTreeMap;
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use super::SourceId;
+
 /// Earliest date the SSE bulletin index covers (§6.4). Earlier windows are not
 /// requested at all; there is no source for them.
 pub const BULLETIN_ARCHIVE_START: &str = "2000-01-01";

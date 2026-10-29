@@ -30,10 +30,10 @@ use chrono::{NaiveDate, Utc};
 
 use super::bind::{self, SnapshotBinding};
 use super::freeze::{FrozenBytes, FrozenSnapshot, freeze_bytes, record_snapshots};
-use super::request::{ExchangeRequest, PagingFormat, Segment, SourceId};
+use super::request::{ExchangeRequest, PagingFormat, Segment};
 use super::transport::{Client, HttpRequest};
 use super::validate::{self, EmptyPolicy, FailureClass, PageEnvelope, PageSet};
-use super::{BasisStatus, default_headers};
+use super::{BasisStatus, SourceId, default_headers};
 use crate::source_store::SourceStore;
 use crate::sqlite_market::backend::MarketBackend;
 

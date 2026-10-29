@@ -16,11 +16,11 @@
 
 use chrono::{SecondsFormat, Utc};
 
-use super::BasisStatus;
 use super::index::{STORE_KIND_HTTP, SnapshotRow, observation_date};
-use super::request::{ExchangeRequest, SourceId};
+use super::request::ExchangeRequest;
 use super::transport::HttpResponse;
 use super::validate::PageEnvelope;
+use super::{BasisStatus, SourceId};
 use crate::market_storage::Error as StorageError;
 use crate::source_store::{Registration, SourceStore, StoreError, StoreKind};
 use crate::sqlite_market::backend::MarketBackend;
