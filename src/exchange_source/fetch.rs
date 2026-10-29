@@ -237,7 +237,7 @@ impl AcquireError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Unavailable { .. } => "source_unavailable",
-            Self::Invalid { code, .. } => *code,
+            Self::Invalid { code, .. } => code,
             Self::NotAdmitted { .. } => "source_not_admitted",
             Self::PartiallyFailed { .. } => "partially_failed",
             Self::Freeze(error) => error.code(),

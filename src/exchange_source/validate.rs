@@ -274,12 +274,12 @@ pub fn validate_pages(
             ),
         });
     }
-    if let Some(total) = total {
-        if total != row_count as u64 {
-            return Err(ValidateError::Truncated {
-                detail: format!("declared total {total} but collected {row_count} row(s)"),
-            });
-        }
+    if let Some(total) = total
+        && total != row_count as u64
+    {
+        return Err(ValidateError::Truncated {
+            detail: format!("declared total {total} but collected {row_count} row(s)"),
+        });
     }
     if row_count == 0 {
         return match policy {
