@@ -24,15 +24,17 @@
 | 8 | 交易所来源入口 | 五类交易所来源（A-1/A-2/历史 ST/停复牌/简称）共用一条链路：获取 → sha256 冻结 → 计数校验 → 逐代保留 → parser 版本 → 失败语义；使用方只写解析器与写入器 | 设计；owner 2026-10-28 补充裁决 |
 | 9 | 沪公告索引 | 归档起点 2000-01，查询必须按 **≤1 季度**分段；每段校验返回计数，0 行是 `not_observed` 而不是「无事件」；分页用 `beginPage/endPage`（`pageNo` 会重复第一页） | owner 裁决；本任务抽样 1/5 季度都返回 `data:[]`，证明「0 行无意义」 |
 | 10 | 裁剪前提 | generation 退役前必须已登记覆盖 `base.zip`/`gbbq.zip`/`hsjday.zip` 的派生事实（行业快照、行业字典、资本/因子事件、日线）；缺失则拒绝退役并给清单；当前「保留最新两个被取代代际」的宽限期不变 | 设计；现状 `ARTIFACTS` 3 个、`retire_bytes`（`src/generation/mod.rs:34,563`） |
-| 11 | 存储 | **schema 25**：行业快照/行业区间、交易所来源快照、generation 派生事实登记、退役豁免；沿用 022/023 的表不重建 | 设计 |
+| 11 | 存储 | **schema 25**：行业快照/行业区间、交易所来源快照、generation 派生事实登记、退役豁免；沿用 022/023 的表不重建；不可再生原始字节持久在库外**来源库**（§9.4），DB 表只是它的索引 | 设计 |
 | 12 | 契约 | 不改已冻结行为：新增 v2-only `market.industry_assignments`、`CatalogScope` 新值与 `selection.kind=scope`、导出 `research-snapshot.v3`；`x` 下游改用主表/股票池取成员 | 设计 |
 | 13 | 可行性 | 退市股行情、股票池、行业区间、来源入口、裁剪门禁均可达；历史行业**早于 2026-09-30 不可达**（标 `unknown`）；北交所与沪 2000 前 ST **NOT_AVAILABLE**；偏差逐条列在 §11 | 实测 + 设计 |
+| 14 | fresh-init 持久性 | 生产部署是「归档旧库 + 全新 init」，只能从 active generation 再生数据；因此 M3 的不可再生事实（历史 `tdxhy.cfg`/`incon.dat`、交易所来源原始响应、回填归档）放进**系统自有的库外内容寻址来源库 + 只追加清单**，DB 表全部可重建；fresh-init 后由 maint 命令重放；退役门禁以「按 sha 读回原始字节」为准 | 设计（本 PR 补缺口） |
 
-**三个最容易被做错的点**（本设计专门守住）：
+**四个最容易被做错的点**（本设计专门守住）：
 
 1. **「不在目录」不等于「已退市」**。目录是当前快照；把目录当成员集会永久丢掉 338 个退市代码，把主表当「当前名单」又会把已退市证券当成仍在册。两者职责分开：目录回答「今天叫什么、属于什么行业」，主表 + 股票池回答「某天在不在册」。
 2. **缺快照不是「没有变化」**。行业只有观测到的快照；两个快照之间的变更日不可知，早于最早快照只能 `unknown`。用当前行业回填历史，或用「0 行」证明无变更，都是伪造历史。
 3. **0 行不是证据**。交易所公告索引在区间过长时会静默返回 `total=0`；来源入口必须分段并校验计数，否则会把「查询失败」写成「没有停牌/没有 ST」。
+4. **归档不是系统的一部分**。owner 私有归档只能当一次性导入源；派生事实与「原文可从归档重解析」都不构成持久性——fresh-init 部署会清空 DB，只有系统自有的来源库能按 sha 读回不可再生字节（§9.4）。
 
 ---
 
@@ -46,7 +48,8 @@
 4. 交易所来源共用入口：A-1/A-2、历史 ST（#308）、停复牌（A-3）、简称历史（S-6）的获取、冻结、保留、版本、与 generation 的关系、失败语义；沪公告索引的 ≤1 季度分段与计数校验。
 5. generation 保留与裁剪：裁剪前必须落哪些派生事实、退役门禁、磁盘估算。
 6. 存储（schema 25）、派生、日更维护、导出列、契约影响、可行性逐项偏差。
-7. 分离点落位、6 个扩展场景走查、实现拆分（含 ST/A-3/S-6 各一个写入器 PR）与 owner 裁决项。
+7. fresh-init 下不可再生事实的持久性：系统自有的库外来源库、只追加清单、重放路径、退役门禁依据、一次性导入、保留与回滚（§9.4）。
+8. 分离点落位、6 个扩展场景走查、实现拆分（含 ST/A-3/S-6 各一个写入器 PR）与 owner 裁决项。
 
 ### 1.2 本次不包含
 
@@ -114,8 +117,9 @@
 
 ```text
 原始证据层   generation 字节（base.zip / gbbq.zip / hsjday.zip，绑 sha256）
+             库外来源库（内容寻址 blobs + 只追加清单）：行业成员/字典抽取物 + 全部交易所原始响应字节
              交易所来源快照（沪深名单/公告索引/简称变更/停复牌，按 sha256 冻结，跨代保留）
-                 │  每个来源一个 Adapter（分离点 1）
+                 │  每个来源一个 Adapter（分离点 1）；DB 只是来源库的索引（§9.4）
                  ▼
 解析事实层   日线(M1)  因子/股本事件(M1/M2)  上市/退市/迁移  风险警示区间  停牌区间  简称区间
              行业快照 + 行业区间  行业字典(code→name)
@@ -129,7 +133,7 @@
                  │  三个入口适配（分离点 5）
                  ├── MCP v8（dataset 分支 + as_of/known_at）
                  ├── 导出 bin（Parquet + 清单）
-                 └── 运维（maint：来源快照、退役门禁、回填）
+                 └── 运维（maint：来源库导入/重放、退役门禁、回填）
 ```
 
 ### 3.2 数据集与层
@@ -246,7 +250,7 @@ industry_assignments（区间，读面）
   snapshot_id → industry_snapshot, evidence_grade
 ```
 
-- **区间由相邻快照计算，不存快照全量行**（全量行只用于重算与审计：只存 `member_sha256` + 统计；如需复查，从归档 blob 重解析）。
+- **区间由相邻快照计算，不存快照全量行**（全量行只用于重算与审计：只存 `member_sha256` + 统计；如需复查，按 `member_sha256` 从来源库 blob 重解析，§9.4）。
 - 同一代码出现在相邻快照且 `(t_code, x_code)` 不变 → 不产生新行，只延长区间；变化 → 旧区间 `effective_to = 新起点`，新行开启。
 - 从某快照消失的代码 → 旧区间在**该快照起点**结束（我们只能证明「从这次观测起不在」，不能证明具体日期）。
 - 区间不重叠、不空洞（在观测窗口内）；同一 `(entity, effective_from)` 唯一，冲突 fail-closed。
@@ -254,7 +258,7 @@ industry_assignments（区间，读面）
 
 ### 5.2 生效日取法与偏差
 
-官方 `tdxhy.cfg` **没有生效日**，`base.zip`/HTTP 只有 `last_modified`。规则（待 owner Q1 确认）：
+官方 `tdxhy.cfg` **没有生效日**，`base.zip`/HTTP 只有 `last_modified`。规则（已裁决，owner 2026-10-28，Q1 按默认）：
 
 | 情形 | `effective_from` | `basis` | 偏差 |
 |---|---|---|---|
@@ -274,10 +278,11 @@ industry_assignments（区间，读面）
 | **C** | 有内容的 `tdxhy.cfg`，但无官方 URL/manifest/时间（如仓库内 2026-09-16 Windows 客户端文件） | 默认**不能** | 只作交叉核对；如 owner 另批，可按提交日定区间并标 `evidence_commit_date` |
 | **D** | 无 sha256 或无法验证内容 | 不能 | 不进入任何表 |
 
-回填流程（一次性 maint 命令，不是日更）：
+回填流程（一次性 maint 命令，不是日更；输入是**来源库**，不是 owner 私有目录）：
 
-1. 读归档索引，按 `tdxhy.cfg` sha256 去重；同一内容多条记录取**最早的非空 `last_modified`**与最早 `observed_at`。
-2. 校验每个 blob 的 sha256 与成员名；校验 `tdxhy.cfg` 能被现有解析器完整解析（fail-closed）。
+0. 先按 §9.4.4 把归档 A/B 档导入来源库；回填/重放只从来源库读（幂等）。
+1. 读来源库清单，按 `tdxhy.cfg` sha256 去重；同一内容多条记录取**最早的非空 `last_modified`**与最早 `observed_at`。
+2. 校验每个 blob 的 sha256 与成员名（读回不一致即 `source_store_corrupt`）；校验 `tdxhy.cfg` 能被清单登记的 `parser_version` 完整解析（fail-closed）。
 3. 按 §5.2 定起点，生成快照 + 区间；证据等级写入每行。
 4. 仓库内 2026-09-16 文件默认只写入 `industry_snapshot(source_kind='repo_evidence', evidence_grade='C')` 供核对，不生成区间。
 5. 回填幂等：同一 `member_sha256` 重复执行不新增行。
@@ -314,7 +319,7 @@ industry_assignments（区间，读面）
 
 `tdxhy.cfg` 只有 `X` 码，名称来自 `gbbq.zip!zhb.zip!incon.dat` 的 `#TDXRSHY`（`src/catalog_tdx/source.rs:124-144`）。`incon.dat` **也在 generation 里**，退役同样丢失。设计：
 
-- 每代同时落 `industry_dictionary` 派生事实：`incon.dat` 的 sha256 + `#TDXRSHY` 的 `(code, name)` 行 + `parser_version`。
+- 每代同时落 `industry_dictionary` 派生事实：`incon.dat` 的 sha256 + `#TDXRSHY` 的 `(code, name)` 行 + `parser_version`；`incon.dat` 抽取物同时进来源库（§9.4），否则 fresh-init 后字典无法重建。
 - 归档回填没有同代 `incon.dat`：`name=null`、`name_status='unknown_dictionary'`，代码与区间仍然可用；不得用 2026-10 的字典给 2026-09 的区间「补名字」而不标偏差。
 - 仓库内 2026-09-16 的 `incon.dat` 可作为 C 档字典作交叉核对，不自动使用。
 
@@ -363,16 +368,17 @@ fetch（HTTP，bounded retries，Referer/UA）
 
 **冻结（freeze）**
 
-- 原始字节内容寻址存（`blobs/<sha256>`，与行业归档同形状）； `exchange_source_snapshots` 表存索引（`snapshot_id` = sha256，`source_id`、`request_fingerprint`、`url`、`fetched_at`、`http_etag`、`http_last_modified`、`as_of`、`row_count`、`page_count`、`parser_version`、`basis_status`）。
-- 冻结发生在解析前：解析失败也保留字节，供诊断与复现。
+- 原始字节内容寻址存进**系统自有的来源库**（`<source-store>/blobs/<sha256>`，与行业抽取物同一存储，§9.4.1），并追加清单行；`exchange_source_snapshots` 表只存索引（`snapshot_id` = sha256，`store_sha256`、`source_id`、`request_fingerprint`、`url`、`fetched_at`、`http_etag`、`http_last_modified`、`as_of`、`row_count`、`page_count`、`parser_version`、`basis_status`）。
+- 冻结发生在解析前：解析失败也保留字节，供诊断与复现；写入顺序固定为「blob + fsync → 清单 + fsync → DB 索引」，DB 行缺了可由重放补（§9.4.2）。
 - 不做「只存解析结果」：原始响应是 AC-M3-9 断网重放的唯一依据。
+- 不存进 owner 私有目录：那不是部署的一部分，fresh-init 或换机后无法保证按 sha 读回（§9.4）。
 
 **保留与版本**
 
-- 按 sha256 去重，**永不自动删除**（全部为小文件：沪深名单日更下估计每秒不到 2MB，但去重后一年 <50MB）。
+- 按 sha256 去重，**永不自动删除**（全部为小文件：沪深名单日更下估计每秒不到 2MB，但去重后一年 <50MB）；它们和行业抽取物一起留在来源库，不随 generation 退役（§9.4.5）。
 - 每个 consumer 派生数据集登记 `source_binding_digest`，绑定「用了哪些 snapshot_id + parser_version」；同一绑定重跑必须逐位相同。
 - 与 generation 的关系：交易所快照**不是** generation 的第 4 个 artifact（`ARTIFACTS` 保持 3 个，`src/generation/mod.rs:34`），而是在派生 item 运行时按需获取并冻结；`generation_manifest_sha256` 记在快照的「使用记录」上，便于回答「这一代主表/ST 用的是哪次响应」。
-- 退役：交易所快照不随 generation 退役删除（它们不在 generation 目录里，且体积小）；退役门禁只要求「派生事实已登记」（§8）。
+- 退役：交易所快照不随 generation 退役删除（它们不在 generation 目录里，且体积小）；退役门禁对不可再生字节的要求是「已在来源库且能按 sha 读回」，对派生事实的要求是「已登记」（§8.3）。
 
 **失败语义**
 
@@ -434,7 +440,8 @@ fetch（HTTP，bounded retries，Referer/UA）
 - 每代 generation 只有 3 个原始 artifact：`base.zip`、`gbbq.zip`、`hsjday.zip`（`src/generation/mod.rs:34`）。
 - 退役时这 3 个文件**直接删除**（`retire_bytes`，`src/generation/mod.rs:557-578`）；自动策略只保留最新 2 个被取代代际的字节（`src/acquire/service.rs:41-43`）。
 - 已被丢掉的、只存在于原始文件的行业事实：`base.zip!tdxhy.cfg`（行业归属）与 `gbbq.zip!zhb.zip!incon.dat`（行业名称）。`base.dbf`/`infoharbor`/`gbbq` 的其它事实已在 M1/M2 落库，`hsjday` 已在 M1 落库。
-- owner 批准的临时措施（仓库外归档）只能支撑回填与过渡，**不是**长期机制：它依赖人工在每次激活前运行，无法在退役路径上 fail-closed。
+- 退役删的是 generation 目录里的 3 个 artifact；**不可再生的原始字节不能只靠 generation 保存**：行业成员与交易所来源响应必须先进入系统自有的来源库（§9.4），否则 fresh-init 部署（D-08：归档旧库 + 全新 init）后无法重建。
+- owner 批准的临时措施（仓库外归档）只能支撑一次性回填与过渡，**不是**长期机制：它依赖人工在每次激活前运行，无法在退役路径上 fail-closed，也不在部署状态里（§9.4.4 导入一次后系统不再引用）。
 
 ### 8.2 裁剪前必须落地的派生事实
 
@@ -446,22 +453,28 @@ fetch（HTTP，bounded retries，Referer/UA）
 | `gbbq.zip` | cat1 因子、cat2/3/5/7/8/9/10 股本 | `adjustment_events` / `capital_events` | M1/M2 已有 |
 | `hsjday.zip` | 日线 OHLCV | `market_series` + `series_bars` | M1 已有 |
 
-登记单元：`generation_facts(generation_manifest_sha256, role, fact_kind, fact_digest, registered_at)`；`fact_digest` 是派生内容的摘要，`role` 是 `base.zip|gbbq.zip|hsjday.zip`。
+登记单元：`generation_facts(generation_manifest_sha256, role, fact_kind, fact_digest, evidence_sha256, parser_version, registered_at)`；`fact_digest` 是派生内容的摘要，`role` 是 `base.zip|gbbq.zip|hsjday.zip`，`evidence_sha256` 是该事实所依据的来源库 blob（不可再生事实必须非空，且登记时按 sha 读回校验）。这张表是**可重建索引**：`replay_source_store --scope generation_facts`（§9.4.2）能从来源库清单与派生表重建它；退役门禁不以它的存在为唯一依据。
 
 ### 8.3 退役门禁
 
 ```text
 retire(generation) 前置：
   1) 现有检查：非 active、无 pin、confirm_token 匹配（不变）
-  2) 新检查：generation_facts 中存在覆盖该代每个 role 的必需 fact_kind
+  2) 来源库证据检查（权威，fail-closed）：该代每个 role 的不可再生原始成员
+     （base.zip → tdxhy.cfg；gbbq.zip → zhb.zip!incon.dat）已在来源库：
+       - 清单里有 generation_manifest_sha256 == 该代的记录
+       - blob 存在，按 sha256 读回逐字节比对通过
+     缺失/读不回 → 拒绝，reason_code=source_store_evidence_missing，列出 (role, source_id, sha256)
+  3) 派生事实索引检查（加速）：generation_facts 中存在覆盖该代每个 role 的必需 fact_kind
      缺失 → 拒绝，reason_code=derived_facts_missing，列出 (role, missing kinds)
-  3) 豁免：retire_exemptions 行（generation sha + 缺失项 + 理由 + 记录人 + 时间）
-     豁免不是默认路径；无豁免记录一律拒绝
+       （附提示：先跑 replay_source_store --scope generation_facts；该表可重建，不把它当唯一依据）
+  4) 豁免：retire_exemptions 行（generation sha + 缺失项 + 理由 + 记录人 + 时间）
+     豁免不是默认路径；无豁免记录一律拒绝；对第 2 步的豁免需 owner 单独批准
 ```
 
-必需集合（初期）：`base.zip → {industry_snapshot, industry_dictionary}`；`gbbq.zip → {industry_dictionary, capital_events, adjustment_events}`；`hsjday.zip → {daily_series}`。宁可拒绝一次退役，不可丢一类事实。
+必需集合（初期）：`base.zip → {industry_snapshot, industry_dictionary}`；`gbbq.zip → {industry_dictionary, capital_events, adjustment_events}`；`hsjday.zip → {daily_series}`。其中 `industry_snapshot`/`industry_dictionary` 属「不可再生」，因此第 2 步要求字节在库；其余事实已在 M1/M2 落库，`fact_digest` 即可解释，但仍需登记索引。宁可拒绝一次退役，不可丢一类事实。
 
-自动策略（保留最新 2 代）不变；它只决定「何时尝试退役」，不决定「能否退役」。手动 `retire_generation` 走同一门禁。这条把临时归档从「靠人记得」变成「不登记就不能删」。
+自动策略（保留最新 2 代）不变；它只决定「何时尝试退役」，不决定「能否退役」。手动 `retire_generation` 走同一门禁。这条把临时归档从「靠人记得」变成「**不从来源库读回就不能删**」，且 fresh-init 后门禁仍有依据（DB 索引可重建，字节在来源库）。
 
 ### 8.4 磁盘与性能估算（只估算，不否决正确性优先）
 
@@ -480,7 +493,7 @@ retire(generation) 前置：
 
 ### 8.5 过渡期
 
-owner 归档在 M3 上线前继续按现规则运行（每次激活后、下一次激活前）；M3 上线后归档仍保留作为独立审计副本，但**不再是唯一副本**：派生事实 + 冻结的行业快照已能支撑复现。回填只读归档，不回头修改历史 generation。
+owner 归档在 M3 上线前继续按现规则运行（每次激活后、下一次激活前），并作为 §9.4.4 的一次性导入源；导入完成后归档降为**独立审计副本**，系统不再读它。M3 上线后「唯一副本」是来源库（原始字节 + 清单）+ 派生事实：fresh-init 后由 §9.4.2 重放重建 DB。回填只读来源库，不回头修改历史 generation。
 
 ---
 
@@ -488,7 +501,7 @@ owner 归档在 M3 上线前继续按现规则运行（每次激活后、下一�
 
 ### 9.1 为什么是 25
 
-M2 的 023/024 已部署，不改已合并迁移；25 号迁移只追加 4 张表与必要索引。迁移链是固定长度数组（`src/sqlite_tasks.rs:45-50`），要同时改 `COMPACT_SCHEMA_VERSION`、数组长度/顺序断言与 `scripts/check_current_facts.py:15`。
+M2 的 023/024 已部署，不改已合并迁移；25 号迁移只追加 5 张表与必要索引（含 §9.4 要求的 `store_sha256`/`parser_version`/`evidence_sha256` 列）。迁移链是固定长度数组（`src/sqlite_tasks.rs:45-50`），要同时改 `COMPACT_SCHEMA_VERSION`、数组长度/顺序断言与 `scripts/check_current_facts.py:15`。
 
 ### 9.2 表
 
@@ -496,6 +509,7 @@ M2 的 023/024 已部署，不改已合并迁移；25 号迁移只追加 4 张�
 -- 1) 行业快照：一代 cfg 一份（按成员内容去重）
 CREATE TABLE industry_snapshots(
   member_sha256 BLOB PRIMARY KEY,
+  store_sha256 BLOB NOT NULL,                  -- 来源库 blob sha（按内容寻址读回的字节，§9.4.1）
   base_zip_sha256 BLOB,
   generation_manifest_sha256 BLOB,
   source_kind TEXT NOT NULL CHECK(source_kind IN ('generation','archive','repo_evidence')),
@@ -503,6 +517,7 @@ CREATE TABLE industry_snapshots(
   observed_at TEXT,
   ingested_at TEXT NOT NULL,
   evidence_grade TEXT NOT NULL CHECK(evidence_grade IN ('A','B','C')),
+  parser_version TEXT NOT NULL,                -- 重放必须用同一解析器
   row_count INTEGER NOT NULL,
   scope_member_count INTEGER NOT NULL,
   dictionary_sha256 BLOB,
@@ -533,6 +548,8 @@ CREATE TABLE industry_assignments(
 -- 3) 交易所来源快照（5 个使用方共用）
 CREATE TABLE exchange_source_snapshots(
   snapshot_id TEXT PRIMARY KEY,                -- 响应字节 sha256（hex）
+  store_sha256 BLOB NOT NULL,                  -- 同一字节的来源库 blob sha（显式列，不从路径猜）
+  store_kind TEXT NOT NULL CHECK(store_kind IN ('http_fetch','archive_import')),
   source_id TEXT NOT NULL,                     -- sse_listing / sse_delisting / sse_bulletin
                                                -- / sse_suspension / szse_listing / szse_delisting
                                                -- / szse_short_name
@@ -558,6 +575,8 @@ CREATE TABLE generation_facts(
   role TEXT NOT NULL CHECK(role IN ('base.zip','gbbq.zip','hsjday.zip')),
   fact_kind TEXT NOT NULL,
   fact_digest BLOB NOT NULL,
+  evidence_sha256 BLOB,                        -- 事实依据的来源库 blob；不可再生事实必须非空
+  parser_version TEXT,
   registered_at TEXT NOT NULL,
   PRIMARY KEY(generation_manifest_sha256, role, fact_kind)
 ) STRICT;
@@ -576,15 +595,115 @@ CREATE TABLE retire_exemptions(
 说明：
 
 - 区间键用 `(exchange, code)` 而不是 `entity` 字符串：退市股在 A-1/A-2 补齐前可能不在主表，但行业事实仍需可存；读面再 join 主表，join 不到的不返回（带 `orphan` 诊断）。
-- `industry_assignments` 不存快照全量行；`industry_snapshots` 只存内容 sha 与统计，原文从归档 blob 重解析（审计）。
-- 交易所快照字节不进 DB（Q7 待定）；表只存索引与 sha；字节在内容寻址目录。
+- `industry_assignments` 不存快照全量行；`industry_snapshots` 只存内容 sha 与统计，原文从**来源库** blob 重解析（审计与重放，§9.4）；`store_sha256` 读回校验失败即 `source_store_corrupt`，fail-closed。
+- 交易所快照字节不进 DB（Q7 已裁决：内容寻址文件 + 表索引）：字节在来源库，表只存索引与 sha。
+- `generation_facts` 是**可重建索引**：`replay_source_store --scope generation_facts` 可从来源库清单与派生表重建；退役门禁以来源库为准（§8.3）。
+- 写入顺序固定：来源库 blob + 清单 fsync 成功后，才写上述索引行（§9.4.1）；不允许「DB 有行、blob 不可读」。
+- 列名用 `store_sha256` 而不是 `blob_sha256`：它指「来源库中的 blob」，与 `member_sha256`（成员内容身份）区分语义角色；对 `tdxhy.cfg` 抽取物两者应相等，写入与重放时都断言。
 - 索引：`industry_assignments(code, effective_from)`、`exchange_source_snapshots(source_id, as_of)`。
 
 ### 9.3 迁移与回滚
 
 - 只建新表与索引，不改 022/023/024 任何表；旧二进制读 schema 25 → 拒绝（现有 `SCHEMA_VERSION` 检查），回滚只能回到旧二进制 + 旧库（部署前归档）。
 - 空表升级与全新 init 两条路径都要测；`pragma user_version=25`。
+- **全新 init 后必须重放**：`task_sqlite init21` 建出的 25 号库中 M3 表为空，部署脚本在服务起来后、写部署报告前调用一次 `replay_source_store --scope all`（§9.4.2），否则「部署成功」只是「探活通过、历史为空」。
+- **回滚不动来源库**：旧二进制不理解来源库，忽略即可；恢复旧库后来源库只增不改，再次前滚时重放幂等补齐（§9.4.5）。
 - `industry_assignments.known_at NOT NULL`：没有知晓时间的行不允许入库（回填统一用回填日），防止把事件日冒充知晓时间。
+
+### 9.4 持久性：fresh-init 部署与不可再生事实
+
+**问题**。D-08 规定生产部署是「归档旧库 + 全新 init 重建」，不做原地迁移（`scripts/deploy_phase_g.sh:350-365`：归档旧库 → `task_sqlite init21` → 起服务 → 探活）。重建只能从**当前 active generation** 再生数据，而 M3 引入三类**不可再生**事实：
+
+| 不可再生事实 | 为什么不可再生 | 按原设计（只改 DB）会怎样 |
+|---|---|---|
+| 历史行业快照（`tdxhy.cfg`）与行业字典（`incon.dat`） | 只存在于各自 generation 的 `base.zip`/`gbbq.zip` 里；退役即删字节（§8.1） | fresh-init 后 `industry_snapshots`/`industry_assignments`/`industry_dictionary` 为空，且旧代字节已删 → 无法重建 |
+| 交易所来源原始响应 | 网站内容滚动变化（深交所简称表每月约 +15 行）；重抓得到的是**新**事实，不是当时冻结的那一份 | `exchange_source_snapshots` 只剩悬空索引；AC-M3-9 的「断网重放」失效 |
+| 回填进来的归档快照 | 唯一副本在 owner 私有目录，不在部署状态里 | 换机、清理归档或下一次 fresh-init 即永久丢历史 |
+
+§5.1/§9.2 原来写「原文从归档 blob 重解析」，但那个归档是 owner 的临时目录，不是系统的一部分；`generation_facts` 也只有 DB 行，fresh-init 后同样清空，退役门禁在部署后失去依据。结果就是把 M3 要防止的「丢历史」换个位置再发生一次。因此 M3 必须先有**系统自有的持久来源库**，DB 表只是它的索引。
+
+#### 9.4.1 来源库（source store）
+
+- **位置**：库外的内容寻址存储，位于部署状态目录下、与 generation 根同级（例如 `<deploy-state>/source-store/`）。具体路径由部署配置给出；本文档不写本机路径、不写绝对路径。
+- **布局**：
+
+```text
+<source-store>/
+  blobs/<sha256>        # 原始字节，内容寻址；只增不删、不覆盖
+  manifest.jsonl        # 只追加清单，一行一条登记
+  tmp/                  # 写入暂存（fsync 后 rename 进 blobs/）
+```
+
+- **存货范围**：`base.zip!tdxhy.cfg`、`gbbq.zip!zhb.zip!incon.dat`（每代一份抽取物）、全部交易所来源原始响应字节（A-1/A-2/ST/A-3/S-6 每次冻结）、以及回填导入的归档成员。**不存**整个 `base.zip`/`gbbq.zip`（每份 16–32MB，且 §8 只保留最新 2 代）；容器 `base.zip` 的 sha256 与 manifest 摘要作为清单字段留证。代价：只能按 sha 读回成员字节，不能逐字节重建容器——写进 §11 偏差，作为 AC-M3-9「重放边界」的明文定义。
+- **清单字段**（`manifest.jsonl`，只追加；每行一条登记）：
+
+| 字段 | 语义 |
+|---|---|
+| `sha256` | 字节内容 sha256（hex），即 blob 文件名 |
+| `source_id` | 逻辑来源：`tdx.base.zip!tdxhy.cfg` / `tdx.gbbq.zip!zhb.zip!incon.dat` / `sse_listing` / `szse_short_name` … |
+| `store_kind` | `generation_member` / `http_fetch` / `archive_import` / `repo_evidence` |
+| `origin` | 证据出处：generation manifest sha / 请求指纹 / 归档批次 id + 条目路径 / 仓库路径 |
+| `acquired_at` | 首次拿到该字节的时间（UTC 秒） |
+| `publisher_last_modified` | 发布方 `last_modified`（可空） |
+| `evidence_grade` / `basis_status` | 行业证据等级 A/B/C（§5.3）；交易所来源分档（§6） |
+| `parser_version` | 解析该字节所用的解析器版本；重放必须用同一版本，未知版本 fail-closed |
+| `size_bytes` / `container_sha256` | 字节数 / 容器 sha256（可空） |
+| `import_batch` | 一次性导入批次 id（可空） |
+
+- **写入顺序（强制）**：写 `tmp/` → `fsync(file)` → `rename` 到 `blobs/<sha256>` → `fsync(dir)` → 追加清单行 → `fsync(manifest)` → **最后**才写 DB 索引行（每域一个事务）。任何一步失败都不写 DB；「blob 在、清单在、DB 索引缺」是允许的中间态，由 §9.4.2 补齐；反过来「DB 有索引、blob 不可读」不可接受，读面与门禁一律 fail-closed。
+- **权威关系**：blob + 清单是事实源；`industry_snapshots`、`exchange_source_snapshots`、`generation_facts` 是**索引**，可由来源库完整重建。DB 不复制整份清单（不造双真相）；重建后若发现清单里有、DB 没有，属于待补索引；DB 有、清单没有 → `source_store_index_orphan`，拒绝并列出。
+- **不做自动 GC**：内容寻址去重后只增不删；删除只能走 owner 显式批准的 maint 命令并留痕（首期不提供该命令）。
+
+#### 9.4.2 重放（replay）
+
+一个 maint 入口，按域重放，幂等：
+
+```text
+maint replay_source_store --scope industry|exchange|generation_facts|all [--verify-only]
+```
+
+| scope | 从来源库重建什么 | 解析/校验 |
+|---|---|---|
+| `industry` | `industry_snapshots`（按 `store_sha256` 读回）、`industry_dictionary`、`industry_assignments`（按 §5.1/§5.2 的确定性规则重算区间） | 清单登记的 `parser_version` 解析；sha 读回不符 → `source_store_corrupt` |
+| `exchange` | `exchange_source_snapshots` 索引行（清单 → 行，不重发 HTTP）；再按 `parser_version` 重建各使用方的派生表（主表/ST/停牌/简称区间） | 字节 sha 读回校验；解析失败保留索引、标记 `derived_unavailable`，不静默跳行 |
+| `generation_facts` | `generation_facts`（按 `origin` 里的 generation sha + `role` + 派生表摘要重算 `fact_digest`/`evidence_sha256`） | 与 §8.3 门禁同源的校验函数 |
+
+- **确定性**：区间重算的排序键固定为 `(effective_from, ingested_at, sha256)`，同日多变更按 §5.2 处理；同一来源库 + 同一 `parser_version` 重放两次必须产出逐位相同的表内容（AC-M3-9 的仓内定义）。
+- **摘要对账**：每个 scope 输出规范化摘要（按主键排序的固定字段 JSON 的 sha256）。`--verify-only` 只重算并与 DB 比较，返回 `match` 或 `drift` + 差异主键（前 20 条）与计数；不写 DB。
+- **部署钩子**：`scripts/deploy_phase_g.sh` 在 fresh init 并起服务后、写部署报告前调用一次 `replay_source_store --scope all`（经 maint socket 或 PR-1a 选定的等价 CLI 入口）；来源库为空时返回 `store_empty` 并记入部署报告，不算失败（首次上线前先跑 §9.4.4 导入）。验收时比较重放前后的摘要，必须 `match`。
+- **失败语义**：任一 blob 读不回 → 整个 scope 失败、不写半成品（每域一个事务）；只影响 M3 表，不阻塞 TDX 日更与已有行情（§10.1 的隔离规则不变）。
+- **与日更的关系**：日更首个派生 item 可以顺带补本代缺失的索引，但**不能替代**部署后的显式重放——部署脚本不依赖日更是否成功。
+
+#### 9.4.3 退役门禁
+
+见 §8.3：必须是「按 sha 从来源库读回原始字节」才算证据；`generation_facts` 只是加速索引，可重建。这样 fresh-init 之后门禁仍有依据，且不依赖任何 owner 私有目录。
+
+#### 9.4.4 一次性导入（owner 私有归档）
+
+```text
+maint import_source_store --index <archive-index.json> --blobs <dir> --tiers A,B [--kind industry|exchange] [--dry-run]
+```
+
+- **只导入通过校验的内容**：成员 sha256 与索引相符、容器 `base.zip` 的 sha256 与 manifest 相符（A 档）、`parser_version` 能完整解析（fail-closed）。不通过 → 进 `skipped_unverified` 清单（逐条原因：`sha_mismatch` / `manifest_mismatch` / `parse_failed` / `unknown_parser`），不静默丢。
+- **幂等**：键为 `(sha256, source_id)`；重复执行不新增 blob/清单行，只回报 `already_present`；同一字节不同 `origin` 追加一条清单记录（证据更全，blob 不重复）。
+- **A/B 档**（Q2 已裁决）：A 档写 `evidence_grade='A'` + `publisher_last_modified`；B 档写 `B` + `acquired_at`，区间起点按 §5.2 取获取时间。C 档（仓库内 2026-09-16 文件）随仓库存在，不依赖 owner 归档；可选入库标 `repo_evidence`，不产生区间。
+- **批次留痕**：导入写 `import_batch`，并在 `docs/STATUS.md` 记一行（批次 id、条目数、跳过数、最早/最晚 `last_modified`）。导入完成后系统**不再读** owner 私有目录；PR-6 的回填只以 `--source store` 读来源库，私有目录仅作为导入输入。
+- **与 PR-1 的关系**：导入 + 重放框架是 PR-1a（先于 schema 25 合并）；schema 25 只负责索引列，不承担持久化职责。
+
+#### 9.4.5 保留、磁盘、备份与回滚
+
+- **保留策略**：只增不删，按 sha256 去重；同一内容不因来源重复而多存。
+- **磁盘估算**（与 §8.4 合计预算 <0.5GB/年不冲突）：
+
+| 项 | 估算 | 依据 |
+|---|---|---|
+| 行业抽取物 | 每代 <1MB（`tdxhy.cfg` 约 150KB + `incon.dat` 约 67KB）；按每日 1 代 <0.25MB/代 → 首年 <90MB（未压缩） | §5.6；历史 cfg 实测 |
+| 交易所来源原始字节 | 每月数 MB；去重后 <50MB/年 | §8.4「单次 ~1.7MB、仅内容变化时新增」 |
+| 合计首年 | **<0.15GB** | 含回填导入（9 份 `base.zip` 的成员抽取物，不含容器） |
+
+- **备份**：部署前对来源库做一次快照（`rsync` 或同盘硬链接副本），与 DB 归档同一批次；因为除 `generation_facts` 外的派生表都能从来源库 + generation 重建，**备份只需覆盖来源库**。首期只有单机一份 + 部署快照，未做异地备份（列为 U-10）。
+- **回滚**：回滚到旧二进制时来源库**不动**，旧二进制不认识它、忽略即可；旧库（部署前归档）恢复后与来源库各自独立。再次前滚由 §9.4.2 幂等补齐。「在旧库上直接跑新二进制」与「删来源库换新库」都属禁止操作。
+- **损坏处理**：blob 读回 sha 不匹配 → `source_store_corrupt`，重放、门禁与读面全部 fail-closed，输出 `(sha256, source_id, expected, actual)` 清单，等待 owner 用备份或归档副本修复；不自动重抓（重抓得到的是新事实，不能冒充旧事实）。
 
 ## 10. 派生、日更、导出、v8 与契约
 
@@ -594,7 +713,7 @@ CREATE TABLE retire_exemptions(
 |---|---|---|---|
 | 逐实体日线 item（现有） | 不复权 + 前复权 + 因子/股本 | generation | 不变 |
 | `derived:security_master`（现有） | 主表 + 简称 + 上市/退市 + 迁移 | TDX + A-1/A-2 冻结快照 | 失败 → item 失败；旧版继续可读 |
-| `derived:industry_snapshot`（新） | 行业快照 + 区间 + 字典 | `base.zip!tdxhy.cfg`、`gbbq.zip!zhb.zip!incon.dat`、§6 共用入口（C 档回填不走日更） | 解析失败/字典缺失 → item 失败并保留字节；不丢上一版 |
+| `derived:industry_snapshot`（新） | 行业快照 + 区间 + 字典 | `base.zip!tdxhy.cfg`、`gbbq.zip!zhb.zip!incon.dat`、§6 共用入口（C 档回填不走日更） | 解析失败/字典缺失 → item 失败，字节已先落来源库；不丢上一版 |
 | `derived:suspensions`（现有） | `confirmed`（A-3）+ `unresolved_gap`（派生） | 冻结快照 + 日历 + 主表 | A-3 获取失败 → `partially_failed`，不写 `confirmed` |
 | `derived:risk_warnings`（现有） | ST 区间 | #308 冻结快照 + GP29/行情锚定 | 同上；沪 2000 前/北交所 `unknown` |
 | `derived:security_names`（新写入器） | 简称区间（仅深） | `SSGSGMXX/tab2` 冻结快照 | 沪/北 `unbounded`/`unknown` |
@@ -602,6 +721,7 @@ CREATE TABLE retire_exemptions(
 
 - 退市股首次采集是**显式任务**（§4.4），不计入日更 plan；日更只做「新退市成员尾巴」与「不消失检查」。
 - 内部 item 之间无事务耦合：行业失败不阻塞日线；主表失败不阻塞已有行情（沿用 M2）。
+- 所有写 M3 表的 item 遵循 §9.4.1 顺序：先写来源库（blob + fsync + 清单），再写 DB 索引；中途失败只会留下可重放的证据，不会留下悬空索引。
 - 交易所快照在 item 内获取：同一日多个 item 共用一个 run 级缓存（按 `source_id + request_fingerprint`），不重复下载。
 
 ### 10.2 `as_of` / `known_at` 语义
@@ -662,6 +782,9 @@ v2 的文件集不变，新增：
 | 退市日 | **可达（99.9%）** | 剩 2 例：300114（迁移）、600849（吸收合并）；深市名单本次未取到（沿用 M2） |
 | 历史行业 | **部分** | 最早 2026-09-30（若批 C 档：2026-09-16）；之前 `unknown`；变更日最多晚一个发布周期；回填名称为 `unknown` |
 | 行业字典 | **可达（前向）** | 回填期无同代字典 → 名称 `unknown`；代码/区间可用 |
+| 不可再生字节的持久性 | **可达** | 靠系统自有来源库（§9.4）；只存成员抽取物，不存整个 `base.zip`，因此不能逐字节重建容器（重放边界 = 成员字节 + 清单） |
+| fresh-init 重建 | **可达（需部署步骤）** | 依赖 `replay_source_store` 成为部署脚本的一步；首次上线需先导入（§9.4.4）；首期只有单机一份 + 部署快照，无异地备份（U-10） |
+| 回填覆盖范围 | **有限** | 来源库首次导入只覆盖 owner 归档已有的 9 份 `base.zip`/7 份 `tdxhy.cfg`；更早历史仍 `unknown`，导入不创造新证据 |
 | 交易所来源入口 | **可达** | 沪公告索引历史 2000-01 起；深市停牌 `confirmed` 首期没有；接口变更风险（参数全大写、分页怪癖） |
 | 历史 ST | **部分（按裁决）** | 深市区间可达；沪 2000 起元数据可达但生效日 `OWNER_RISK_ACCEPTED`；沪 2000 前/北交所 `NOT_AVAILABLE` |
 | generation 裁剪 | **可达** | 退役会变得更「容易失败」（门禁）；首次上线需要为存量活动代补登记 |
@@ -682,7 +805,7 @@ v2 的文件集不变，新增：
 | # | 分离点 | 本设计的设计点 | 边界靠什么守住 | 过度设计防线 |
 |---|---|---|---|---|
 | 1 | 来源接入层 ↔ 领域层 | 交易所来源入口（§6）只产出 `ExchangeSnapshot`/公告事实/简称区间/停牌事实；领域层不认 URL、`sqlId`、`CATALOGID` | **依赖方向**：领域层 grep 不到来源名；**测试**：领域层单测不构造 HTTP 结构体 | 不建 crate；一个 source = 一个 parser + 一行注册 |
-| 2 | 原始证据 → 解析事实 → 派生 | 原始：generation 字节 + 冻结快照；解析事实：行业区间、主表、ST/停牌/简称；派生：股票池、不消失检查、收尾清单 | **测试**：同一冻结快照重放逐位相同（AC-M3-9）；派生不进 `version_id` | 不做「来源 DSL」；不为每个来源建 trait 对象 |
+| 2 | 原始证据 → 解析事实 → 派生 | 原始：generation 字节 + 来源库冻结快照（两者都在库外内容寻址存储，DB 只是索引）；解析事实：行业区间、主表、ST/停牌/简称；派生：股票池、不消失检查、收尾清单 | **测试**：同一冻结快照重放逐位相同（AC-M3-9）；**部署**：fresh-init 后重放摘要必须 `match`（§9.4.2）；派生不进 `version_id` | 不做「来源 DSL」；不为每个来源建 trait 对象；不把清单镜像进 DB |
 | 3 | 生效时间 ↔ 知晓时间 | 行业区间 `effective_from/to` + `known_at` + `basis`；ST 生效日与公告日分开 | **契约**：`temporal` 逐数据集；**测试**：`known_at` 排除 NULL 并计数；回填 `known_at` 不得早于入库日 | 不做秒级时间轴；不预建「多版本时钟」 |
 | 4 | 存储模型 ↔ 研究读模型 | `src/research/industry.rs`、`universe`；表名/SQL 只在存储适配 | **依赖方向**：MCP/导出只调读模型；**测试**：换存储实现不改响应 schema | 不为每张表建 trait；读模型直吃只读连接 |
 | 5 | 核心用例 ↔ 入口适配 | 核心：读模型 + 纯函数；入口：v8 dataset/scope、导出、maint（回填/门禁） | **契约**：三入口同一 `as_of` 结果逐字节相同 | 不复制查询逻辑；不做「一键回测」 |
@@ -714,7 +837,7 @@ v2 的文件集不变，新增：
 
 ### 13.2 需要修改 `docs/design.md` 的地方（单列，不在本 PR 改）
 
-1. 「后续数据扩展要求」补「**来源快照**」这一类：从网站获取的官方事实必须可冻结/重放/版本化，且不属于 generation artifact。
+1. 「后续数据扩展要求」补「**来源快照**」这一类：从网站获取的官方事实必须可冻结/重放/版本化，且不属于 generation artifact；冻结字节必须落在**系统自有的库外存储 + 只追加清单**里，并且 fresh-init 重建后可用（§9.4）。
 2. 「扩展契约」补「**成员集与目录快照分离**」：目录是投影，成员集来自主表；scope 命名带类别。
 3. 「事实行必须同时带生效时间与知晓时间」补「**回填行的 `known_at` 不得早于入库时间**」。
 4. 「产品闭环与排除范围」补「**0 行不是证据**；范围查询必须分段并校验计数」。
@@ -723,21 +846,24 @@ v2 的文件集不变，新增：
 
 通用约束：本机不编译，Rust 正确性只由 PR 上的 CI 证明；每个 PR 跑 §15 的本机门禁。来源细节（ST/A-3/S-6 字段）不在本设计展开；它们共用 PR-2 的入口，各自一个写入器 PR。
 
+**顺序约束（§9.4）**：PR-1a（来源库 + 重放框架）必须先于 PR-1（schema 25）合并；PR-1 的迁移要加 `store_sha256`/`parser_version`/`evidence_sha256` 列，不能把持久化留到后续 PR，否则下一次 fresh-init 仍会清空 M3 表。
+
 | PR | 范围 | AC | 测试计划（CI） | 依赖 |
 |---|---|---|---|---|
-| **PR-1** schema 25 | §9.2 五张表 + 索引；常量/迁移数组/`check_current_facts.py` 同步；旧二进制拒绝 25 | AC-M3-3/5/9 的存储面 | 全新 init + 空表升级两条路径；唯一键/CHECK/外键冲突；`user_version=25` | 无 |
-| **PR-2** 交易所来源入口 | 获取/冻结/校验/注册；`exchange_source_snapshots` 写入；内容寻址 blob；分页与 ≤1 季度分段；0 行 `not_observed`；run 级缓存 | AC-M3-9/10 | 夹具：两页 SSE 列表、1 季度公告索引、0 行窗口 → 失败、HTTP 500 → `source_unavailable`、同指纹重复 → 不新增；不联网 | PR-1 |
+| **PR-1a** 来源库基础设施 | §9.4.1 布局 + 原子写/fsync + 只追加清单；`maint {replay,import,verify}_source_store` 骨架（scope 注册表，空实现 no-op）；部署脚本在 fresh init 后调用 `replay --scope all`（空库返回 `store_empty`）；一次性导入 A/B 档（幂等） | AC-M3-9 的存储面；AC-M3-3/5 的重建前提 | 夹具：写序失败（fsync 前/后）无悬空索引；重复导入不增行；sha 读回不符 → `source_store_corrupt`；重放两次摘要相同；空库部署报告 `store_empty` | 无 |
+| **PR-1** schema 25 | §9.2 五张表 + 索引（含 `store_sha256`/`store_kind`/`parser_version`/`evidence_sha256`）；常量/迁移数组/`check_current_facts.py` 同步；旧二进制拒绝 25；索引行必须在来源库写入后才写 | AC-M3-3/5/9 的存储面 | 全新 init + 空表升级两条路径；唯一键/CHECK/外键冲突；`user_version=25`；「blob 先于索引」断言 | PR-1a |
+| **PR-2** 交易所来源入口 | 获取/冻结/校验/注册；`exchange_source_snapshots` 写入；来源库 blob + 清单；`--scope exchange` 重放；分页与 ≤1 季度分段；0 行 `not_observed`；run 级缓存 | AC-M3-9/10 | 夹具：两页 SSE 列表、1 季度公告索引、0 行窗口 → 失败、HTTP 500 → `source_unavailable`、同指纹重复 → 不新增；不联网；索引可从来源库重建 | PR-1 |
 | **PR-3** A-1/A-2 适配器 + 主表 | SSE/SZSE 两个 parser；`ExchangeSnapshot` 装配；接 `exchange_source(Some(..))`；`code_migrations` confirmed 300114；`pending_source` 降为真实来源 | AC-M3-7（上市/退市/迁移） | 夹具：`600001`/`000003`/`600849`/`300114`/`302132`；B 股/科创板过滤；冲突行两侧值；与 `SSDATE` 零冲突回归 | PR-2 |
 | **PR-4** 退市股首次采集 | `CatalogScope::ShSzAListedEver`；`WriteSelection::Scope`（预算 500）；解析 = 主表 ∩ hsjday 成员；item 级发布 | AC-M3-1/2（行情面） | 夹具：5 个退市代码 + 2 个无 bar；重复提交幂等；catalog 数据集拒绝新 scope；预算边界 | PR-3 |
 | **PR-5** 日更尾巴 + 不消失检查 | eligible 集加「上一版目录成员」；`derived:delisted_series_check`；失败实体清单 | AC-M3-6 | 夹具：退市日当天最后 3 根 bar 不漏；活跃股不受影响；摘要变化 → 失败且不重写；缺序列 → 清单 | PR-4 |
-| **PR-6** 行业落库 + 回填 | `derived:industry_snapshot`；区间计算（相邻快照、同日/缺失 `last_modified` 规则）；字典 `incon.dat`；maint 回填命令（A/B/C 档） | AC-M3-3/4 | 夹具：7 个历史 cfg（含同内容 3 个 blob）；成员增删/重分类；同日冲突；缺字典 → `unknown_dictionary`；回填幂等；早于起点 `unknown` | PR-1（不依赖 PR-2/3） |
+| **PR-6** 行业落库 + 回填 | `derived:industry_snapshot`；区间计算（相邻快照、同日/缺失 `last_modified` 规则）；字典 `incon.dat`；`--scope industry` 重放；maint 回填命令（A/B/C 档，只读来源库） | AC-M3-3/4 | 夹具：7 个历史 cfg（含同内容 3 个 blob）；成员增删/重分类；同日冲突；缺字典 → `unknown_dictionary`；回填幂等；早于起点 `unknown`；来源库重放后摘要 `match` | PR-1a；PR-1（不依赖 PR-2/3） |
 | **PR-7** 行业读模型 | `src/research/industry.rs`；`market.industry_assignments` 分支；`status=assigned/unknown`；`universe` 的 `canonical_entity/aliases` | AC-M3-3 | 10 个 `as_of` 夹具；`known_at` 排除 NULL 并计数；before_coverage/missing_in_snapshot；迁移前后只一个代码 | PR-6 |
-| **PR-8** 退役门禁 | `generation_facts` 登记（各派生 item 写）；`retire_bytes` 前置检查；`derived_facts_missing`；豁免表与 maint 命令 | AC-M3-5 | 缺任一 kind → 拒绝并给清单；有豁免 → 成功且留痕；active/pin 检查不回归；自动退役走同一门禁 | PR-1；PR-3/5/6 登记源 |
+| **PR-8** 退役门禁 | `generation_facts` 登记（各派生 item 写，含 `evidence_sha256`）；`--scope generation_facts` 重放；`retire_bytes` 前置检查（先来源库按 sha 读回，再查索引）；`source_store_evidence_missing`/`derived_facts_missing`；豁免表与 maint 命令 | AC-M3-5 | 缺任一 kind → 拒绝并给清单；来源库有字节但索引缺行 → 拒绝 + 提示重放；blob 读不回 → 拒绝；有豁免 → 成功且留痕；active/pin 检查不回归；自动退役走同一门禁 | PR-1a；PR-1；PR-3/5/6 登记源 |
 | **PR-9** 导出 + v8 | `research-snapshot.v3`（`industry_assignments.parquet`、`code_migrations.parquet`、universe 新列）；`Dataset`/capabilities/`scope` 解码 | AC-M3-9（复现）；AC-M3-3（读面） | 清单确定性；旧 v2 快照可读；v1 拒新 dataset/scope；三入口同结果 | PR-7 |
 | **PR-10** 历史 ST 写入器（#308） | 深 `SSGSGMXX/tab2` ST 区间 + 沪公告索引状态事件；GP29/行情锚定标 `OWNER_RISK_ACCEPTED`；沪 2000 前/北交所 `NOT_AVAILABLE` | 归 #308（M3 只接 AC-M3-9） | 夹具：ST 实施/撤销区间、同日冲突、未知生效日；不把 0 行当无事件 | PR-2；#308 门禁 |
 | **PR-11** 停复牌写入器（A-3） | 沪 `GW_PL_JYTS_TFPXX` 2008 起 `confirmed`；深首期无 `confirmed`（保留 `unresolved_gap`） | 归 A-3 | 夹具：停牌起止与撤销；深市不写 `confirmed`；与 `unresolved_gap` 不双计 | PR-2 |
 | **PR-12** 简称写入器（S-6） | 深 `SSGSGMXX/tab2` 区间；沪/北 `unbounded`/`unknown` | 归 S-6 | 夹具：变更链、XD/XR 规范化、同日多变更、无 dated 源 | PR-2 |
-| **PR-13** 文档与验收 | `docs/data-catalog.md` §3.1/§3.2/§3.3、`docs/STATUS.md`、`docs/design.md`（§13.2）、验收报告 | AC-M3-1…10 | 文档事实检查脚本；私有栈验收证据贴回 #446 | PR-3…12 |
+| **PR-13** 文档与验收 | `docs/data-catalog.md` §3.1/§3.2/§3.3、`docs/STATUS.md`、`docs/design.md`（§13.2）、验收报告；fresh-init 后重放前后摘要对账、退役门禁演练 | AC-M3-1…10 | 文档事实检查脚本；私有栈验收证据贴回 #446（含 `store_empty` → import → replay `match`） | PR-3…12 |
 
 ### 14.1 独立 Issue（不计入实现 PR）
 
@@ -747,9 +873,11 @@ v2 的文件集不变，新增：
 | 证监会行业分类评估 | §5.7 的五项前置 | 先做来源取证，不写实现 |
 | ETF（D-28） | M3-2 | 身份名单、精度、cat11；与本设计的 scope 词汇不冲突 |
 
-### 14.2 需 owner 裁决
+### 14.2 已裁决（owner 2026-10-28，全部按默认）
 
-| Q | 问题 | 本设计的默认 |
+owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，实现 PR 不再回头询问；若实现中发现需要偏离，在对应 PR 写明理由并请 owner 重裁。
+
+| Q | 问题 | 裁决（= 设计默认） |
 |---|---|---|
 | Q1 | 行业生效日取 `last_modified` 还是获取时间 | `last_modified` 优先，缺失取获取时间，偏差标 `basis` |
 | Q2 | 归档快照与仓库内 2026-09-16 文件能否回填 | A/B 可回填；C 只交叉核对（除非另批） |
@@ -759,6 +887,8 @@ v2 的文件集不变，新增：
 | Q6 | ETF 是否与 M3 同批 | 不同批，另拆 |
 | Q7 | 冻结快照字节存文件还是 DB BLOB | 内容寻址文件 + 表索引 |
 | Q8 | 五个使用方是否同批 | 共用入口先落地，五个写入器各自 PR |
+
+§9.4 的来源库不是新增裁决项：它是 D-08（fresh-init 重建只能靠 active generation）+ Q7（内容寻址文件 + 表索引）的直接推论，本 PR 按默认设计给出。若 owner 要改为存整个 `base.zip` 容器、或要异地备份/删除策略，属新裁决，不影响 PR-1a 的布局。
 
 ## 15. 本机与 CI 验证方式
 
@@ -771,7 +901,8 @@ v2 的文件集不变，新增：
   3. `cargo build --locked`；
   4. 迁移与 schema 断言（`schema_upgrade` 类 + `check_current_facts`）；
   5. **不联网测试**：来源入口用固定小夹具（JSON/XLSX/季度响应/0 行）；真实抓取只在私有栈验收，结果贴回 #446。
-- 私有栈验收（不走 CI）：7 份行业快照回填 → 6 个边界；338 个退市代码首采；退役门禁在真实 generation 上拒绝/放行；退市股序列跨代摘要不变；耗时/磁盘与估算对账。
+  6. **来源库**：写序夹具（fsync/rename 任一步失败 → 无悬空 DB 索引）、重放两次摘要一致、blob 读回不符 → `source_store_corrupt`、导入幂等（第二次 `already_present`）。
+- 私有栈验收（不走 CI）：fresh-init → 空库 `replay` 返回 `store_empty` → `import_source_store` → `replay --scope all` 摘要 `match`；7 份行业快照回填 → 6 个边界；338 个退市代码首采；退役门禁在真实 generation 上拒绝/放行（含“来源库有字节、索引缺行”与“blob 不可读”两种拒绝）；退市股序列跨代摘要不变；耗时/磁盘与估算对账。
 
 ---
 
@@ -803,10 +934,12 @@ v2 的文件集不变，新增：
 | U-6 | 退役门禁对存量活动代的影响 | 未实现 | PR-8 首代回填登记后演练 |
 | U-7 | `x` 下游改造 | 不在本仓 | 下游任务 |
 | U-8 | 沪 2000 前 ST 与北交所 ST | owner 已裁 `NOT_AVAILABLE` | 不取证；写 `unknown` |
+| U-9 | fresh-init 后重放摘要真的一致 | 未实现 | PR-1a/13 私有栈：init → import → replay → 比对摘要（预期先 `store_empty` 再 `match`） |
+| U-10 | 来源库备份/损坏演练与容量 | 未实现；首期只有单机一份 + 部署快照 | PR-1a 后用真实归档做一次恢复演练，并与 §9.4.5 估算对账 |
 
 ### 16.3 待确认
 
-见 §14.2（Q1–Q8）。审核时只需确认或否决默认方案。
+无。§14.2 的 Q1–Q8 已由 owner 2026-10-28 全部按默认裁决。§9.4 的来源库属 D-08 + Q7 的直接推论，若 business 上要改「存整个容器 / 异地备份 / 删除策略」再另开裁决；不阻塞 PR-1a。
 
 ---
 
@@ -824,3 +957,4 @@ v2 的文件集不变，新增：
 10. **深交所 `ShowReport` 的 `pageSize` 不被采纳**（M2 已记）且本次 `1793_ssgs` 重试 500：来源入口需要「单次失败不影响已冻结快照」的隔离。
 11. **`security_master` 已有 `listing_conflict`/`delisting_conflict` 列**（`migrations/tasks/023_security_master.sql:96-98`），M3 不需要新列即可记录两侧值；不要另造冲突表。
 12. **AC-M3-8（跨机逐位复现）与 AC-M3-9（断网重放）不是同一件事**：前者要求快照格式规范，后者只要求同一仓内从冻结快照重建；本设计只交付后者。
+13. **fresh-init 部署没有派生/重放步骤**（`scripts/deploy_phase_g.sh:350-365`：归档旧库 → `init21` → 起服务 → 探活）：新库的 M3 表在重放前全空，而探活仍然通过。M3 必须把 `replay_source_store` 写成部署脚本的一步并把摘要进部署报告，否则「部署成功」与「历史仍在」没有任何关系。
