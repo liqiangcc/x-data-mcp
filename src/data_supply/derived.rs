@@ -303,21 +303,42 @@ fn execute(
         // Bar spans are evidence only: they propose candidate code
         // migrations, never dedup truth (§4.1).
         let spans = market.raw_bar_spans()?;
-        let candidates = assembly::detect_candidate_migrations(&spans);
+        let mut candidates = assembly::detect_candidate_migrations(&spans);
+        // A-1/A-2 (issue-446 §7, D-45/D-46): the exchange branch is an admitted
+        // snapshot when the process has a source store configured, otherwise
+        // it stays `pending_source` and the TDX facts are what gets written.
+        // A configured source that cannot be fetched fails this item; the
+        // previously committed master version stays readable (§6.3).
+        let (exchange, exchange_evidence) = match crate::official_security::a1a2::run_source(market)
+            .map_err(|error| {
+                Error::Invalid(format!(
+                    "exchange listing/delisting source: {}: {error}",
+                    error.code()
+                ))
+            })? {
+            crate::official_security::a1a2::RunSource::Pending(pending) => {
+                (assembly::ExchangeSource::Pending(pending), Value::Null)
+            }
+            crate::official_security::a1a2::RunSource::Admitted(admitted) => {
+                let evidence = admitted.evidence();
+                // The candidate migration of D-46 is a recorded lead, never
+                // dedup truth (§7.1).
+                candidates.extend(crate::official_security::a1a2::candidate_migrations());
+                (assembly::exchange_source(Some(admitted.snapshot)), evidence)
+            }
+        };
         let assembled = assembly::assemble_security_master(
             &snapshot.facts.lifecycle,
             &snapshot.facts.arrangements,
-            // A-1/A-2 are not admitted: the exchange branch stays
-            // `pending_source` and the TDX facts are what gets written.
-            assembly::exchange_source(None),
+            exchange,
             &candidates,
         )
         .map_err(|e| Error::Invalid(e.to_string()))?;
         // The item's write set is 主表 + 简称 + 上市/退市 + 迁移 (§12.1). The
-        // first three inputs are the TDX files assembled above; the name
-        // history and the exchange listing/delisting branches stay
-        // `pending_source` (#308 S-6, A-1/A-2), so no name row is written and
-        // no "current name" is invented from an unadmitted interval.
+        // name history stays `pending_source` (#308 S-6) until its writer
+        // exists, so no name row is written and no "current name" is invented
+        // from an unadmitted interval. The exchange pending entry, when the
+        // branch is not admitted, is already in `assembled.pending_sources`.
         let mut pending = assembled.pending_sources.clone();
         match crate::security_master::names::name_history_source(None) {
             crate::security_master::names::NameSource::Pending(source) => pending.push(source),
@@ -329,6 +350,11 @@ fn execute(
                 ));
             }
         }
+        // The generation binding digest is shared by every whole-market item of
+        // one generation (`derived:suspensions` and friends recompute it and
+        // refuse a master assembled from another generation), so the A-1/A-2
+        // evidence goes on the *item* outcome only, never into the generation
+        // evidence.
         let generation_evidence = source.generation_evidence(generation_manifest_sha256);
         let registration = market.commit_security_master(&SecurityMasterWrite {
             assembled: &assembled,
@@ -350,6 +376,7 @@ fn execute(
             // parser collapses them and names the record indices here, so a
             // later audit can tell a dedupe from a missing row (XDM-70, #391).
             "duplicates_collapsed": collapsed_duplicates_json(&snapshot.facts.duplicates_collapsed),
+            "exchange_source": exchange_evidence,
             "pending_sources": pending_json(&pending),
             "elapsed_ms": elapsed_ms(started),
         }));

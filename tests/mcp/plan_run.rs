@@ -539,6 +539,18 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
             json!({"contract_version":"v1","task_id":task_id}),
         )
         .unwrap();
+    if done["status"] != "succeeded" {
+        let c = rusqlite::Connection::open(r.tasks.path()).unwrap();
+        let mut st = c
+            .prepare("SELECT item_id,success,error FROM task_items ORDER BY item_id")
+            .unwrap();
+        let items: Vec<(String, i64, Option<String>)> = st
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        panic!("{done} ITEMS={items:#?}");
+    }
     assert_eq!(done["status"], "succeeded", "{done}");
     let progress = r
         .api
