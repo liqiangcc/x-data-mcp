@@ -176,7 +176,7 @@ fn concurrent_registers_do_not_interleave_lines_or_duplicate_keys() {
         let barrier = Arc::clone(&barrier);
         handles.push(std::thread::spawn(move || {
             let store = SourceStore::new(root);
-            let body = format!("0|{index:06}|T1001|||X500102\r\n");
+            let body = format!("0|9{index:05}|T1001|||X500102\r\n");
             let registration = facts(&format!("import:distinct:{index}"));
             barrier.wait();
             store.register(body.as_bytes(), &registration).unwrap();
