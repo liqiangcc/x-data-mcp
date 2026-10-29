@@ -81,6 +81,11 @@ pub mod gap_verification;
 
 pub mod source_store;
 
+/// Shared exchange-source entry (M3 PR-2, issue #446 §6): fetch/freeze/
+/// validate/bind plus the `exchange` replay scope. Consumer writers are later
+/// PRs; this module deliberately contains no source-specific parser.
+pub mod exchange_source;
+
 pub mod acquire;
 
 #[cfg(target_os = "linux")]

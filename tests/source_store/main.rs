@@ -1,3 +1,4 @@
 // Consolidated integration test target for the M3 source store.
+mod exchange;
 mod store;
 mod store_cli;
