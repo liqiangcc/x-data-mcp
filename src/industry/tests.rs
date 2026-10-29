@@ -356,9 +356,9 @@ fn two_snapshots_on_one_day_resolve_to_the_later_ingest_and_drop_the_zero_length
             Some(DICT),
         ),
     ];
-    let rebuild = rebuild(&same_day).unwrap();
-    assert_eq!(rebuild.superseded, 1);
-    let rows = assignment(&rebuild.assignments, "sz", "000001");
+    let collision = rebuild(&same_day).unwrap();
+    assert_eq!(collision.superseded, 1);
+    let rows = assignment(&collision.assignments, "sz", "000001");
     assert_eq!(rows.len(), 1, "zero-length segments are not written");
     assert_eq!(rows[0].industry_code, "X5002");
     assert_eq!(rows[0].effective_from, day(2026, 10, 12));
@@ -385,11 +385,11 @@ fn two_snapshots_on_one_day_resolve_to_the_later_ingest_and_drop_the_zero_length
             Some(DICT),
         ),
     ];
-    let rebuild = rebuild(&vanished_same_day).unwrap();
-    assert!(assignment(&rebuild.assignments, "sz", "000009").is_empty());
+    let vanished = rebuild(&vanished_same_day).unwrap();
+    assert!(assignment(&vanished.assignments, "sz", "000009").is_empty());
     // One collision: the code that only existed in the superseded same-day
     // snapshot had its zero-length segment dropped.
-    assert_eq!(rebuild.superseded, 1);
+    assert_eq!(vanished.superseded, 1);
 }
 
 #[test]

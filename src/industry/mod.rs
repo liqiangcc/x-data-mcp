@@ -779,7 +779,7 @@ fn assignment_line(row: &AssignmentRow) -> String {
         row.code,
         row.level,
         row.industry_code,
-        row.t_code,
+        row.t_code.as_deref().unwrap_or(""),
         row.name.as_deref().unwrap_or(""),
         row.name_status,
         row.effective_from,
