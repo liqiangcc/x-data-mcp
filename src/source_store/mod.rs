@@ -118,6 +118,13 @@ pub struct ManifestRecord {
     /// One-off import batch id, when the bytes came from an archive import.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub import_batch: Option<String>,
+    /// When a one-off import first registered the bytes in this system. Absent
+    /// on records written before the field existed (additive, so an old
+    /// manifest still reads). It is what makes a backfilled interval's
+    /// `known_at` ("we knew it from the import on") reproducible from the
+    /// store alone, instead of being re-stamped by every replay run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imported_at: Option<String>,
 }
 
 impl ManifestRecord {
@@ -142,6 +149,10 @@ pub struct Registration {
     pub parser_version: Option<String>,
     pub container_sha256: Option<String>,
     pub import_batch: Option<String>,
+    /// Set by the importer to "now": the moment this system first held the
+    /// bytes (§9.4.4). Distinct from `acquired_at`, which for an archive import
+    /// is the archive's own historical acquisition time.
+    pub imported_at: Option<String>,
 }
 
 impl Registration {
@@ -162,6 +173,7 @@ impl Registration {
             parser_version: None,
             container_sha256: None,
             import_batch: None,
+            imported_at: None,
         }
     }
 }
@@ -370,6 +382,7 @@ impl SourceStore {
             size_bytes: bytes.len() as u64,
             container_sha256: facts.container_sha256.clone(),
             import_batch: facts.import_batch.clone(),
+            imported_at: facts.imported_at.clone(),
         };
         self.append_manifest(&record, fault)?;
         Ok(RegisterOutcome {

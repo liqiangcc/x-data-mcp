@@ -545,6 +545,10 @@ fn import_member(
         parser_version: Some(kind.parser_version().to_string()),
         container_sha256: Some(actual_container_sha),
         import_batch: Some(facts.batch.to_string()),
+        // §5.2: a backfilled interval's `known_at` is when the import brought
+        // the bytes into this system, not the archive's own acquisition time
+        // (claiming the latter would claim knowledge we did not have).
+        imported_at: Some(crate::industry::now()),
     };
     if facts.dry_run {
         let written_blob = !facts.store.blob_exists(&actual_member_sha);

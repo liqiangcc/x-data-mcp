@@ -63,6 +63,12 @@ pub(crate) const SECURITY_EVENTS_ROLE: &str = "gbbq-security-events";
 /// schema carries exactly three file entries and stays far below this.
 const MANIFEST_LIMIT: u64 = 1 << 20;
 
+/// Largest nested member this adapter will materialize. The industry members
+/// are ~150 KiB (`tdxhy.cfg`) and ~67 KiB (`incon.dat`) and the intermediate
+/// `zhb.zip` a few MiB, so the cap only stops a corrupt archive from forcing an
+/// unbounded allocation.
+const INDUSTRY_MEMBER_LIMIT: u64 = 64 << 20;
+
 /// `.day` r7 marker TDX writes when a day's true share count no longer fits
 /// the u32 volume field, so the record carries hands instead (1 hand = 100
 /// shares). Only the high 24 bits are fixed; the low byte varies per record
@@ -434,6 +440,34 @@ pub struct SecuritySnapshotFacts {
     pub security_event_sha256: String,
 }
 
+/// The industry members of one generation (M3 PR-6, `#446` §5.6/§9.4.1): the
+/// `base.zip!tdxhy.cfg` snapshot bytes and the `gbbq.zip!zhb.zip!incon.dat`
+/// dictionary bytes, plus the container digests and publisher times the
+/// source store registers them under.
+///
+/// The bytes stay in memory only for the duration of one item: they are
+/// registered in the content-addressed source store and re-parsed from there
+/// on replay, so this struct is an acquisition result, not a cache.
+#[derive(Debug, Clone)]
+pub struct IndustrySnapshotFacts {
+    pub tdxhy_member: String,
+    pub tdxhy_bytes: Vec<u8>,
+    pub incon_member: String,
+    pub incon_bytes: Vec<u8>,
+    /// `manifest.last_modified` of `base.zip`, the publisher time the interval
+    /// start is taken from (§5.2).
+    pub tdxhy_publisher_last_modified: Option<String>,
+    /// Acquisition-complete time of `base.zip`.
+    pub tdxhy_observed_at: String,
+    pub incon_publisher_last_modified: Option<String>,
+    /// Acquisition-complete time of `gbbq.zip`.
+    pub incon_observed_at: String,
+    /// sha256 of the `base.zip` container (evidence, never stored bytes).
+    pub base_zip_sha256: String,
+    /// sha256 of the inspected manifest (the source binding).
+    pub manifest_sha256: String,
+}
+
 /// `yyyymmdd` (the GBBQ date encoding) → calendar date; `None` when the
 /// integer is not a real date, which the caller fails closed on.
 fn event_day(date_raw: u32) -> Option<NaiveDate> {
@@ -560,6 +594,35 @@ impl MaterializeSession<'_> {
     /// shared through the source instead of re-scanned per thread.
     pub fn fork(&self) -> MaterializeSession<'_> {
         self.source.materialize_session()
+    }
+
+    /// The member bytes if exactly one candidate exists, `None` when the
+    /// archive does not carry any of them. More than one match stays an error:
+    /// ambiguity is a source defect, absence is not.
+    fn member_opt(
+        &self,
+        input: &FileInput,
+        candidates: &[String],
+    ) -> Result<Option<(String, Vec<u8>)>, SourceError> {
+        // The lock is scoped: `member_bytes` takes it again, and the mutex is
+        // not re-entrant.
+        let found = {
+            let index = self.source.archive_index(input)?;
+            let index = index
+                .lock()
+                .map_err(|_| SourceError::Invocation("archive index cache poisoned".into()))?;
+            candidates
+                .iter()
+                .filter(|name| index.members.contains_key(*name))
+                .count()
+        };
+        match found {
+            0 => Ok(None),
+            1 => self.member_bytes(input, candidates).map(Some),
+            _ => Err(SourceError::Invocation(format!(
+                "member ambiguous: more than one of {candidates:?} is present"
+            ))),
+        }
     }
 
     /// Read exactly one archive member through the source's verified
@@ -729,6 +792,70 @@ impl MaterializeSession<'_> {
             gbbq_member_sha256: decoded.sha256.clone(),
             security_event_sha256,
         })
+    }
+
+    /// The generation's industry members (M3 PR-6, `#446` §5.6):
+    /// `base.zip!tdxhy.cfg` plus the `gbbq.zip!zhb.zip!incon.dat` dictionary.
+    ///
+    /// Both archives carry role-bound digests in the inspected manifest, so the
+    /// publisher time and acquisition time that §5.2 needs travel with the
+    /// bytes instead of being guessed from a file mtime.
+    ///
+    /// `None` means this generation ships no industry member at all — no
+    /// `base_industry` role, or no `tdxhy.cfg` inside it. That is a successful
+    /// `no_change` for the item (there is no fact to observe), not an error.
+    /// A present `tdxhy.cfg` whose dictionary is missing *is* an error
+    /// (§10.1), because the generation then claimed to carry the fact.
+    pub fn industry_facts(&self) -> Result<Option<IndustrySnapshotFacts>, SourceError> {
+        let Some(base_input) = self.source.base.as_ref() else {
+            return Ok(None);
+        };
+        // A generation that does not ship `tdxhy.cfg` carries no industry fact:
+        // the item reports `no_change` instead of failing, so a source without
+        // the file cannot break the daily run (`#446` §10.1 keeps item failures
+        // for the file being unreadable, not absent).
+        let Some((tdxhy_member, tdxhy_bytes)) =
+            self.member_opt(base_input, &["tdxhy.cfg".into()])?
+        else {
+            return Ok(None);
+        };
+        // `incon.dat` only exists inside the nested `zhb.zip` of the gbbq
+        // archive (the same shape the catalog executor reads).
+        let (zhb_member, zhb_bytes) = self.member_bytes(&self.source.gbbq, &["zhb.zip".into()])?;
+        let mut zhb = zip::ZipArchive::new(std::io::Cursor::new(zhb_bytes))
+            .map_err(|e| SourceError::InvalidResponse(format!("{zhb_member}: {e}")))?;
+        let (incon_member, incon_bytes) = {
+            let entry = zhb.by_name("incon.dat").map_err(|e| {
+                SourceError::InvalidResponse(format!("member incon.dat unavailable: {e}"))
+            })?;
+            if entry.size() > INDUSTRY_MEMBER_LIMIT {
+                return Err(SourceError::InvalidResponse(format!(
+                    "member {zhb_member}!incon.dat exceeds the bounded size limit"
+                )));
+            }
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry
+                .take(INDUSTRY_MEMBER_LIMIT)
+                .read_to_end(&mut bytes)
+                .map_err(|e| {
+                    SourceError::InvalidResponse(format!("{zhb_member}!incon.dat: {e}"))
+                })?;
+            (format!("{zhb_member}!incon.dat"), bytes)
+        };
+        Ok(Some(IndustrySnapshotFacts {
+            tdxhy_member,
+            tdxhy_bytes,
+            incon_member,
+            incon_bytes,
+            tdxhy_publisher_last_modified: base_input.last_modified.clone(),
+            tdxhy_observed_at: crate::industry::timestamp(base_input.acquisition_completed_at),
+            incon_publisher_last_modified: self.source.gbbq.last_modified.clone(),
+            incon_observed_at: crate::industry::timestamp(
+                self.source.gbbq.acquisition_completed_at,
+            ),
+            base_zip_sha256: base_input.sha256.clone(),
+            manifest_sha256: self.source.manifest_sha256.clone(),
+        }))
     }
 
     /// Candidate member names for a security's `.day` file.

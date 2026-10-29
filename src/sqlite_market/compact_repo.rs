@@ -17,6 +17,7 @@ use sha2::{Digest as _, Sha256};
 use super::compact_runtime::{CheckpointMetrics, SchemaIdentity, WriteCoordinator};
 use super::{evidence_store, integrity, series, series_commit, storage};
 use crate::compact_market::{self, CompactBar, Digest, EvidenceKind, VersionEvidence};
+use crate::industry::{AssignmentRow, SnapshotRecord};
 use crate::local_runtime::DatabaseLease;
 use crate::market_data::{Bar, CoverageEvidence, CoverageStatus, Period};
 use crate::market_storage::compat::{self, CheckedRecord};
@@ -173,6 +174,39 @@ impl SqliteCompactMarket {
         write: &super::rules::TradingRulesWrite<'_>,
     ) -> Result<super::rules::TradingRulesCommit, Error> {
         self.tx(|c| super::rules::commit_trading_rules(c, write))
+    }
+
+    /// Append one M3 industry snapshot and extend its intervals in one
+    /// transaction (M3 PR-6, `#446` §5.1). The daily
+    /// `derived:industry_snapshot` item drives this; identical content is a
+    /// `no_change` outcome and writes nothing.
+    pub(crate) fn commit_industry_snapshot(
+        &self,
+        write: &super::industry::IndustrySnapshotWrite<'_>,
+    ) -> Result<super::industry::IndustryCommit, Error> {
+        self.tx(|c| super::industry::commit_industry_snapshot(c, write))
+    }
+
+    /// Replace the whole M3 industry table set from the source store
+    /// (`replay --scope industry`). Verification-only runs call the reader
+    /// functions instead, so this is the only industry write path besides the
+    /// daily item.
+    pub(crate) fn replace_industry(
+        &self,
+        rebuild: &crate::industry::Rebuild,
+    ) -> Result<super::industry::IndustryCommit, Error> {
+        self.tx(|c| super::industry::replace_industry(c, rebuild))
+    }
+
+    /// Stored industry snapshots and intervals on one read connection, for the
+    /// replay's `--verify-only` comparison.
+    pub(crate) fn read_industry(&self) -> Result<(Vec<SnapshotRecord>, Vec<AssignmentRow>), Error> {
+        self.read(|c| {
+            Ok((
+                super::industry::read_snapshots(c)?,
+                super::industry::read_assignments(c)?,
+            ))
+        })
     }
 
     /// The stored raw-bar spans on a read connection (issue-391 §4.1), as

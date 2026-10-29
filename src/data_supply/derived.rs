@@ -48,12 +48,13 @@ pub const PROGRESS_UNIT: &str = "derived_dataset";
 
 /// The internal items a daily plan-run task maintains, in execution order:
 /// the nine benchmark indices first, the calendar next (its inputs are index
-/// members, §9.2), then the four M2 whole-market datasets (issue-391 §12.1).
+/// members, §9.2), then the four M2 whole-market datasets (issue-391 §12.1) and
+/// finally the M3 industry snapshot (M3 PR-6, `#446` §10.1).
 /// `derived:security_master` runs before `derived:suspensions` because the gap
 /// derivation reads the main table this run assembled.
 pub fn item_specs(generation: &Value) -> Vec<ItemSpec> {
     let mut items = Vec::with_capacity(
-        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len(),
+        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len() + 1,
     );
     for registration in &index_registry::INDEX_SERIES {
         let item_id = task_control::derived::index(registration.entity);
@@ -82,6 +83,17 @@ pub fn item_specs(generation: &Value) -> Vec<ItemSpec> {
             item_id: dataset.to_string(),
         });
     }
+    // The M3 industry snapshot is its own item: it writes the M3 index tables
+    // (§5.1), not an M2 dataset version, and its failure must not block the
+    // sessions that already ran (§10.1 "内部 item 之间无事务耦合").
+    let industry = task_control::derived::INDUSTRY_SNAPSHOT;
+    items.push(ItemSpec {
+        target: task_control::derived::target(industry),
+        progress_unit: PROGRESS_UNIT.into(),
+        frozen_inputs: json!({SOURCE_GENERATION_KEY: generation.clone()}),
+        scope_keys: BTreeSet::from([task_control::derived::industry_scope()]),
+        item_id: industry.to_string(),
+    });
     items
 }
 
@@ -452,6 +464,74 @@ fn execute(
             "pending_sources": [],
             // Unchanged content keeps the stored version instead of minting a
             // new one; the flag is the item's `published`/`no_change` answer.
+            "no_change": commit.no_change,
+            "elapsed_ms": elapsed_ms(started),
+        }));
+    }
+    if item.item_id == task_control::derived::INDUSTRY_SNAPSHOT {
+        let started = std::time::Instant::now();
+        let Some(facts) = session
+            .industry_facts()
+            .map_err(|e| Error::Invalid(e.to_string()))?
+        else {
+            // This generation ships no `tdxhy.cfg`: there is no industry fact
+            // to observe, so the item is a successful no-op. A *present* file
+            // that cannot be read or loses its dictionary still fails (§10.1),
+            // because then the source did claim to carry the fact.
+            return Ok(json!({
+                "dataset": item.item_id,
+                "no_change": true,
+                "reason": "member_absent",
+                "elapsed_ms": elapsed_ms(started),
+            }));
+        };
+        // §9.4.1 write order: the source store holds the bytes (blob + fsync +
+        // manifest) before any index row is written. A parsing failure happens
+        // before registration, like the archive importer, so an unreadable
+        // member never enters the store a later replay would have to trust.
+        let store = crate::industry::source_store_for_database(market.tasks().path());
+        let snapshot = crate::industry::register_generation_members(
+            &store,
+            &crate::industry::GenerationMembers {
+                manifest_sha256: &facts.manifest_sha256,
+                tdxhy_member: &facts.tdxhy_member,
+                tdxhy_bytes: &facts.tdxhy_bytes,
+                tdxhy_publisher_last_modified: facts.tdxhy_publisher_last_modified.as_deref(),
+                tdxhy_observed_at: &facts.tdxhy_observed_at,
+                incon_member: &facts.incon_member,
+                incon_bytes: &facts.incon_bytes,
+                incon_publisher_last_modified: facts.incon_publisher_last_modified.as_deref(),
+                incon_observed_at: &facts.incon_observed_at,
+                base_zip_sha256: &facts.base_zip_sha256,
+            },
+        )
+        .map_err(|e| Error::Integrity(e.to_string()))?;
+        let commit = market.commit_industry_snapshot(
+            &crate::sqlite_market::industry::IndustrySnapshotWrite { facts: &snapshot },
+        )?;
+        return Ok(json!({
+            "dataset": item.item_id,
+            // The snapshot content identity: the item's version, since the M3
+            // tables carry no `derived_dataset_versions` registration (§5.1).
+            "version_id": snapshot.record.member_sha256,
+            "snapshot_sha256": snapshot.record.member_sha256,
+            "store_sha256": snapshot.record.store_sha256,
+            "source_kind": snapshot.record.source_kind.as_str(),
+            "evidence_grade": snapshot.record.evidence_grade,
+            "effective_from_basis": snapshot
+                .record
+                .boundary()
+                .ok()
+                .flatten()
+                .map(|(_, basis)| basis.as_str().to_string()),
+            "row_count": snapshot.record.row_count,
+            "scope_member_count": snapshot.record.scope_member_count,
+            "dictionary_sha256": snapshot.record.dictionary_sha256,
+            "snapshot_rows": commit.snapshot_rows,
+            "assignment_rows": commit.assignment_rows,
+            "superseded_same_day": commit.superseded,
+            // Unchanged content keeps the stored snapshot and intervals instead
+            // of re-stamping them (§5.1).
             "no_change": commit.no_change,
             "elapsed_ms": elapsed_ms(started),
         }));

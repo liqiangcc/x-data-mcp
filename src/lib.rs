@@ -40,6 +40,8 @@ pub mod sqlite_task_mcp;
 
 pub mod hash;
 
+pub mod industry;
+
 pub mod market_storage;
 pub mod sqlite_market;
 

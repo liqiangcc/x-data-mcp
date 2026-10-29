@@ -382,6 +382,25 @@ fresh_schema=$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DB?mode=
 [[ "$fresh_schema" == "$EXPECTED_SCHEMA" ]] \
     || fail "fresh db user_version=$fresh_schema != $EXPECTED_SCHEMA"
 
+# --- 3b. source store replay (M3 PR-1a, writes since PR-6) ------------------
+# The fresh database has empty M3 index tables; the source store under the
+# deployment state directory is the only durable copy of facts a fresh init
+# cannot regenerate. Since M3 PR-6 (`replay --scope industry`) this step
+# *writes* the fresh database, so it runs after `init21` and before the
+# services start: the replay takes the database service lease, and a live
+# writer would make it fail instead of rebuilding. `store_empty` (before the
+# first import) is a recorded deployment fact, not a failure; a corrupt store
+# or a drift verdict fails the deployment instead of silently deploying empty
+# history.
+step=replay_source_store
+replay_out=$("$RELEASE_DIR/bin/source_store" replay --store "$SOURCE_STORE" --db "$DB" --scope all) \
+    || fail "source_store replay failed"
+printf '%s\n' "$replay_out" > "$WORK/source-store-replay.json"
+REPLAY_REPORT="$WORK/source-store-replay.json"
+replay_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$REPLAY_REPORT") \
+    || fail "source store replay report unreadable"
+echo "source store replay: $replay_status (store $SOURCE_STORE)"
+
 step=switch
 ln -sfn "$RELEASE_DIR" "$DEPLOY_ROOT/current" || fail "switch current"
 systemctl start "$DATA_SERVICE" || fail "start $DATA_SERVICE"
@@ -443,22 +462,6 @@ acq_tools = tools(acq_sock, release)
 assert not need_acq - acq_tools, f"acquire socket missing tools: {need_acq - acq_tools}"
 print(f"data tools ok ({len(data_specs)} socket(s)), acquire tools ok")
 PY
-
-# --- 5. source store replay (M3 PR-1a) ---------------------------------------
-# The fresh database has empty M3 index tables; the source store under the
-# deployment state directory is the only durable copy of facts a fresh init
-# cannot regenerate. Replay after the sockets are ready and before the report,
-# so `store_empty` (before the first import) is a recorded deployment fact and
-# a corrupt store fails the deployment instead of silently deploying empty
-# history. The replay never writes the market database in PR-1a.
-step=replay_source_store
-replay_out=$("$RELEASE_DIR/bin/source_store" replay --store "$SOURCE_STORE" --scope all) \
-    || fail "source_store replay failed"
-printf '%s\n' "$replay_out" > "$WORK/source-store-replay.json"
-REPLAY_REPORT="$WORK/source-store-replay.json"
-replay_status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$REPLAY_REPORT") \
-    || fail "source store replay report unreadable"
-echo "source store replay: $replay_status (store $SOURCE_STORE)"
 
 step=report
 report "DEPLOYED"

@@ -1103,6 +1103,10 @@ pub(crate) mod derived;
 pub(crate) mod envelope;
 pub(crate) mod evidence_store;
 pub(crate) mod gaps;
+// M3 industry snapshots/intervals (PR-6): written by `derived:industry_snapshot`
+// and rebuilt by `replay --scope industry`. The read model (PR-7) reuses the
+// readers here.
+pub(crate) mod industry;
 // Index benchmark storage is consumed by the internal index items (PR-7) and
 // the research read model (PR-8); until then only its tests drive it.
 #[allow(dead_code)]

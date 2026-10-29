@@ -323,6 +323,26 @@ industry_assignments（区间，读面）
 - 归档回填没有同代 `incon.dat`：`name=null`、`name_status='unknown_dictionary'`，代码与区间仍然可用；不得用 2026-10 的字典给 2026-09 的区间「补名字」而不标偏差。
 - 仓库内 2026-09-16 的 `incon.dat` 可作为 C 档字典作交叉核对，不自动使用。
 
+#### 5.6.1 PR-6 实现落位（2026-10-29）
+
+- **没有 `industry_dictionary` 表**：§9.2 的 DDL（schema 25，PR-1 已合并）只有
+  `industry_snapshots.dictionary_sha256`。字典因此按「来源库字节 + 快照里的 sha」落库，
+  名称在写入/重放时从 `incon.dat` 重解析，与 Q7「字节不进 DB」一致。§5.6/§9.2/§9.4.2
+  文字里的 `industry_dictionary` 指这份「来源库字节 + sha 索引」，不是第六张表。
+- **配对规则**：`tdxhy.cfg` 与同代 `incon.dat` 按清单 `origin` 配对——generation 用
+  `generation:<manifest sha256>`，归档导入用 `<batch>:<容器目录>`（见
+  `src/sqlite_market/industry.rs` 的 `pairing_key`）。配对不上 → 该快照
+  `dictionary_sha256=NULL`、所有行 `unknown_dictionary`（回填没有同代字典的正常结果）。
+- **同内容多记录只取首条**：清单按登记顺序去重，第一条登记（即日更首次写入快照的那条）
+  决定 `source_kind`/`publisher_last_modified`/`observed_at`，后续同 sha 的登记只补充证据链。
+  与 §5.3「取最早的非空 `last_modified`」的差别：只有「后登记的记录反而带更早时间」时才不同，
+  此时本实现取更晚的起点，偏差方向仍是「不提前」；换来的是日更增量表与重放表逐位一致
+  （否则同一 sha 的两条记录会让两条路径选出不同元数据，`--verify-only` 必然报 drift）。
+- **`tdxhy.cfg` 内同代码冲突**：同一文件里同一代码出现两条不同 `(t_code, x_code)` →
+  item 失败（`industry_snapshot_invalid`），不猜哪条赢；完全相同的重复行折叠。
+- **只有 `X` 一级码的行**：没有二级祖先（`code_level != 2/3`）时不进区间表，也不猜一个
+  上级代码。
+
 ### 5.7 证监会行业分类（只写结论与依赖）
 
 结论：**不在 M3 接入**。它是另一套口径（证监会门类/大类），与 TDX 研究行业二级**不能直接互换或映射**；接入需要：① 单独的来源准入（D-25 门类）；② 发布入口/历史覆盖/再分发边界的证据包；③ 与 TDX 代码的映射表（无官方 crosswalk，需人工规则 + 抽样）；④ 历史生效日的官方依据；⑤ 双口径并存的契约与读面（两个 `scheme`，不得合并成一行）。依赖：M3 已交付的证券身份、退市覆盖与 `issuer_key` 是任何映射的前置；不先有它们，映射会把退市股/代码复用搞错。评估结论写入数据目录缺口表 #10 的备注，不承诺时间。
@@ -688,6 +708,23 @@ maint replay_source_store --scope industry|exchange|generation_facts|all [--veri
 - **失败语义**：任一 blob 读不回 → 整个 scope 失败、不写半成品（每域一个事务）；只影响 M3 表，不阻塞 TDX 日更与已有行情（§10.1 的隔离规则不变）。
 - **与日更的关系**：日更首个派生 item 可以顺带补本代缺失的索引，但**不能替代**部署后的显式重放——部署脚本不依赖日更是否成功。
 
+**PR-6 落地（2026-10-29）**：`industry` scope 已实现（`exchange`/`generation_facts` 仍是
+`rebuilt=skeleton_no_op`）。入口形式在 PR-1a 的 CLI 上加两个参数：
+`source_store replay --store <dir> --scope industry [--db <market.sqlite>] [--verify-only]`
+（`verify` 同形，恒为只读）。
+
+- **`--db` 才是写**：不带 `--db` 只重算并报告 `summary`（`rebuilt=computed_no_db`），
+  保证「读不建库、不写库」；带 `--db` 在**一个事务**里替换整个表集
+  （`rebuilt=rebuilt`），写完立即回读比对，`match` 才算成功。
+- **中文摘要口径**：`summary` = 按主键排序的规范化行（快照 14 字段、区间 12 字段）sha256；
+  `--verify-only` 重算同一摘要并与 DB 比较，`drift` 时给出前 20 条主键。
+- **空表不是 drift**：`store_empty` 与「库里为空但来源库有内容」都按状态区分，前者不算失败。
+- **部署钩子顺序改了**：重放现在写库，所以它从「起服务之后」移到 `task_sqlite init21`
+  之后、`systemctl start` 之前（重放要拿数据库服务租约，服务已起会失败而不是重建）。
+  报告字段与 `store_empty` 语义不变。
+- **区间重建与日更同源**：两条路径都调 `crate::industry::rebuild`/`apply_on`，
+  测试断言「逐条追加 == 全量重建」，这是 AC-M3-9 的仓内可执行定义。
+
 **PR-1a 落地（2026-10-28）**：入口选定为 CLI `source_store {replay,verify,import}`（release 包内二进制），不注册 maint MCP 工具：maint 入口是只读运维/取证面，来源库写入属于离线运维动作，且不改变三个静态 allowlist、capability revision 与工具数事实；部署钩子直接调用 release 二进制。PR-1a 只注册 `industry`/`exchange`/`generation_facts` 三个 scope 与按 sha 读回的校验路径（报告 `rebuilt=skeleton_no_op`），索引表与域写入器分别由 PR-1、PR-2/PR-6/PR-8 补齐。库格式、清单字段与导入索引格式见 [来源库说明](../source-store.md)。
 
 #### 9.4.3 退役门禁
@@ -729,7 +766,7 @@ maint import_source_store --index <archive-index.json> --blobs <dir> --tiers A,B
 |---|---|---|---|
 | 逐实体日线 item（现有） | 不复权 + 前复权 + 因子/股本 | generation | 不变 |
 | `derived:security_master`（现有） | 主表 + 简称 + 上市/退市 + 迁移 | TDX + A-1/A-2 冻结快照 | 失败 → item 失败；旧版继续可读 |
-| `derived:industry_snapshot`（新） | 行业快照 + 区间 + 字典 | `base.zip!tdxhy.cfg`、`gbbq.zip!zhb.zip!incon.dat`、§6 共用入口（C 档回填不走日更） | 解析失败/字典缺失 → item 失败，字节已先落来源库；不丢上一版 |
+| `derived:industry_snapshot`（新） | 行业快照 + 区间 + 字典 | `base.zip!tdxhy.cfg`、`gbbq.zip!zhb.zip!incon.dat`、§6 共用入口（C 档回填不走日更） | 解析失败/字典缺失 → item 失败，字节已先落来源库；不丢上一版。实现（PR-6）：本代**不带** `tdxhy.cfg` → 成功且 `no_change`（`reason=member_absent`），因为「来源没有这类事实」不是解析失败；同一内容重复观测 → `no_change`，不重开区间 |
 | `derived:suspensions`（现有） | `confirmed`（A-3）+ `unresolved_gap`（派生） | 冻结快照 + 日历 + 主表 | A-3 获取失败 → `partially_failed`，不写 `confirmed` |
 | `derived:risk_warnings`（现有） | ST 区间 | #308 冻结快照 + GP29/行情锚定 | 同上；沪 2000 前/北交所 `unknown` |
 | `derived:security_names`（新写入器） | 简称区间（仅深） | `SSGSGMXX/tab2` 冻结快照 | 沪/北 `unbounded`/`unknown` |
@@ -872,7 +909,7 @@ v2 的文件集不变，新增：
 | **PR-3** A-1/A-2 适配器 + 主表 | SSE/SZSE 两个 parser；`ExchangeSnapshot` 装配；接 `exchange_source(Some(..))`；`code_migrations` confirmed 300114；`pending_source` 降为真实来源 | AC-M3-7（上市/退市/迁移） | 夹具：`600001`/`000003`/`600849`/`300114`/`302132`；B 股/科创板过滤；冲突行两侧值；与 `SSDATE` 零冲突回归 | PR-2 |
 | **PR-4** 退市股首次采集 | `CatalogScope::ShSzAListedEver`；`WriteSelection::Scope`（预算 500）；解析 = 主表 ∩ hsjday 成员；item 级发布 | AC-M3-1/2（行情面） | 夹具：5 个退市代码 + 2 个无 bar；重复提交幂等；catalog 数据集拒绝新 scope；预算边界 | PR-3 |
 | **PR-5** 日更尾巴 + 不消失检查 | eligible 集加「上一版目录成员」；`derived:delisted_series_check`；失败实体清单 | AC-M3-6 | 夹具：退市日当天最后 3 根 bar 不漏；活跃股不受影响；摘要变化 → 失败且不重写；缺序列 → 清单 | PR-4 |
-| **PR-6** 行业落库 + 回填 | `derived:industry_snapshot`；区间计算（相邻快照、同日/缺失 `last_modified` 规则）；字典 `incon.dat`；`--scope industry` 重放；maint 回填命令（A/B/C 档，只读来源库） | AC-M3-3/4 | 夹具：7 个历史 cfg（含同内容 3 个 blob）；成员增删/重分类；同日冲突；缺字典 → `unknown_dictionary`；回填幂等；早于起点 `unknown`；来源库重放后摘要 `match` | PR-1a；PR-1（不依赖 PR-2/3） |
+| **PR-6** 行业落库 + 回填 | `derived:industry_snapshot`；区间计算（相邻快照、同日/缺失 `last_modified` 规则）；字典 `incon.dat`；`--scope industry` 重放；maint 回填命令（A/B/C 档，只读来源库） | AC-M3-3/4 | 夹具：7 个历史 cfg（含同内容 3 个 blob）；成员增删/重分类；同日冲突；缺字典 → `unknown_dictionary`；回填幂等；早于起点 `unknown`；来源库重放后摘要 `match` | PR-1a；PR-1（不依赖 PR-2/3）；**已交付 2026-10-29（XDM-104）** |
 | **PR-7** 行业读模型 | `src/research/industry.rs`；`market.industry_assignments` 分支；`status=assigned/unknown`；`universe` 的 `canonical_entity/aliases` | AC-M3-3 | 10 个 `as_of` 夹具；`known_at` 排除 NULL 并计数；before_coverage/missing_in_snapshot；迁移前后只一个代码 | PR-6 |
 | **PR-8** 退役门禁 | `generation_facts` 登记（各派生 item 写，含 `evidence_sha256`）；`--scope generation_facts` 重放；`retire_bytes` 前置检查（先来源库按 sha 读回，再查索引）；`source_store_evidence_missing`/`derived_facts_missing`；豁免表与 maint 命令 | AC-M3-5 | 缺任一 kind → 拒绝并给清单；来源库有字节但索引缺行 → 拒绝 + 提示重放；blob 读不回 → 拒绝；有豁免 → 成功且留痕；active/pin 检查不回归；自动退役走同一门禁 | PR-1a；PR-1；PR-3/5/6 登记源 |
 | **PR-9** 导出 + v8 | `research-snapshot.v3`（`industry_assignments.parquet`、`code_migrations.parquet`、universe 新列）；`Dataset`/capabilities/`scope` 解码 | AC-M3-9（复现）；AC-M3-3（读面） | 清单确定性；旧 v2 快照可读；v1 拒新 dataset/scope；三入口同结果 | PR-7 |
