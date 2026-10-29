@@ -367,6 +367,33 @@ request_id。**推荐每个子批用新的唯一 request_id**，事后才能按 
 分裂说明 plan 的可执行集合与受理实际可接受的集合不一致（典型：plan 之后 head 前进），报告这一
 事实，不要自行改成逐实体提交。
 
+### 3.9 退市股一次性首采（操作员发起，不是日更步骤）
+
+退市股没有 published daily head，日更 `plan`/`run` 永远不会把它们列为 eligible：
+`default_selection` 只取当前目录成员。M3 PR-4 提供了一条**显式**的一次性入口，
+只能在操作员明确要求时执行（典型时机：部署/升级后执行一次），**不属于任何日更
+plan，日更 AI 不得自行发起**。
+
+前置条件：当前 generation 已 verified+active；`market.security_master` 已有 published
+version（否则解析直接 `invalid_arguments`，不要改用 v1 explicit 猜测名单）。
+
+```text
+start_collection{dataset:"market.daily", contract_version:"v2",
+  request_id:<唯一>, selection:{kind:"scope", scope:"sh_sz_a_listed_ever"}}
+```
+
+- 服务端解析 `security_master` 中 `instrument_class=0`、`exchange ∈ {sh,sz}`、
+  尚无 daily series 的实体 ∩ 当前 generation 的 `.day` 成员；调用方不提供实体列表。
+- 预算是 **1..500**（v1 explicit 仍是 1..100）。空集合返回 `invalid_arguments`
+  （说明已经没有缺 head 的成员）；没有 bar 的成员在受理时跳过并记入任务证据
+  `skipped_no_bars`，不会生成失败 item。
+- 已有 head 的实体在解析时跳过，重复提交同一 scope 只采缺失项。列表在受理时冻结，
+  item 证据记录 `security_master_version_id` 与 `generation_id`/manifest sha。
+- 轮询与任务终态判定同 §3.2；item 级发布/验证语义与 §3.7 的 v1 首采相同
+  （per-item `needs_verification` 属预期 fail-closed，不重试、不绕过）。
+- 禁止：把它写进日更 plan、在每个 generation 后自动重跑、用 v1 `explicit` 模拟该
+  scope、或对 `securities.catalog` 传 `sh_sz_a_listed_ever`（目录读写都拒绝）。
+
 ## 4. 验证与汇报
 
 - 复用 §3.0/§3.1 的 catalog `version_id` 与实体枚举；对 market.daily 继续按 ≤100 实体分批调用 `get_data_availability`

@@ -71,7 +71,9 @@ M2 的 6 个解析事实数据集（`market.security_master`、`security_names`�
 
 **身份**：`{exchange, code}`，另带 `name` 与 `industry`（`wire.rs:173-190` 的 `Row::Catalog`）。
 
-**覆盖范围**：selection 只有 `{"scope":"current_sh_sz_a"}` 一个变体（`wire.rs:73-77`），
+**覆盖范围**：`securities.catalog` 的 selection 仍只接受 `{"scope":"current_sh_sz_a"}`
+（`wire.rs` 的 `CatalogScope` 另有 v2-only 的 `sh_sz_a_listed_ever`，只作为
+`market.daily` `start_collection` 的写选择，目录读写都显式拒绝它），
 含义是冻结规则 S：`f0 ∈ {0,1}` 且 TDX 行业码（`f2`）与证监会形态码（`f5`）都非空
 （`src/catalog_tdx/scope.rs:1-8,70-95`）。规则 S 之外的行被显式分到三类并计数：北交所
 （`f0=2`）、B 股（`200xxx`/`900xxx`）、异常行（`scope.rs:10-24,84-95`）。
@@ -353,7 +355,7 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
 | 5 | 市值（总/流通） | 部分提供（可派生，preview.37） | 两个输入都已部署：不复权收盘（preview.36）+ 股本事件后值（preview.37），可用 `float_after`/`total_after` × 不复权收盘自行派生；**没有服务端市值数据集**。A 股总市值对 A+H 公司仍是 `unknown`（`total_after` 是公司总股本，§3.3 偏差 4），用前复权价乘当时股本会得到错误市值 | #1 | M2 | 部分满足（需标注口径） |
 | 6 | 上市日 | 部分提供（代码支持，待发布） | `market.security_master` 用 `base.dbf` 的 `SSDATE` + `infoharbor_spec.cfg` 组装（preview.37 部署）；M3 PR-3 已实现 A-1/A-2 适配器（沪深交易所上市/终止上市名单，只取 A 股，`parser_version=exchange-a1a2-v1`），按「交易所 A-1/A-2 > `SSDATE` > `unknown`」合并，两者不同则 `listing_conflict=1`、取交易所值并保留 `listing_date_tdx`（M2 已有列）；`sz.302132` 的交易所「A股上市日期」是被继承的 2010-08-27，不据此开新区间（区间起点由 confirmed 迁移 2025-02-17 决定）。**未部署，未在本实例实测**：进程未配置 `X_DATA_MCP_SOURCE_STORE` 时仍写 `pending_source` 并按 `unknown` 返回。补齐后剩余 `unknown` 按设计估算 0（61/62 由交易所名单补齐，`sh.600849` 靠 A-2 的上市日），数字取自 2026-10-15 快照、未在部署实例重测 | 无（交易所名单待准入） | M2/M3 | 部分满足（`unknown` 如实披露） |
 | 7 | 退市日 | 部分提供（代码支持，待发布） | `infoharbor_spec.cfg` 的退市整理期区间（169 行、2013 年起）随主表部署；M3 PR-3 接入 A-2 终止上市名单（沪 `COMPANY_STATUS=3` 且 `STOCK_TYPE∈{1,8}`；深 `1793_ssgs` + `selectModule`），优先级「交易所 `DELIST_DATE` > 整理期 end > `unknown`」，冲突时 `delisting_conflict=1` 且两值都存（整理期与退市日口径分开）；退市原因 `NOT_AVAILABLE` 一律 `unknown`。**未部署，未在本实例实测**；未配置来源库时仍 `pending_source`。补齐后剩余 2 例（`sz.300114` 由 confirmed 迁移处理、`sh.600849` 吸收合并只有 candidate 迁移 → `unknown`），`unknown` 占比估算 `<0.1%`（约 2/5,565），数字取自 2026-10-15 快照、未在部署实例重测 | 无（交易所名单待准入） | M2/M3 | 部分满足（2013 起 + 交易所名单） |
-| 8 | 退市股行情 | 缺失·计划中 | 官方 `hsjday.zip` 保留了目录之外 A 股代码的完整历史（2026-10-26 快照：335 个代码，其中 251 个末根 bar 在 2015 年及以后），跨代不消失；阻塞只在目录 scope（`CatalogScope` 只有 `current_sh_sz_a`，`wire.rs:73-77`）与证券主表 | #246（范围） | M3 | 未满足 → M3 |
+| 8 | 退市股行情 | 代码支持，待发布并首采 | 官方 `hsjday.zip` 保留了目录之外 A 股代码的完整历史（2026-10-26 快照：335 个代码，其中 251 个末根 bar 在 2015 年及以后），跨代不消失。M3 PR-4 已实现 `market.daily` `start_collection` v2 的 `{"kind":"scope","scope":"sh_sz_a_listed_ever"}`：解析 `security_master` 中沪深 A 股且 `has_series=false` 的实体 ∩ 当前 generation 的 `.day` 成员，预算 1..500，跳过无 bar 成员并记入证据；已有 head 的实体跳过。**未部署、未做真实首采**：代码通过 CI 后仍需发布并显式执行一次，日更 plan 不会自动纳入 | #246（范围）、#446 | M3 | 代码支持（待发布+首采） |
 | 9 | 历史 ST / \*ST | 缺失·计划中 | 2026-10-28 owner 按市场分档准入（D-58）：**深市** `SSGSGMXX`/`tab2` 的 ST 区间与**沪市 2000-01 起**公告索引的状态事件（事件级）为 `APPROVED_SOURCE`，沪市生效日按 GP29/行情锚定为 `OWNER_RISK_ACCEPTED`，沪市 2000 年前与北交所 `NOT_AVAILABLE`；无公告一律 `unknown`，禁止「无公告 ⇒ 非 ST」。**来源准入不再是阻塞，缺的是写入器**：`market.risk_warnings` 仍**写 0 行**（只记 `pending_source`），读取是 `absent` | #308 | M2（沪市 2000 年前为硬缺口，见 §3.3 偏差 2） | 未满足（准入已裁决、写入器未实现） |
 | 10 | 历史行业 | 部分提供 | 当前行业已提供（catalog 的 TDX 研究行业二级）；**历史区间不可回补**，只能从今天起逐代积累（每代 `tdxhy.cfg` 落变更集，不能靠留 generation 目录）。替代来源（证监会行业分类）需取证 | #1 | M3 | 未满足 → M3；历史部分首期无法达成 |
 | 11 | 停牌 | 部分提供（preview.37 部署） | 官方文件没有停牌标记，`.day` 也没有占位行。A-3 已由 D-49 准入、2026-10-28 定交付口径（D-60）：沪市 **2008 年起**可实现 `confirmed`（结构化事件表，`endStopDate`=复牌日前一自然日），**深市首期没有 `confirmed`**（无结构化源，`BULLETIN_TYPE` 过滤不可用），只到 `unresolved_gap`；深市全域可交易性统一 `unknown`（§3.3 偏差 6）。写入器未实现，`confirmed` 行数仍为 0 | #404（A-3） | M2（标记）/ M3（闭合） | 部分满足（缺口可查；`confirmed` 未实现） |
@@ -521,7 +523,8 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
 - 过滤条件：`market.daily`/`market.yearly` 只有日期/年份区间；`securities.catalog` 只有
   `code`/`name_query`/`industry_code`（`wire.rs:79-92`）。**没有**价格、成交量、市值、ST 等谓词。
 - 版本选择：`latest_per_entity` / 显式版本映射 / 目录版本（`wire.rs:97-104`）。
-- 目录 scope 只有 `current_sh_sz_a`（`wire.rs:73-77`）。
+- 目录读 scope 只有 `current_sh_sz_a`；`CatalogScope` 的 `sh_sz_a_listed_ever` 仅用于
+  `market.daily` `start_collection` v2，目录读写都拒绝（`wire.rs`、`src/data_supply/query.rs`）。
 - `query_data` 是纯读：不触发采集、修复或换源（`src/data_supply/registry.rs:139`）。
 - 工具清单、参数与返回形状用 `get_data_capabilities` 查（`registry.rs` 的 `entries()`），本文不复述；
   data 侧当前部署三个入口（单进程三 socket）：`ops` 15 个 data 工具、`research`（只读研究面）

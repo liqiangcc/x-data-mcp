@@ -25,6 +25,33 @@ impl Collection {
             | Collection::Yearly { request_id, .. } => request_id,
         }
     }
+    pub fn contract_version(&self) -> CollectionContractVersion {
+        match self {
+            Collection::Daily {
+                contract_version, ..
+            }
+            | Collection::Catalog {
+                contract_version, ..
+            }
+            | Collection::Yearly {
+                contract_version, ..
+            } => *contract_version,
+        }
+    }
+    /// The persisted command key. `v1` stays byte-identical; `v2` exists only
+    /// for the `market.daily` scope selection and is rejected before lookup
+    /// for every other dataset.
+    pub fn key(&self) -> CommandKey {
+        CommandKey {
+            operation: "start_collection".into(),
+            dataset: serde_json::to_value(self.dataset())
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .into(),
+            contract_version: self.contract_version().as_str().into(),
+        }
+    }
     pub fn payload(&self) -> Value {
         let mut v = serde_json::to_value(self).unwrap();
         v.as_object_mut().unwrap().remove("request_id");
@@ -66,6 +93,9 @@ impl CollectionContract {
             WriteSelection::Default { .. } => Err(invalid(
                 "default selection is only implemented for market.daily update/backfill",
             )),
+            WriteSelection::Scope { .. } => {
+                Err(invalid("selection.kind=scope requires contract_version v2"))
+            }
         }
     }
 }
@@ -106,9 +136,21 @@ impl Contract for CollectionContract {
                             "default selection is only implemented for market.daily update/backfill",
                         ));
                     }
+                    WriteSelection::Scope { .. } => {
+                        return Err(invalid("selection.kind=scope requires contract_version v2"));
+                    }
                 }
             }
-            Collection::Catalog { .. } => {}
+            Collection::Catalog { selection, .. } => {
+                // The listed-ever scope resolves from the security master, not
+                // from a catalog snapshot: fail closed instead of degrading to
+                // the current-member subset.
+                if selection.scope != CatalogScope::CurrentShSzA {
+                    return Err(invalid(
+                        "catalog collection only accepts scope current_sh_sz_a",
+                    ));
+                }
+            }
         }
         if let Collection::Yearly {
             years,
@@ -218,3 +260,237 @@ impl Contract for CollectionContract {
         })
     }
 }
+
+/// Budget of one server-resolved listed-ever collection (`#446` §4.4, D-62
+/// Q3). The scope resolves the whole delisted tail; accepting it unbounded
+/// would make acceptance and progress unpredictable, so 0 or 501+ fails
+/// closed instead of silently truncating.
+const LISTED_EVER_BUDGET: usize = 500;
+/// One `.day` record is 32 bytes (`src/day_file.rs`); a shorter member holds
+/// no bar and is skipped into the task evidence instead of failing the call.
+const DAY_RECORD_BYTES: u64 = 32;
+
+/// `v2` `start_collection` for `market.daily`: the member list comes from the
+/// security master ∩ the active generation's `.day` members. The caller picks
+/// a scope, never entities.
+pub struct ListedEverCollectionContract {
+    pub repository: SqliteSupply,
+    pub generation: Option<super::generation::GenerationSource>,
+}
+
+impl ListedEverCollectionContract {
+    fn decode(&self, mut v: Value) -> Result<Collection, task::Error> {
+        v.as_object_mut()
+            .ok_or_else(|| invalid("expected collection object"))?
+            .insert("request_id".into(), json!(""));
+        let c: Collection = serde_json::from_value(v).map_err(invalid)?;
+        match &c {
+            Collection::Daily {
+                contract_version,
+                selection,
+                ..
+            } => {
+                if *contract_version != CollectionContractVersion::V2 {
+                    return Err(invalid("contract_version v2 required"));
+                }
+                match selection {
+                    WriteSelection::Scope { scope } if *scope == CatalogScope::ShSzAListedEver => {}
+                    WriteSelection::Scope { .. } => {
+                        return Err(invalid(
+                            "listed-ever collection only accepts scope sh_sz_a_listed_ever",
+                        ));
+                    }
+                    _ => {
+                        return Err(invalid("contract_version v2 requires selection.kind=scope"));
+                    }
+                }
+            }
+            _ => {
+                return Err(invalid(
+                    "contract_version v2 is implemented only for market.daily",
+                ));
+            }
+        }
+        Ok(c)
+    }
+
+    /// Master entities (`sh|sz` ordinary A shares) without a published raw
+    /// daily series. Intervals are collapsed: a code reused by two issuers is
+    /// still one series identity.
+    fn candidates(
+        rows: &[crate::security_master::SecurityLifecycleFact],
+        has_series: &BTreeSet<String>,
+    ) -> BTreeSet<String> {
+        rows.iter()
+            .filter(|row| {
+                row.instrument_class == 0
+                    && matches!(
+                        row.exchange,
+                        crate::security_master::Exchange::Sh | crate::security_master::Exchange::Sz
+                    )
+                    && !has_series.contains(&row.entity())
+            })
+            .map(|row| row.entity())
+            .collect()
+    }
+
+    fn budget(count: usize) -> Result<(), task::Error> {
+        if count == 0 {
+            return Err(invalid(
+                "resolved listed-ever selection is empty; nothing to collect",
+            ));
+        }
+        if count > LISTED_EVER_BUDGET {
+            return Err(invalid(format!(
+                "resolved listed-ever selection budget 1..{LISTED_EVER_BUDGET}, got {count}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// The frozen resolution: master rows, series presence, generation member
+    /// set and member sizes. Split from `resolve` so the pure filters and the
+    /// budget can be unit-tested without a source.
+    fn resolve_scope(&self) -> Result<ListedEverResolution, task::Error> {
+        let (version, rows, has_series) = self
+            .repository
+            .market
+            .read(|c| {
+                let version = crate::sqlite_market::derived::read_kind_version(
+                    c,
+                    crate::security_master::assembly::DATASET_KIND,
+                )?;
+                let rows = crate::sqlite_market::security::read_security_master(c)?;
+                let spans = crate::sqlite_market::series::raw_daily_spans(c)?;
+                Ok((
+                    version,
+                    rows,
+                    spans.into_keys().collect::<BTreeSet<String>>(),
+                ))
+            })
+            .map_err(|e| task::Error::StorageUnavailable(e.to_string()))?;
+        let Some(version) = version else {
+            return Err(invalid(
+                "security_master has no published version; the listed-ever scope cannot resolve",
+            ));
+        };
+        let source = self
+            .generation
+            .as_ref()
+            .ok_or_else(|| invalid("selection.kind=scope requires a verified generation store"))?;
+        let (generation_id, source) = source
+            .active_source()
+            .ok_or_else(|| invalid("selection.kind=scope requires a verified active generation"))?;
+        let members = source
+            .day_member_symbols()
+            .map_err(|e| invalid(format!("listed-ever member listing failed: {e}")))?;
+        let candidates = Self::candidates(&rows, &has_series);
+        let mut selected = Vec::new();
+        let mut skipped_no_bars = Vec::new();
+        for entity in &candidates {
+            if !members.contains(entity) {
+                continue;
+            }
+            let size = source
+                .day_member_size(entity)
+                .map_err(|e| invalid(format!("listed-ever member lookup failed: {e}")))?
+                .ok_or_else(|| invalid("listed member disappeared during resolution"))?;
+            if size < DAY_RECORD_BYTES {
+                skipped_no_bars.push(entity.clone());
+            } else {
+                let (exchange, code) = entity
+                    .split_once('.')
+                    .ok_or_else(|| invalid("entity has no exchange separator"))?;
+                selected.push(Security {
+                    exchange: match exchange {
+                        "sh" => Exchange::Sh,
+                        "sz" => Exchange::Sz,
+                        _ => return Err(invalid("listed-ever scope is limited to sh/sz")),
+                    },
+                    code: code.into(),
+                });
+            }
+        }
+        Self::budget(selected.len())?;
+        Ok(ListedEverResolution {
+            entities: selected,
+            skipped_no_bars,
+            security_master_version_id: version.version_id,
+            security_master_content_digest: crate::research::read::hex(&version.content_digest),
+            generation_id,
+            generation_manifest_sha256: source.manifest_sha256().to_string(),
+        })
+    }
+}
+
+struct ListedEverResolution {
+    entities: Vec<Security>,
+    skipped_no_bars: Vec<String>,
+    security_master_version_id: String,
+    security_master_content_digest: String,
+    generation_id: String,
+    generation_manifest_sha256: String,
+}
+
+impl Contract for ListedEverCollectionContract {
+    fn key(&self) -> CommandKey {
+        CommandKey {
+            operation: "start_collection".into(),
+            dataset: "market.daily".into(),
+            contract_version: CollectionContractVersion::V2.as_str().into(),
+        }
+    }
+    fn normalize(&self, v: Value) -> Result<Value, task::Error> {
+        Ok(self.decode(v)?.payload())
+    }
+    fn resolve(&self, v: &Value) -> Result<FrozenWork, task::Error> {
+        let c = self.decode(v.clone())?;
+        let Collection::Daily { .. } = &c else {
+            unreachable!("decode accepts market.daily only")
+        };
+        let resolution = self.resolve_scope()?;
+        let evidence = json!({
+            "scope": "sh_sz_a_listed_ever",
+            "security_master_version_id": resolution.security_master_version_id,
+            "security_master_content_digest": resolution.security_master_content_digest,
+            "generation_id": resolution.generation_id,
+            "generation_manifest_sha256": resolution.generation_manifest_sha256,
+            "source_generation_id": resolution.generation_id,
+            "skipped_no_bars": resolution.skipped_no_bars,
+            "skipped_no_bars_count": resolution.skipped_no_bars.len(),
+        });
+        let mut items = Vec::with_capacity(resolution.entities.len());
+        let mut scopes = BTreeSet::new();
+        for entity in resolution.entities {
+            let scope = task::legacy::scope_id(&entity.symbol(), "day");
+            scopes.insert(scope.clone());
+            items.push(ItemSpec {
+                item_id: scope.clone(),
+                target: json!({"symbol":entity.symbol(),"period":"day"}),
+                progress_unit: "security_period".into(),
+                frozen_inputs: evidence.clone(),
+                scope_keys: BTreeSet::from([scope]),
+            });
+        }
+        Ok(FrozenWork {
+            items,
+            scopes,
+            shared_evidence: None,
+        })
+    }
+}
+
+/// The `start_collection` command keys this surface knows. `v1` covers the
+/// three collection datasets; `v2` exists only for the `market.daily`
+/// listed-ever scope (`#446` §4.4). Verification tooling uses this instead of
+/// pattern-matching the version string in three places.
+pub fn is_collection_key(key: &CommandKey) -> bool {
+    key.operation == "start_collection"
+        && matches!(
+            (key.dataset.as_str(), key.contract_version.as_str()),
+            ("market.daily", "v1" | "v2") | ("securities.catalog" | "market.yearly", "v1")
+        )
+}
+
+#[cfg(test)]
+mod tests;

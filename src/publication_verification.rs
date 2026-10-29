@@ -37,8 +37,7 @@ pub(crate) enum FactContract {
 pub(crate) fn contract_kind(key: &crate::task_control::CommandKey) -> Option<FactContract> {
     use crate::task_control::{Contract, legacy::LegacyCollection};
     if key == &LegacyCollection.key()
-        || (key.operation == "start_collection"
-            && key.contract_version == "v1"
+        || (crate::data_supply::collect::is_collection_key(key)
             && matches!(key.dataset.as_str(), "market.daily" | "market.yearly"))
     {
         return Some(FactContract::Legacy);

@@ -237,6 +237,25 @@ pub enum ContractVersion {
     #[serde(rename = "v1")]
     V1,
 }
+// Collection is the one write surface with a v2 shape (M3 #446 §4.4):
+// `selection.kind=scope` resolves the entity list from the security master.
+// Keeping it separate from `ContractVersion` means the schema of every other
+// write tool still advertises exactly the versions it accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum CollectionContractVersion {
+    #[serde(rename = "v1")]
+    V1,
+    #[serde(rename = "v2")]
+    V2,
+}
+impl CollectionContractVersion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::V1 => "v1",
+            Self::V2 => "v2",
+        }
+    }
+}
 
 // `v1` keeps the row/task shape, `v2` selects the columnar read shape (PR-3)
 // or the task diagnosis shape (PR-5).
@@ -347,6 +366,7 @@ pub enum Selection {
         entities: Vec<Security>,
     },
     Catalog {
+        #[schemars(schema_with = "current_catalog_scope")]
         scope: CatalogScope,
     },
     // A frozen catalog version's whole member set (v8 #387 §4.3). The
@@ -366,6 +386,17 @@ pub enum Selection {
 pub enum CatalogScope {
     #[serde(rename = "current_sh_sz_a")]
     CurrentShSzA,
+    // v2-only member scope (M3 #446 §4.1): `security_master` rows that are
+    // SH/SZ ordinary A shares without a published `market.daily` series.
+    // Valid only as a `market.daily` `start_collection` selection; catalog
+    // and read paths reject it instead of degrading to a subset.
+    #[serde(rename = "sh_sz_a_listed_ever")]
+    ShSzAListedEver,
+}
+/// Catalog selections only ever accept `current_sh_sz_a`. Runtime rejects the
+/// listed-ever scope; the schema must not advertise it either.
+fn current_catalog_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "string", "enum": ["current_sh_sz_a"]})
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -1048,6 +1079,11 @@ pub enum WriteSelection {
         version_id: String,
         industry_code: Option<String>,
     },
+    // v2-only: the server resolves the member list from the security
+    // master ∩ the frozen generation's `.day` members. Not accepted by v1.
+    Scope {
+        scope: CatalogScope,
+    },
     /// Snapshot-resolved selection, implemented only for market.daily
     /// update/backfill acceptance. Carries no caller-provided base, range
     /// or gap overrides.
@@ -1059,19 +1095,19 @@ pub enum Collection {
     #[serde(rename = "market.daily")]
     Daily {
         request_id: String,
-        contract_version: ContractVersion,
+        contract_version: CollectionContractVersion,
         selection: WriteSelection,
     },
     #[serde(rename = "securities.catalog")]
     Catalog {
         request_id: String,
-        contract_version: ContractVersion,
+        contract_version: CollectionContractVersion,
         selection: CatalogSelection,
     },
     #[serde(rename = "market.yearly")]
     Yearly {
         request_id: String,
-        contract_version: ContractVersion,
+        contract_version: CollectionContractVersion,
         selection: WriteSelection,
         base_daily_versions: Vec<VersionBinding>,
         years: Vec<i32>,
@@ -1080,6 +1116,7 @@ pub enum Collection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogSelection {
+    #[schemars(schema_with = "current_catalog_scope")]
     pub scope: CatalogScope,
 }
 /// Machine-checkable readiness fact; no workflow hints or next actions.

@@ -170,6 +170,13 @@ impl DataApi {
                             dataset: Dataset::Catalog,
                             repository: repository.clone(),
                         })),
+                        // v2 `market.daily` member-scope collection (M3 #446
+                        // §4.4): the frozen list is resolved from the security
+                        // master ∩ the generation, so it is bound too.
+                        bind(Box::new(super::collect::ListedEverCollectionContract {
+                            repository: repository.clone(),
+                            generation: generation.clone(),
+                        })),
                     ],
                 )?,
             },
@@ -633,21 +640,27 @@ impl DataApi {
                 });
             }
             "start_collection" => {
-                use crate::task_control::Contract;
                 let command: Collection = decode(input)?;
                 if command.request_id().trim().is_empty() {
                     return Err(ApiError::new("empty_request_id", "request_id required"));
                 }
-                // Resolution goes through the registered contract, which is
-                // already generation-bound for source-reading datasets.
-                let contract = super::collect::CollectionContract {
-                    dataset: command.dataset(),
-                    repository: self.queries.repository.clone(),
-                };
+                // v2 is a `market.daily` scope shape only; every other
+                // dataset stays on its v1 contract (no silent fallback).
+                if command.contract_version() == CollectionContractVersion::V2
+                    && command.dataset() != Dataset::Daily
+                {
+                    return Err(ApiError::new(
+                        "invalid_arguments",
+                        "contract_version v2 is implemented only for market.daily scope collection",
+                    ));
+                }
+                // The persisted key selects the registered contract
+                // (`v1` or the generation-bound `v2` one); resolution never
+                // trusts caller-provided entities.
                 let accepted = self
                     .legacy
                     .control
-                    .accept(command.request_id(), contract.key(), command.payload())
+                    .accept(command.request_id(), command.key(), command.payload())
                     .map_err(task_error)?;
                 return self.acceptance(command.request_id(), accepted);
             }
@@ -745,9 +758,12 @@ impl DataApi {
                 "dataset is not registered",
             ));
         }
-        // v2 is the columnar read surface (v8 PR-3, #387 §9.1) plus the task
-        // surface (v8 PR-5, §14); every other tool keeps the v1-only gate.
-        let v2_read = matches!(
+        // v2 is the columnar read surface (v8 PR-3, #387 §9.1), the task
+        // surface (v8 PR-5, §14) and the `market.daily` listed-ever scope
+        // collection (M3 PR-4, #446 §4.4); every other tool keeps the
+        // v1-only gate. The dispatch below still refuses v2 for any dataset
+        // other than `market.daily`.
+        let v2_tools = matches!(
             name,
             "query_data"
                 | "get_data_availability"
@@ -755,10 +771,11 @@ impl DataApi {
                 | "get_task"
                 | "get_task_progress"
                 | "list_tasks"
+                | "start_collection"
         );
         if input
             .get("contract_version")
-            .is_some_and(|version| version != "v1" && !(v2_read && version == "v2"))
+            .is_some_and(|version| version != "v1" && !(v2_tools && version == "v2"))
         {
             return Err(ApiError::new(
                 "unsupported_contract",

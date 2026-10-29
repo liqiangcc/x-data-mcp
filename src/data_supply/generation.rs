@@ -218,6 +218,18 @@ impl Contract for Bound {
             None => Value::Null,
         };
         for item in &mut work.items {
+            // A contract that resolves against a specific generation (the M3
+            // listed-ever scope) freezes its own binding; if the active
+            // generation moved between resolution and this stamp, accepting
+            // the task would bind a list the reader cannot reproduce.
+            if let Some(existing) = item.frozen_inputs.get(SOURCE_GENERATION_KEY)
+                && existing != &binding
+            {
+                return Err(Error::InvalidCommand(format!(
+                    "contract resolved against generation {existing} but the active verified \
+                     generation is {binding}"
+                )));
+            }
             item.frozen_inputs[SOURCE_GENERATION_KEY] = binding.clone();
         }
         Ok(work)

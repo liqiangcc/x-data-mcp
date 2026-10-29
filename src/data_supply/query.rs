@@ -268,6 +268,17 @@ pub fn page_size(n: usize) -> Result<(), Error> {
     }
 }
 pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<Security>, Error> {
+    // `sh_sz_a_listed_ever` is a write-selection scope resolved from the
+    // security master; a catalog read must fail closed instead of returning
+    // the current-member subset under the same name (M3 #446 §4.1).
+    if let (Dataset::Catalog, Selection::Catalog { scope }) = (dataset, s)
+        && *scope != CatalogScope::CurrentShSzA
+    {
+        return Err(invalid(
+            "securities.catalog only supports scope current_sh_sz_a; \
+             sh_sz_a_listed_ever is a market.daily start_collection v2 scope",
+        ));
+    }
     let mut e = match (dataset, s) {
         (Dataset::Catalog, Selection::Catalog { .. }) => vec![],
         (Dataset::Calendar | Dataset::PriceLimitRules, Selection::Market { .. }) => vec![],
