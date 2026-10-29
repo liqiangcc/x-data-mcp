@@ -14,7 +14,7 @@ fi
 # the export_research target (Cargo.toml [[bin]] required-features).
 cargo build --release --locked --features export --bins
 mkdir -p "$stage/bin"
-for binary in data_service acquire_service mcp_connect mcp_data mcp_server mcp_sqlite_dev task_sqlite inspect_day inspect_snapshot create_demo consistency_check export_research; do
+for binary in data_service acquire_service mcp_connect mcp_data mcp_server mcp_sqlite_dev task_sqlite source_store inspect_day inspect_snapshot create_demo consistency_check export_research; do
   cp "target/release/$binary" "$stage/bin/"
 done
 cp -r migrations "$stage/migrations"

@@ -674,6 +674,8 @@ maint replay_source_store --scope industry|exchange|generation_facts|all [--veri
 - **失败语义**：任一 blob 读不回 → 整个 scope 失败、不写半成品（每域一个事务）；只影响 M3 表，不阻塞 TDX 日更与已有行情（§10.1 的隔离规则不变）。
 - **与日更的关系**：日更首个派生 item 可以顺带补本代缺失的索引，但**不能替代**部署后的显式重放——部署脚本不依赖日更是否成功。
 
+**PR-1a 落地（2026-10-28）**：入口选定为 CLI `source_store {replay,verify,import}`（release 包内二进制），不注册 maint MCP 工具：maint 入口是只读运维/取证面，来源库写入属于离线运维动作，且不改变三个静态 allowlist、capability revision 与工具数事实；部署钩子直接调用 release 二进制。PR-1a 只注册 `industry`/`exchange`/`generation_facts` 三个 scope 与按 sha 读回的校验路径（报告 `rebuilt=skeleton_no_op`），索引表与域写入器分别由 PR-1、PR-2/PR-6/PR-8 补齐。库格式、清单字段与导入索引格式见 [来源库说明](../source-store.md)。
+
 #### 9.4.3 退役门禁
 
 见 §8.3：必须是「按 sha 从来源库读回原始字节」才算证据；`generation_facts` 只是加速索引，可重建。这样 fresh-init 之后门禁仍有依据，且不依赖任何 owner 私有目录。
@@ -685,7 +687,7 @@ maint import_source_store --index <archive-index.json> --blobs <dir> --tiers A,B
 ```
 
 - **只导入通过校验的内容**：成员 sha256 与索引相符、容器 `base.zip` 的 sha256 与 manifest 相符（A 档）、`parser_version` 能完整解析（fail-closed）。不通过 → 进 `skipped_unverified` 清单（逐条原因：`sha_mismatch` / `manifest_mismatch` / `parse_failed` / `unknown_parser`），不静默丢。
-- **幂等**：键为 `(sha256, source_id)`；重复执行不新增 blob/清单行，只回报 `already_present`；同一字节不同 `origin` 追加一条清单记录（证据更全，blob 不重复）。
+- **幂等**：键为 `(sha256, source_id, origin)`（上文「不同 `origin` 追加一条记录」要求键里含 `origin`，否则两条要求互相矛盾；PR-1a 按含 `origin` 实现）；重复执行不新增 blob/清单行，只回报 `already_present`；同一字节不同 `origin` 追加一条清单记录（证据更全，blob 不重复）。
 - **A/B 档**（Q2 已裁决）：A 档写 `evidence_grade='A'` + `publisher_last_modified`；B 档写 `B` + `acquired_at`，区间起点按 §5.2 取获取时间。C 档（仓库内 2026-09-16 文件）随仓库存在，不依赖 owner 归档；可选入库标 `repo_evidence`，不产生区间。
 - **批次留痕**：导入写 `import_batch`，并在 `docs/STATUS.md` 记一行（批次 id、条目数、跳过数、最早/最晚 `last_modified`）。导入完成后系统**不再读** owner 私有目录；PR-6 的回填只以 `--source store` 读来源库，私有目录仅作为导入输入。
 - **与 PR-1 的关系**：导入 + 重放框架是 PR-1a（先于 schema 25 合并）；schema 25 只负责索引列，不承担持久化职责。

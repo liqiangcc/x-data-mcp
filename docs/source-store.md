@@ -1,0 +1,122 @@
+# 来源库（source store）
+
+来源库保存 fresh-init 无法再生的原始字节：历史 `tdxhy.cfg` / `incon.dat`
+抽取物、冻结的交易所响应，以及一次性导入的 owner 归档成员。设计见
+[issue-446 M3 设计](tasks/issue-446-m3-delisted-industry.md) §9.4；本文只记录
+PR-1a 落地的库格式、入口与当前边界。
+
+## 1. 权威关系
+
+- **blob + `manifest.jsonl` 是事实源**。SQLite 里的 `industry_snapshots`、
+  `exchange_source_snapshots`、`generation_facts` 是索引，可由来源库重建。
+- 写入顺序固定：blob 落盘、`fsync`、清单追加、`fsync`，之后才允许写索引行。
+  「blob 在、清单在、索引缺」是允许的中间态；「索引有行、blob 不可读」不可接受。
+- 读面、重放和退役门禁一律按 sha256 读回校验；不符即
+  `source_store_corrupt`，fail-closed，不自动重抓（重抓得到的是新事实）。
+- 只增不删、不覆盖。按内容去重；同一字节来自新的证据出处时只追加一条清单行。
+
+## 2. 位置与布局
+
+位置由部署配置/命令参数给出：部署状态目录下、与 generation 根同级，例如
+`<deploy-state>/source-store/`。代码与文档都不写本机绝对路径；CLI 用
+`--store <dir>` 显式传入，部署脚本传 `$DEPLOY_ROOT/state/source-store`。
+
+```text
+<store>/
+  blobs/<sha256>       原始字节，内容寻址；只增不删、不覆盖
+  manifest.jsonl       只追加清单，一行一条登记
+  tmp/                 写入暂存（fsync 后发布进 blobs/）
+```
+
+发布用「临时文件 → `fsync(file)` → hard link 到 `blobs/<sha256>` →
+`fsync(dir)` → 追加清单 → `fsync(manifest)`」。hard link 在目标已存在时失败，
+因此不会覆盖既有 blob；临时名随后删除。任一步失败都不写索引行。
+
+## 3. 清单字段
+
+| 字段 | 语义 |
+|---|---|
+| `sha256` | 字节内容 sha256（hex），即 blob 文件名 |
+| `source_id` | 逻辑来源，如 `tdx.base.zip!tdxhy.cfg`、`sse_listing` |
+| `store_kind` | `generation_member` / `http_fetch` / `archive_import` / `repo_evidence` |
+| `origin` | 证据出处：generation manifest sha / 请求指纹 / 批次 id + 条目路径 |
+| `acquired_at` | 首次拿到该字节的时间（UTC） |
+| `publisher_last_modified` | 发布方 `last_modified`（可空） |
+| `evidence_grade` | 行业证据等级 `A`/`B`/`C`（交易所来源留空） |
+| `basis_status` | 交易所来源分档（行业来源留空） |
+| `parser_version` | 重放必须使用的解析器版本；未知版本 fail-closed |
+| `size_bytes` | 字节数 |
+| `container_sha256` | 抽取物所属容器的 sha256（可空） |
+| `import_batch` | 一次性导入批次 id（可空） |
+
+去重键是 `(sha256, source_id, origin)`：重复执行同一导入报 `already_present`；
+同一字节换了出处则追加一行、blob 不重复。
+
+## 4. 入口形态：CLI（PR-1a 选定）
+
+PR-1a 在 maint socket 工具与等价 CLI 之间选择了 **CLI**
+（`source_store` 二进制）：
+
+- maint 入口是只读运维/取证面，`data_service` 不为它开启写路径；来源库写入
+  属于离线运维动作，不该绕过单进程写协调者塞进 MCP 工具。
+- 导入是对 owner 私有归档的一次性操作，本来就在服务之外执行；部署钩子也
+  直接运行 release 里的二进制。
+- 不改变三个静态 allowlist、capability revision 与文档里的工具数事实。
+
+```text
+source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] [--verify-only]
+source_store verify --store <dir> [--scope industry|exchange|generation_facts|all]
+source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
+  [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+```
+
+输出为单个 JSON 对象；退出码 0 表示 `ok` 或 `store_empty`，1 表示
+`source_store_corrupt` / `unknown_parser` 等失败，2 表示用法错误。
+
+`replay`/`verify` 按 scope 选择清单记录、逐 sha 读回校验，并输出按固定字段
+排序后的规范化摘要。PR-1a 只注册 scope 与校验路径：`rebuilt` 为
+`skeleton_no_op`，索引表在 PR-1 的迁移中加入，域写入器分别由
+PR-2（交易所）、PR-6（行业）、PR-8（generation facts）实现。空库返回
+`store_empty`，不算失败。`--verify-only` 现在与 `replay` 行为一致，PR-1
+起用来跳过写库。
+
+## 5. 一次性导入（归档索引）
+
+`--index` 是 JSONL，一行一份归档批次；`--blobs` 是容器所在目录，索引里的
+`source_path` 必须是其下的相对路径。每行示例（字段含义见代码
+`src/source_store/import.rs`）：
+
+```json
+{"batch":"owner-archive-1","kind":"industry","tier":"A",
+ "source_path":"2026-10-24/base.zip","sha256":"<base.zip sha256>",
+ "tdxhy_sha256":"<member sha256>","manifest_sha256":"<snapshot manifest sha256>",
+ "manifest_match":true,"last_modified":"2026-10-24T01:00:00Z","etag":"\"...\"",
+ "acquisition_completed_at":"2026-10-24T02:00:00Z",
+ "gbbq_source_path":"2026-10-24/gbbq.zip","gbbq_sha256":"<gbbq.zip sha256>",
+ "gbbq_last_modified":"2026-10-24T01:00:00Z","incon_sha256":"<incon.dat sha256>"}
+```
+
+只存抽取物（`base.zip!tdxhy.cfg`、`gbbq.zip!zhb.zip!incon.dat`），不存整个容器；
+容器 sha256 留在清单里作证据。校验顺序：tier/kind 过滤 → 容器 sha256 →
+A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解析器）。
+不通过就进 `skipped_unverified`，逐条给出 `sha_mismatch` /
+`manifest_mismatch` / `parse_failed` / `unknown_parser` / `member_missing` /
+`invalid_path` 等原因；索引 JSON 语法错误是硬错误，不静默跳过。
+`--dry-run` 执行全部校验但不写任何文件。
+
+## 6. 部署钩子
+
+`scripts/deploy_phase_g.sh` 在 fresh init、服务就绪、socket 冒烟之后，写部署
+报告之前调用一次 `source_store replay --scope all`。`store_empty` 记入报告的
+`source_store_replay` 字段且不算失败；非 0 退出（例如 blob sha 读回不符）会让
+部署失败，而不是部署一个「探活通过、历史为空」的实例。回滚不动来源库。
+
+## 7. 验证边界
+
+CI 覆盖写序故障注入（fsync/rename 各失败点无悬空清单行）、按 sha 读回不符 →
+`source_store_corrupt`、重复导入不增 blob/行、重放两次摘要相同、空库
+`store_empty`、含 manifest 不符条目的夹具进 `skipped_unverified`。测试全部使用
+临时目录与合成归档，不联网、不依赖本机路径。
+
+真实归档导入、`docs/STATUS.md` 的批次留痕和 fresh-init 后的
+`store_empty → import → replay match` 验收，属于后续 PR 的私有栈验收范围。

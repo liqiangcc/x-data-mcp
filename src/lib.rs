@@ -79,6 +79,8 @@ pub mod verification_inspection;
 
 pub mod gap_verification;
 
+pub mod source_store;
+
 pub mod acquire;
 
 #[cfg(target_os = "linux")]
