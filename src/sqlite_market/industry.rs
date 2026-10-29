@@ -899,7 +899,7 @@ mod tests {
         let report = crate::source_store::replay::replay(&store, &compute_only).unwrap();
         assert_eq!(
             report.scopes[0].rebuilt,
-            crate::source_store::replay::COMPUTED_NO_DB
+            crate::source_store::replay::COMPUTED_INDUSTRY_NO_DB
         );
         assert_eq!(
             report.scopes[0].summary.as_deref(),

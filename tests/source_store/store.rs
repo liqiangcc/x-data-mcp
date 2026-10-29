@@ -215,7 +215,7 @@ fn replay_twice_has_the_same_digest_and_scope_selection() {
     assert_eq!(first.scopes[0].scope, "industry");
     // M3 PR-6: the industry body is implemented, so the scope now computes the
     // snapshot set and reports its deterministic summary (no `--db` here).
-    assert_eq!(first.scopes[0].rebuilt, replay_mod::COMPUTED_NO_DB);
+    assert_eq!(first.scopes[0].rebuilt, replay_mod::COMPUTED_INDUSTRY_NO_DB);
     assert!(first.scopes[0].summary.is_some());
     assert_eq!(first.scopes[0].summary, second.scopes[0].summary);
     assert!(first.problems.is_empty());

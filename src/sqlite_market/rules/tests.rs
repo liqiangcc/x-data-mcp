@@ -248,11 +248,10 @@ fn an_empty_set_removes_the_rows_and_the_registration() {
 }
 
 /// Schema 25 (issue-446 §9.1, owner 2026-10-29): `min_band_ticks` is a
-/// nullable minimum-band floor in tick units. The storage layer only stores and
-/// round-trips it (the algorithm PR is next): a set value survives the round
-/// trip, a NULL stays NULL, a non-positive floor is refused before the write,
-/// the DDL CHECK is the last line of defence, and the value is part of the
-/// dataset content identity.
+/// nullable minimum-band floor in tick units. A set value survives the round
+/// trip, a NULL stays NULL, a non-positive floor or a floor on an unbounded
+/// row is refused before the write, the DDL CHECK is the last line of defence,
+/// and the value is part of the dataset content identity.
 #[test]
 fn min_band_ticks_round_trips_and_a_bad_floor_is_refused() {
     let fixture = Fixture::new();
@@ -303,6 +302,26 @@ fn min_band_ticks_round_trips_and_a_bad_floor_is_refused() {
             "{bad_floor}: {error}"
         );
     }
+    assert_eq!(read_trading_rules(&fixture.c).unwrap(), book);
+
+    // A floor is a band property: an unbounded row cannot carry one.
+    let mut unbounded = rule("sh-first-day", RuleMarket::Sh, 500);
+    unbounded.band_side = BandSide::None;
+    unbounded.band_bp = None;
+    unbounded.min_band_ticks = Some(1);
+    let error = replace_trading_rules(
+        &fixture.c,
+        &RuleBook {
+            price_limits: vec![unbounded],
+            min_ticks: vec![tick("sh-tick", RuleMarket::Sh)],
+        },
+        fixture.binding,
+        "task-rules",
+        "derived:price_limit_rules",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("unbounded row"), "{error}");
     assert_eq!(read_trading_rules(&fixture.c).unwrap(), book);
 
     // The DDL CHECK is the last line of defence: a raw INSERT that bypasses

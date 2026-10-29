@@ -1001,6 +1001,7 @@ message price_limit_rules {
   REQUIRED BINARY status_class (STRING);
   REQUIRED BINARY listing_phase (STRING);
   OPTIONAL INT64 band_bp;
+  OPTIONAL INT64 min_band_ticks;
   REQUIRED BINARY band_side (STRING);
   REQUIRED BINARY rounding (STRING);
   REQUIRED INT32 effective_from (DATE);
@@ -1157,6 +1158,7 @@ const PRICE_LIMIT_RULES_SPEC: TableSpec = TableSpec {
         ColumnType::Text,
         ColumnType::Text,
         ColumnType::Text,
+        ColumnType::Int64Opt,
         ColumnType::Int64Opt,
         ColumnType::Text,
         ColumnType::Text,
@@ -1449,6 +1451,7 @@ fn price_limit_rule_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>
                 text(row.status_class.as_str()),
                 text(row.listing_phase.as_str()),
                 row.band_bp.map(Cell::Int64),
+                row.min_band_ticks.map(Cell::Int64),
                 text(row.band_side.as_str()),
                 text(row.rounding.as_str()),
                 date(row.effective_from),

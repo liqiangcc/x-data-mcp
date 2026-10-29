@@ -1102,6 +1102,9 @@ pub(crate) mod compact_runtime;
 pub(crate) mod derived;
 pub(crate) mod envelope;
 pub(crate) mod evidence_store;
+// The exchange-source index writer is driven by the shared entry (PR-2) and by
+// `replay --scope exchange`; consumer writers land in PR-3/PR-10/PR-11/PR-12.
+pub(crate) mod exchange_source;
 pub(crate) mod gaps;
 // M3 industry snapshots/intervals (PR-6): written by `derived:industry_snapshot`
 // and rebuilt by `replay --scope industry`. The read model (PR-7) reuses the

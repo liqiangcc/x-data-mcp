@@ -182,6 +182,7 @@ CONTRACT = {
         "status_class": pa.string(),
         "listing_phase": pa.string(),
         "band_bp": pa.int64(),
+        "min_band_ticks": pa.int64(),
         "band_side": pa.string(),
         "rounding": pa.string(),
         "effective_from": pa.date32(),

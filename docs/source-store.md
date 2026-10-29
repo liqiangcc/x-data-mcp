@@ -66,6 +66,7 @@ blob、追加清单与两次 fsync 都在锁内），因此多个写者不会交
 | `container_sha256` | 抽取物所属容器的 sha256（可空） |
 | `import_batch` | 一次性导入批次 id（可空） |
 | `imported_at` | 该字节**首次进入本系统**的导入时间（可空；只在一次性导入时写，见 §5 的 `known_at`） |
+| `http_etag` | 交易所响应的 `ETag`（可空；`Last-Modified` 复用 `publisher_last_modified`，见 [交易所来源入口](exchange-source.md) §5） |
 
 去重键是 `(sha256, source_id, origin)`：重复执行同一导入报 `already_present`；
 同一字节换了出处则追加一行、blob 不重复。
@@ -91,22 +92,27 @@ source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 ```
 
 输出为单个 JSON 对象；退出码 0 表示 `ok` 或 `store_empty`，1 表示
-`source_store_corrupt` / `unknown_parser` / `drift` / 写库失败等，2 表示用法错误。
+`source_store_corrupt` / `unknown_parser` / `drift` / 重建失败，2 表示用法错误。
 
 `replay`/`verify` 按 scope 选择清单记录、逐 sha 读回校验，并输出按固定字段
-排序后的规范化摘要。`rebuilt` 取值：`skeleton_no_op`（`exchange`/
-`generation_facts`，写入器在 PR-2/PR-8）、`computed_no_db`（`industry` 已算出
-但没有 `--db`）、`rebuilt`（`industry` 已写库）。空库返回 `store_empty`，不算
-失败。
+排序后的规范化摘要。scope 的写入器到位情况：`exchange` 自 PR-2 起可从清单
+重建 `exchange_source_snapshots`（见 [交易所来源入口](exchange-source.md) §4），
+`industry` 自 PR-6 起可重建 `industry_snapshots`/`industry_assignments`，
+`generation_facts` 仍是 PR-1a 的 `skeleton_no_op`，由 PR-8 实现。`rebuilt` 取值：
+`skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）。
+空库返回 `store_empty`，不算失败。
 
-`--db` 把 `replay` 变成**写库**：`industry` 在一个事务里替换
-`industry_snapshots`/`industry_assignments`，写完立即回读比对，`database=match`
-才算成功。时间线按**清单里的每次登记**重放，不只按内容去重：相邻且内容相同的
-登记折叠为一段区间，内容变化（包括变回旧内容，A → B → A）就开新区间；
-`industry_snapshots` 仍是每个内容一行，其时间与等级按设计 §5.3 在该内容的全部
-登记上合并。不带 `--db` 只计算并报告 `summary`，不建库、不写库。`verify` 恒为
-只读，等价于 `replay --verify-only`：重算同一摘要与库中行比较，输出 `match`
-或 `drift` + 前 20 条差异主键。
+`--db` 是「只算」与「重建」的分界：不给数据库时只计算并报告摘要，不打开也
+不创建数据库；给了以后 scope 在单个事务里替换自己的索引表，写后回读并与
+重算摘要比较，`match` 才算成功，否则输出 `drift` 与前 20 条差异主键。
+`--verify-only` 只重算并比较、不写。重放在服务启动前执行，因此直接取数据库
+租约，不和在线写入竞争。
+
+`industry` 的时间线按清单里的**带发布方 `last_modified` 的登记**重放（见
+[行业快照设计](tasks/issue-446-m3-delisted-industry.md) §5.6.1）：相邻且内容相同的
+观测折叠为一段区间，内容变化（包括变回旧内容，A → B → A）就开新区间；同一内容的
+多条登记合并成一个 `industry_snapshots` 行（§5.3），时间与等级取该内容全部登记的
+最优值。
 
 ## 5. 一次性导入（归档索引）
 

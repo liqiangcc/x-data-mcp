@@ -125,6 +125,13 @@ pub struct ManifestRecord {
     /// store alone, instead of being re-stamped by every replay run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_at: Option<String>,
+    /// HTTP `ETag` of a frozen exchange response (M3 PR-2). `publisher_last_modified`
+    /// already carries `Last-Modified`; the ETag has no other home, and without
+    /// it `replay --scope exchange` could not rebuild
+    /// `exchange_source_snapshots.http_etag` (§9.4.2). Absent on records written
+    /// before the field existed (additive, so an old manifest still reads).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_etag: Option<String>,
 }
 
 impl ManifestRecord {
@@ -153,6 +160,8 @@ pub struct Registration {
     /// bytes (§9.4.4). Distinct from `acquired_at`, which for an archive import
     /// is the archive's own historical acquisition time.
     pub imported_at: Option<String>,
+    /// HTTP `ETag` of a frozen exchange response (see `ManifestRecord::http_etag`).
+    pub http_etag: Option<String>,
 }
 
 impl Registration {
@@ -174,6 +183,7 @@ impl Registration {
             container_sha256: None,
             import_batch: None,
             imported_at: None,
+            http_etag: None,
         }
     }
 }
@@ -383,6 +393,7 @@ impl SourceStore {
             container_sha256: facts.container_sha256.clone(),
             import_batch: facts.import_batch.clone(),
             imported_at: facts.imported_at.clone(),
+            http_etag: facts.http_etag.clone(),
         };
         self.append_manifest(&record, fault)?;
         Ok(RegisterOutcome {
@@ -583,6 +594,7 @@ pub fn validate_sha256(value: &str) -> Result<(), StoreError> {
 /// (§9.4.1): the bytes stay registered but no rebuild may claim them.
 pub fn known_parser_version(value: &str) -> bool {
     matches!(value, TDXHY_PARSER_VERSION | INCON_PARSER_VERSION)
+        || crate::exchange_source::PagingFormat::from_parser_version(value).is_some()
 }
 
 fn keys(records: &[ManifestRecord]) -> BTreeSet<RegistrationKey> {

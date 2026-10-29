@@ -15,12 +15,13 @@
 //!                     [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
 //! ```
 //!
-//! `--db` is what turns a replay into a rebuild: M3 PR-6's `industry` scope
-//! replaces `industry_snapshots`/`industry_assignments` from the store in one
-//! transaction, and `--verify-only` compares the recomputed summary with the
-//! stored rows instead of writing. Without `--db` the scope only computes and
-//! reports its summary, so a read never touches a database or creates the
-//! store.
+//! `--db` is what turns a replay into a rebuild: M3 PR-2's `exchange` scope
+//! replaces `exchange_source_snapshots` and M3 PR-6's `industry` scope replaces
+//! `industry_snapshots`/`industry_assignments` from the store, each in one
+//! transaction; `--verify-only` compares the recomputed summary with the stored
+//! rows instead of writing. Without `--db` a scope only computes and reports its
+//! summary, so a read never touches a database or creates the store. `verify`
+//! always compares, even if `--verify-only` is also given.
 //!
 //! Every command prints one JSON object on stdout. Exit 0 means `ok` or
 //! `store_empty`; a corrupt store, an unknown parser version, a drift verdict or
@@ -112,20 +113,10 @@ fn run(args: &[String]) -> Result<i32, String> {
             format!("unknown scope {other} (industry|exchange|generation_facts|all)")
         })?),
     };
-    let request = replay::ReplayRequest::new(
-        selected_scope,
-        verify_only || command == "verify",
-        database.as_deref(),
-    );
+    let request = replay::ReplayRequest::new(selected_scope, verify_only, database.as_deref());
     match command {
-        "replay" => {
-            let report = replay::replay(&store, &request);
-            print_report(report)
-        }
-        "verify" => {
-            let report = replay::verify(&store, &request);
-            print_report(report)
-        }
+        "replay" => print_report(replay::replay(&store, &request)),
+        "verify" => print_report(replay::verify(&store, &request)),
         "import" => {
             let index_path = index.ok_or_else(|| "--index is required".to_string())?;
             let blobs_dir = blobs.ok_or_else(|| "--blobs is required".to_string())?;

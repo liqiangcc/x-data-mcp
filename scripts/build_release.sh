@@ -20,6 +20,9 @@ done
 cp -r migrations "$stage/migrations"
 mkdir -p "$stage/scripts"
 cp scripts/tdx_fetch.py "$stage/scripts/tdx_fetch.py"
+# The exchange-source entry shells out to this helper the same way
+# (`src/exchange_source/transport.rs`): the Rust side never holds a socket.
+cp scripts/exchange_fetch.py "$stage/scripts/exchange_fetch.py"
 # Python-side read-back helper for researchers (pyarrow/duckdb, §7.5).
 cp scripts/export_smoke.py "$stage/scripts/export_smoke.py"
 # The tunnel drop-in runs <release>/scripts/wait_service_ready.py directly

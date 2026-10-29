@@ -252,6 +252,45 @@ impl MarketBackend {
             )),
         }
     }
+
+    /// Insert the `exchange_source_snapshots` rows of a frozen window (M3
+    /// PR-2, `#446` §6.3). The caller has already published the blobs and their
+    /// manifest lines, so "index row present, blob unreadable" cannot originate
+    /// here; a snapshot id already stored is left untouched (one row per
+    /// response byte identity).
+    pub(crate) fn write_exchange_snapshots(
+        &self,
+        rows: &[crate::exchange_source::SnapshotRow],
+    ) -> Result<usize, Error> {
+        match self {
+            Self::Compact(m) => m.tx(|c| super::exchange_source::insert_rows(c, rows)),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "exchange_source_snapshots requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Replace the whole `exchange_source_snapshots` index from the source
+    /// store (`replay --scope exchange`), in one transaction.
+    pub(crate) fn replace_exchange_snapshots(
+        &self,
+        rows: &[crate::exchange_source::SnapshotRow],
+    ) -> Result<usize, Error> {
+        match self {
+            Self::Compact(m) => m.tx(|c| super::exchange_source::replace(c, rows)),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "exchange_source_snapshots requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Stored `exchange_source_snapshots` rows, for the exchange binding and
+    /// for `replay --verify-only`.
+    pub(crate) fn read_exchange_snapshots(
+        &self,
+    ) -> Result<Vec<crate::exchange_source::SnapshotRow>, Error> {
+        self.read(super::exchange_source::read)
+    }
 }
 
 impl crate::market_storage::MarketRepository for MarketBackend {

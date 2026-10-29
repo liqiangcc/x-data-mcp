@@ -549,6 +549,7 @@ fn import_member(
         // the bytes into this system, not the archive's own acquisition time
         // (claiming the latter would claim knowledge we did not have).
         imported_at: Some(crate::industry::now()),
+        http_etag: None,
     };
     if facts.dry_run {
         let written_blob = !facts.store.blob_exists(&actual_member_sha);
