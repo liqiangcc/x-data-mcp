@@ -291,8 +291,8 @@ impl<'a> Entry<'a> {
 
     /// Acquire one unpaginated window (or the source's whole current page set).
     pub fn acquire(&self, plan: &AcquisitionPlan) -> Result<AcquisitionOutcome, AcquireError> {
-        let (frozen, pages) = self.acquire_pages(plan, None, "", "")?;
-        self.finish(plan, frozen, pages)
+        let (pages, snapshots) = self.acquire_pages(plan, None, "", "")?;
+        self.finish(plan, pages, snapshots)
     }
 
     /// Acquire one date window; `from_param`/`to_param` are the source's
@@ -304,8 +304,8 @@ impl<'a> Entry<'a> {
         from_param: &str,
         to_param: &str,
     ) -> Result<AcquisitionOutcome, AcquireError> {
-        let (frozen, pages) = self.acquire_pages(plan, Some(window), from_param, to_param)?;
-        self.finish(plan, frozen, pages)
+        let (pages, snapshots) = self.acquire_pages(plan, Some(window), from_param, to_param)?;
+        self.finish(plan, pages, snapshots)
     }
 
     /// Acquire a set of windows (e.g. `quarter_segments`) with per-window
@@ -368,13 +368,21 @@ impl<'a> Entry<'a> {
         })
     }
 
+    /// Fetch, freeze and index one window.
+    ///
+    /// Index rows are written for **every** frozen page whose envelope parsed —
+    /// including pages of a window that then fails validation. The index is a
+    /// rebuildable accelerator over the store (§9.4.2), so it must be a
+    /// function of the store alone; admission is decided by `basis_status` plus
+    /// this call's result, not by whether a row exists. A page whose envelope
+    /// does not parse has no counts to index and is reported instead.
     fn acquire_pages(
         &self,
         plan: &AcquisitionPlan,
         window: Option<Segment>,
         from_param: &str,
         to_param: &str,
-    ) -> Result<(Vec<FrozenBytes>, PageSet), AcquireError> {
+    ) -> Result<(PageSet, Vec<FrozenSnapshot>), AcquireError> {
         if !plan.basis_status.admits(plan.required_basis) {
             return Err(AcquireError::NotAdmitted {
                 detail: format!(
@@ -387,10 +395,10 @@ impl<'a> Entry<'a> {
         }
         let fetched_at = super::freeze::now();
         let policy = EmptyPolicy::for_window(window, self.today);
-        let mut frozen = Vec::new();
-        let mut envelopes = Vec::new();
+        let mut pages: Vec<(FrozenBytes, PageEnvelope)> = Vec::new();
         let mut page = plan.format.first_page();
         let mut page_count: Option<u32> = None;
+        let mut failure: Option<AcquireError> = None;
         loop {
             let request = plan.request(page, window, from_param, to_param);
             let fingerprint = request.fingerprint();
@@ -406,18 +414,22 @@ impl<'a> Entry<'a> {
                         url: request.display_url(),
                         headers: default_headers(plan.source_id),
                     };
-                    let response =
-                        self.client
-                            .get(&http)
-                            .map_err(|error| AcquireError::Unavailable {
+                    let response = match self.client.get(&http) {
+                        Ok(response) => response,
+                        Err(error) => {
+                            failure = Some(AcquireError::Unavailable {
                                 detail: format!("{}: {error}", error.code()),
-                            })?;
-                    validate::require_status(response.status).map_err(|error| {
-                        AcquireError::Invalid {
+                            });
+                            break;
+                        }
+                    };
+                    if let Err(error) = validate::require_status(response.status) {
+                        failure = Some(AcquireError::Invalid {
                             code: error.code(),
                             detail: error.to_string(),
-                        }
-                    })?;
+                        });
+                        break;
+                    }
                     // Frozen before parsing: a parse failure keeps the bytes
                     // (§6.3). A failed parse never reaches the cache.
                     let bytes = freeze_bytes(
@@ -428,13 +440,16 @@ impl<'a> Entry<'a> {
                         plan.basis_status,
                         &fetched_at,
                     )?;
-                    let envelope =
-                        validate::parse_page(plan.format, &response.body).map_err(|error| {
-                            AcquireError::Invalid {
+                    let envelope = match validate::parse_page(plan.format, &response.body) {
+                        Ok(envelope) => envelope,
+                        Err(error) => {
+                            failure = Some(AcquireError::Invalid {
                                 code: error.code(),
                                 detail: error.to_string(),
-                            }
-                        })?;
+                            });
+                            break;
+                        }
+                    };
                     let page_state = Arc::new(CachedPage {
                         frozen: bytes,
                         envelope,
@@ -447,71 +462,81 @@ impl<'a> Entry<'a> {
             };
             let envelope = page_state.envelope.clone();
             if envelope.page != page {
-                return Err(AcquireError::Invalid {
+                failure = Some(AcquireError::Invalid {
                     code: "source_invalid",
                     detail: format!(
                         "requested page {page} but the envelope reports page {}",
                         envelope.page
                     ),
                 });
+                break;
             }
             match page_count {
                 None => {
                     if envelope.page_count > plan.max_pages {
-                        return Err(AcquireError::Invalid {
+                        failure = Some(AcquireError::Invalid {
                             code: "page_count_exceeds_bound",
                             detail: format!(
                                 "pageCount {} exceeds the bound {}",
                                 envelope.page_count, plan.max_pages
                             ),
                         });
+                        break;
                     }
                     page_count = Some(envelope.page_count);
                 }
                 Some(expected) if expected != envelope.page_count => {
-                    return Err(AcquireError::Invalid {
+                    failure = Some(AcquireError::Invalid {
                         code: "truncated",
                         detail: format!(
                             "page {page} reports pageCount {} but the window started with {expected}",
                             envelope.page_count
                         ),
                     });
+                    break;
                 }
                 Some(_) => {}
             }
-            envelopes.push(envelope);
             let mut frozen_page = page_state.frozen.clone();
             if from_cache {
                 // This call appended nothing: the line came from the call that
                 // populated the cache, so the snapshot is a re-use.
                 frozen_page.appended_manifest_line = false;
             }
-            frozen.push(frozen_page);
+            pages.push((frozen_page, envelope));
             if page >= page_count.unwrap_or(0) {
                 break;
             }
             page += 1;
         }
-        let pages = validate::validate_pages(&envelopes, policy).map_err(|error| {
+        // Index first, decide second: the rows are facts about the store, and
+        // replay must reproduce exactly these pages even when the window fails
+        // (`empty data` and `truncated` are window verdicts, not index state).
+        let snapshots = if pages.is_empty() {
+            Vec::new()
+        } else {
+            record_snapshots(self.backend, &pages)?
+        };
+        if let Some(failure) = failure {
+            return Err(failure);
+        }
+        let envelopes: Vec<PageEnvelope> =
+            pages.into_iter().map(|(_, envelope)| envelope).collect();
+        let set = validate::validate_pages(&envelopes, policy).map_err(|error| {
             AcquireError::Invalid {
                 code: error.code(),
                 detail: error.to_string(),
             }
         })?;
-        Ok((frozen, pages))
+        Ok((set, snapshots))
     }
 
     fn finish(
         &self,
         plan: &AcquisitionPlan,
-        frozen: Vec<FrozenBytes>,
         pages: PageSet,
+        snapshots: Vec<FrozenSnapshot>,
     ) -> Result<AcquisitionOutcome, AcquireError> {
-        let pairs: Vec<(FrozenBytes, PageEnvelope)> = frozen
-            .into_iter()
-            .zip(pages.pages.iter().cloned())
-            .collect();
-        let snapshots = record_snapshots(self.backend, &pairs)?;
         // The binding is the source's, not this window's: `bind` reads every
         // frozen snapshot of `source_id` from the index (§6.3 "bind"), so two
         // consumers acquiring different windows of one source agree on it.

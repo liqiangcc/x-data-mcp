@@ -54,17 +54,24 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 fetch（有界重试，仅网络错误 / 429 / 5xx）
   → 非 2xx：source_unavailable（不冻结，不发解析器）
   → 2xx：blob + 清单行（fsync）——解析之前
-  → 信封解析与计数校验
-  → 校验通过：exchange_source_snapshots 行（一个窗口一个事务）
+  → 信封解析 → exchange_source_snapshots 行（一个窗口一个事务）
+  → 窗口计数校验（页码/页数/total/0 行）
   → bind：source_binding_digest
 ```
 
-- 解析失败不删字节：清单与 blob 保留，索引行不写，失败码为
-  `source_invalid` / `truncated` / `unverified_zero`。
+索引是来源库的可重建加速器（§9.4.2），因此**清单里每个能解析出信封的冻结响应都会
+有一行**，包括随后被判 `truncated` / `unverified_zero` 的窗口：这些是窗口裁决，不是
+索引状态；把它们排除在外会让「清库重放」无法复现，AC-M3-9 就失去意义。真正的准入
+由 `basis_status` 与本次获取结果决定——校验失败时入口返回错误，使用方不写任何派生
+行。信封解析不出来的响应没有行数可记，进 `problems`（`source_invalid`）而不是伪造
+一行。
+
+- 解析失败不删字节：清单与 blob 保留，索引行不写（无计数可记），失败码
+  `source_invalid`。
 - 0 行默认失败（`unverified_zero`）：只有「整段窗口晚于今天」这一种显式声明才允许 0 行
   （`EmptyPolicy`）。「0 行」不是「没有事件」的证据（§6.4、`work/evidence-notes.md` U-1）。
 - 计数不一致（`pageHelp.total`/`recordcount` 与收集行数不符、页数不符、重复页）一律
-  `truncated`，不写任何索引行。
+  `truncated`，入口返回失败；已冻结的页仍按上面的规则入索引。
 - 多段运行（如按季度循环）逐段隔离：成功的段照常写库；失败的段不出行，整体返回
   `partially_failed` 并列出失败窗口。已冻结快照保留。
 - `basis_status` 低于写入门槛时 `bind` 返回 `source_not_admitted`，`Entry` 在发请求前
@@ -82,6 +89,10 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
    `exchange_source_snapshots`（先清空、再插入，单事务）；
 4. 与写完后回读的摘要比较，`match` 才算成功；`--verify-only` 只重算并比较，输出
    `match` / `drift` + 前 20 条差异 `snapshot_id`。
+
+重放与获取写出的行集合相同：能解析出信封的冻结响应都有一行，解析不出的都没有。
+因此 `truncated` / `unverified_zero` 窗口留下的字节在重放后仍只产生 0 行快照，
+不会凭空多出「看起来可用」的数据，也不会让摘要对不上。
 
 同一响应字节被多条清单行登记时，取「最早 `acquired_at`、其次最小 `origin`」的那条，
 因此重放是可重复的。`as_of` 取首次获取时间的 UTC 日期；`url` 与

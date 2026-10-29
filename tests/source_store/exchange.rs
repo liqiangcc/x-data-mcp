@@ -281,11 +281,16 @@ fn empty_data_is_unverified_zero_and_bytes_stay_frozen() {
     };
     assert_eq!(error.code(), "unverified_zero");
     assert_eq!(store.records().unwrap().len(), 1);
-    assert_eq!(snapshot_count(&db, SourceId::SseListing), 0);
+    // The frozen page is indexed as a factual 0-row snapshot (the index mirrors
+    // the store); the *window* is still refused, so no consumer writes.
+    assert_eq!(snapshot_count(&db, SourceId::SseListing), 1);
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 1);
 }
 
 #[test]
-fn total_mismatch_is_truncated_and_writes_no_index_row() {
+fn total_mismatch_is_truncated_but_the_frozen_page_stays_reproducible() {
     let scenario = Scenario::new();
     let store = scenario.store();
     let db = scenario.db();
@@ -300,7 +305,10 @@ fn total_mismatch_is_truncated_and_writes_no_index_row() {
     };
     assert_eq!(error.code(), "truncated");
     assert_eq!(store.records().unwrap().len(), 1);
-    assert_eq!(snapshot_count(&db, SourceId::SseListing), 0);
+    assert_eq!(snapshot_count(&db, SourceId::SseListing), 1);
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 1);
 }
 
 #[test]

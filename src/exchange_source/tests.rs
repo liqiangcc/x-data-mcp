@@ -374,7 +374,7 @@ fn rebuild_from_the_store_is_deterministic_and_keeps_etags() {
 }
 
 #[test]
-fn frozen_response_that_cannot_be_parsed_is_reported_not_invented() {
+fn a_frozen_zero_row_page_is_indexed_as_a_zero_row_snapshot() {
     let dir = tempfile::tempdir().unwrap();
     let store = SourceStore::new(dir.path().join("store"));
     let request = ExchangeRequest::new(SourceId::SseBulletin, "https://example.invalid/bulletin");
@@ -392,10 +392,36 @@ fn frozen_response_that_cannot_be_parsed_is_reported_not_invented() {
     let records = store.records().unwrap();
     let refs: Vec<&ManifestRecord> = records.iter().collect();
     let rebuild = index::rebuild(&store, &refs).unwrap();
+    // The index records the store, not a verdict: the entry refuses the window
+    // (`unverified_zero`), and the frozen page is still reproducible.
+    assert!(rebuild.problems.is_empty());
+    assert_eq!(rebuild.rows.len(), 1);
+    assert_eq!(rebuild.rows[0].row_count, 0);
+    assert!(store.blob_exists(&records[0].sha256));
+}
+
+#[test]
+fn a_frozen_page_without_a_usable_envelope_is_reported_not_indexed() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = SourceStore::new(dir.path().join("store"));
+    let request = ExchangeRequest::new(SourceId::SseListing, "https://example.invalid/list");
+    let mut facts = Registration::new(
+        request.source_id.as_str(),
+        StoreKind::HttpFetch,
+        request.fingerprint(),
+        "2026-10-30T04:00:00Z",
+    );
+    facts.parser_version = Some(SSE_PARSER_VERSION.to_string());
+    facts.basis_status = Some(BasisStatus::ApprovedSource.as_str().to_string());
+    store
+        .register(b"<html>maintenance</html>", &facts)
+        .expect("the bytes are frozen before parsing");
+    let records = store.records().unwrap();
+    let refs: Vec<&ManifestRecord> = records.iter().collect();
+    let rebuild = index::rebuild(&store, &refs).unwrap();
     assert!(rebuild.rows.is_empty());
     assert_eq!(rebuild.problems.len(), 1);
-    assert_eq!(rebuild.problems[0].reason, "unverified_zero");
-    // The bytes are still there, which is the point of freezing first.
+    assert_eq!(rebuild.problems[0].reason, "source_invalid");
     assert!(store.blob_exists(&records[0].sha256));
 }
 
