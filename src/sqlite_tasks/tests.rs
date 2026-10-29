@@ -835,7 +835,7 @@ fn head_transition_refreshes_a_stale_held_head() {
 /// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
 /// version-manifest/result tables below are replaced by `market_series` +
 /// `series_bars` + `yearly_series_lineage` + `market_events`.
-const COMPACT_TABLES: [&str; 20] = [
+const COMPACT_TABLES: [&str; 25] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
