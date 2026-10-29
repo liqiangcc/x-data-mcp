@@ -112,13 +112,13 @@ fn run(args: &[String]) -> Result<i32, String> {
         })?),
     };
     match command {
-        "replay" | "verify" => {
-            let report = replay::replay_to(
-                &store,
-                selected_scope,
-                verify_only || command == "verify",
-                database.as_deref(),
-            );
+        "replay" => {
+            let report =
+                replay::replay_to(&store, selected_scope, verify_only, database.as_deref());
+            print_report(report)
+        }
+        "verify" => {
+            let report = replay::verify_to(&store, selected_scope, database.as_deref());
             print_report(report)
         }
         "import" => {

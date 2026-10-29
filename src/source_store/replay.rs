@@ -150,7 +150,17 @@ pub fn replay(
 
 /// `verify_source_store`: the read-only check of the same selection.
 pub fn verify(store: &SourceStore, scope: Option<Scope>) -> Result<ReplayReport, StoreError> {
-    replay_to(store, scope, true, None)
+    verify_to(store, scope, None)
+}
+
+/// `verify` with an optional database: recompute the index summary and compare
+/// it with the stored rows instead of writing.
+pub fn verify_to(
+    store: &SourceStore,
+    scope: Option<Scope>,
+    database: Option<&Path>,
+) -> Result<ReplayReport, StoreError> {
+    run(store, scope, true, database, "verify")
 }
 
 /// Replay with an optional database: scopes whose writer exists rebuild their
