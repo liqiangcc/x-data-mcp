@@ -482,6 +482,10 @@ fn price_limit_rules(
                 ("status_class", text(rule.status_class.as_str())),
                 ("listing_phase", text(rule.listing_phase.as_str())),
                 ("band_bp", rule.band_bp.map_or(FactValue::Null, int)),
+                (
+                    "min_band_ticks",
+                    rule.min_band_ticks.map_or(FactValue::Null, int),
+                ),
                 ("band_side", text(rule.band_side.as_str())),
                 ("rounding", text(rule.rounding.as_str())),
                 ("effective_from", date(Some(rule.effective_from))),

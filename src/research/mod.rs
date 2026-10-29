@@ -597,6 +597,7 @@ pub const PRICE_LIMIT_RULES_COLUMNS: &[&str] = &[
     "status_class",
     "listing_phase",
     "band_bp",
+    "min_band_ticks",
     "band_side",
     "rounding",
     "effective_from",

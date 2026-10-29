@@ -663,16 +663,19 @@ fn expected_first_day_2023(market: RuleMarket) -> &'static str {
     }
 }
 
-/// D-64 leaves exactly two deliberately unencoded rules and names the reason
-/// that blocks each one. The deleted entries must not come back by accident:
-/// G-6 is closed and the pre-2023 ST span is encoded.
+/// D-64 leaves exactly one deliberately unencoded rule (the SH/SZ 2023
+/// first-day 44%/36% declared range) and names the reason that blocks it. The
+/// deleted entries must not come back by accident: G-6 is closed, the pre-2023
+/// ST span is encoded, and the low-price exception now has the schema 25
+/// `min_band_ticks` column instead of a `not_encoded` note.
 #[test]
-fn the_rule_book_names_the_two_remaining_not_encoded_rules() {
+fn the_rule_book_names_the_remaining_not_encoded_rule() {
     let raw: serde_json::Value =
         serde_json::from_str(include_str!("a7-d44-v1.json")).expect("the rule book is JSON");
     let snapshot = raw["snapshot_id"].as_str().expect("snapshot_id");
     assert!(snapshot.contains("D-64"), "{snapshot}");
     assert!(snapshot.contains("2026-10-29"), "{snapshot}");
+    assert!(snapshot.contains("min_band_ticks"), "{snapshot}");
     let entries: Vec<(&str, &str)> = raw["not_encoded"]
         .as_array()
         .expect("not_encoded")
@@ -684,19 +687,18 @@ fn the_rule_book_names_the_two_remaining_not_encoded_rules() {
             )
         })
         .collect();
-    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(entries[0].0, "R6-first-day");
     assert!(
         entries[0].1.contains("issue price"),
         "the 44%/36% block must name the issue-price source"
     );
     assert!(entries[0].1.contains("two-band"), "{}", entries[0].1);
-    assert_eq!(entries[1].0, "SH-risk-warning-low-price");
-    assert!(
-        entries[1].1.contains("min_band_ticks") && entries[1].1.contains("schema 25"),
-        "the low-price block must point at the schema 25 column"
-    );
-    for removed in ["R6-first-day-inferred", "R2-pre-2023-02-17"] {
+    for removed in [
+        "R6-first-day-inferred",
+        "R2-pre-2023-02-17",
+        "SH-risk-warning-low-price",
+    ] {
         assert!(
             entries.iter().all(|(rule, _)| *rule != removed),
             "{removed} must stay removed"
@@ -710,4 +712,37 @@ fn the_rule_book_names_the_two_remaining_not_encoded_rules() {
             .any(|entry| entry["rule"] == "R7"),
         "R7 stays NOT_AVAILABLE"
     );
+}
+
+/// D-64 §4.3: the one-tick band floor is set only where an admitted clause
+/// says so. SH ST from 2013-01-01 and SZ ST from 2011-02-28 carry it; the SZ
+/// 2023+ rows do not, because the SZ 2023 clause text is still the G-4 gap;
+/// every other row stays NULL so the floor is never back-filled from today's
+/// rule onto an earlier span.
+#[test]
+fn min_band_ticks_is_set_only_on_the_rows_with_a_clause() {
+    let book = rule_book().unwrap();
+    let expected = [
+        ("r2-sz-main-st-5pct-2011-02-28-2023-02-16", Some(1)),
+        ("r2-sh-main-st-5pct-2013-01-01-2023-02-16", Some(1)),
+        ("r2-sh-main-st-5pct-until-2026-07-05", Some(1)),
+        ("r2-sh-main-st-10pct-from-2026-07-06", Some(1)),
+        ("r2-sz-main-st-5pct-until-2026-07-05", None),
+        ("r2-sz-main-st-10pct-from-2026-07-06", None),
+    ];
+    for (rule_id, floor) in expected {
+        let rule = book
+            .price_limits
+            .iter()
+            .find(|rule| rule.rule_id == rule_id)
+            .unwrap_or_else(|| panic!("{rule_id} is missing"));
+        assert_eq!(rule.min_band_ticks, floor, "{rule_id}");
+    }
+    let with_floor: Vec<&str> = book
+        .price_limits
+        .iter()
+        .filter(|rule| rule.min_band_ticks.is_some())
+        .map(|rule| rule.rule_id.as_str())
+        .collect();
+    assert_eq!(with_floor.len(), 4, "{with_floor:?}");
 }

@@ -211,6 +211,10 @@ pub struct PriceLimitReport {
     pub basis_ref: Option<String>,
     pub basis_status: Option<BasisStatus>,
     pub band_bp: Option<i64>,
+    /// The rule row's minimum band width in ticks (`None` = no floor). This is
+    /// the band floor, not the price floor: the answer still belongs to the
+    /// row that said it, so a consumer can tell which exception applied.
+    pub min_band_ticks: Option<i64>,
     pub band_side: Option<BandSide>,
     pub rounding: Option<Rounding>,
     pub effective_from: Option<NaiveDate>,
@@ -258,6 +262,7 @@ impl PriceLimitReport {
             basis_ref: None,
             basis_status: None,
             band_bp: None,
+            min_band_ticks: None,
             band_side: None,
             rounding: None,
             effective_from: None,
@@ -403,6 +408,7 @@ pub fn price_limit(
     answer.basis_ref = Some(rule.basis_ref.clone());
     answer.basis_status = Some(rule.basis_status);
     answer.band_bp = rule.band_bp;
+    answer.min_band_ticks = rule.min_band_ticks;
     answer.band_side = Some(rule.band_side);
     answer.rounding = Some(rule.rounding);
     answer.effective_from = Some(rule.effective_from);
@@ -497,36 +503,63 @@ fn compute_limit(
     let prev = i128::from(prev_close_units).checked_mul(factor).ok_or(())?;
     let scale = i128::from(tick.tick_units);
 
-    let up = if matches!(rule.band_side, BandSide::Both | BandSide::UpOnly) {
+    // The band floor is the rule row's `min_band_ticks` times one tick. A
+    // non-positive value is refused here too, because the derivation takes
+    // the row verbatim instead of trusting the write path.
+    let band_floor = match rule.min_band_ticks {
+        Some(ticks) => {
+            if ticks < 1 {
+                return Err(());
+            }
+            Some(i128::from(ticks).checked_mul(scale).ok_or(())?)
+        }
+        None => None,
+    };
+
+    // The two floors are different rules (§4.3): the band floor raises
+    // `up - prev` / `prev - down`, the price floor clamps the limit itself to
+    // one tick. Without the band floor prev=0.09 keeps a zero-width 5% band;
+    // without the price floor prev=0.01 can produce a zero down limit. Each
+    // floor is an integer number of ticks, so applying it after rounding onto
+    // the tick grid is the same as applying it before (the grid contains the
+    // floors).
+    let mut up = None;
+    if matches!(rule.band_side, BandSide::Both | BandSide::UpOnly) {
         let target = prev.checked_mul(BP_SCALE + i128::from(band_bp)).ok_or(())?;
-        Some(to_bar_units(target, rule.rounding, scale, factor)?)
-    } else {
-        None
-    };
-    let down = if rule.band_side == BandSide::Both {
+        let mut aligned = to_tick_units(target, rule.rounding, scale)?;
+        if let Some(floor) = band_floor {
+            aligned = aligned.max(prev.checked_add(floor).ok_or(())?);
+        }
+        aligned = aligned.max(scale);
+        up = Some(tick_units_to_bar_units(aligned, factor)?);
+    }
+    let mut down = None;
+    if rule.band_side == BandSide::Both {
         let target = prev.checked_mul(BP_SCALE - i128::from(band_bp)).ok_or(())?;
-        Some(to_bar_units(target, rule.rounding, scale, factor)?)
-    } else {
-        None
-    };
+        let mut aligned = to_tick_units(target, rule.rounding, scale)?;
+        if let Some(floor) = band_floor {
+            aligned = aligned.min(prev.checked_sub(floor).ok_or(())?);
+        }
+        aligned = aligned.max(scale);
+        down = Some(tick_units_to_bar_units(aligned, factor)?);
+    }
     Ok(ComputedLimit { up, down })
 }
 
-/// Round `numerator / BP_SCALE` with `rounding`, align to `tick_units`, then
-/// convert the tick-scale result back to the series' price scale.
-fn to_bar_units(
-    numerator: i128,
-    rounding: Rounding,
-    tick_units: i128,
-    factor: i128,
-) -> Result<i64, ()> {
+/// Round `numerator / BP_SCALE` with `rounding` and align it to `tick_units`,
+/// keeping the tick-scale units the caller then floors in.
+fn to_tick_units(numerator: i128, rounding: Rounding, tick_units: i128) -> Result<i128, ()> {
     if numerator < 0 {
         return Err(());
     }
     let rounded = divide_round(numerator, BP_SCALE, rounding);
-    let aligned = divide_round(rounded, tick_units, rounding)
+    divide_round(rounded, tick_units, rounding)
         .checked_mul(tick_units)
-        .ok_or(())?;
+        .ok_or(())
+}
+
+/// Convert an already tick-aligned price back to the series' price scale.
+fn tick_units_to_bar_units(aligned: i128, factor: i128) -> Result<i64, ()> {
     let bar_units = aligned.checked_div(factor).ok_or(())?;
     if bar_units * factor != aligned {
         return Err(());
