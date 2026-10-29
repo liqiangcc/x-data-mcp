@@ -1238,9 +1238,11 @@ pub fn register_generation_members(
     let previous_member_sha256 = store
         .records()?
         .iter()
-        .filter(|record| record.source_id == crate::source_store::TDXHY_SOURCE_ID)
-        .filter(|record| !(record.sha256 == member_sha256 && record.origin == origin))
-        .next_back()
+        .rev()
+        .find(|record| {
+            record.source_id == crate::source_store::TDXHY_SOURCE_ID
+                && !(record.sha256 == member_sha256 && record.origin == origin)
+        })
         .map(|record| record.sha256.clone());
 
     let record = SnapshotRecord {
