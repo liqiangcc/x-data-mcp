@@ -137,6 +137,7 @@ fn mapped(e: super::service::Error) -> ApiError {
         super::service::Error::Fetch(_) => "fetch_error",
         super::service::Error::Json(_) => "internal_error",
         super::service::Error::Io(_) => "io_error",
+        super::service::Error::Gate(_) => "retire_gate_unavailable",
     };
     ApiError::new(code, e.to_string())
 }

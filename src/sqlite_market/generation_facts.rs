@@ -88,18 +88,18 @@ pub(crate) fn record_facts(c: &Connection, facts: &[GenerationFact]) -> Result<(
 const FACT_COLUMNS: &str = "generation_manifest_sha256,role,fact_kind,fact_digest,\
 evidence_sha256,parser_version,registered_at";
 
-fn map_fact(row: &rusqlite::Row<'_>) -> Result<GenerationFact, Error> {
-    let generation: Vec<u8> = row.get(0).map_err(storage)?;
-    let digest: Vec<u8> = row.get(3).map_err(storage)?;
-    let evidence: Option<Vec<u8>> = row.get(4).map_err(storage)?;
+fn map_fact(row: &rusqlite::Row<'_>) -> rusqlite::Result<GenerationFact> {
+    let generation: Vec<u8> = row.get(0)?;
+    let digest: Vec<u8> = row.get(3)?;
+    let evidence: Option<Vec<u8>> = row.get(4)?;
     Ok(GenerationFact {
         generation_manifest_sha256: hex(&generation),
-        role: row.get(1).map_err(storage)?,
-        fact_kind: row.get(2).map_err(storage)?,
+        role: row.get(1)?,
+        fact_kind: row.get(2)?,
         fact_digest: hex(&digest),
         evidence_sha256: optional_hex(evidence),
-        parser_version: row.get(5).map_err(storage)?,
-        registered_at: row.get(6).map_err(storage)?,
+        parser_version: row.get(5)?,
+        registered_at: row.get(6)?,
     })
 }
 
@@ -144,14 +144,14 @@ pub(crate) fn replace_facts(c: &Connection, facts: &[GenerationFact]) -> Result<
 const EXEMPTION_COLUMNS: &str =
     "generation_manifest_sha256,missing_kind,reason,recorded_by,recorded_at";
 
-fn map_exemption(row: &rusqlite::Row<'_>) -> Result<RetireExemption, Error> {
-    let generation: Vec<u8> = row.get(0).map_err(storage)?;
+fn map_exemption(row: &rusqlite::Row<'_>) -> rusqlite::Result<RetireExemption> {
+    let generation: Vec<u8> = row.get(0)?;
     Ok(RetireExemption {
         generation_manifest_sha256: hex(&generation),
-        missing_kind: row.get(1).map_err(storage)?,
-        reason: row.get(2).map_err(storage)?,
-        recorded_by: row.get(3).map_err(storage)?,
-        recorded_at: row.get(4).map_err(storage)?,
+        missing_kind: row.get(1)?,
+        reason: row.get(2)?,
+        recorded_by: row.get(3)?,
+        recorded_at: row.get(4)?,
     })
 }
 
