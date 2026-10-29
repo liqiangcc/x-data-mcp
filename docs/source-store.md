@@ -101,7 +101,10 @@ source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 
 `--db` 把 `replay` 变成**写库**：`industry` 在一个事务里替换
 `industry_snapshots`/`industry_assignments`，写完立即回读比对，`database=match`
-才算成功。不带 `--db` 只计算并报告 `summary`，不建库、不写库。`verify` 恒为
+才算成功。时间线按**清单里的每次登记**重放，不只按内容去重：相邻且内容相同的
+登记折叠为一段区间，内容变化（包括变回旧内容，A → B → A）就开新区间；
+`industry_snapshots` 仍是每个内容一行，其时间与等级按设计 §5.3 在该内容的全部
+登记上合并。不带 `--db` 只计算并报告 `summary`，不建库、不写库。`verify` 恒为
 只读，等价于 `replay --verify-only`：重算同一摘要与库中行比较，输出 `match`
 或 `drift` + 前 20 条差异主键。
 

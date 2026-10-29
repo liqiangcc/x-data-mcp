@@ -567,22 +567,209 @@ fn rebuild_is_deterministic_and_the_daily_append_matches_it() {
         .is_empty()
     );
 
-    // The daily path applies one snapshot at a time onto the stored rows; the
-    // result must equal the full rebuild, otherwise "clear the DB and replay"
-    // would silently drift from the incrementally maintained table.
+    // The daily path applies one observation at a time onto the stored rows;
+    // the result must equal the full rebuild, otherwise "clear the DB and
+    // replay" would silently drift from the incrementally maintained table.
     let mut rows: Vec<AssignmentRow> = Vec::new();
     for facts in &inputs {
-        let (next, _) = apply_on(&rows, facts).unwrap();
+        let (next, _) = apply_on(&rows, facts, RunLink::Fresh).unwrap();
         rows = next;
     }
     assert_eq!(rows, first.assignments);
 
-    // Applying the same snapshot again is a no-op at this layer too (the DB
-    // writer short-circuits on `member_sha256`, this proves the computation is
-    // stable when it is reached).
-    let (again, superseded) = apply_on(&rows, &inputs[2]).unwrap();
+    // Re-observing the content of the newest run is a no-op at this layer too
+    // (the writer reports `no_change`), and the same observation as a *fresh*
+    // run would be a backfill: the link is what distinguishes them.
+    let (again, superseded) = apply_on(&rows, &inputs[2], RunLink::Continue).unwrap();
     assert_eq!(again, rows);
     assert_eq!(superseded, 0);
+}
+
+#[test]
+fn a_content_that_comes_back_opens_a_second_run() {
+    // A → B → A: the publisher changed the file twice and the second `A` is a
+    // new observation of an old content. Deduplicating it away would leave the
+    // history at B forever (§5.3).
+    let a = cfg(&[(0, "000001", "T1001", "X500102")]);
+    let b = cfg(&[(0, "000001", "T1001", "X500202")]);
+    let inputs = vec![
+        snapshot(
+            &a,
+            Some("Wed, 30 Sep 2026 00:00:00 GMT"),
+            "2026-09-30T01:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+        snapshot(
+            &b,
+            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
+            "2026-10-12T01:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+        snapshot(
+            &a,
+            Some("Fri, 16 Oct 2026 00:00:00 GMT"),
+            "2026-10-16T01:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+    ];
+    let rebuilt = rebuild(&inputs).unwrap();
+    assert_eq!(
+        rebuilt.snapshots.len(),
+        2,
+        "storage keeps one row per content: A and B"
+    );
+    assert_eq!(rebuilt.boundaries, 3, "three observations, three runs");
+    let rows = assignment(&rebuilt.assignments, "sz", "000001");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].industry_code, "X5001");
+    assert_eq!(rows[0].effective_from, day(2026, 9, 30));
+    assert_eq!(rows[0].effective_to, Some(day(2026, 10, 12)));
+    assert_eq!(rows[1].industry_code, "X5002");
+    assert_eq!(rows[1].effective_to, Some(day(2026, 10, 16)));
+    assert_eq!(rows[2].industry_code, "X5001");
+    assert_eq!(rows[2].effective_to, None);
+    assert_eq!(
+        rows[2].snapshot_member_sha256, rows[0].snapshot_member_sha256,
+        "both intervals name the same content; only the observation differs"
+    );
+
+    // The daily path reaches the same table one observation at a time, with the
+    // link telling the writer that the third observation is *not* the run of the
+    // first (its predecessor was B).
+    let mut rows_daily: Vec<AssignmentRow> = Vec::new();
+    for (index, facts) in inputs.iter().enumerate() {
+        let link = if index == 0 {
+            RunLink::Fresh
+        } else if inputs[index - 1].record.member_sha256 == facts.record.member_sha256 {
+            RunLink::Continue
+        } else {
+            RunLink::Fresh
+        };
+        let (next, _) = apply_on(&rows_daily, facts, link).unwrap();
+        rows_daily = next;
+    }
+    assert_eq!(rows_daily, rebuilt.assignments);
+}
+
+#[test]
+fn identical_observations_in_a_row_are_one_interval_from_the_earliest_day() {
+    let a = cfg(&[(0, "000001", "T1001", "X500102")]);
+    let inputs = vec![
+        snapshot(
+            &a,
+            Some("Wed, 30 Sep 2026 00:00:00 GMT"),
+            "2026-09-30T01:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+        snapshot(
+            &a,
+            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
+            "2026-10-12T01:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+        snapshot(
+            &a,
+            Some("Fri, 16 Oct 2026 00:00:00 GMT"),
+            "2026-10-16T01:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+    ];
+    let rebuilt = rebuild(&inputs).unwrap();
+    assert_eq!(rebuilt.snapshots.len(), 1, "one content, one stored row");
+    assert_eq!(rebuilt.boundaries, 1, "three observations, one run");
+    let rows = assignment(&rebuilt.assignments, "sz", "000001");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].effective_from, day(2026, 9, 30));
+    assert_eq!(rows[0].effective_to, None);
+    assert_eq!(
+        rows[0].known_at, "2026-09-30T01:00:00Z",
+        "the earliest knowledge time of the run"
+    );
+}
+
+#[test]
+fn a_run_takes_the_earliest_publisher_time_and_the_best_grade() {
+    // The archive holds the same bytes twice: the first registration lost its
+    // `last_modified` (B, dated by the acquisition time on 10-11), the second
+    // kept it (A, 10-12). §5.3 step 1 says the run is dated by the publisher
+    // time and graded A — taking the first registration would make the fact
+    // both weaker and earlier than it is.
+    let a = cfg(&[(0, "000001", "T1001", "X500102")]);
+    let inputs = vec![
+        snapshot(&a, None, "2026-10-11T01:00:00Z", "B", Some(DICT)),
+        snapshot(
+            &a,
+            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
+            "2026-10-12T09:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+    ];
+    let rebuilt = rebuild(&inputs).unwrap();
+    assert_eq!(rebuilt.boundaries, 1);
+    let rows = assignment(&rebuilt.assignments, "sz", "000001");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].basis, "publisher_last_modified");
+    assert_eq!(rows[0].evidence_grade, "A");
+    assert_eq!(rows[0].effective_from, day(2026, 10, 12));
+    assert_eq!(
+        rows[0].known_at, "2026-10-11T01:00:00Z",
+        "the earliest ingestion of the run, not the best-evidenced one"
+    );
+    // Storage merges the same evidence into the one snapshot row.
+    assert_eq!(rebuilt.snapshots.len(), 1);
+    assert!(rebuilt.snapshots[0].publisher_last_modified.is_some());
+    assert_eq!(rebuilt.snapshots[0].evidence_grade, "A");
+    assert_eq!(
+        rebuilt.snapshots[0].observed_at.as_deref(),
+        Some("2026-10-11T01:00:00Z")
+    );
+
+    // A later observation that *moves* the boundary of an open interval is a
+    // history rewrite: the daily path refuses it instead of re-dating it.
+    let (rows_one, _) = apply_on(&[], &inputs[0], RunLink::Fresh).unwrap();
+    let error = apply_on(&rows_one, &inputs[1], RunLink::Continue).unwrap_err();
+    assert!(
+        error.to_string().contains("source-store replay"),
+        "re-dating a published interval needs a replay: {error}"
+    );
+}
+
+#[test]
+fn a_continuation_that_only_improves_the_grade_is_applied_in_place() {
+    // Same day, better evidence: the run keeps its start (no history rewrite)
+    // and the daily path reaches the same rows as the rebuild.
+    let a = cfg(&[(0, "000001", "T1001", "X500102")]);
+    let inputs = vec![
+        snapshot(
+            &a,
+            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
+            "2026-10-12T01:00:00Z",
+            "B",
+            Some(DICT),
+        ),
+        snapshot(
+            &a,
+            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
+            "2026-10-12T09:00:00Z",
+            "A",
+            Some(DICT),
+        ),
+    ];
+    let rebuilt = rebuild(&inputs).unwrap();
+    let (mut rows, _) = apply_on(&[], &inputs[0], RunLink::Fresh).unwrap();
+    let (next, superseded) = apply_on(&rows, &inputs[1], RunLink::Continue).unwrap();
+    rows = next;
+    assert_eq!(superseded, 0);
+    assert_eq!(rows, rebuilt.assignments);
+    assert_eq!(rows[0].evidence_grade, "A");
+    assert_eq!(rows[0].effective_from, day(2026, 10, 12));
 }
 
 #[test]
@@ -604,7 +791,7 @@ fn a_historical_snapshot_is_refused_on_the_daily_path() {
         "A",
         Some(DICT),
     );
-    let error = apply_on(&newer.assignments, &older).unwrap_err();
+    let error = apply_on(&newer.assignments, &older, RunLink::Fresh).unwrap_err();
     assert!(
         error.to_string().contains("backfill"),
         "a historical snapshot must be replayed, not appended: {error}"

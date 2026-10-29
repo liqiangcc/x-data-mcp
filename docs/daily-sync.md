@@ -231,7 +231,10 @@ worker 还会追加 **15** 个服务器内部派生 item（9 个指数基准 + �
 `list_data_versions` 回读（M3 item 写的是索引表而不是版本行，取值看 evidence）。
 M3 的 `derived:industry_snapshot` 只维护行业快照与区间：来源不带
 `tdxhy.cfg` 时成功且 `no_change`；文件存在但解析失败或缺字典 → item 失败，
-字节已先落来源库、上一版区间不丢。
+字节已先落来源库、上一版区间不丢。同一内容被再次观测（前一条登记内容相同）只是
+延长未闭合区间、`no_change`；内容变回旧内容（A → B → A）是新的一次变更，会开新区间。
+若这条观测会改变**已公布**区间的起点（例如后到的登记带来更早的发布方时间），日更
+fail-closed 指向 `source_store replay --scope industry`，不要手工改表。
 
 ### 全新数据库
 

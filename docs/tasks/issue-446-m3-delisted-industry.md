@@ -333,11 +333,21 @@ industry_assignments（区间，读面）
   `generation:<manifest sha256>`，归档导入用 `<batch>:<容器目录>`（见
   `src/sqlite_market/industry.rs` 的 `pairing_key`）。配对不上 → 该快照
   `dictionary_sha256=NULL`、所有行 `unknown_dictionary`（回填没有同代字典的正常结果）。
-- **同内容多记录只取首条**：清单按登记顺序去重，第一条登记（即日更首次写入快照的那条）
-  决定 `source_kind`/`publisher_last_modified`/`observed_at`，后续同 sha 的登记只补充证据链。
-  与 §5.3「取最早的非空 `last_modified`」的差别：只有「后登记的记录反而带更早时间」时才不同，
-  此时本实现取更晚的起点，偏差方向仍是「不提前」；换来的是日更增量表与重放表逐位一致
-  （否则同一 sha 的两条记录会让两条路径选出不同元数据，`--verify-only` 必然报 drift）。
+- **存储去重与时间线分离**（2026-10-29 审核修订）：`industry_snapshots` 每个内容一行，
+  该行的时间与等级按 §5.3 第 1 步在**该内容的全部登记**上合并——最早的非空
+  `last_modified`、最早的 `observed_at`/`ingested_at`、最好的等级（A 优于 B）；
+  清单里的每条登记仍是一次**观测**，时间线按观测序列算，不只按内容去重：
+  - 观测按 `(起点日, ingested_at, sha256)` 排序，只折叠**相邻**且内容相同的观测；
+  - 一段相邻相同内容的观测（run）取段内最早的非空 `last_modified` 作起点
+    （basis `publisher_last_modified`），没有才用最早的获取时间（`acquisition_time`），
+    等级取段内最好，`known_at` 取段内最早的入库/导入时间；
+  - 内容变化即开新区间，包括**变回旧内容**：A → B → A 是两处变更、三段区间。
+    内容去重只解决存储（blob 与快照行），不解决历史。
+- **日更的 run 判定来自观测日志**：`apply_on` 的短路条件是「这次观测与**上一条**观测内容相同」，
+  由来源库清单给出前一条 `tdxhy.cfg` 登记的 sha，而不是「该 sha 在表里出现过」。
+  上一条内容相同 → 只是延长未闭合区间（段内证据可在原地改善）；上一条内容不同（含 A → B → A）
+  → 新开区间。已经公布的区间起点不会因为后到的观测而改写（那要重算整表），
+  这类情况日更 fail-closed 指向 `replay --scope industry`。
 - **`tdxhy.cfg` 内同代码冲突**：同一文件里同一代码出现两条不同 `(t_code, x_code)` →
   item 失败（`industry_snapshot_invalid`），不猜哪条赢；完全相同的重复行折叠。
 - **只有 `X` 一级码的行**：没有二级祖先（`code_level != 2/3`）时不进区间表，也不猜一个

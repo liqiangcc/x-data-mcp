@@ -208,7 +208,9 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
   版本行可回读，取值只看 item 级结果。来源 generation 不带 `tdxhy.cfg` 时它
   **成功且 `no_change`（`reason=member_absent`）**；`tdxhy.cfg` 存在但解析失败或
   同代 `zhb.zip!incon.dat` 缺失时 item 失败——字节已先落来源库，上一版区间不丢，
-  按 `error` 原样报告，不要重试或手工补行业。
+  按 `error` 原样报告，不要重试或手工补行业。同一内容再观测一次只是延长区间
+  （`no_change`）；内容变回旧内容会开新区间。若观测会移动已公布区间的起点，
+  日更 fail-closed，走 `source_store replay --scope industry`。
 - **没有规则时涨跌停派生是 `unknown`，这是正确结果**，不要用 `price_limit_rules`
   的空结果去推断涨跌停价，也不要自行按 10% 计算。
 - M2 item 失败**不影响**已提交的实体 item（不回滚），所以实体补漏仍按 §3.3 走。

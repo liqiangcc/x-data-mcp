@@ -19,18 +19,28 @@
 //!
 //! Interval rules (§5.1/§5.2), all of them "never earlier than we can prove":
 //!
-//! - a code present in adjacent snapshots with the same `(t_code, x_code)`
-//!   does not open a new row, it extends the interval;
-//! - a changed mapping closes the old interval at the new snapshot's start and
-//!   opens a new one;
-//! - a code that disappeared from a snapshot closes at *that snapshot's start*
-//!   (we can only prove "not in it from this observation on");
-//! - two snapshots on one day are ordered by `(ingested_at, member_sha256)`;
-//!   the later one starts that same day and the earlier one's same-day segment
-//!   is zero-length and therefore not written — the collision is counted as a
+//! - the timeline is the **observation** sequence, not the set of contents: each
+//!   manifest registration is one observation, so a file that goes A → B → A was
+//!   changed twice and yields three intervals. Only *adjacent* observations of
+//!   the same content fold into one step, dated by the earliest publisher time in
+//!   that step (§5.3);
+//! - a code present in adjacent steps with the same `(t_code, x_code)` does not
+//!   open a new row, it extends the interval;
+//! - a changed mapping closes the old interval at the new step's start and opens
+//!   a new one;
+//! - a code that disappeared closes at *that step's start* (we can only prove
+//!   "not in it from this observation on");
+//! - two steps on one day are ordered by `(ingested_at, member_sha256)`; the
+//!   later one starts that same day and the earlier one's same-day segment is
+//!   zero-length and therefore not written — the collision is counted as a
 //!   diagnostic instead of being silently resolved;
-//! - grade C evidence (no publisher time, no manifest) is stored as a
-//!   snapshot but never produces an interval.
+//! - grade C evidence (no publisher time, no manifest) is stored as a snapshot
+//!   but never produces an interval.
+//!
+//! Storage and history answer different questions (§5.3): `industry_snapshots`
+//! keeps one row per content with the evidence merged over every registration of
+//! it, while the interval table distinguishes the same content seen at different
+//! times.
 //!
 //! `known_at` is when *this system* knew the content: the acquisition time for
 //! a forward generation, the import time for a backfilled archive. It is never
@@ -232,6 +242,110 @@ impl SnapshotRecord {
         let day = parse_day_prefix(observed)?;
         Ok(Some((epoch_day(day), Basis::AcquisitionTime)))
     }
+
+    /// §5.3 step 1: several registrations of one content describe **one**
+    /// snapshot. The merged record keeps the earliest non-empty publisher time,
+    /// the earliest observation and ingestion times and the best evidence
+    /// grade; the content-identifying fields come from the earliest
+    /// registration.
+    ///
+    /// `known_at` is deliberately *not* merged here: it is a property of an
+    /// observation, and the run merge adds the observations' knowledge times
+    /// explicitly (one record cannot see the others').
+    pub fn merged_with(&self, other: &Self) -> SnapshotRecord {
+        let self_first = (
+            self.ingested_at.as_str(),
+            self.observed_at.as_deref().unwrap_or(""),
+        ) <= (
+            other.ingested_at.as_str(),
+            other.observed_at.as_deref().unwrap_or(""),
+        );
+        let (base, extra) = if self_first {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        SnapshotRecord {
+            member_sha256: base.member_sha256.clone(),
+            store_sha256: base.store_sha256.clone(),
+            base_zip_sha256: base.base_zip_sha256.clone(),
+            generation_manifest_sha256: base.generation_manifest_sha256.clone(),
+            source_kind: base.source_kind,
+            publisher_last_modified: earliest_publisher_time(
+                base.publisher_last_modified.as_deref(),
+                extra.publisher_last_modified.as_deref(),
+            ),
+            observed_at: earliest_timestamp(
+                base.observed_at.as_deref(),
+                extra.observed_at.as_deref(),
+            ),
+            ingested_at: earliest_timestamp(
+                Some(base.ingested_at.as_str()),
+                Some(extra.ingested_at.as_str()),
+            )
+            .unwrap_or_else(|| base.ingested_at.clone()),
+            imported_at: earliest_timestamp(
+                base.imported_at.as_deref(),
+                extra.imported_at.as_deref(),
+            ),
+            evidence_grade: best_grade(&base.evidence_grade, &extra.evidence_grade),
+            parser_version: base.parser_version.clone(),
+            row_count: base.row_count,
+            scope_member_count: base.scope_member_count,
+            dictionary_sha256: base
+                .dictionary_sha256
+                .clone()
+                .or_else(|| extra.dictionary_sha256.clone()),
+            notes: base.notes.clone().or_else(|| extra.notes.clone()),
+        }
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+/// The earlier of two publisher times, compared by the day they name: the
+/// archive keeps both HTTP-dates and RFC 3339 spellings of the same moment.
+fn earliest_publisher_time(left: Option<&str>, right: Option<&str>) -> Option<String> {
+    let (left, right) = match (non_empty(left), non_empty(right)) {
+        (Some(left), Some(right)) => (left, right),
+        (Some(only), None) | (None, Some(only)) => return Some(only.to_string()),
+        (None, None) => return None,
+    };
+    let left_first = match (
+        parse_publisher_day(left).ok(),
+        parse_publisher_day(right).ok(),
+    ) {
+        (Some(left_day), Some(right_day)) => (left_day, left) <= (right_day, right),
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        (None, None) => left <= right,
+    };
+    let earliest = if left_first { left } else { right };
+    Some(earliest.to_string())
+}
+
+/// The earlier of two RFC 3339 timestamps (lexicographic order is chronological
+/// for that shape), keeping whichever side exists.
+fn earliest_timestamp(left: Option<&str>, right: Option<&str>) -> Option<String> {
+    match (non_empty(left), non_empty(right)) {
+        (Some(left), Some(right)) => {
+            let earliest = if left <= right { left } else { right };
+            Some(earliest.to_string())
+        }
+        (Some(only), None) | (None, Some(only)) => Some(only.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// `A` beats `B` beats `C`: the best evidence a run carries.
+fn best_grade(left: &str, right: &str) -> String {
+    if left <= right {
+        left.to_string()
+    } else {
+        right.to_string()
+    }
 }
 
 /// Everything one snapshot contributes to a rebuild: its metadata, its parsed
@@ -283,7 +397,9 @@ pub struct Rebuild {
     pub snapshots: Vec<SnapshotRecord>,
     /// Intervals, ordered by `(exchange, code, effective_from)`.
     pub assignments: Vec<AssignmentRow>,
-    /// Distinct snapshot start dates that produced intervals (the "boundaries").
+    /// Timeline runs — adjacent identical observations folded into one step —
+    /// that defined an interval (the "boundaries"). A content that comes back
+    /// after a different one counts again: A → B → A is three.
     pub boundaries: usize,
     /// Same-day collisions where a later snapshot superseded an earlier
     /// same-day mapping (zero-length segments are not written).
@@ -369,61 +485,72 @@ pub fn parse_dictionary(bytes: &[u8]) -> Result<Option<BTreeMap<String, String>>
     Ok(Some(dictionary))
 }
 
-/// One distinct snapshot during a rebuild: its record, its interval boundary
-/// (`None` for grade C, which never defines an interval), and its parsed
-/// members + dictionary.
-struct RebuildInput<'a> {
-    record: &'a SnapshotRecord,
-    boundary: Option<(i64, Basis)>,
-    facts: &'a SnapshotFacts,
+/// One timeline step handed to [`Segments`]: the content, the merged evidence
+/// of the run it belongs to, and the dictionary that names it. `rebuild` and
+/// `apply_on` share this shape on purpose — an appended observation and a
+/// replayed one cannot diverge.
+struct Step<'a> {
+    member_sha256: &'a str,
+    members: &'a [IndustryMember],
+    dictionary: &'a BTreeMap<String, String>,
+    dictionary_present: bool,
+    /// Interval start of this step (§5.2).
+    day: i64,
+    basis: Basis,
+    /// When this system knew the content (§5.2) — never a file mtime.
+    known_at: &'a str,
+    evidence_grade: &'a str,
 }
 
-/// Deterministic rebuild of the snapshot list and the assignment intervals
-/// from a set of snapshot facts. This is the *only* implementation of §5.1:
-/// the daily item and `replay --scope industry` both call it, which is what
-/// makes "clear the DB and replay" reproduce the same table contents.
-///
-/// Ordering: snapshots by `(ingested_at, member_sha256)` (append order — the
-/// registration order is the observation order); intervals by
-/// `(effective_from, ingested_at, member_sha256)` (§9.4.2), so two snapshots
-/// sharing a day are resolved the same way every run.
-pub fn rebuild(inputs: &[SnapshotFacts]) -> Result<Rebuild, Error> {
-    let mut snapshot_records: Vec<RebuildInput<'_>> = Vec::with_capacity(inputs.len());
-    let mut seen: BTreeSet<&str> = BTreeSet::new();
-    for facts in inputs {
-        if !seen.insert(facts.record.member_sha256.as_str()) {
-            // One content is one snapshot: a second manifest record naming the
-            // same bytes is the same fact registered twice (§5.3 dedupe).
-            continue;
-        }
-        let boundary = facts.record.boundary()?;
-        snapshot_records.push(RebuildInput {
-            record: &facts.record,
-            boundary,
-            facts,
-        });
-    }
-    snapshot_records.sort_by(|left, right| {
-        left.record
-            .ingested_at
-            .cmp(&right.record.ingested_at)
-            .then_with(|| left.record.member_sha256.cmp(&right.record.member_sha256))
-    });
+/// How an incoming observation relates to the newest stored run (§5.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunLink {
+    /// The observation right before it carried the same content: this one
+    /// extends that run, so the run's evidence may be improved in place.
+    Continue,
+    /// A different observation. Even a *known* content starts its own run here:
+    /// a file that goes A → B → A was changed twice, and folding the two `A`
+    /// observations into one would leave the history stuck at `B`.
+    Fresh,
+}
 
-    let mut segments = Segments::default();
-    let mut boundaries: BTreeSet<i64> = BTreeSet::new();
-    let mut interval_inputs: Vec<(&SnapshotFacts, i64, Basis)> = Vec::new();
-    for input in &snapshot_records {
-        let Some((day, basis)) = input.boundary else {
+/// Deterministic rebuild of the snapshot list and the assignment intervals from
+/// a set of observations. This is the *only* implementation of §5.1: the daily
+/// item and `replay --scope industry` both end up here, which is what makes
+/// "clear the DB and replay" reproduce the same table contents.
+///
+/// Two different dedupe rules, because storage and history are not the same
+/// question (§5.3):
+///
+/// - **storage** keeps one row per content, with the evidence merged over every
+///   registration of it (earliest publisher time, earliest observation, best
+///   grade);
+/// - **the timeline** keeps every registration. Observations are ordered by
+///   `(interval start, ingested_at, member_sha256)` (§9.4.2) and only *adjacent*
+///   observations of the same content fold into one interval, with the earliest
+///   publisher time of the run as its start.
+pub fn rebuild(observations: &[SnapshotFacts]) -> Result<Rebuild, Error> {
+    let mut stored: BTreeMap<&str, SnapshotRecord> = BTreeMap::new();
+    for facts in observations {
+        let record = &facts.record;
+        match stored.get_mut(record.member_sha256.as_str()) {
+            Some(merged) => *merged = merged.merged_with(record),
+            None => {
+                stored.insert(record.member_sha256.as_str(), record.clone());
+            }
+        }
+    }
+
+    // Grade C is stored but never defines an interval (§5.3), so it takes no
+    // part in the timeline at all.
+    let mut timeline: Vec<(&SnapshotFacts, i64, Basis)> = Vec::new();
+    for facts in observations {
+        let Some((day, basis)) = facts.record.boundary()? else {
             continue;
         };
-        boundaries.insert(day);
-        interval_inputs.push((input.facts, day, basis));
+        timeline.push((facts, day, basis));
     }
-    // §9.4.2 sort key: (effective_from, ingested_at, sha256). `interval_inputs`
-    // inherits snapshot append order from `snapshot_records`, which is already
-    // `(ingested_at, sha256)`, so sorting on the day completes the key.
-    interval_inputs.sort_by(|left, right| {
+    timeline.sort_by(|left, right| {
         left.1
             .cmp(&right.1)
             .then_with(|| left.0.record.ingested_at.cmp(&right.0.record.ingested_at))
@@ -434,49 +561,88 @@ pub fn rebuild(inputs: &[SnapshotFacts]) -> Result<Rebuild, Error> {
                     .cmp(&right.0.record.member_sha256)
             })
     });
-    for (facts, day, basis) in interval_inputs {
-        segments.apply(facts, day, basis)?;
+
+    let mut segments = Segments::default();
+    let mut steps = 0usize;
+    let mut cursor = 0usize;
+    while cursor < timeline.len() {
+        let mut end = cursor + 1;
+        while end < timeline.len()
+            && timeline[end].0.record.member_sha256 == timeline[cursor].0.record.member_sha256
+        {
+            end += 1;
+        }
+        let run = &timeline[cursor..end];
+        // §5.3: one interval per run, dated by the earliest publisher time in
+        // it, else by the earliest acquisition time, with the best grade and the
+        // earliest knowledge time of its observations.
+        let mut merged = run[0].0.record.clone();
+        let mut known_at = run[0].0.record.known_at();
+        for (facts, _, _) in &run[1..] {
+            merged = merged.merged_with(&facts.record);
+            if facts.record.known_at() < known_at {
+                known_at = facts.record.known_at();
+            }
+        }
+        let Some((day, basis)) = merged.boundary()? else {
+            return Err(Error::Invalid(format!(
+                "the run of {} lost its interval boundary in the metadata merge",
+                merged.member_sha256
+            )));
+        };
+        steps += 1;
+        let step = Step {
+            member_sha256: &merged.member_sha256,
+            members: &run[0].0.members,
+            dictionary: &run[0].0.dictionary,
+            dictionary_present: run[0].0.dictionary_present,
+            day,
+            basis,
+            known_at: &known_at,
+            evidence_grade: &merged.evidence_grade,
+        };
+        segments.apply(&step, RunLink::Fresh)?;
+        cursor = end;
     }
 
     let superseded = segments.superseded;
     let assignments = segments.into_rows();
+    let mut snapshots: Vec<SnapshotRecord> = stored.into_values().collect();
+    snapshots.sort_by(|left, right| {
+        left.ingested_at
+            .cmp(&right.ingested_at)
+            .then_with(|| left.member_sha256.cmp(&right.member_sha256))
+    });
     Ok(Rebuild {
-        snapshots: snapshot_records
-            .into_iter()
-            .map(|input| input.record.clone())
-            .collect(),
+        snapshots,
         assignments,
-        boundaries: boundaries.len(),
+        boundaries: steps,
         superseded,
     })
 }
 
-/// Apply one snapshot on top of the stored intervals — the daily item path.
+/// Apply one observation on top of the stored intervals — the daily item path.
 ///
-/// A daily generation always observes a *later* state than what is stored, so
-/// a snapshot that starts before the stored coverage is a backfill and must go
+/// A daily generation always observes a *later* state than what is stored, so a
+/// snapshot that starts before the stored coverage is a backfill and must go
 /// through `replay --scope industry`, which recomputes the whole table from the
 /// source store (§5.3). Rejecting it here keeps the two paths from ever
 /// disagreeing: the stored table can only be extended forward by this function.
+///
+/// `link` says whether the observation continues the newest run. A content that
+/// was seen before but is *not* the previous observation opens a new interval
+/// (A → B → A), so nothing here looks the content up in the table.
 ///
 /// Grade C evidence is stored as a snapshot but contributes no interval, so the
 /// rows come back unchanged.
 pub fn apply_on(
     existing: &[AssignmentRow],
     facts: &SnapshotFacts,
+    link: RunLink,
 ) -> Result<(Vec<AssignmentRow>, usize), Error> {
     let Some((day, basis)) = facts.record.boundary()? else {
         return Ok((existing.to_vec(), 0));
     };
-    if existing
-        .iter()
-        .any(|row| row.snapshot_member_sha256 == facts.record.member_sha256)
-    {
-        // The content is already represented: the DB writer short-circuits on
-        // `member_sha256` before it gets here, and this keeps the pure function
-        // idempotent for a caller that does not (`apply_on` twice is a no-op).
-        return Ok((existing.to_vec(), 0));
-    }
     if let Some(current) = existing.iter().map(|row| row.effective_from).max()
         && current > day
     {
@@ -486,8 +652,19 @@ pub fn apply_on(
             facts.record.member_sha256, day, current
         )));
     }
+    let known_at = facts.record.known_at();
+    let step = Step {
+        member_sha256: &facts.record.member_sha256,
+        members: &facts.members,
+        dictionary: &facts.dictionary,
+        dictionary_present: facts.dictionary_present,
+        day,
+        basis,
+        known_at: &known_at,
+        evidence_grade: &facts.record.evidence_grade,
+    };
     let mut segments = Segments::from_rows(existing)?;
-    segments.apply(facts, day, basis)?;
+    segments.apply(&step, link)?;
     let superseded = segments.superseded;
     Ok((segments.into_rows(), superseded))
 }
@@ -552,18 +729,18 @@ impl Segments {
         })
     }
 
-    fn apply(&mut self, facts: &SnapshotFacts, day: i64, basis: Basis) -> Result<(), Error> {
-        let record = &facts.record;
-        let present: BTreeSet<(String, String)> = facts
+    fn apply(&mut self, step: &Step<'_>, link: RunLink) -> Result<(), Error> {
+        let day = step.day;
+        let present: BTreeSet<(String, String)> = step
             .members
             .iter()
             .map(|member| (member.exchange.clone(), member.code.clone()))
             .collect();
-        for member in &facts.members {
-            let (name, name_status) = if !facts.dictionary_present {
+        for member in step.members {
+            let (name, name_status) = if !step.dictionary_present {
                 (None, NameStatus::UnknownDictionary)
             } else {
-                match facts.dictionary.get(&member.industry_code) {
+                match step.dictionary.get(&member.industry_code) {
                     Some(name) => (Some(name.clone()), NameStatus::Resolved),
                     None => (None, NameStatus::NotInDictionary),
                 }
@@ -576,10 +753,10 @@ impl Segments {
                 name_status: name_status.as_str(),
                 effective_from: day,
                 effective_to: None,
-                known_at: record.known_at(),
-                basis: basis.as_str(),
-                evidence_grade: record.evidence_grade.clone(),
-                snapshot: record.member_sha256.clone(),
+                known_at: step.known_at.to_string(),
+                basis: step.basis.as_str(),
+                evidence_grade: step.evidence_grade.to_string(),
+                snapshot: step.member_sha256.to_string(),
             };
             let key = (member.exchange.clone(), member.code.clone());
             let segments = self.per_entity.entry(key).or_default();
@@ -593,8 +770,12 @@ impl Segments {
                         && last.industry_code == segment.industry_code
                         && last.t_code == segment.t_code;
                     if unchanged {
-                        // Extend the open interval; the evidence of the first
-                        // observation stays as it was (§5.1).
+                        // Extend the open interval. Inside one run the evidence
+                        // may still improve (§5.3); across runs it stays as
+                        // first written.
+                        if link == RunLink::Continue && last.snapshot == step.member_sha256 {
+                            improve_run_evidence(last, step)?;
+                        }
                         continue;
                     }
                     if last.effective_to.is_some() {
@@ -670,6 +851,36 @@ impl Segments {
         }
         rows
     }
+}
+
+/// §5.3 inside one run: the run keeps the earliest publisher time and the best
+/// evidence grade. Moving a published interval's start is a history rewrite, so
+/// the daily path refuses it and points at `replay --scope industry`, which
+/// recomputes the table from the source store.
+fn improve_run_evidence(last: &mut Segment, step: &Step<'_>) -> Result<(), Error> {
+    let run_has_publisher = last.basis == Basis::PublisherLastModified.as_str();
+    let incoming_has_publisher = step.basis == Basis::PublisherLastModified;
+    if incoming_has_publisher {
+        if run_has_publisher && step.day < last.effective_from {
+            return Err(Error::Invalid(format!(
+                "snapshot {} is dated {} but the open interval started {}: only a \
+                 source-store replay may move a published interval start",
+                step.member_sha256, step.day, last.effective_from
+            )));
+        }
+        if !run_has_publisher && step.day != last.effective_from {
+            return Err(Error::Invalid(format!(
+                "snapshot {} brings publisher time {} for an interval that opened on \
+                 acquisition time at {}: only a source-store replay may re-date it",
+                step.member_sha256, step.day, last.effective_from
+            )));
+        }
+        last.basis = Basis::PublisherLastModified.as_str();
+    }
+    if step.evidence_grade < last.evidence_grade.as_str() {
+        last.evidence_grade = step.evidence_grade.to_string();
+    }
+    Ok(())
 }
 
 /// The coverage start of the whole dataset: the earliest interval start, i.e.
@@ -939,6 +1150,18 @@ pub struct GenerationMembers<'a> {
     pub base_zip_sha256: &'a str,
 }
 
+/// What registering a generation's members produces: the observation itself and
+/// the observation it follows.
+pub struct GenerationSnapshot {
+    /// The observation this generation made.
+    pub facts: SnapshotFacts,
+    /// The `tdxhy.cfg` registration right before this one in the source store,
+    /// when there is one. The writer needs it to tell "the same content, seen
+    /// again" (one run) from "an older content, seen again" (a new interval,
+    /// A → B → A): the table cannot answer that, the observation log can.
+    pub previous_member_sha256: Option<String>,
+}
+
 /// Register a generation's industry members in the source store and build the
 /// snapshot facts the DB writer consumes (§9.4.1 write order: blob + manifest
 /// first, index rows afterwards).
@@ -954,7 +1177,7 @@ pub struct GenerationMembers<'a> {
 pub fn register_generation_members(
     store: &SourceStore,
     members: &GenerationMembers<'_>,
-) -> Result<SnapshotFacts, Error> {
+) -> Result<GenerationSnapshot, Error> {
     // The replay pairs a snapshot with its dictionary by `origin`, so the
     // member names must be the canonical ones the pairing rule knows; a
     // differently named member is refused instead of silently stored as
@@ -1001,7 +1224,7 @@ pub fn register_generation_members(
     let mut incon = crate::source_store::Registration::new(
         crate::source_store::INCON_SOURCE_ID,
         crate::source_store::StoreKind::GenerationMember,
-        origin,
+        origin.clone(),
         members.incon_observed_at,
     );
     incon.parser_version = Some(crate::source_store::INCON_PARSER_VERSION.to_string());
@@ -1031,11 +1254,22 @@ pub fn register_generation_members(
         // (a value only the daily path could set would drift on rebuild).
         notes: None,
     };
-    Ok(SnapshotFacts {
-        record,
-        members: parsed_members,
-        dictionary_present: dictionary.is_some(),
-        dictionary: dictionary.unwrap_or_default(),
+    // The observation log, not the table, says what came before (§5.3).
+    let previous_member_sha256 = store
+        .records()?
+        .iter()
+        .filter(|record| record.source_id == crate::source_store::TDXHY_SOURCE_ID)
+        .filter(|record| !(record.sha256 == member_sha256 && record.origin == origin))
+        .next_back()
+        .map(|record| record.sha256.clone());
+    Ok(GenerationSnapshot {
+        facts: SnapshotFacts {
+            record,
+            members: parsed_members,
+            dictionary_present: dictionary.is_some(),
+            dictionary: dictionary.unwrap_or_default(),
+        },
+        previous_member_sha256,
     })
 }
 

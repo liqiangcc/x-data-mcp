@@ -507,26 +507,34 @@ fn execute(
         )
         .map_err(|e| Error::Integrity(e.to_string()))?;
         let commit = market.commit_industry_snapshot(
-            &crate::sqlite_market::industry::IndustrySnapshotWrite { facts: &snapshot },
+            &crate::sqlite_market::industry::IndustrySnapshotWrite {
+                facts: &snapshot.facts,
+                previous_member_sha256: snapshot.previous_member_sha256.as_deref(),
+            },
         )?;
+        let record = &snapshot.facts.record;
         return Ok(json!({
             "dataset": item.item_id,
             // The snapshot content identity: the item's version, since the M3
             // tables carry no `derived_dataset_versions` registration (§5.1).
-            "version_id": snapshot.record.member_sha256,
-            "snapshot_sha256": snapshot.record.member_sha256,
-            "store_sha256": snapshot.record.store_sha256,
-            "source_kind": snapshot.record.source_kind.as_str(),
-            "evidence_grade": snapshot.record.evidence_grade,
-            "effective_from_basis": snapshot
-                .record
+            "version_id": record.member_sha256,
+            "snapshot_sha256": record.member_sha256,
+            "store_sha256": record.store_sha256,
+            "source_kind": record.source_kind.as_str(),
+            "evidence_grade": record.evidence_grade,
+            // A content re-observed inside one run (`A → A`) continues the open
+            // interval instead of opening a second one (§5.3); `A → B → A`
+            // does not, so the flag is the observation link, not a lookup.
+            "continues_run": snapshot.previous_member_sha256.as_deref()
+                == Some(record.member_sha256.as_str()),
+            "effective_from_basis": record
                 .boundary()
                 .ok()
                 .flatten()
                 .map(|(_, basis)| basis.as_str().to_string()),
-            "row_count": snapshot.record.row_count,
-            "scope_member_count": snapshot.record.scope_member_count,
-            "dictionary_sha256": snapshot.record.dictionary_sha256,
+            "row_count": record.row_count,
+            "scope_member_count": record.scope_member_count,
+            "dictionary_sha256": record.dictionary_sha256,
             "snapshot_rows": commit.snapshot_rows,
             "assignment_rows": commit.assignment_rows,
             "superseded_same_day": commit.superseded,

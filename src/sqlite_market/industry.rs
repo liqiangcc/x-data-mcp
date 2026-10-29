@@ -4,9 +4,10 @@
 //! Two writers, one shape:
 //!
 //! - [`commit_industry_snapshot`] is the daily `derived:industry_snapshot`
-//!   path: it appends one snapshot and extends the intervals forward. An
-//!   already-stored `member_sha256` is a `no_change` — the rows are left
-//!   untouched, which is what makes "same content, same fact" observable.
+//!   path: it appends one observation and extends the intervals forward. An
+//!   observation that continues the newest run changes nothing (`no_change`);
+//!   one that brings back a *previous* content opens a new interval, because a
+//!   file that went A → B → A was changed twice (§5.3).
 //! - [`replace_industry`] is the `replay --scope industry` path: the source
 //!   store is authoritative, so the whole table set is recomputed and written
 //!   in one transaction. A DB snapshot the store does not hold is
@@ -27,20 +28,25 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{integrity, storage};
 use crate::industry::{
-    self, AssignmentRow, SnapshotFacts, SnapshotRecord, SourceKind, parse_dictionary, parse_members,
+    self, AssignmentRow, IndustryMember, SnapshotFacts, SnapshotRecord, SourceKind,
+    parse_dictionary, parse_members,
 };
 use crate::market_storage::Error;
 use crate::source_store::{self, ManifestRecord, SourceStore, StoreKind};
 
-/// One daily-path write: the snapshot facts the item acquired.
+/// One daily-path write: the snapshot facts the item acquired, and the content
+/// of the observation that came before it in the source store (the item knows
+/// it: it just appended its own registration there).
 pub(crate) struct IndustrySnapshotWrite<'a> {
     pub facts: &'a SnapshotFacts,
+    pub previous_member_sha256: Option<&'a str>,
 }
 
 /// What the item reports, and what the replay verifies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IndustryCommit {
-    /// The content was already stored; nothing was written.
+    /// The observation changed nothing: the intervals and the stored snapshot
+    /// row already said exactly this.
     pub no_change: bool,
     pub snapshot_rows: i64,
     pub assignment_rows: i64,
@@ -70,34 +76,49 @@ pub(crate) fn commit_industry_snapshot(
 ) -> Result<IndustryCommit, Error> {
     let facts = write.facts;
     validate(facts)?;
-    let assignment_rows = count(c, "SELECT count(*) FROM industry_assignments")?;
-    let already = c
-        .query_row(
-            "SELECT 1 FROM industry_snapshots WHERE member_sha256=?1",
-            params![blob(&facts.record.member_sha256)?],
-            |_| Ok(()),
-        )
-        .optional()
-        .map_err(storage)?
-        .is_some();
-    if already {
-        // Same content is the same fact: no snapshot row is re-stamped and no
-        // interval is reopened (§5.1, `no_change`).
+    // Whether this observation continues the newest run is a fact about the
+    // observation sequence, not about the table: a content that came back after
+    // a different one must open a new interval even though its `member_sha256`
+    // is already stored (§5.3).
+    let link = if write.previous_member_sha256 == Some(facts.record.member_sha256.as_str()) {
+        industry::RunLink::Continue
+    } else {
+        industry::RunLink::Fresh
+    };
+    let stored = read_assignments(c)?;
+    let (rows, superseded) = industry::apply_on(&stored, facts, link)
+        .map_err(|error| Error::Integrity(error.to_string()))?;
+    // §5.3 step 1 for storage: one row per content, its evidence merged over
+    // every registration. The row is only rewritten when the merge actually
+    // improves a stored column.
+    let existing = read_snapshot(c, &facts.record.member_sha256)?;
+    let merged = existing
+        .as_ref()
+        .map(|stored| stored.merged_with(&facts.record));
+    let snapshot_changed = match (&existing, &merged) {
+        (Some(stored), Some(merged)) => stored_metadata(stored) != stored_metadata(merged),
+        _ => true,
+    };
+    if rows == stored && !snapshot_changed {
+        // A repeated observation inside one run: the intervals keep their
+        // evidence and the snapshot row is already the merge of both.
         return Ok(IndustryCommit {
             no_change: true,
             snapshot_rows: count(c, "SELECT count(*) FROM industry_snapshots")?,
-            assignment_rows,
+            assignment_rows: count(c, "SELECT count(*) FROM industry_assignments")?,
             superseded: 0,
         });
     }
-    let stored: Vec<AssignmentRow> = read_assignments(c)?;
-    let (rows, superseded) =
-        industry::apply_on(&stored, facts).map_err(|error| Error::Integrity(error.to_string()))?;
-    insert_snapshot(c, &facts.record)?;
-    c.execute("DELETE FROM industry_assignments", [])
-        .map_err(storage)?;
-    for row in &rows {
-        insert_assignment(c, row)?;
+    match merged {
+        Some(merged) => update_snapshot(c, &merged)?,
+        None => insert_snapshot(c, &facts.record)?,
+    }
+    if rows != stored {
+        c.execute("DELETE FROM industry_assignments", [])
+            .map_err(storage)?;
+        for row in &rows {
+            insert_assignment(c, row)?;
+        }
     }
     Ok(IndustryCommit {
         no_change: false,
@@ -105,6 +126,47 @@ pub(crate) fn commit_industry_snapshot(
         assignment_rows: count(c, "SELECT count(*) FROM industry_assignments")?,
         superseded,
     })
+}
+
+/// The four columns a re-registration of the same content may improve (§5.3).
+fn stored_metadata(record: &SnapshotRecord) -> (&str, Option<&str>, Option<&str>, &str) {
+    (
+        record.ingested_at.as_str(),
+        record.observed_at.as_deref(),
+        record.publisher_last_modified.as_deref(),
+        record.evidence_grade.as_str(),
+    )
+}
+
+fn read_snapshot(c: &Connection, member_sha256: &str) -> Result<Option<SnapshotRecord>, Error> {
+    let mut statement = c
+        .prepare(&format!(
+            "SELECT {SNAPSHOT_COLUMNS} FROM industry_snapshots WHERE member_sha256=?1"
+        ))
+        .map_err(storage)?;
+    statement
+        .query_row(params![blob(member_sha256)?], snapshot_from_row)
+        .optional()
+        .map_err(storage)
+}
+
+/// §5.3 step 1 for storage: rewrite the four columns a later registration of the
+/// same content may improve. Identity, counts and parser version are content
+/// facts and never change for one `member_sha256`.
+fn update_snapshot(c: &Connection, record: &SnapshotRecord) -> Result<(), Error> {
+    c.execute(
+        "UPDATE industry_snapshots SET publisher_last_modified=?2, observed_at=?3, \
+         ingested_at=?4, evidence_grade=?5 WHERE member_sha256=?1",
+        params![
+            blob(&record.member_sha256)?,
+            record.publisher_last_modified,
+            record.observed_at,
+            record.ingested_at,
+            record.evidence_grade,
+        ],
+    )
+    .map_err(storage)?;
+    Ok(())
 }
 
 /// The replay write: the store's snapshot set is authoritative. Any index row
@@ -172,39 +234,41 @@ pub(crate) fn read_snapshots(c: &Connection) -> Result<Vec<SnapshotRecord>, Erro
         ))
         .map_err(storage)?;
     let rows = statement
-        .query_map([], |row| {
-            let source_kind: String = row.get(4)?;
-            let source_kind = SourceKind::parse(&source_kind).ok_or_else(|| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    4,
-                    rusqlite::types::Type::Text,
-                    Box::new(std::io::Error::other(format!(
-                        "industry_snapshots.source_kind {source_kind:?}"
-                    ))),
-                )
-            })?;
-            let member_sha256: Vec<u8> = row.get(0)?;
-            let store_sha256: Vec<u8> = row.get(1)?;
-            Ok(SnapshotRecord {
-                member_sha256: hex(member_sha256),
-                store_sha256: hex(store_sha256),
-                base_zip_sha256: optional_hex(row.get(2)?),
-                generation_manifest_sha256: optional_hex(row.get(3)?),
-                source_kind,
-                publisher_last_modified: row.get(5)?,
-                observed_at: row.get(6)?,
-                ingested_at: row.get(7)?,
-                imported_at: None,
-                evidence_grade: row.get(8)?,
-                parser_version: row.get(9)?,
-                row_count: row.get(10)?,
-                scope_member_count: row.get(11)?,
-                dictionary_sha256: optional_hex(row.get(12)?),
-                notes: row.get(13)?,
-            })
-        })
+        .query_map([], snapshot_from_row)
         .map_err(storage)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(storage)
+}
+
+fn snapshot_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SnapshotRecord> {
+    let source_kind: String = row.get(4)?;
+    let source_kind = SourceKind::parse(&source_kind).ok_or_else(|| {
+        rusqlite::Error::FromSqlConversionFailure(
+            4,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::other(format!(
+                "industry_snapshots.source_kind {source_kind:?}"
+            ))),
+        )
+    })?;
+    let member_sha256: Vec<u8> = row.get(0)?;
+    let store_sha256: Vec<u8> = row.get(1)?;
+    Ok(SnapshotRecord {
+        member_sha256: hex(member_sha256),
+        store_sha256: hex(store_sha256),
+        base_zip_sha256: optional_hex(row.get(2)?),
+        generation_manifest_sha256: optional_hex(row.get(3)?),
+        source_kind,
+        publisher_last_modified: row.get(5)?,
+        observed_at: row.get(6)?,
+        ingested_at: row.get(7)?,
+        imported_at: None,
+        evidence_grade: row.get(8)?,
+        parser_version: row.get(9)?,
+        row_count: row.get(10)?,
+        scope_member_count: row.get(11)?,
+        dictionary_sha256: optional_hex(row.get(12)?),
+        notes: row.get(13)?,
+    })
 }
 
 /// Stored interval rows in primary-key order.
@@ -246,23 +310,29 @@ pub(crate) fn facts_from_store(store: &SourceStore) -> Result<Vec<SnapshotFacts>
     let records = store
         .records()
         .map_err(|error| Error::Integrity(error.to_string()))?;
+    // Every registration is an observation (§5.3): the same bytes observed twice
+    // are two points in the timeline, even though storage keeps one row. Parsing
+    // is content addressed, so the duplicates share one parse.
+    let mut parsed: BTreeMap<String, (i64, Vec<IndustryMember>)> = BTreeMap::new();
+    let mut dictionaries: BTreeMap<String, Option<BTreeMap<String, String>>> = BTreeMap::new();
     let mut snapshots: Vec<SnapshotFacts> = Vec::new();
-    let mut seen: BTreeSet<String> = BTreeSet::new();
     for record in &records {
         if record.source_id != source_store::TDXHY_SOURCE_ID {
             continue;
         }
-        if !seen.insert(record.sha256.clone()) {
-            // The first registration of a content wins (§5.3 dedupe): later
-            // lines for the same bytes only widen the evidence trail.
-            continue;
-        }
-        let bytes = store
-            .read_verified(&record.sha256)
-            .map_err(|error| Error::Integrity(error.to_string()))?;
-        let (row_count, members) =
-            parse_members(&bytes).map_err(|error| Error::Integrity(error.to_string()))?;
-        let paired = dictionary_for(store, &records, record)?;
+        let (row_count, members) = match parsed.get(&record.sha256) {
+            Some(cached) => cached.clone(),
+            None => {
+                let bytes = store
+                    .read_verified(&record.sha256)
+                    .map_err(|error| Error::Integrity(error.to_string()))?;
+                let value =
+                    parse_members(&bytes).map_err(|error| Error::Integrity(error.to_string()))?;
+                parsed.insert(record.sha256.clone(), value.clone());
+                value
+            }
+        };
+        let paired = dictionary_for(store, &records, record, &mut dictionaries)?;
         snapshots.push(SnapshotFacts {
             record: snapshot_record(record, row_count, members.len(), paired.sha256)?,
             members,
@@ -286,6 +356,7 @@ fn dictionary_for(
     store: &SourceStore,
     records: &[ManifestRecord],
     tdxhy: &ManifestRecord,
+    cache: &mut BTreeMap<String, Option<BTreeMap<String, String>>>,
 ) -> Result<PairedDictionary, Error> {
     let absent = PairedDictionary {
         names: None,
@@ -301,10 +372,18 @@ fn dictionary_for(
     let Some(sibling) = sibling else {
         return Ok(absent);
     };
-    let bytes = store
-        .read_verified(&sibling.sha256)
-        .map_err(|error| Error::Integrity(error.to_string()))?;
-    let names = parse_dictionary(&bytes).map_err(|error| Error::Integrity(error.to_string()))?;
+    let names = match cache.get(&sibling.sha256) {
+        Some(cached) => cached.clone(),
+        None => {
+            let bytes = store
+                .read_verified(&sibling.sha256)
+                .map_err(|error| Error::Integrity(error.to_string()))?;
+            let names =
+                parse_dictionary(&bytes).map_err(|error| Error::Integrity(error.to_string()))?;
+            cache.insert(sibling.sha256.clone(), names.clone());
+            names
+        }
+    };
     Ok(PairedDictionary {
         names,
         sha256: Some(sibling.sha256.clone()),
@@ -377,8 +456,14 @@ fn snapshot_record(
         generation_manifest_sha256: generation_manifest(&record.origin),
         source_kind,
         publisher_last_modified: record.publisher_last_modified.clone(),
+        // `observed_at` is when the bytes were fetched (an archive index keeps
+        // the historical fetch time); `ingested_at` is when *this system* first
+        // held them, i.e. the import time for a backfill (§5.2).
         observed_at: Some(record.acquired_at.clone()),
-        ingested_at: record.acquired_at.clone(),
+        ingested_at: record
+            .imported_at
+            .clone()
+            .unwrap_or_else(|| record.acquired_at.clone()),
         imported_at: record.imported_at.clone(),
         evidence_grade,
         parser_version,
@@ -653,15 +738,15 @@ mod tests {
         }
     }
 
-    /// Register one generation's members in the store and return the facts the
-    /// daily item would commit.
+    /// Register one generation's members in the store and return the
+    /// observation the daily item would commit.
     fn generation(
         store: &SourceStore,
         manifest: &str,
         cfg_bytes: &[u8],
         last_modified: Option<&str>,
         observed: &str,
-    ) -> SnapshotFacts {
+    ) -> crate::industry::GenerationSnapshot {
         crate::industry::register_generation_members(
             store,
             &GenerationMembers {
@@ -678,6 +763,20 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    /// The daily item's write: the observation plus the link the source store
+    /// just told us.
+    fn commit(
+        backend: &MarketBackend,
+        snapshot: &crate::industry::GenerationSnapshot,
+    ) -> IndustryCommit {
+        backend
+            .commit_industry_snapshot(&IndustrySnapshotWrite {
+                facts: &snapshot.facts,
+                previous_member_sha256: snapshot.previous_member_sha256.as_deref(),
+            })
+            .unwrap()
     }
 
     #[test]
@@ -727,18 +826,16 @@ mod tests {
                 Some(*last_modified),
                 observed,
             );
-            let commit = backend
-                .commit_industry_snapshot(&IndustrySnapshotWrite { facts: &facts })
-                .unwrap();
-            assert!(!commit.no_change);
-            first_commit = Some(commit);
+            let written = commit(&backend, &facts);
+            assert!(!written.no_change);
+            first_commit = Some(written);
         }
-        let commit = first_commit.unwrap();
-        assert_eq!(commit.snapshot_rows, 3);
+        let last_write = first_commit.unwrap();
+        assert_eq!(last_write.snapshot_rows, 3);
         // v1: 2 rows; v2 closes 000001 at 10-12 and opens a new one (+1 net)
         // and adds 000003 (+1) → 4; v3 closes 000001 at 10-16 (600006 and
         // 000003 are unchanged) → still 4.
-        assert_eq!(commit.assignment_rows, 4);
+        assert_eq!(last_write.assignment_rows, 4);
         let daily_summary = fixture.summary();
         let (snapshots, assignments) = fixture.rows();
         assert_eq!(snapshots.len(), 3);
@@ -754,10 +851,8 @@ mod tests {
             Some("Fri, 16 Oct 2026 08:00:00 GMT"),
             "2026-10-16T09:00:00Z",
         );
-        let again = backend
-            .commit_industry_snapshot(&IndustrySnapshotWrite { facts: &facts })
-            .unwrap();
-        assert!(again.no_change);
+        let again = commit(&backend, &facts);
+        assert!(again.no_change, "{again:?}");
         assert_eq!(fixture.summary(), daily_summary);
         drop(backend);
 
@@ -814,6 +909,167 @@ mod tests {
             fixture.rows().0.is_empty(),
             "a read must not write the database"
         );
+    }
+
+    #[test]
+    fn a_re_observation_upgrades_the_evidence_without_moving_the_interval() {
+        let fixture = Fixture::new();
+        let store = fixture.store();
+        let bytes = cfg(&[(0, "000001", "T1001", "X500102")]);
+        let backend = fixture.backend();
+        // First observation: the file arrived without a publisher time, so it
+        // is grade B and dated by the acquisition day.
+        let first = generation(
+            &store,
+            &format!("{}1", "d".repeat(63)),
+            &bytes,
+            None,
+            "2026-10-12T09:00:00Z",
+        );
+        assert!(!commit(&backend, &first).no_change);
+        let (snapshots, assignments) = fixture.rows();
+        assert_eq!(snapshots[0].evidence_grade, "B");
+        assert!(snapshots[0].publisher_last_modified.is_none());
+        assert_eq!(assignments[0].basis, "acquisition_time");
+
+        // The same bytes, seen again with the publisher time that belongs to
+        // them. Same day, so the interval cannot move; §5.3 lets the evidence
+        // improve in place instead of keeping the weaker first registration.
+        let second = generation(
+            &store,
+            &format!("{}2", "d".repeat(63)),
+            &bytes,
+            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
+            "2026-10-12T21:00:00Z",
+        );
+        assert_eq!(
+            second.previous_member_sha256.as_deref(),
+            Some(first.facts.record.member_sha256.as_str())
+        );
+        assert!(!commit(&backend, &second).no_change);
+        let daily = fixture.summary();
+        let (snapshots, assignments) = fixture.rows();
+        assert_eq!(snapshots.len(), 1, "one content, one row, better evidence");
+        assert_eq!(
+            snapshots[0].publisher_last_modified.as_deref(),
+            Some("Mon, 12 Oct 2026 00:00:00 GMT")
+        );
+        assert_eq!(snapshots[0].evidence_grade, "A");
+        assert_eq!(assignments.len(), 1, "the interval does not move or split");
+        assert_eq!(assignments[0].basis, "publisher_last_modified");
+        assert_eq!(assignments[0].evidence_grade, "A");
+        assert_eq!(
+            assignments[0].effective_from,
+            crate::industry::epoch_day(chrono::NaiveDate::from_ymd_opt(2026, 10, 12).unwrap())
+        );
+        assert_eq!(
+            assignments[0].known_at, "2026-10-12T09:00:00Z",
+            "the earliest knowledge time of the run is kept"
+        );
+
+        // And the replayed table is the same one the daily path maintains.
+        drop(backend);
+        fixture.clear_industry();
+        let request = crate::source_store::replay::ReplayRequest::new(
+            Some(crate::source_store::replay::Scope::Industry),
+            false,
+            Some(fixture.path.as_path()),
+        );
+        let report = crate::source_store::replay::replay(&store, &request).unwrap();
+        assert_eq!(report.status, "ok", "{report:?}");
+        assert_eq!(report.scopes[0].database, Some("match"));
+        assert_eq!(fixture.summary(), daily);
+    }
+
+    #[test]
+    fn a_content_that_comes_back_writes_a_third_interval_and_replays_the_same() {
+        let fixture = Fixture::new();
+        let store = fixture.store();
+        let a = cfg(&[
+            (0, "000001", "T1001", "X500102"),
+            (1, "600006", "T1001", "X500102"),
+        ]);
+        let b = cfg(&[
+            (0, "000001", "T1001", "X500202"),
+            (1, "600006", "T1001", "X500102"),
+        ]);
+        let observations = [
+            (
+                a.as_slice(),
+                "1",
+                "Wed, 30 Sep 2026 08:00:00 GMT",
+                "2026-09-30T09:00:00Z",
+            ),
+            (
+                b.as_slice(),
+                "2",
+                "Mon, 12 Oct 2026 08:00:00 GMT",
+                "2026-10-12T09:00:00Z",
+            ),
+            // The publisher reverted the file: the first observation's bytes,
+            // seen again two weeks later. It is a new observation, not a
+            // duplicate of the stored snapshot.
+            (
+                a.as_slice(),
+                "3",
+                "Fri, 16 Oct 2026 08:00:00 GMT",
+                "2026-10-16T09:00:00Z",
+            ),
+        ];
+        let backend = fixture.backend();
+        for (bytes, manifest, last_modified, observed) in observations {
+            let snapshot = generation(
+                &store,
+                &format!("{}{manifest}", "a".repeat(63)),
+                bytes,
+                Some(last_modified),
+                observed,
+            );
+            let written = commit(&backend, &snapshot);
+            assert!(!written.no_change, "{written:?}");
+        }
+        drop(backend);
+
+        let daily = fixture.summary();
+        let (snapshots, assignments) = fixture.rows();
+        assert_eq!(
+            snapshots.len(),
+            2,
+            "storage keeps one row per content: A, B"
+        );
+        let reclassified: Vec<&AssignmentRow> = assignments
+            .iter()
+            .filter(|row| row.code == "000001")
+            .collect();
+        assert_eq!(reclassified.len(), 3, "A → B → A is two changes");
+        assert_eq!(reclassified[0].industry_code, "X5001");
+        assert_eq!(reclassified[1].industry_code, "X5002");
+        assert_eq!(reclassified[2].industry_code, "X5001");
+        assert_eq!(reclassified[2].effective_to, None);
+        // The code that never changed keeps one interval across all three.
+        assert_eq!(
+            assignments
+                .iter()
+                .filter(|row| row.code == "600006")
+                .count(),
+            1
+        );
+
+        // The source store is the only durable copy: replaying it must produce
+        // the same three intervals, not the two a content-keyed dedupe leaves.
+        fixture.clear_industry();
+        let request = crate::source_store::replay::ReplayRequest::new(
+            Some(crate::source_store::replay::Scope::Industry),
+            false,
+            Some(fixture.path.as_path()),
+        );
+        let report = crate::source_store::replay::replay(&store, &request).unwrap();
+        assert_eq!(report.status, "ok", "{report:?}");
+        let scope = &report.scopes[0];
+        assert_eq!(scope.database, Some("match"));
+        assert_eq!(scope.summary.as_deref(), Some(daily.as_str()));
+        assert_eq!(scope.boundaries, Some(3));
+        assert_eq!(fixture.summary(), daily);
     }
 
     #[test]
@@ -879,13 +1135,11 @@ mod tests {
             Some("Wed, 30 Sep 2026 08:00:00 GMT"),
             "2026-09-30T09:00:00Z",
         );
-        backend
-            .commit_industry_snapshot(&IndustrySnapshotWrite { facts: &facts })
-            .unwrap();
+        commit(&backend, &facts);
         drop(backend);
         // Drop the blob: the store no longer proves the content its manifest
         // still names, so nothing may be rebuilt from it (§9.4.1).
-        std::fs::remove_file(store.blob_path(&facts.record.member_sha256)).unwrap();
+        std::fs::remove_file(store.blob_path(&facts.facts.record.member_sha256)).unwrap();
 
         let request = crate::source_store::replay::ReplayRequest::new(
             Some(crate::source_store::replay::Scope::Industry),
@@ -908,9 +1162,7 @@ mod tests {
             Some("Wed, 30 Sep 2026 08:00:00 GMT"),
             "2026-09-30T09:00:00Z",
         );
-        backend
-            .commit_industry_snapshot(&IndustrySnapshotWrite { facts: &facts })
-            .unwrap();
+        commit(&backend, &facts);
         drop(backend);
         // An index row the store cannot prove: the store is authoritative, so a
         // replay refuses instead of silently dropping the row (§9.4.1).
@@ -956,9 +1208,7 @@ mod tests {
             "2026-09-30T09:00:00Z",
         );
         let backend = fixture.backend();
-        backend
-            .commit_industry_snapshot(&IndustrySnapshotWrite { facts: &facts })
-            .unwrap();
+        commit(&backend, &facts);
         drop(backend);
         let rebuild: Rebuild =
             industry::rebuild(&crate::sqlite_market::industry::facts_from_store(&store).unwrap())
