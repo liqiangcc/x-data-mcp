@@ -506,6 +506,140 @@ impl Fixture {
         )
         .unwrap();
     }
+
+    /// Extend the fixture backwards in time (D-64's pre-2023 rows). Each
+    /// member keeps its own bar days so no series carries a bar before its
+    /// listing; the security master, risk intervals and calendar are rewritten
+    /// through the same production paths the daily item uses.
+    fn add_legacy_members(&self, members: &[LegacyMember<'_>]) {
+        let mut c = self.open();
+        let tx = c.transaction().unwrap();
+        let version_evidence =
+            evidence_store::put_evidence(&tx, EvidenceKind::Version, &series_evidence()).unwrap();
+        let mut seed = 0xC0u8;
+        for member in members {
+            seed += 1;
+            let bars: Vec<CompactBar> = member.days.iter().map(|when| bar(*when, 5_000)).collect();
+            let key = series::insert_series(
+                &tx,
+                &NewSeries {
+                    entity: member.entity.into(),
+                    period: Period::Day,
+                    adjustment: Adjustment::Raw,
+                    instrument_class: crate::market_data::INSTRUMENT_CLASS_STOCK,
+                    price_scale: 2,
+                    content_digest: digest(seed),
+                    record_count: bars.len() as i64,
+                    first_day: bars[0].trade_day,
+                    last_day: bars[bars.len() - 1].trade_day,
+                    coverage_status: CoverageStatus::Complete,
+                    source_binding_digest: self.binding,
+                    evidence_digest: version_evidence,
+                    last_event_seq: 1,
+                    created_at: "1998-01-01T00:00:00Z".into(),
+                    updated_at: "1998-01-01T00:00:00Z".into(),
+                },
+            )
+            .unwrap();
+            series::insert_bars(&tx, key, &bars).unwrap();
+        }
+
+        let mut rows = security::read_security_master(&tx).unwrap();
+        for member in members {
+            rows.push(lifecycle(member.exchange, member.code, member.listing, 0));
+        }
+        security::replace_security_master(
+            &tx,
+            &Assembly {
+                rows,
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(days()[9]),
+            },
+            self.binding,
+            "task-master",
+            "derived:security_master",
+        )
+        .unwrap();
+
+        let risk_evidence =
+            evidence_store::put_evidence(&tx, EvidenceKind::Derived, &json!({"fixture": "risk"}))
+                .unwrap();
+        for member in members {
+            let Some(status) = member.risk else { continue };
+            let exchange = member.exchange.as_str();
+            tx.execute(
+                "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
+                 raw_status_code,normalized_status,announced_at,known_at,source_kind,\
+                 source_record_id,source_document_sha256,source_generation_id,evidence_digest) \
+                 VALUES(?1,?2,?3,NULL,?4,?4,NULL,NULL,'exchange_announcement','fixture',\
+                 NULL,NULL,?5)",
+                params![
+                    exchange,
+                    member.code,
+                    crate::compact_market::epoch_day(member.listing),
+                    status,
+                    risk_evidence.as_slice()
+                ],
+            )
+            .unwrap();
+        }
+
+        let mut all: Vec<NaiveDate> = days();
+        for member in members {
+            all.extend_from_slice(member.days);
+        }
+        all.sort_unstable();
+        all.dedup();
+        let batch = CalendarBatch {
+            inputs: vec![
+                CalendarInputDates {
+                    entity: "sh.000001".into(),
+                    member: "sh\\lday\\sh000001.day".into(),
+                    day_member_sha256: "aa".repeat(32),
+                    days: all.clone(),
+                },
+                CalendarInputDates {
+                    entity: "sz.399001".into(),
+                    member: "sz\\lday\\sz399001.day".into(),
+                    day_member_sha256: "bb".repeat(32),
+                    days: all,
+                },
+            ],
+            security_event_sha256: crate::hash::sha256(&0u64.to_le_bytes()),
+        };
+        let calendar = TradingCalendar::union(&batch).unwrap();
+        let coverage = calendar::measure_coverage(&tx, &calendar).unwrap();
+        calendar::commit_calendar(
+            &tx,
+            &CalendarWrite {
+                batch: &batch,
+                coverage: &coverage,
+                task_id: "task-calendar-legacy",
+                item_id: "derived:calendar",
+                generation_id: "gen-1",
+                generation_manifest_sha256: &"0f".repeat(32),
+                generation_evidence: &json!({"generation_id": "gen-1"}),
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+}
+
+/// One pre-2023 member added by [`Fixture::add_legacy_members`].
+struct LegacyMember<'a> {
+    entity: &'a str,
+    exchange: Exchange,
+    code: &'a str,
+    listing: NaiveDate,
+    days: &'a [NaiveDate],
+    /// `Some(status)` writes a risk-warning interval from the listing day;
+    /// `None` leaves the status unknown, which is what D-58 keeps for SH
+    /// before 2000.
+    risk: Option<&'a str>,
 }
 
 fn ask(c: &Connection, entity: &str, as_of: NaiveDate) -> PriceLimitReport {
@@ -815,4 +949,217 @@ fn an_unknown_st_status_still_answers_when_every_status_shares_the_band() {
     // The diagnostic still collapses the (now identical) candidates to one.
     assert_eq!(main.candidates.len(), 1);
     assert_eq!(main.candidates[0].band_bp, Some(1_000));
+}
+
+/// D-64: the pre-2023 main-board first-day rows are `band_side=none`, so the
+/// derivation answers `unbounded` (a known no-limit) instead of `unknown`.
+#[test]
+fn a_pre_2023_first_day_is_unbounded_not_unknown() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let sh_day = [day(1996, 12, 16)];
+    let sz_2011_day = [day(2011, 3, 1)];
+    let sz_2013_day = [day(2013, 12, 13)];
+    fixture.add_legacy_members(&[
+        LegacyMember {
+            entity: "sh.600001",
+            exchange: Exchange::Sh,
+            code: "600001",
+            listing: day(1996, 12, 16),
+            days: &sh_day,
+            risk: None,
+        },
+        LegacyMember {
+            entity: "sz.000901",
+            exchange: Exchange::Sz,
+            code: "000901",
+            listing: day(2011, 3, 1),
+            days: &sz_2011_day,
+            risk: None,
+        },
+        LegacyMember {
+            entity: "sz.000902",
+            exchange: Exchange::Sz,
+            code: "000902",
+            listing: day(2013, 12, 13),
+            days: &sz_2013_day,
+            risk: None,
+        },
+    ]);
+    let c = fixture.open();
+    for (entity, as_of, rule_id) in [
+        (
+            "sh.600001",
+            day(1996, 12, 16),
+            "r6-sh-main-all-first-day-none-1996-12-16-2006-06-30",
+        ),
+        (
+            "sz.000901",
+            day(2011, 3, 1),
+            "r6-sz-main-all-first-day-none-2011-02-28-2013-12-12",
+        ),
+        (
+            "sz.000902",
+            day(2013, 12, 13),
+            "r6-sz-main-all-first-day-none-2013-12-13-2014-06-12",
+        ),
+    ] {
+        let report = ask(&c, entity, as_of);
+        assert_eq!(report.state, PriceLimitState::Unbounded, "{entity}");
+        assert_eq!(report.reason_code(), "unbounded", "{entity}");
+        assert_eq!(
+            report.listing_phase,
+            Some(ListingPhase::FirstDay),
+            "{entity}"
+        );
+        assert_eq!(report.band_side, Some(BandSide::None), "{entity}");
+        assert_eq!(report.rule_id.as_deref(), Some(rule_id), "{entity}");
+        assert_eq!(report.limit_up_units, None, "{entity}");
+        assert_eq!(report.limit_down_units, None, "{entity}");
+    }
+}
+
+/// D-64: the 44%/36% declared ranges stay unencoded, so the derivation keeps
+/// answering `rule_missing` there — including SH from 2013-12-13, while the
+/// same SZ day is a known no-limit day.
+#[test]
+fn the_declared_range_first_day_is_still_rule_missing() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let sh_2013 = [day(2013, 12, 13)];
+    let sz_2013 = [day(2013, 12, 13)];
+    let sz_2014 = [day(2014, 6, 13)];
+    let sh_2023 = [day(2023, 2, 16)];
+    fixture.add_legacy_members(&[
+        LegacyMember {
+            entity: "sh.600003",
+            exchange: Exchange::Sh,
+            code: "600003",
+            listing: day(2013, 12, 13),
+            days: &sh_2013,
+            risk: Some("normal"),
+        },
+        LegacyMember {
+            entity: "sz.000903",
+            exchange: Exchange::Sz,
+            code: "000903",
+            listing: day(2013, 12, 13),
+            days: &sz_2013,
+            risk: Some("normal"),
+        },
+        LegacyMember {
+            entity: "sz.000904",
+            exchange: Exchange::Sz,
+            code: "000904",
+            listing: day(2014, 6, 13),
+            days: &sz_2014,
+            risk: Some("normal"),
+        },
+        LegacyMember {
+            entity: "sh.600004",
+            exchange: Exchange::Sh,
+            code: "600004",
+            listing: day(2023, 2, 16),
+            days: &sh_2023,
+            risk: Some("normal"),
+        },
+    ]);
+    let c = fixture.open();
+    for (entity, as_of) in [
+        ("sh.600003", day(2013, 12, 13)),
+        ("sz.000904", day(2014, 6, 13)),
+        ("sh.600004", day(2023, 2, 16)),
+    ] {
+        let report = ask(&c, entity, as_of);
+        assert_eq!(report.state, PriceLimitState::Unknown, "{entity}");
+        assert_eq!(
+            report.reason,
+            Some(PriceLimitReason::RuleMissing),
+            "{entity}"
+        );
+        assert_eq!(
+            report.listing_phase,
+            Some(ListingPhase::FirstDay),
+            "{entity}"
+        );
+        assert_eq!(report.band_side, None, "{entity}");
+    }
+    // The same 2013-12-13 listing day is a known no-limit day in Shenzhen:
+    // the 142号 notice has no full-day band, so `none` is the honest answer.
+    let sz = ask(&c, "sz.000903", day(2013, 12, 13));
+    assert_eq!(sz.state, PriceLimitState::Unbounded);
+    assert_eq!(
+        sz.rule_id.as_deref(),
+        Some("r6-sz-main-all-first-day-none-2013-12-13-2014-06-12")
+    );
+}
+
+/// D-64 encodes the SH 1998 R2 start, but D-58 still leaves SH's pre-2000 ST
+/// status unknown. A rule row must not turn an unknown status into a 5% answer.
+#[test]
+fn the_r2_pre_2000_sh_row_does_not_make_an_unknown_st_status_known() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let legacy = [
+        day(1998, 4, 20),
+        day(1998, 4, 21),
+        day(1998, 4, 22),
+        day(1998, 4, 23),
+        day(1998, 4, 24),
+        day(1998, 4, 27),
+        day(1998, 4, 28),
+        day(1998, 4, 29),
+        day(1998, 4, 30),
+        day(1998, 5, 4),
+        day(1998, 5, 5),
+    ];
+    fixture.add_legacy_members(&[
+        LegacyMember {
+            entity: "sh.600831",
+            exchange: Exchange::Sh,
+            code: "600831",
+            listing: day(1996, 1, 2),
+            days: &legacy,
+            risk: Some("other_risk_warning"),
+        },
+        LegacyMember {
+            entity: "sh.600647",
+            exchange: Exchange::Sh,
+            code: "600647",
+            listing: day(1996, 1, 2),
+            days: &legacy,
+            risk: None,
+        },
+    ]);
+    let c = fixture.open();
+
+    // A known ST status on 1998-04-30 now resolves through the new row.
+    let st = ask(&c, "sh.600831", day(1998, 4, 30));
+    assert_eq!(st.state, PriceLimitState::Known);
+    assert_eq!(st.status_class, Some(StatusClass::St));
+    assert_eq!(
+        st.rule_id.as_deref(),
+        Some("r2-sh-main-st-5pct-1998-04-29-2006-06-30")
+    );
+    assert_eq!(st.band_bp, Some(500));
+    assert_eq!(st.prev_close_units, Some(5_000));
+    assert_eq!(st.limit_up_units, Some(5_250));
+    assert_eq!(st.limit_down_units, Some(4_750));
+
+    // The day before the accepted SH start is still rule_missing.
+    let before = ask(&c, "sh.600831", day(1998, 4, 28));
+    assert_eq!(before.state, PriceLimitState::Unknown);
+    assert_eq!(before.reason, Some(PriceLimitReason::RuleMissing));
+
+    // The row exists, but the status does not: the derivation stays unknown
+    // and offers both the ST and the normal band as candidates.
+    let unknown = ask(&c, "sh.600647", day(1998, 4, 30));
+    assert_eq!(unknown.state, PriceLimitState::Unknown);
+    assert_eq!(unknown.reason, Some(PriceLimitReason::StUnknown));
+    assert_eq!(unknown.status_class, None);
+    assert!(!unknown.status_unknown_band_invariant);
+    assert_eq!(unknown.rule_id, None);
+    let bands: Vec<Option<i64>> = unknown.candidates.iter().map(|c| c.band_bp).collect();
+    assert!(bands.contains(&Some(500)), "{bands:?}");
+    assert!(bands.contains(&Some(1_000)), "{bands:?}");
 }
