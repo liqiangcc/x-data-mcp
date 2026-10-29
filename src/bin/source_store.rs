@@ -8,14 +8,22 @@
 //! allowlists and the documented per-entry tool counts unchanged.
 //!
 //! ```text
-//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] [--verify-only]
-//! source_store verify --store <dir> [--scope ...]
+//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|all]
+//!                     [--db <market.sqlite>] [--verify-only]
+//! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir>
 //!                     [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
 //! ```
 //!
+//! `--db` is what turns a replay into a rebuild: M3 PR-2's `exchange` scope
+//! replaces `exchange_source_snapshots` from the store in one transaction and
+//! `--verify-only` compares the recomputed summary with the stored rows instead
+//! of writing. Without `--db` the scope only computes and reports its summary,
+//! so a read never touches a database or creates the store.
+//!
 //! Every command prints one JSON object on stdout. Exit 0 means `ok` or
-//! `store_empty`; a corrupt store exits 1; bad usage exits 2.
+//! `store_empty`; a corrupt store, an unknown parser version, a drift verdict or
+//! a failed rebuild exits 1; bad usage exits 2.
 
 use std::path::PathBuf;
 
@@ -23,8 +31,10 @@ use x_data_mcp::source_store::{SourceStore, import, replay};
 
 const USAGE: &str = "\
 usage:
-  source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] [--verify-only]
-  source_store verify --store <dir> [--scope industry|exchange|generation_facts|all]
+  source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] \
+[--db <market.sqlite>] [--verify-only]
+  source_store verify --store <dir> [--scope industry|exchange|generation_facts|all] \
+[--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]";
 
@@ -52,6 +62,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         return Err(format!("unknown command {command}"));
     }
     let mut store: Option<PathBuf> = None;
+    let mut database: Option<PathBuf> = None;
     let mut scope = "all".to_string();
     let mut verify_only = false;
     let mut index: Option<PathBuf> = None;
@@ -65,6 +76,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         let flag = args[position].as_str();
         match flag {
             "--store" => store = Some(PathBuf::from(value(args, position + 1)?)),
+            "--db" => database = Some(PathBuf::from(value(args, position + 1)?)),
             "--scope" => scope = value(args, position + 1)?,
             "--index" => index = Some(PathBuf::from(value(args, position + 1)?)),
             "--blobs" => blobs = Some(PathBuf::from(value(args, position + 1)?)),
@@ -100,12 +112,13 @@ fn run(args: &[String]) -> Result<i32, String> {
         })?),
     };
     match command {
-        "replay" => {
-            let report = replay::replay(&store, selected_scope, verify_only);
-            print_report(report)
-        }
-        "verify" => {
-            let report = replay::verify(&store, selected_scope);
+        "replay" | "verify" => {
+            let report = replay::replay_to(
+                &store,
+                selected_scope,
+                verify_only || command == "verify",
+                database.as_deref(),
+            );
             print_report(report)
         }
         "import" => {
@@ -135,7 +148,7 @@ fn run(args: &[String]) -> Result<i32, String> {
 fn needs_value(flag: &str) -> bool {
     matches!(
         flag,
-        "--store" | "--scope" | "--index" | "--blobs" | "--tiers" | "--kind" | "--batch"
+        "--store" | "--db" | "--scope" | "--index" | "--blobs" | "--tiers" | "--kind" | "--batch"
     )
 }
 

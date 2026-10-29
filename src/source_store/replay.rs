@@ -1,30 +1,43 @@
 //! Replay skeleton over the source store (design §9.4.2).
 //!
 //! PR-1a registers the three scopes and their byte-verification path; schema
-//! 25 (PR-1) now creates the empty index tables these scopes will fill, but
-//! the replay body still does not write. Each scope reports what it *selected* and a
-//! deterministic digest, and rebuilds nothing yet (`rebuilt:
-//! "skeleton_no_op"`): the index tables it will fill are added by PR-1 and the
-//! domain writers by PR-6 (industry), PR-2/PR-8 (exchange) and PR-8
-//! (generation facts). Empty store is `store_empty`, not an error, so the
-//! deploy hook can record it.
+//! 25 (PR-1) creates the empty index tables these scopes fill. Each scope
+//! reports what it *selected*, a deterministic digest of the manifest, and —
+//! when a database is supplied — the summary of the index rows it rebuilt.
+//!
+//! - `exchange` (M3 PR-2): every frozen `http_fetch` response is re-parsed with
+//!   the envelope parser version the manifest recorded, and
+//!   `exchange_source_snapshots` is replaced from the store without any HTTP
+//!   request. `--verify-only` recomputes the same summary and compares it with
+//!   the stored rows (`match` / `drift` + the first 20 differing snapshot ids).
+//! - `industry` / `generation_facts`: still the PR-1a skeleton (`rebuilt:
+//!   "skeleton_no_op"`); their writers are PR-6 and PR-8.
+//!
+//! Without a database the scopes only compute and report their summary, so a
+//! read never touches a database and never creates the store.
 //!
 //! A blob that does not read back to its digest fails the whole scope with
 //! `source_store_corrupt`; an unknown `parser_version` is fail-closed (§9.4.1).
-//! No partial rebuild is produced, and PR-1a writes no database row at all.
+//! No partial rebuild is produced: the index replacement is one transaction.
 
 use std::collections::BTreeSet;
+use std::path::Path;
 
 use serde::Serialize;
 
 use super::{ManifestRecord, SourceStore, StoreError, known_parser_version};
 use crate::hash::sha256;
+use crate::sqlite_market::backend::MarketBackend;
 
 /// Marks a scope report whose rebuild body is not implemented yet.
 pub const SKELETON_REBUILT: &str = "skeleton_no_op";
+/// The exchange table set was recomputed from the store and written.
+pub const REBUILT_EXCHANGE: &str = "rebuilt";
+/// The exchange table set was recomputed but no `--db` was given.
+pub const COMPUTED_EXCHANGE_NO_DB: &str = "computed_no_db";
 
-pub const NOTE: &str = "PR-1a skeleton: M3 index tables land in PR-1 and the scope writers in \
-PR-2/PR-6/PR-8; this run only verifies blobs and prints a deterministic digest.";
+pub const NOTE: &str = "`exchange` rebuilds `exchange_source_snapshots` from the store (M3 PR-2); \
+`industry`/`generation_facts` still report `skeleton_no_op` (PR-6/PR-8).";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,6 +99,18 @@ pub struct ScopeReport {
     pub blobs: usize,
     pub digest: String,
     pub rebuilt: &'static str,
+    /// Canonical summary of the rebuilt table set (§9.4.2); `exchange` today.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// `match` / `drift` / `not_compared` against the database.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<&'static str>,
+    /// Primary keys the database should change, capped at 20.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub drift: Vec<String>,
+    /// Rows of the rebuilt table set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshots: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -109,28 +134,45 @@ pub struct ReplayReport {
     pub scopes: Vec<ScopeReport>,
     pub problems: Vec<BlobProblem>,
     pub note: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
 }
 
-/// Replay one scope (or all) and verify every selected blob. `verify_only` is
-/// recorded in the report; with no index tables it is behaviourally identical
-/// today, and PR-1 makes it skip the (now existing) writes.
+/// Replay one scope (or all) and verify every selected blob, without a
+/// database: the store side only.
 pub fn replay(
     store: &SourceStore,
     scope: Option<Scope>,
     verify_only: bool,
 ) -> Result<ReplayReport, StoreError> {
-    replay_with_mode(store, scope, verify_only, "replay")
+    replay_to(store, scope, verify_only, None)
 }
 
 /// `verify_source_store`: the read-only check of the same selection.
 pub fn verify(store: &SourceStore, scope: Option<Scope>) -> Result<ReplayReport, StoreError> {
-    replay_with_mode(store, scope, true, "verify")
+    replay_to(store, scope, true, None)
 }
 
-fn replay_with_mode(
+/// Replay with an optional database: scopes whose writer exists rebuild their
+/// index rows (`exchange`, PR-2) and, with `verify_only`, only compare.
+///
+/// The replay runs before the services start (the deploy script replays between
+/// fresh init and start), so it takes the database lease instead of racing a
+/// live writer for it.
+pub fn replay_to(
     store: &SourceStore,
     scope: Option<Scope>,
     verify_only: bool,
+    database: Option<&Path>,
+) -> Result<ReplayReport, StoreError> {
+    run(store, scope, verify_only, database, "replay")
+}
+
+fn run(
+    store: &SourceStore,
+    scope: Option<Scope>,
+    verify_only: bool,
+    database: Option<&Path>,
     mode: &'static str,
 ) -> Result<ReplayReport, StoreError> {
     let records = store.records()?;
@@ -177,7 +219,7 @@ fn replay_with_mode(
                 problems.push(problem(&error, record));
             }
         }
-        let status = if selected.is_empty() {
+        let mut status = if selected.is_empty() {
             "store_empty"
         } else if scope_corrupt {
             "source_store_corrupt"
@@ -186,13 +228,55 @@ fn replay_with_mode(
         } else {
             "ok"
         };
+        let mut rebuilt = SKELETON_REBUILT;
+        let mut summary = None;
+        let mut database_verdict = None;
+        let mut drift_keys = Vec::new();
+        let mut snapshot_count = None;
+        if *scope == Scope::Exchange && status == "ok" {
+            match rebuild_exchange(store, &selected, verify_only, database) {
+                Ok(outcome) => {
+                    rebuilt = outcome.rebuilt;
+                    summary = Some(outcome.summary);
+                    database_verdict = outcome.database;
+                    drift_keys = outcome.drift;
+                    snapshot_count = Some(outcome.snapshots);
+                    for issue in outcome.problems {
+                        problems.push(BlobProblem {
+                            sha256: issue.snapshot_id,
+                            source_id: issue.source_id,
+                            reason: issue.reason,
+                            expected: outcome.expected.clone(),
+                            actual: issue.detail,
+                        });
+                    }
+                    if outcome.status != "ok" {
+                        status = outcome.status;
+                    }
+                }
+                Err(error) => {
+                    status = "exchange_rebuild_failed";
+                    problems.push(BlobProblem {
+                        sha256: String::new(),
+                        source_id: String::new(),
+                        reason: "exchange_rebuild_failed",
+                        expected: "a readable source store".to_string(),
+                        actual: error,
+                    });
+                }
+            }
+        }
         scope_reports.push(ScopeReport {
             scope: scope.name(),
             status,
             entries: selected.len(),
             blobs: seen.len(),
             digest: digest(selected.iter().copied()),
-            rebuilt: SKELETON_REBUILT,
+            rebuilt,
+            summary,
+            database: database_verdict,
+            drift: drift_keys,
+            snapshots: snapshot_count,
         });
     }
     let selected_all: Vec<&ManifestRecord> = records
@@ -205,6 +289,18 @@ fn replay_with_mode(
         "source_store_corrupt"
     } else if unknown_parser {
         "unknown_parser"
+    } else if let Some(failed) = scope_reports
+        .iter()
+        .find(|report| report.status != "ok" && report.status != "store_empty")
+    {
+        // A scope that failed its rebuild (or found drift) is the run status;
+        // reporting `ok` here would hide it behind the manifest digest.
+        failed.status
+    } else if scope_reports
+        .iter()
+        .any(|report| report.database == Some("drift"))
+    {
+        "drift"
     } else {
         "ok"
     };
@@ -219,7 +315,90 @@ fn replay_with_mode(
         scopes: scope_reports,
         problems,
         note: NOTE,
+        database: database.map(|database| database.display().to_string()),
     })
+}
+
+/// The exchange scope's outcome, or the reason no table set was produced.
+struct ExchangeOutcome {
+    status: &'static str,
+    rebuilt: &'static str,
+    summary: String,
+    database: Option<&'static str>,
+    drift: Vec<String>,
+    snapshots: usize,
+    problems: Vec<crate::exchange_source::RebuildProblem>,
+    expected: String,
+}
+
+fn rebuild_exchange(
+    store: &SourceStore,
+    records: &[&ManifestRecord],
+    verify_only: bool,
+    database: Option<&Path>,
+) -> Result<ExchangeOutcome, String> {
+    let rebuild =
+        crate::exchange_source::rebuild(store, records).map_err(|error| error.to_string())?;
+    let summary = rebuild.summary();
+    let expected = format!(
+        "a registered envelope parser ({}, {})",
+        crate::exchange_source::request::SSE_PARSER_VERSION,
+        crate::exchange_source::request::SZSE_PARSER_VERSION
+    );
+    let mut outcome = ExchangeOutcome {
+        status: if rebuild.problems.is_empty() {
+            "ok"
+        } else {
+            // Frozen bytes without a usable envelope stay registered and are
+            // reported; they never become a row with a made-up count.
+            "partially_failed"
+        },
+        rebuilt: COMPUTED_EXCHANGE_NO_DB,
+        summary,
+        database: None,
+        drift: Vec::new(),
+        snapshots: rebuild.rows.len(),
+        problems: rebuild.problems,
+        expected,
+    };
+    let Some(database) = database else {
+        return Ok(outcome);
+    };
+    let tasks = crate::sqlite_tasks::SqliteTasks::new(database);
+    let backend = MarketBackend::open(&tasks)
+        .map_err(|error| format!("database_unavailable: {}: {error}", database.display()))?;
+    if verify_only {
+        let stored = backend
+            .read_exchange_snapshots()
+            .map_err(|error| error.to_string())?;
+        let stored_summary = crate::exchange_source::summary(&stored);
+        if stored_summary == outcome.summary {
+            outcome.database = Some("match");
+            return Ok(outcome);
+        }
+        outcome.status = "drift";
+        outcome.database = Some("drift");
+        outcome.drift = crate::exchange_source::index::drift(&rebuild.rows, &stored, 20);
+        return Ok(outcome);
+    }
+    backend
+        .replace_exchange_snapshots(&rebuild.rows)
+        .map_err(|error| error.to_string())?;
+    outcome.rebuilt = REBUILT_EXCHANGE;
+    // A write is only reported as rebuilt once it reads back as the computed
+    // rows: the same summary comparison `--verify-only` performs.
+    let stored = backend
+        .read_exchange_snapshots()
+        .map_err(|error| error.to_string())?;
+    let stored_summary = crate::exchange_source::summary(&stored);
+    if stored_summary == outcome.summary {
+        outcome.database = Some("match");
+        return Ok(outcome);
+    }
+    outcome.status = "drift";
+    outcome.database = Some("drift");
+    outcome.drift = crate::exchange_source::index::drift(&rebuild.rows, &stored, 20);
+    Ok(outcome)
 }
 
 fn problem(error: &StoreError, record: &ManifestRecord) -> BlobProblem {

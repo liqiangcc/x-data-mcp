@@ -545,6 +545,7 @@ fn import_member(
         parser_version: Some(kind.parser_version().to_string()),
         container_sha256: Some(actual_container_sha),
         import_batch: Some(facts.batch.to_string()),
+        http_etag: None,
     };
     if facts.dry_run {
         let written_blob = !facts.store.blob_exists(&actual_member_sha);

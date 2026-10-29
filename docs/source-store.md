@@ -65,6 +65,7 @@ blob、追加清单与两次 fsync 都在锁内），因此多个写者不会交
 | `size_bytes` | 字节数 |
 | `container_sha256` | 抽取物所属容器的 sha256（可空） |
 | `import_batch` | 一次性导入批次 id（可空） |
+| `http_etag` | 交易所响应的 `ETag`（可空；`Last-Modified` 复用 `publisher_last_modified`，见 [交易所来源入口](exchange-source.md) §5） |
 
 去重键是 `(sha256, source_id, origin)`：重复执行同一导入报 `already_present`；
 同一字节换了出处则追加一行、blob 不重复。
@@ -81,21 +82,28 @@ PR-1a 在 maint socket 工具与等价 CLI 之间选择了 **CLI**
 - 不改变三个静态 allowlist、capability revision 与文档里的工具数事实。
 
 ```text
-source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] [--verify-only]
-source_store verify --store <dir> [--scope industry|exchange|generation_facts|all]
+source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] \
+  [--db <market.sqlite>] [--verify-only]
+source_store verify --store <dir> [--scope industry|exchange|generation_facts|all] \
+  [--db <market.sqlite>]
 source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
   [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
 ```
 
 输出为单个 JSON 对象；退出码 0 表示 `ok` 或 `store_empty`，1 表示
-`source_store_corrupt` / `unknown_parser` 等失败，2 表示用法错误。
+`source_store_corrupt` / `unknown_parser` / `drift` / 重建失败，2 表示用法错误。
 
 `replay`/`verify` 按 scope 选择清单记录、逐 sha 读回校验，并输出按固定字段
-排序后的规范化摘要。PR-1a 只注册 scope 与校验路径：`rebuilt` 为
-`skeleton_no_op`，索引表在 PR-1 的迁移中加入，域写入器分别由
-PR-2（交易所）、PR-6（行业）、PR-8（generation facts）实现。空库返回
-`store_empty`，不算失败。`--verify-only` 现在与 `replay` 行为一致，PR-1
-起用来跳过写库。
+排序后的规范化摘要。scope 的写入器到位情况：`exchange` 自 PR-2 起可从清单
+重建 `exchange_source_snapshots`（见 [交易所来源入口](exchange-source.md) §4），
+`industry`/`generation_facts` 仍是 PR-1a 的 `skeleton_no_op`，分别由
+PR-6、PR-8 实现。空库返回 `store_empty`，不算失败。
+
+`--db` 是「只算」与「重建」的分界：不给数据库时只计算并报告摘要，不打开也
+不创建数据库；给了以后 scope 在单个事务里替换自己的索引表，写后回读并与
+重算摘要比较，`match` 才算成功，否则输出 `drift` 与前 20 条差异主键。
+`--verify-only` 只重算并比较、不写。重放在服务启动前执行，因此直接取数据库
+租约，不和在线写入竞争。
 
 ## 5. 一次性导入（归档索引）
 
