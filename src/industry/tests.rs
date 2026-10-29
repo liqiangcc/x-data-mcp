@@ -805,8 +805,8 @@ fn a_run_takes_the_earliest_publisher_time_and_the_best_grade() {
     // `last_modified` (B, 10-11), the second kept it (A, 10-12). §5.3 step 1
     // says the content is dated by the publisher time and graded A — taking the
     // first registration would make the fact both weaker and earlier than it
-    // is. The copy without a publisher time is not an observation, but it still
-    // feeds the merged evidence (best grade, earliest known time).
+    // is. The copy without a publisher time is not an observation, so it dates
+    // neither the interval nor its `known_at`; it only feeds the storage row.
     let a = cfg(&[(0, "000001", "T1001", "X500102")]);
     let inputs = vec![
         snapshot(&a, None, "2026-10-11T01:00:00Z", "B", Some(DICT)),
@@ -826,8 +826,8 @@ fn a_run_takes_the_earliest_publisher_time_and_the_best_grade() {
     assert_eq!(rows[0].evidence_grade, "A");
     assert_eq!(rows[0].effective_from, day(2026, 10, 12));
     assert_eq!(
-        rows[0].known_at, "2026-10-11T01:00:00Z",
-        "the earliest ingestion of the run, not the best-evidenced one"
+        rows[0].known_at, "2026-10-12T09:00:00Z",
+        "a copy's fetch time is not a fact about when the publisher's file was current"
     );
     // Storage merges the same evidence into the one snapshot row.
     assert_eq!(rebuilt.snapshots.len(), 1);

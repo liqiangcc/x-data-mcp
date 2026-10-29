@@ -657,22 +657,25 @@ pub fn rebuild(observations: &[SnapshotFacts]) -> Result<Rebuild, Error> {
         }
         let run = &timeline[cursor..end];
         // §5.3: one interval per run, dated by the earliest day the run claims,
-        // with the evidence merged over *every* registration of the content: a
-        // copy without a publisher time can still improve the known time or the
-        // grade without ever being an observation itself.
+        // with the best grade and the earliest knowledge time *of the run*. The
+        // evidence stays run-scoped on purpose — a copy without a publisher time
+        // cannot be attributed to one run, and a later run must never upgrade or
+        // back-date an earlier interval (the daily path could not reproduce it).
         let day = run
             .iter()
             .map(|observation| observation.day)
             .min()
             .unwrap_or(run[0].day);
-        let merged = stored.get(sha).expect("every content is stored");
-        let known_at = contents
-            .get(sha)
-            .into_iter()
-            .flatten()
-            .map(|facts| facts.record.known_at())
+        let known_at = run
+            .iter()
+            .map(|observation| observation.facts.record.known_at())
             .min()
-            .unwrap_or_else(|| merged.known_at());
+            .unwrap_or_else(|| run[0].facts.record.known_at());
+        let evidence_grade = run
+            .iter()
+            .map(|observation| observation.facts.record.evidence_grade.as_str())
+            .min()
+            .unwrap_or_else(|| run[0].facts.record.evidence_grade.as_str());
         steps += 1;
         let step = Step {
             member_sha256: sha,
@@ -682,7 +685,7 @@ pub fn rebuild(observations: &[SnapshotFacts]) -> Result<Rebuild, Error> {
             day,
             basis: run[0].basis,
             known_at: &known_at,
-            evidence_grade: &merged.evidence_grade,
+            evidence_grade,
         };
         segments.apply(&step, RunLink::Fresh)?;
         cursor = end;
@@ -958,17 +961,22 @@ fn improve_run_evidence(last: &mut Segment, step: &Step<'_>) -> Result<(), Error
     let run_has_publisher = last.basis == Basis::PublisherLastModified.as_str();
     let incoming_has_publisher = step.basis == Basis::PublisherLastModified;
     if incoming_has_publisher {
-        if run_has_publisher && step.day < last.effective_from {
-            return Err(Error::Invalid(format!(
-                "snapshot {} is dated {} but the open interval started {}: only a \
-                 source-store replay may move a published interval start",
-                step.member_sha256, step.day, last.effective_from
-            )));
-        }
-        if !run_has_publisher && step.day != last.effective_from {
+        if !run_has_publisher {
+            // The interval was opened on acquisition time because no publisher
+            // time named this content then. Now one does: the run has to be
+            // dated again from scratch, which only a replay may do — doing it
+            // here would move a start and a `known_at` the table already
+            // published.
             return Err(Error::Invalid(format!(
                 "snapshot {} brings publisher time {} for an interval that opened on \
                  acquisition time at {}: only a source-store replay may re-date it",
+                step.member_sha256, step.day, last.effective_from
+            )));
+        }
+        if step.day < last.effective_from {
+            return Err(Error::Invalid(format!(
+                "snapshot {} is dated {} but the open interval started {}: only a \
+                 source-store replay may move a published interval start",
                 step.member_sha256, step.day, last.effective_from
             )));
         }

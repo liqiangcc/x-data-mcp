@@ -7,7 +7,9 @@
 //!   path: it appends one observation and extends the intervals forward. An
 //!   observation that continues the newest run changes nothing (`no_change`);
 //!   one that brings back a *previous* content opens a new interval, because a
-//!   file that went A → B → A was changed twice (§5.3).
+//!   file that went A → B → A was changed twice (§5.3). A registration without
+//!   a publisher time is not an observation at all: once the content is in the
+//!   table it changes nothing (a copy proves only that we held the bytes).
 //! - [`replace_industry`] is the `replay --scope industry` path: the source
 //!   store is authoritative, so the whole table set is recomputed and written
 //!   in one transaction. A DB snapshot the store does not hold is
@@ -96,7 +98,7 @@ pub(crate) fn commit_industry_snapshot(
         .as_ref()
         .map(|stored| stored.merged_with(&facts.record));
     let snapshot_changed = match (&existing, &merged) {
-        (Some(stored), Some(merged)) => stored_metadata(stored) != stored_metadata(merged),
+        (Some(stored), Some(merged)) => stored_row(stored) != stored_row(merged),
         _ => true,
     };
     if rows == stored && !snapshot_changed {
@@ -128,14 +130,13 @@ pub(crate) fn commit_industry_snapshot(
     })
 }
 
-/// The four columns a re-registration of the same content may improve (§5.3).
-fn stored_metadata(record: &SnapshotRecord) -> (&str, Option<&str>, Option<&str>, &str) {
-    (
-        record.ingested_at.as_str(),
-        record.observed_at.as_deref(),
-        record.publisher_last_modified.as_deref(),
-        record.evidence_grade.as_str(),
-    )
+/// The row as it reads back: `imported_at` has no column (it is the
+/// registration's, not the content's), so it never counts as a change.
+fn stored_row(record: &SnapshotRecord) -> SnapshotRecord {
+    SnapshotRecord {
+        imported_at: None,
+        ..record.clone()
+    }
 }
 
 fn read_snapshot(c: &Connection, member_sha256: &str) -> Result<Option<SnapshotRecord>, Error> {
@@ -150,19 +151,40 @@ fn read_snapshot(c: &Connection, member_sha256: &str) -> Result<Option<SnapshotR
         .map_err(storage)
 }
 
-/// §5.3 step 1 for storage: rewrite the four columns a later registration of the
-/// same content may improve. Identity, counts and parser version are content
-/// facts and never change for one `member_sha256`.
+/// §5.3 step 1 for storage: rewrite the row a later registration of the same
+/// content may improve. Every column is rewritten from the merged record — not
+/// just the four time/grade columns — so the daily path and a replay end up with
+/// the same row when the merge moves `source_kind` or the container/manifest
+/// fields to an earlier registration. The primary key cannot change (and the
+/// interval rows reference it), so this is an in-place update.
 fn update_snapshot(c: &Connection, record: &SnapshotRecord) -> Result<(), Error> {
+    let sql = format!(
+        "UPDATE industry_snapshots SET {} WHERE member_sha256=?1",
+        SNAPSHOT_COLUMNS
+            .split(',')
+            .enumerate()
+            .skip(1)
+            .map(|(index, column)| format!("{column}=?{}", index + 1))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     c.execute(
-        "UPDATE industry_snapshots SET publisher_last_modified=?2, observed_at=?3, \
-         ingested_at=?4, evidence_grade=?5 WHERE member_sha256=?1",
+        &sql,
         params![
             blob(&record.member_sha256)?,
+            blob(&record.store_sha256)?,
+            optional_blob(record.base_zip_sha256.as_deref())?,
+            optional_blob(record.generation_manifest_sha256.as_deref())?,
+            record.source_kind.as_str(),
             record.publisher_last_modified,
             record.observed_at,
             record.ingested_at,
             record.evidence_grade,
+            record.parser_version,
+            record.row_count,
+            record.scope_member_count,
+            optional_blob(record.dictionary_sha256.as_deref())?,
+            record.notes,
         ],
     )
     .map_err(storage)?;
@@ -912,64 +934,55 @@ mod tests {
     }
 
     #[test]
-    fn a_re_observation_upgrades_the_evidence_without_moving_the_interval() {
+    fn a_copy_without_a_publisher_time_never_changes_the_intervals() {
+        // The archive shape at the table level: the same bytes registered again
+        // without a publisher time (an old copy, fetched earlier but imported
+        // later) is not an observation. It may only refine the stored row; the
+        // interval and its `known_at` stay where the publisher time put them.
         let fixture = Fixture::new();
         let store = fixture.store();
         let bytes = cfg(&[(0, "000001", "T1001", "X500102")]);
         let backend = fixture.backend();
-        // First observation: the file arrived without a publisher time, so it
-        // is grade B and dated by the acquisition day.
         let first = generation(
             &store,
             &format!("{}1", "d".repeat(63)),
             &bytes,
-            None,
+            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
             "2026-10-12T09:00:00Z",
         );
         assert!(!commit(&backend, &first).no_change);
         let (snapshots, assignments) = fixture.rows();
-        assert_eq!(snapshots[0].evidence_grade, "B");
-        assert!(snapshots[0].publisher_last_modified.is_none());
-        assert_eq!(assignments[0].basis, "acquisition_time");
-
-        // The same bytes, seen again with the publisher time that belongs to
-        // them. Same day, so the interval cannot move; §5.3 lets the evidence
-        // improve in place instead of keeping the weaker first registration.
-        let second = generation(
-            &store,
-            &format!("{}2", "d".repeat(63)),
-            &bytes,
-            Some("Mon, 12 Oct 2026 00:00:00 GMT"),
-            "2026-10-12T21:00:00Z",
-        );
-        assert_eq!(
-            second.previous_member_sha256.as_deref(),
-            Some(first.facts.record.member_sha256.as_str())
-        );
-        assert!(!commit(&backend, &second).no_change);
-        let daily = fixture.summary();
-        let (snapshots, assignments) = fixture.rows();
-        assert_eq!(snapshots.len(), 1, "one content, one row, better evidence");
-        assert_eq!(
-            snapshots[0].publisher_last_modified.as_deref(),
-            Some("Mon, 12 Oct 2026 00:00:00 GMT")
-        );
-        assert_eq!(snapshots[0].evidence_grade, "A");
-        assert_eq!(assignments.len(), 1, "the interval does not move or split");
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(assignments[0].basis, "publisher_last_modified");
-        assert_eq!(assignments[0].evidence_grade, "A");
-        assert_eq!(
-            assignments[0].effective_from,
-            crate::industry::epoch_day(chrono::NaiveDate::from_ymd_opt(2026, 10, 12).unwrap())
-        );
-        assert_eq!(
-            assignments[0].known_at, "2026-10-12T09:00:00Z",
-            "the earliest knowledge time of the run is kept"
-        );
-
-        // And the replayed table is the same one the daily path maintains.
+        assert_eq!(assignments[0].known_at, "2026-10-12T09:00:00Z");
         drop(backend);
-        fixture.clear_industry();
+
+        // The copy: same bytes, fetched on 10-08 but imported only on 10-13.
+        let mut copy = Registration::new(
+            crate::source_store::TDXHY_SOURCE_ID,
+            StoreKind::ArchiveImport,
+            "batch-9:2026-10-08/base.zip!tdxhy.cfg",
+            "2026-10-08T01:00:00Z",
+        );
+        copy.evidence_grade = Some("B".to_string());
+        copy.parser_version = Some("tdxhy-v1".to_string());
+        copy.import_batch = Some("batch-9".to_string());
+        copy.imported_at = Some("2026-10-13T00:00:00Z".to_string());
+        store.register(&bytes, &copy).unwrap();
+
+        // The store now holds evidence the table does not: `verify` says so
+        // instead of silently agreeing.
+        let verify_request = crate::source_store::replay::ReplayRequest::new(
+            Some(crate::source_store::replay::Scope::Industry),
+            true,
+            Some(fixture.path.as_path()),
+        );
+        let drift = crate::source_store::replay::replay(&store, &verify_request).unwrap();
+        assert_eq!(drift.status, "drift", "{drift:?}");
+        assert_eq!(drift.scopes[0].database, Some("drift"));
+
+        // A replay merges the copy into the stored row and leaves the intervals
+        // exactly where the publisher time put them.
         let request = crate::source_store::replay::ReplayRequest::new(
             Some(crate::source_store::replay::Scope::Industry),
             false,
@@ -978,7 +991,24 @@ mod tests {
         let report = crate::source_store::replay::replay(&store, &request).unwrap();
         assert_eq!(report.status, "ok", "{report:?}");
         assert_eq!(report.scopes[0].database, Some("match"));
-        assert_eq!(fixture.summary(), daily);
+        let (snapshots, assignments) = fixture.rows();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].observed_at.as_deref(),
+            Some("2026-10-08T01:00:00Z"),
+            "the earliest fetch of the same bytes refines the row"
+        );
+        assert_eq!(
+            snapshots[0].publisher_last_modified.as_deref(),
+            Some("Mon, 12 Oct 2026 00:00:00 GMT")
+        );
+        assert_eq!(snapshots[0].evidence_grade, "A");
+        assert_eq!(assignments.len(), 1);
+        assert_eq!(assignments[0].basis, "publisher_last_modified");
+        assert_eq!(
+            assignments[0].known_at, "2026-10-12T09:00:00Z",
+            "a copy without a publisher time dates nothing"
+        );
     }
 
     #[test]
