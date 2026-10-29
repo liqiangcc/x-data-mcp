@@ -1,15 +1,15 @@
 {
   "schema": "trading-rule-book/1",
-  "snapshot_id": "A-7/D-44/D-63 2026-10-29",
+  "snapshot_id": "A-7/D-44/D-64 2026-10-29",
   "notes": [
     "Every basis_ref carries its provenance tier in text: APPROVED_SOURCE for the exchange rule text, OWNER_RISK_ACCEPTED for the owner-accepted additions. basis_status only says admitted-vs-not-admitted; the tier is never inferred from it.",
     "R9 (rounding = HALF_UP) is a property of every price-limit row, so each row names its clause instead of adding a separate rule row.",
     "The exact document URL, fetch time and byte sha256 live in the private A-7 evidence report (#395); they are not reproduced here because this repository does not redistribute the exchange rule text (D-44 (4)).",
     "R7 is NOT_AVAILABLE: no price-limit row starts before 1996-12-16, so a derivation before that day is rule_missing/unknown. There is no 'no limit' wildcard and the loader rejects an earlier row.",
     "Rows are effective-dated facts, not a time series: effective_to is exclusive.",
-    "R2 before 2023-02-17 is encoded as five rows (D-63): the 1998 starts are OWNER_RISK_ACCEPTED (SZ: the exchange name-change table's first ST event plus a .day anchor count; SH: .day only, because D-58 leaves pre-2000 SH ST status NOT_AVAILABLE), while the 2006/2011/2013/2020-12 segments are APPROVED_SOURCE with their clause numbers. Encoding a start the owner accepted is not 'today's rule over history'; the tier says which part is clause text.",
+    "R2 before 2023-02-17 is encoded as five rows (D-64): the 1998 starts are OWNER_RISK_ACCEPTED (SZ: the exchange name-change table's first ST event plus a .day anchor count; SH: .day only, because D-58 leaves pre-2000 SH ST status NOT_AVAILABLE), while the 2006/2011/2013/2020-12 segments are APPROVED_SOURCE with their clause numbers. Encoding a start the owner accepted is not 'today's rule over history'; the tier says which part is clause text.",
     "R6 first-day segments without any daily band before 2023-02-17 are encoded as band_side=none, i.e. a known Unbounded answer rather than unknown. The 44%/36% declared-range segments (SH from 2013-12-13, SZ from 2014-06-13) stay not_encoded until a two-band schema and an admitted issue-price source exist.",
-    "This file is data: a content change publishes a new derived:trading_rules version, so snapshot_id names the decision that authorised the content (D-63, 2026-10-29)."
+    "This file is data: a content change publishes a new derived:trading_rules version, so snapshot_id names the decision that authorised the content (D-64, 2026-10-29)."
   ],
   "not_available": [
     {
@@ -23,12 +23,12 @@
     {
       "rule": "R6-first-day",
       "range": "2013-12-13..2023-02-16 (SH), 2014-06-13..2023-02-16 (SZ)",
-      "reason": "These segments are an asymmetric declared price range (144%/64%, i.e. +44%/-36%) measured from the issue price, not from a previous close. One band_bp + band_side cannot express an asymmetric range: 4400 as up_only would report the down side as unbounded and 3600 as band_bp would understate the up side. limit-v1 keys on a previous close that a listing day does not have, and the inner session ranges (opening auction 120%/80%, SZ intraday +-10% of the last trade) are a further layer. The issue-price source (G-7) is not admitted. The segments stay rule_missing/unknown until a two-band schema with price_basis/band_kind and an issue-price source exists (D-63)."
+      "reason": "These segments are an asymmetric declared price range (144%/64%, i.e. +44%/-36%) measured from the issue price, not from a previous close. One band_bp + band_side cannot express an asymmetric range: 4400 as up_only would report the down side as unbounded and 3600 as band_bp would understate the up side. limit-v1 keys on a previous close that a listing day does not have, and the inner session ranges (opening auction 120%/80%, SZ intraday +-10% of the last trade) are a further layer. The issue-price source (G-7) is not admitted. The segments stay rule_missing/unknown until a two-band schema with price_basis/band_kind and an issue-price source exists (D-64)."
     },
     {
       "rule": "SH-risk-warning-low-price",
       "range": "all",
-      "reason": "An SH risk-warning stock whose previous close is <= 0.10 yuan uses a one-tick band instead of the percentage band. The rule rows can only say 'at least one tick' once the nullable min_band_ticks column exists, which is the M3 schema 25 change (D-63); this PR does not touch the table shape. Until that column lands, a derived limit for such a bar is the percentage-band answer and must be read as approximate."
+      "reason": "An SH risk-warning stock whose previous close is <= 0.10 yuan uses a one-tick band instead of the percentage band. The rule rows can only say 'at least one tick' once the nullable min_band_ticks column exists, which is the M3 schema 25 change (D-64); this PR does not touch the table shape. Until that column lands, a derived limit for such a bar is the percentage-band answer and must be read as approximate."
     }
   ],
   "price_limit_rules": [
@@ -71,7 +71,7 @@
       "rounding": "half_up",
       "effective_from": "1998-04-28",
       "effective_to": "2011-02-28",
-      "basis_ref": "R2 前段: tier=OWNER_RISK_ACCEPTED(起点) + APPROVED_SOURCE(5% 值); start=深交所《上市公司简称变更表》(SSGSGMXX/tab2) 首个 ST 事件 000511 1998-04-28「ST辽物资」, 1998-04-29 000548/000558 跟进; 锚定=.day 000511 1998-04-28..1999-04-27 共 235 根, |涨跌幅|<=5.07%, >5.2% 0 根（ST 前 70 根最大 +10.12%/-10.05%）; 5% 值由深 2011 3.3.15 / 2013 3.3.15 追认; 1998 年规则原文未取得, 起点按 owner 2026-10-29 接受; rounding=half_up (R9: 深 3.3.19); evidence=仓库外报告（2026-10-29）§2.4 / D-63",
+      "basis_ref": "R2 前段: tier=OWNER_RISK_ACCEPTED(起点) + APPROVED_SOURCE(5% 值); start=深交所《上市公司简称变更表》(SSGSGMXX/tab2) 首个 ST 事件 000511 1998-04-28「ST辽物资」, 1998-04-29 000548/000558 跟进; 锚定=.day 000511 1998-04-28..1999-04-27 共 235 根, |涨跌幅|<=5.07%, >5.2% 0 根（ST 前 70 根最大 +10.12%/-10.05%）; 5% 值由深 2011 3.3.15 / 2013 3.3.15 追认; 1998 年规则原文未取得, 起点按 owner 2026-10-29 接受; rounding=half_up (R9: 深 3.3.19); evidence=仓库外报告（2026-10-29）§2.4 / D-64",
       "basis_status": "verified"
     },
     {
@@ -85,7 +85,7 @@
       "rounding": "half_up",
       "effective_from": "2011-02-28",
       "effective_to": "2023-02-17",
-      "basis_ref": "R2 前段: tier=APPROVED_SOURCE; doc=深交所《交易规则》2011 版 3.3.15 与 2013 版 3.3.15「ST/*ST 股票涨跌幅 5%」; effective=2011-02-28（2011 版 10.11 条「自 2011 年 2 月 28 日起施行」）; 2013-11-30 起由 2013 版 3.3.15 续接, 带宽未变; *ST 与 ST 同带宽（2003 年起 43 条 *ST 简称变更, .day 未见带宽变化）, 不另立 star_st 行; rounding=half_up (R9: 深 3.3.19); evidence=仓库外报告（2026-10-29）§2.1/§2.3 / D-63",
+      "basis_ref": "R2 前段: tier=APPROVED_SOURCE; doc=深交所《交易规则》2011 版 3.3.15 与 2013 版 3.3.15「ST/*ST 股票涨跌幅 5%」; effective=2011-02-28（2011 版 10.11 条「自 2011 年 2 月 28 日起施行」）; 2013-11-30 起由 2013 版 3.3.15 续接, 带宽未变; *ST 与 ST 同带宽（2003 年起 43 条 *ST 简称变更, .day 未见带宽变化）, 不另立 star_st 行; rounding=half_up (R9: 深 3.3.19); evidence=仓库外报告（2026-10-29）§2.1/§2.3 / D-64",
       "basis_status": "verified"
     },
     {
@@ -99,7 +99,7 @@
       "rounding": "half_up",
       "effective_from": "1998-04-29",
       "effective_to": "2006-07-01",
-      "basis_ref": "R2 前段: tier=OWNER_RISK_ACCEPTED(起点) + APPROVED_SOURCE(5% 值); start=沪市 2000 年前无日期化简称表（D-58）, 取首个可观察 5% 交易日 1998-04-29; 锚定=.day 600831 1998-04-29..2000-04-01 共 464 根, |涨跌幅|<=5.09%, >5.2% 0 根（1998-04-27 low -10.00%）, 600647 1998-04-29 起 -5.00%; 1998-04-28 沪市候选无 bar, 4/28 与 4/29 的差别不影响任何 bar 输出; 5% 值由沪 2006 3.4.13 追认; 1998 年规则原文未取得, 起点按 owner 2026-10-29 接受; 沪市 2000 前 ST 状态仍 NOT_AVAILABLE（D-58）, 本行不把状态变 known; rounding=half_up (R9: 沪 3.3.17); evidence=仓库外报告（2026-10-29）§2.4 / D-63",
+      "basis_ref": "R2 前段: tier=OWNER_RISK_ACCEPTED(起点) + APPROVED_SOURCE(5% 值); start=沪市 2000 年前无日期化简称表（D-58）, 取首个可观察 5% 交易日 1998-04-29; 锚定=.day 600831 1998-04-29..2000-04-01 共 464 根, |涨跌幅|<=5.09%, >5.2% 0 根（1998-04-27 low -10.00%）, 600647 1998-04-29 起 -5.00%; 1998-04-28 沪市候选无 bar, 4/28 与 4/29 的差别不影响任何 bar 输出; 5% 值由沪 2006 3.4.13 追认; 1998 年规则原文未取得, 起点按 owner 2026-10-29 接受; 沪市 2000 前 ST 状态仍 NOT_AVAILABLE（D-58）, 本行不把状态变 known; rounding=half_up (R9: 沪 3.3.17); evidence=仓库外报告（2026-10-29）§2.4 / D-64",
       "basis_status": "verified"
     },
     {
@@ -113,7 +113,7 @@
       "rounding": "half_up",
       "effective_from": "2006-07-01",
       "effective_to": "2013-01-01",
-      "basis_ref": "R2 前段: tier=APPROVED_SOURCE; doc=上交所《交易规则》(2006 版) 3.4.13「风险警示股票涨跌幅 5%」+ 11.7 条「自 2006 年 7 月 1 日起施行」; effective=2006-07-01; rounding=half_up (R9: 沪 3.3.17); evidence=仓库外报告（2026-10-29）§2.1 / D-63",
+      "basis_ref": "R2 前段: tier=APPROVED_SOURCE; doc=上交所《交易规则》(2006 版) 3.4.13「风险警示股票涨跌幅 5%」+ 11.7 条「自 2006 年 7 月 1 日起施行」; effective=2006-07-01; rounding=half_up (R9: 沪 3.3.17); evidence=仓库外报告（2026-10-29）§2.1 / D-64",
       "basis_status": "verified"
     },
     {
@@ -127,7 +127,7 @@
       "rounding": "half_up",
       "effective_from": "2013-01-01",
       "effective_to": "2023-02-17",
-      "basis_ref": "R2 前段: tier=APPROVED_SOURCE; doc=上交所《风险警示板股票交易管理办法》(上证公字〔2012〕72号) 第 7 条「风险警示股票涨跌幅 5%」; effective=2013-01-01（通知「自 2013 年 1 月 1 日起施行」）; 2020-12-31 起由上证发〔2020〕103号 办法第 7 条续接, 值未变; 其间 2015-01-30/2017-06-28/2018-08-06/2020-05 修订未改 5% 带宽; rounding=half_up (R9: 沪 3.3.17); evidence=仓库外报告（2026-10-29）§2.1 / D-63",
+      "basis_ref": "R2 前段: tier=APPROVED_SOURCE; doc=上交所《风险警示板股票交易管理办法》(上证公字〔2012〕72号) 第 7 条「风险警示股票涨跌幅 5%」; effective=2013-01-01（通知「自 2013 年 1 月 1 日起施行」）; 2020-12-31 起由上证发〔2020〕103号 办法第 7 条续接, 值未变; 其间 2015-01-30/2017-06-28/2018-08-06/2020-05 修订未改 5% 带宽; rounding=half_up (R9: 沪 3.3.17); evidence=仓库外报告（2026-10-29）§2.1 / D-64",
       "basis_status": "verified"
     },
     {
@@ -295,7 +295,7 @@
       "rounding": "half_up",
       "effective_from": "1996-12-16",
       "effective_to": "2006-07-01",
-      "basis_ref": "R6 前段: tier=OWNER_RISK_ACCEPTED; start=1996-12-16 无当年原文, 以沪 2006 3.4.13「首个交易日无价格涨跌幅限制」追认, 并以 .day 首 bar 抽样行情锚定（1996..2006 沪市首日多次越过 10%）; band_side=none 是已知的「无限制」（Unbounded）, 不是 unknown; 沪 2006 3.4.15/3.4.16 的集合竞价/连续竞价有效申报范围是另一层约束, 不在本行; evidence=仓库外报告（2026-10-29）§3.3 / D-63",
+      "basis_ref": "R6 前段: tier=OWNER_RISK_ACCEPTED; start=1996-12-16 无当年原文, 以沪 2006 3.4.13「首个交易日无价格涨跌幅限制」追认, 并以 .day 首 bar 抽样行情锚定（1996..2006 沪市首日多次越过 10%）; band_side=none 是已知的「无限制」（Unbounded）, 不是 unknown; 沪 2006 3.4.15/3.4.16 的集合竞价/连续竞价有效申报范围是另一层约束, 不在本行; evidence=仓库外报告（2026-10-29）§3.3 / D-64",
       "basis_status": "verified"
     },
     {
@@ -309,7 +309,7 @@
       "rounding": "half_up",
       "effective_from": "2006-07-01",
       "effective_to": "2013-12-13",
-      "basis_ref": "R6 前段: tier=APPROVED_SOURCE; doc=上交所《交易规则》(2006 版) 3.4.13「首个交易日无价格涨跌幅限制」+ 11.7 条（2006-07-01 施行）; effective=2006-07-01; band_side=none 是已知的「无限制」; 沪 2013-12-13 起为 144%/64% 申报范围, 见 not_encoded; evidence=仓库外报告（2026-10-29）§3.3 / D-63",
+      "basis_ref": "R6 前段: tier=APPROVED_SOURCE; doc=上交所《交易规则》(2006 版) 3.4.13「首个交易日无价格涨跌幅限制」+ 11.7 条（2006-07-01 施行）; effective=2006-07-01; band_side=none 是已知的「无限制」; 沪 2013-12-13 起为 144%/64% 申报范围, 见 not_encoded; evidence=仓库外报告（2026-10-29）§3.3 / D-64",
       "basis_status": "verified"
     },
     {
@@ -323,7 +323,7 @@
       "rounding": "half_up",
       "effective_from": "1996-12-16",
       "effective_to": "2011-02-28",
-      "basis_ref": "R6 前段: tier=OWNER_RISK_ACCEPTED; start=1996-12-16 无当年原文, 以深 2011 3.3.17「IPO 首日不实行涨跌幅限制」追认, 并以 .day 首 bar 抽样行情锚定; band_side=none 是已知的「无限制」（Unbounded）, 不是 unknown; evidence=仓库外报告（2026-10-29）§3.3 / D-63",
+      "basis_ref": "R6 前段: tier=OWNER_RISK_ACCEPTED; start=1996-12-16 无当年原文, 以深 2011 3.3.17「IPO 首日不实行涨跌幅限制」追认, 并以 .day 首 bar 抽样行情锚定; band_side=none 是已知的「无限制」（Unbounded）, 不是 unknown; evidence=仓库外报告（2026-10-29）§3.3 / D-64",
       "basis_status": "verified"
     },
     {
@@ -337,7 +337,7 @@
       "rounding": "half_up",
       "effective_from": "2011-02-28",
       "effective_to": "2013-12-13",
-      "basis_ref": "R6 前段: tier=APPROVED_SOURCE; doc=深交所《交易规则》2011 版 3.3.17（2011-02-28 施行）+ 2013 版 3.3.17「IPO 首日不实行涨跌幅限制」; effective=2011-02-28, 2013-11-30 续接; band_side=none 是已知的「无限制」; evidence=仓库外报告（2026-10-29）§3.3 / D-63",
+      "basis_ref": "R6 前段: tier=APPROVED_SOURCE; doc=深交所《交易规则》2011 版 3.3.17（2011-02-28 施行）+ 2013 版 3.3.17「IPO 首日不实行涨跌幅限制」; effective=2011-02-28, 2013-11-30 续接; band_side=none 是已知的「无限制」; evidence=仓库外报告（2026-10-29）§3.3 / D-64",
       "basis_status": "verified"
     },
     {
@@ -351,7 +351,7 @@
       "rounding": "half_up",
       "effective_from": "2013-12-13",
       "effective_to": "2014-06-13",
-      "basis_ref": "R6 前段: tier=APPROVED_SOURCE; doc=深证会〔2013〕142号（2013-12-13 施行）: 只有开盘集合竞价 ±20% 与盘中 10%/20% 停牌, 没有全日 144%/64%; effective=2013-12-13; band_side=none 只表达「无全日涨跌幅」, 开盘 ±20% 与停牌是另一层约束; 深 2014-06-13 起为 144%/64%, 见 not_encoded; evidence=仓库外报告（2026-10-29）§3.1/§3.2 / D-63",
+      "basis_ref": "R6 前段: tier=APPROVED_SOURCE; doc=深证会〔2013〕142号（2013-12-13 施行）: 只有开盘集合竞价 ±20% 与盘中 10%/20% 停牌, 没有全日 144%/64%; effective=2013-12-13; band_side=none 只表达「无全日涨跌幅」, 开盘 ±20% 与停牌是另一层约束; 深 2014-06-13 起为 144%/64%, 见 not_encoded; evidence=仓库外报告（2026-10-29）§3.1/§3.2 / D-64",
       "basis_status": "verified"
     },
     {
@@ -365,7 +365,7 @@
       "rounding": "half_up",
       "effective_from": "2023-02-17",
       "effective_to": null,
-      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; effective=2023-02-17 起; 替代沪 2013-12-13（深 2014-06-13）起至 2023-02-16 的 44%/36% 首日段（该段在单 band 结构下无法表达，见 not_encoded，D-63）; 行情侧：2025-2026 主板越过 10% 的 22 根 bar 全部落在上市后第 1-4 个交易日; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; effective=2023-02-17 起; 替代沪 2013-12-13（深 2014-06-13）起至 2023-02-16 的 44%/36% 首日段（该段在单 band 结构下无法表达，见 not_encoded，D-64）; 行情侧：2025-2026 主板越过 10% 的 22 根 bar 全部落在上市后第 1-4 个交易日; evidence=#395 2026-10-26 评论 / D-44",
       "basis_status": "verified"
     },
     {
@@ -393,7 +393,7 @@
       "rounding": "half_up",
       "effective_from": "2023-02-17",
       "effective_to": null,
-      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; effective=2023-02-17 起; 替代沪 2013-12-13（深 2014-06-13）起至 2023-02-16 的 44%/36% 首日段（该段在单 band 结构下无法表达，见 not_encoded，D-63）; 行情侧：2025-2026 主板越过 10% 的 22 根 bar 全部落在上市后第 1-4 个交易日; evidence=#395 2026-10-26 评论 / D-44",
+      "basis_ref": "R6: tier=APPROVED_SOURCE; doc=全面注册制主板交易规则（2023-02-17 施行）「上市后前五个交易日不设涨跌幅限制」; effective=2023-02-17 起; 替代沪 2013-12-13（深 2014-06-13）起至 2023-02-16 的 44%/36% 首日段（该段在单 band 结构下无法表达，见 not_encoded，D-64）; 行情侧：2025-2026 主板越过 10% 的 22 根 bar 全部落在上市后第 1-4 个交易日; evidence=#395 2026-10-26 评论 / D-44",
       "basis_status": "verified"
     },
     {

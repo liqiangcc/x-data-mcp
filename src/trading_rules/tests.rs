@@ -428,7 +428,7 @@ fn the_rule_source_is_admitted_not_pending() {
     }
 }
 
-/// D-63 (2026-10-29): the R2 pre-2023-02-17 span is five effective-dated rows.
+/// D-64 (2026-10-29): the R2 pre-2023-02-17 span is five effective-dated rows.
 /// Every boundary day is probed from both sides so an off-by-one in the
 /// half-open interval cannot slip through.
 #[test]
@@ -551,7 +551,7 @@ fn r2_pre_2023_segments_change_on_their_own_boundary_day() {
     }
 }
 
-/// D-63: the pre-2023 first-day no-limit segments are encoded as
+/// D-64: the pre-2023 first-day no-limit segments are encoded as
 /// `band_side=none`. The 44%/36% declared ranges are not, so those days must
 /// stay `rule_missing` instead of borrowing a `none` row.
 #[test]
@@ -637,7 +637,7 @@ fn r6_first_day_no_limit_segments_stop_where_the_declared_range_starts() {
     );
 
     // SH has a 44%/36% declared range from 2013-12-13; SZ from 2014-06-13.
-    // Neither may fall back to `none`, and both stay unencoded (D-63).
+    // Neither may fall back to `none`, and both stay unencoded (D-64).
     for (market, when) in [
         (RuleMarket::Sh, day(2013, 12, 13)),
         (RuleMarket::Sh, day(2014, 6, 12)),
@@ -662,7 +662,7 @@ fn expected_first_day_2023(market: RuleMarket) -> &'static str {
     }
 }
 
-/// D-63 leaves exactly two deliberately unencoded rules and names the reason
+/// D-64 leaves exactly two deliberately unencoded rules and names the reason
 /// that blocks each one. The deleted entries must not come back by accident:
 /// G-6 is closed and the pre-2023 ST span is encoded.
 #[test]
@@ -670,6 +670,7 @@ fn the_rule_book_names_the_two_remaining_not_encoded_rules() {
     let raw: serde_json::Value =
         serde_json::from_str(include_str!("a7-d44-v1.json")).expect("the rule book is JSON");
     let snapshot = raw["snapshot_id"].as_str().expect("snapshot_id");
+    assert!(snapshot.contains("D-64"), "{snapshot}");
     assert!(snapshot.contains("2026-10-29"), "{snapshot}");
     let entries: Vec<(&str, &str)> = raw["not_encoded"]
         .as_array()

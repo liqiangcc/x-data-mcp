@@ -507,7 +507,7 @@ impl Fixture {
         .unwrap();
     }
 
-    /// Extend the fixture backwards in time (D-63's pre-2023 rows). Each
+    /// Extend the fixture backwards in time (D-64's pre-2023 rows). Each
     /// member keeps its own bar days so no series carries a bar before its
     /// listing; the security master, risk intervals and calendar are rewritten
     /// through the same production paths the daily item uses.
@@ -951,7 +951,7 @@ fn an_unknown_st_status_still_answers_when_every_status_shares_the_band() {
     assert_eq!(main.candidates[0].band_bp, Some(1_000));
 }
 
-/// D-63: the pre-2023 main-board first-day rows are `band_side=none`, so the
+/// D-64: the pre-2023 main-board first-day rows are `band_side=none`, so the
 /// derivation answers `unbounded` (a known no-limit) instead of `unknown`.
 #[test]
 fn a_pre_2023_first_day_is_unbounded_not_unknown() {
@@ -1019,7 +1019,7 @@ fn a_pre_2023_first_day_is_unbounded_not_unknown() {
     }
 }
 
-/// D-63: the 44%/36% declared ranges stay unencoded, so the derivation keeps
+/// D-64: the 44%/36% declared ranges stay unencoded, so the derivation keeps
 /// answering `rule_missing` there — including SH from 2013-12-13, while the
 /// same SZ day is a known no-limit day.
 #[test]
@@ -1094,7 +1094,7 @@ fn the_declared_range_first_day_is_still_rule_missing() {
     );
 }
 
-/// D-63 encodes the SH 1998 R2 start, but D-58 still leaves SH's pre-2000 ST
+/// D-64 encodes the SH 1998 R2 start, but D-58 still leaves SH's pre-2000 ST
 /// status unknown. A rule row must not turn an unknown status into a 5% answer.
 #[test]
 fn the_r2_pre_2000_sh_row_does_not_make_an_unknown_st_status_known() {
