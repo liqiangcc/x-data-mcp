@@ -331,12 +331,12 @@ fn two_snapshots_on_one_day_resolve_to_the_later_ingest_and_drop_the_zero_length
             Some(DICT),
         ),
     ];
-    let rebuild = rebuild(&inputs).unwrap();
+    let two_days = rebuild(&inputs).unwrap();
     // Both snapshots start on 10-12 (their own publisher dates differ only in
     // metadata; the same-day case is two snapshots with the same start day,
     // which this fixture makes explicit by using one start date).
-    assert_eq!(rebuild.superseded, 0, "different days are not a collision");
-    assert_eq!(assignment(&rebuild.assignments, "sz", "000001").len(), 2);
+    assert_eq!(two_days.superseded, 0, "different days are not a collision");
+    assert_eq!(assignment(&two_days.assignments, "sz", "000001").len(), 2);
 
     // Same day: the second snapshot starts that same day, so the first
     // same-day segment is zero-length and must not be written.
