@@ -14,6 +14,7 @@ fn rule(id: &str, status: StatusClass, phase: ListingPhase, band_bp: i64) -> Pri
         status_class: status,
         listing_phase: phase,
         band_bp: Some(band_bp),
+        min_band_ticks: None,
         band_side: BandSide::Both,
         rounding: Rounding::HalfUp,
         effective_from: day(2020, 1, 1),

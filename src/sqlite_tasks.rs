@@ -40,20 +40,26 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
 /// `derived_dataset_versions` vocabulary (M2 PR-1, issue-391 §9) — structure
 /// only, no writer. Schema 24 widens `capital_events.category` to the D-50
 /// R-3 admission set (2/3/5/7/8/9/10) by rebuilding that one table; 023 stays
-/// immutable. Every step stays fresh-init only, never in-place: a file built
-/// by another schema revision is refused, not upgraded (D-08).
-pub const COMPACT_SCHEMA_VERSION: u32 = 24;
+/// immutable. Schema 25 adds the M3 index tables over the source store
+/// (industry snapshots/assignments, exchange source snapshots, generation
+/// facts, retire exemptions) plus the nullable
+/// `price_limit_rules.min_band_ticks` floor column (issue-446 §9.1/§9.2,
+/// owner 2026-10-29) — structure only, no writer. Every step stays fresh-init
+/// only, never in-place: a file built by another schema revision is refused,
+/// not upgraded (D-08).
+pub const COMPACT_SCHEMA_VERSION: u32 = 25;
 /// Fixed-length array on purpose: the length is a compile-time assertion that
 /// `COMPACT_SCHEMA_VERSION == MIGRATIONS.len() + COMPACT_MIGRATIONS.len()`, and
 /// the order is asserted at open time by the positional checksum comparison in
 /// `check_schema` (a reordered or edited migration file fails closed).
-pub(crate) const COMPACT_MIGRATIONS: [&str; 6] = [
+pub(crate) const COMPACT_MIGRATIONS: [&str; 7] = [
     include_str!("../migrations/tasks/019_compact_market.sql"),
     include_str!("../migrations/tasks/020_evidence_parts.sql"),
     include_str!("../migrations/tasks/021_latest_only.sql"),
     include_str!("../migrations/tasks/022_research_data.sql"),
     include_str!("../migrations/tasks/023_security_master.sql"),
     include_str!("../migrations/tasks/024_capital_categories.sql"),
+    include_str!("../migrations/tasks/025_m3_index_tables.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.

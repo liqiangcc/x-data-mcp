@@ -56,6 +56,10 @@ M2 的 6 个解析事实数据集（`market.security_master`、`security_names`�
 有写入路径；交易所名单与 A 股总股本仍待准入，历史 ST（#308）、停复牌公告与涨跌停规则原文
 已按 D-58/D-60/D-59 裁决准入、写入器未实现，这些部分在 item 结果里按 `pending_source` 记录；
 `security_names` 尚无写入器。未登记版本返回 `absent` 与 0 行（见 §3.1「M2 部署状态」）。
+数据库 compact schema：**生产仍是 24，代码是 25（未部署）**。代码里的 schema 25（M3 PR-1，
+[#446](tasks/issue-446-m3-delisted-industry.md) §9）只加 5 张来源库索引表与
+`price_limit_rules.min_band_ticks` 可空列，不改变上述 6 个数据集的行形状；这些表和列
+目前全部为空、无写入路径。
 
 **实体身份**：`{exchange, code}`，`exchange ∈ {sh, sz}`，`code` 为 6 位数字，展示形式
 `sh.600000`（`src/data_supply/wire.rs:34-56`）。非规范实体在写入侧 fail-closed

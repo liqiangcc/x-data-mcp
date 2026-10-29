@@ -65,9 +65,9 @@ fn push_opt_day(out: &mut Vec<u8>, day: Option<NaiveDate>) {
 }
 
 /// Content identity of the rule dataset (§3.10). The digest covers every
-/// column that changes an answer: scope, band, side, rounding, interval and
-/// basis. `basis_status` is included because a pending row becoming verified
-/// changes which rule the derivation may use.
+/// column that changes an answer: scope, band, the `min_band_ticks` floor,
+/// side, rounding, interval and basis. `basis_status` is included because a
+/// pending row becoming verified changes which rule the derivation may use.
 fn rules_digest(book: &RuleBook) -> Digest {
     let mut payload = Vec::with_capacity(128 + book.price_limits.len() * 96);
     payload.extend_from_slice(b"trading-rules-v1\0");
@@ -85,6 +85,7 @@ fn rules_digest(book: &RuleBook) -> Digest {
         push_text(&mut payload, rule.status_class.as_str());
         push_text(&mut payload, rule.listing_phase.as_str());
         push_opt_i64(&mut payload, rule.band_bp);
+        push_opt_i64(&mut payload, rule.min_band_ticks);
         push_text(&mut payload, rule.band_side.as_str());
         push_text(&mut payload, rule.rounding.as_str());
         push_day(&mut payload, rule.effective_from);
@@ -119,8 +120,8 @@ fn rules_digest(book: &RuleBook) -> Digest {
 pub(crate) fn read_trading_rules(c: &Connection) -> Result<RuleBook, Error> {
     let mut price_statement = c
         .prepare(
-            "SELECT rule_id,market,board,status_class,listing_phase,band_bp,band_side,\
-             rounding,effective_from,effective_to,basis_ref,basis_status \
+            "SELECT rule_id,market,board,status_class,listing_phase,band_bp,min_band_ticks,\
+             band_side,rounding,effective_from,effective_to,basis_ref,basis_status \
              FROM price_limit_rules ORDER BY rule_id",
         )
         .map_err(storage)?;
@@ -133,12 +134,13 @@ pub(crate) fn read_trading_rules(c: &Connection) -> Result<RuleBook, Error> {
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
                 row.get::<_, Option<i64>>(5)?,
-                row.get::<_, String>(6)?,
+                row.get::<_, Option<i64>>(6)?,
                 row.get::<_, String>(7)?,
-                row.get::<_, i64>(8)?,
-                row.get::<_, Option<i64>>(9)?,
-                row.get::<_, String>(10)?,
+                row.get::<_, String>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, Option<i64>>(10)?,
                 row.get::<_, String>(11)?,
+                row.get::<_, String>(12)?,
             ))
         })
         .map_err(storage)?;
@@ -151,6 +153,7 @@ pub(crate) fn read_trading_rules(c: &Connection) -> Result<RuleBook, Error> {
             status_class,
             listing_phase,
             band_bp,
+            min_band_ticks,
             band_side,
             rounding,
             effective_from,
@@ -169,6 +172,7 @@ pub(crate) fn read_trading_rules(c: &Connection) -> Result<RuleBook, Error> {
             listing_phase: ListingPhase::parse(&listing_phase)
                 .ok_or_else(|| integrity("price_limit_rules listing_phase is unregistered"))?,
             band_bp,
+            min_band_ticks,
             band_side: BandSide::parse(&band_side)
                 .ok_or_else(|| integrity("price_limit_rules band_side is unregistered"))?,
             rounding: Rounding::parse(&rounding)
@@ -299,8 +303,9 @@ pub(crate) fn replace_trading_rules(
         }
         c.execute(
             "INSERT INTO price_limit_rules(rule_id,market,board,status_class,listing_phase,\
-             band_bp,band_side,rounding,effective_from,effective_to,basis_ref,basis_status,\
-             evidence_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+             band_bp,min_band_ticks,band_side,rounding,effective_from,effective_to,basis_ref,\
+             basis_status,evidence_digest) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 rule.rule_id,
                 rule.market.as_str(),
@@ -308,6 +313,7 @@ pub(crate) fn replace_trading_rules(
                 rule.status_class.as_str(),
                 rule.listing_phase.as_str(),
                 rule.band_bp,
+                rule.min_band_ticks,
                 rule.band_side.as_str(),
                 rule.rounding.as_str(),
                 compact_market::epoch_day(rule.effective_from),

@@ -862,6 +862,13 @@ const COMPACT_TABLES: [&str; 20] = [
     "suspension_intervals",
     "price_limit_rules",
     "min_tick_rules",
+    // Schema 25 (M3 PR-1, issue-446 §9.2): the five index tables over the
+    // source store, created empty; writers land in PR-2/PR-6/PR-8.
+    "industry_snapshots",
+    "industry_assignments",
+    "exchange_source_snapshots",
+    "generation_facts",
+    "retire_exemptions",
 ];
 /// Dropped by migration 021 — their absence is part of the v21 shape.
 const DROPPED_V19_TABLES: [&str; 12] = [
@@ -1138,6 +1145,8 @@ fn assert_compact_shape(path: &std::path::Path) {
         "effective_to",
         "basis_ref",
         "basis_status",
+        // Schema 25: the nullable minimum-band floor (owner 2026-10-29).
+        "min_band_ticks",
     ] {
         assert!(limits.contains(&column.to_string()), "missing {column}");
     }
@@ -1222,9 +1231,10 @@ fn hex32(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
 
-/// Schema 24 length/order assertion (issue-391 §9.4, §19 note 8): the fixed
-/// array length, the schema constant and the `schema_migrations` rows must
-/// agree, and the tail of the chain must be the D-50 capital-category step.
+/// Schema 25 length/order assertion (issue-446 §9.1/§9.3): the fixed array
+/// length, the schema constant and the `schema_migrations` rows must agree, and
+/// the tail of the chain must be the M3 index-table step. 022/023/024 stay
+/// immutable.
 #[test]
 fn compact_migration_chain_matches_schema_version() {
     assert_eq!(
@@ -1234,15 +1244,24 @@ fn compact_migration_chain_matches_schema_version() {
     );
     let tail = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 1];
     assert!(
-        tail.contains("CREATE TABLE capital_events_v24(")
-            && tail.contains("category IN (2,3,5,7,8,9,10)"),
-        "the tail of the compact chain is not migration 024"
+        tail.contains("CREATE TABLE industry_snapshots(")
+            && tail.contains("CREATE TABLE industry_assignments(")
+            && tail.contains("CREATE TABLE exchange_source_snapshots(")
+            && tail.contains("CREATE TABLE generation_facts(")
+            && tail.contains("CREATE TABLE retire_exemptions(")
+            && tail.contains("ADD COLUMN min_band_ticks INTEGER"),
+        "the tail of the compact chain is not migration 025"
     );
     let previous = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 2];
     assert!(
-        previous.contains("CREATE TABLE security_master(")
-            && previous.contains("CREATE TABLE price_limit_rules(")
-            && previous.contains("CREATE TABLE min_tick_rules("),
+        previous.contains("CREATE TABLE capital_events_v24(")
+            && previous.contains("category IN (2,3,5,7,8,9,10)"),
+        "migration 024 was not kept immutable before 025"
+    );
+    let earlier = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 3];
+    assert!(
+        earlier.contains("CREATE TABLE security_master(")
+            && earlier.contains("CREATE TABLE price_limit_rules("),
         "migration 023 was not kept immutable before 024"
     );
     let dir = tempfile::tempdir().unwrap();
@@ -1320,6 +1339,392 @@ fn schema24_builds_on_fresh_init_and_empty_upgrade() {
             assert_eq!(rows, 1, "migration {version:03} missing (fresh={fresh})");
         }
     }
+}
+
+/// M3 PR-1 (issue-446 §9.3): schema 25 builds on both init paths — the fresh
+/// compact init and the empty 18 -> compact upgrade — with `user_version=25`,
+/// the five index tables created empty, `price_limit_rules.min_band_ticks`
+/// present and NULL everywhere, and clean foreign keys. The "24 -> 25" step
+/// itself is fresh-init only (D-08); the separate refused-not-upgraded test
+/// covers what a schema-24 file gets.
+#[test]
+fn schema25_builds_on_fresh_init_and_empty_upgrade() {
+    for fresh in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m3.db");
+        let db = SqliteTasks::new(&path);
+        if fresh {
+            db.initialize_compact().unwrap();
+        } else {
+            db.initialize().unwrap();
+            db.upgrade_compact().unwrap();
+        }
+        assert_compact_shape(&path);
+        assert_eq!(
+            raw_user_version(&path),
+            COMPACT_SCHEMA_VERSION,
+            "user_version must be 25 (fresh={fresh})"
+        );
+        let c = Connection::open(&path).unwrap();
+        for table in [
+            "industry_snapshots",
+            "industry_assignments",
+            "exchange_source_snapshots",
+            "generation_facts",
+            "retire_exemptions",
+        ] {
+            let n: i64 = c
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} must be created empty (fresh={fresh})");
+        }
+        let floors: i64 = c
+            .query_row(
+                "SELECT count(*) FROM price_limit_rules WHERE min_band_ticks IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(floors, 0, "min_band_ticks must start NULL (fresh={fresh})");
+        assert_eq!(
+            raw_columns(&path, "price_limit_rules")
+                .last()
+                .map(String::as_str),
+            Some("min_band_ticks"),
+            "025 must append min_band_ticks instead of rebuilding the table (fresh={fresh})"
+        );
+        let broken: bool = c
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap();
+        assert!(!broken, "foreign key violations (fresh={fresh})");
+        for version in [24, 25] {
+            let rows: i64 = c
+                .query_row(
+                    "SELECT count(*) FROM schema_migrations WHERE version=?1",
+                    [version],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(rows, 1, "migration {version:03} missing (fresh={fresh})");
+        }
+    }
+}
+
+/// A schema-24 file is neither upgraded in place nor served: the current
+/// binary refuses it (D-08 fresh-init only), which is also the branch an older
+/// binary takes on a schema-25 file (`version > COMPACT_SCHEMA_VERSION`).
+#[test]
+fn schema24_files_are_refused_not_upgraded_to_25() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("v24.db");
+    let db = SqliteTasks::new(&path);
+    db.initialize_compact().unwrap();
+    {
+        let c = Connection::open(&path).unwrap();
+        // A schema-24 file: migration rows 1..24 and user_version 24. The
+        // migration identity check must accept the prefix (024 is untouched),
+        // so the refusal comes from the version guard, not from a stale
+        // checksum.
+        c.execute("DELETE FROM schema_migrations WHERE version>24", [])
+            .unwrap();
+        c.pragma_update(None, "user_version", 24).unwrap();
+    }
+    let error = db.read(|_| Ok(())).unwrap_err().to_string();
+    assert!(
+        error.contains("unsupported/uninitialized schema 24"),
+        "{error}"
+    );
+    let error = db.write(|_| Ok(())).unwrap_err().to_string();
+    assert!(
+        error.contains("unsupported/uninitialized schema 24"),
+        "{error}"
+    );
+    let error = SqliteTasks::new(&path)
+        .upgrade_compact()
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("requires exact schema 18"),
+        "a schema-24 file took an upgrade path: {error}"
+    );
+    assert_eq!(
+        raw_user_version(&path),
+        24,
+        "the schema-24 file was rewritten"
+    );
+}
+
+/// AC-M3-3/5/9 storage surface: the unique keys, CHECKs and foreign key of the
+/// five schema-25 tables reject duplicates, unregistered vocabulary and
+/// impossible intervals. `industry_assignments` is the one that also encodes
+/// the §9.3 rules: `effective_to > effective_from` and a NOT NULL `known_at`.
+#[test]
+fn schema25_constraints_reject_duplicates_and_bad_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("m3-constraints.db");
+    SqliteTasks::new(&path).initialize_compact().unwrap();
+    let c = Connection::open(&path).unwrap();
+    c.pragma_update(None, "foreign_keys", true).unwrap();
+    fn rejected(label: &str, r: rusqlite::Result<usize>) {
+        assert!(r.is_err(), "{label} was accepted");
+    }
+    let member = hex32(0x61);
+    let store = hex32(0x62);
+    let generation = hex32(0x63);
+
+    // industry_snapshots: content identity is the primary key.
+    let snapshot = |source_kind: &str, grade: &str| {
+        format!(
+            "INSERT INTO industry_snapshots(member_sha256,store_sha256,\
+             generation_manifest_sha256,source_kind,ingested_at,evidence_grade,\
+             parser_version,row_count,scope_member_count) \
+             VALUES(X'{member}',X'{store}',X'{generation}','{source_kind}',\
+             '2026-10-29T00:00:00Z','{grade}','tdxhy-v1',10,10)"
+        )
+    };
+    c.execute(&snapshot("generation", "B"), []).unwrap();
+    rejected(
+        "duplicate industry_snapshots member_sha256",
+        c.execute(&snapshot("generation", "B"), []),
+    );
+    rejected(
+        "unregistered industry_snapshots source_kind",
+        c.execute(&snapshot("streamed", "B"), []),
+    );
+    rejected(
+        "unregistered industry_snapshots evidence_grade",
+        c.execute(&snapshot("generation", "D"), []),
+    );
+
+    // industry_assignments: PK, FK to the snapshot, half-open interval, NOT
+    // NULL known_at and the closed vocabularies.
+    fn assignment(
+        exchange: &str,
+        from: i64,
+        to: &str,
+        known_at: &str,
+        from_basis: &str,
+        name_status: &str,
+        member: &str,
+    ) -> String {
+        format!(
+            "INSERT INTO industry_assignments(exchange,code,scheme,level,industry_code,\
+             name,name_status,effective_from,effective_to,known_at,effective_from_basis,\
+             evidence_grade,snapshot_member_sha256) \
+             VALUES('{exchange}','600000','tdx_research_industry',1,'T01','银行',\
+             '{name_status}',{from},{to},'{known_at}','{from_basis}','B',X'{member}')"
+        )
+    }
+    c.execute(
+        &assignment(
+            "sh",
+            1000,
+            "NULL",
+            "2026-10-29T00:00:00Z",
+            "publisher_last_modified",
+            "resolved",
+            &member,
+        ),
+        [],
+    )
+    .unwrap();
+    rejected(
+        "duplicate industry_assignments key",
+        c.execute(
+            &assignment(
+                "sh",
+                1000,
+                "NULL",
+                "2026-10-29T00:00:00Z",
+                "publisher_last_modified",
+                "resolved",
+                &member,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "industry_assignments effective_to == effective_from",
+        c.execute(
+            &assignment(
+                "sh",
+                1100,
+                "1100",
+                "2026-10-29T00:00:00Z",
+                "publisher_last_modified",
+                "resolved",
+                &member,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "industry_assignments effective_to < effective_from",
+        c.execute(
+            &assignment(
+                "sh",
+                1100,
+                "1099",
+                "2026-10-29T00:00:00Z",
+                "publisher_last_modified",
+                "resolved",
+                &member,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "industry_assignments NULL known_at",
+        c.execute(
+            &assignment(
+                "sh",
+                1100,
+                "NULL",
+                "NULL",
+                "publisher_last_modified",
+                "resolved",
+                &member,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "industry_assignments missing snapshot (foreign key)",
+        c.execute(
+            &assignment(
+                "sh",
+                1100,
+                "NULL",
+                "2026-10-29T00:00:00Z",
+                "publisher_last_modified",
+                "resolved",
+                &hex32(0x64),
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "unregistered industry_assignments exchange",
+        c.execute(
+            &assignment(
+                "bj",
+                1100,
+                "NULL",
+                "2026-10-29T00:00:00Z",
+                "publisher_last_modified",
+                "resolved",
+                &member,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "unregistered industry_assignments effective_from_basis",
+        c.execute(
+            &assignment(
+                "sh",
+                1100,
+                "NULL",
+                "2026-10-29T00:00:00Z",
+                "guess",
+                "resolved",
+                &member,
+            ),
+            [],
+        ),
+    );
+    rejected(
+        "unregistered industry_assignments name_status",
+        c.execute(
+            &assignment(
+                "sh",
+                1100,
+                "NULL",
+                "2026-10-29T00:00:00Z",
+                "publisher_last_modified",
+                "pending",
+                &member,
+            ),
+            [],
+        ),
+    );
+
+    // exchange_source_snapshots: snapshot_id (byte sha) is the primary key;
+    // the UNIQUE includes it, so re-freezing the same request with different
+    // bytes is allowed while a duplicate index row is not.
+    let exchange = |snapshot_id: &str, store_kind: &str, basis_status: &str| {
+        format!(
+            "INSERT INTO exchange_source_snapshots(snapshot_id,store_sha256,store_kind,\
+             source_id,url,request_fingerprint,fetched_at,as_of,size_bytes,row_count,\
+             parser_version,basis_status) \
+             VALUES('{snapshot_id}',X'{store}','{store_kind}','sse_listing',\
+             'https://example.invalid/list','fp-1','2026-10-29T00:00:00Z',\
+             '2026-10-29',100,10,'sse-listing-v1','{basis_status}')"
+        )
+    };
+    let first = "a".repeat(64);
+    let second = "b".repeat(64);
+    c.execute(&exchange(&first, "http_fetch", "approved_source"), [])
+        .unwrap();
+    rejected(
+        "duplicate exchange_source_snapshots snapshot_id",
+        c.execute(&exchange(&first, "http_fetch", "approved_source"), []),
+    );
+    c.execute(
+        &exchange(&second, "archive_import", "owner_risk_accepted"),
+        [],
+    )
+    .unwrap();
+    rejected(
+        "unregistered exchange_source_snapshots store_kind",
+        c.execute(
+            &exchange(&"c".repeat(64), "streamed", "approved_source"),
+            [],
+        ),
+    );
+    rejected(
+        "unregistered exchange_source_snapshots basis_status",
+        c.execute(&exchange(&"d".repeat(64), "http_fetch", "pending"), []),
+    );
+
+    // generation_facts: one fact per (generation, role, kind).
+    let fact = |role: &str, kind: &str| {
+        format!(
+            "INSERT INTO generation_facts(generation_manifest_sha256,role,fact_kind,\
+             fact_digest,registered_at) \
+             VALUES(X'{generation}','{role}','{kind}',X'{store}','2026-10-29T00:00:00Z')"
+        )
+    };
+    c.execute(&fact("base.zip", "security_master"), []).unwrap();
+    rejected(
+        "duplicate generation_facts key",
+        c.execute(&fact("base.zip", "security_master"), []),
+    );
+    rejected(
+        "unregistered generation_facts role",
+        c.execute(&fact("day.zip", "security_master"), []),
+    );
+
+    // retire_exemptions: an exemption must carry a non-empty reason.
+    let exemption = |kind: &str, reason: &str| {
+        format!(
+            "INSERT INTO retire_exemptions(generation_manifest_sha256,missing_kind,\
+             reason,recorded_by,recorded_at) \
+             VALUES(X'{generation}','{kind}','{reason}','owner','2026-10-29T00:00:00Z')"
+        )
+    };
+    c.execute(&exemption("industry_snapshots", "owner accepted"), [])
+        .unwrap();
+    rejected(
+        "duplicate retire_exemptions key",
+        c.execute(&exemption("industry_snapshots", "owner accepted"), []),
+    );
+    rejected(
+        "empty retire_exemptions reason",
+        c.execute(&exemption("generation_facts", ""), []),
+    );
 }
 
 /// D-50 migration proof: 024 rebuilds `capital_events` and copies a schema-23

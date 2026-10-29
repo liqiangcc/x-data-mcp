@@ -1,7 +1,8 @@
 //! Replay skeleton over the source store (design §9.4.2).
 //!
-//! PR-1a registers the three scopes and their byte-verification path before
-//! schema 25 exists. Each scope therefore reports what it *selected* and a
+//! PR-1a registers the three scopes and their byte-verification path; schema
+//! 25 (PR-1) now creates the empty index tables these scopes will fill, but
+//! the replay body still does not write. Each scope reports what it *selected* and a
 //! deterministic digest, and rebuilds nothing yet (`rebuilt:
 //! "skeleton_no_op"`): the index tables it will fill are added by PR-1 and the
 //! domain writers by PR-6 (industry), PR-2/PR-8 (exchange) and PR-8

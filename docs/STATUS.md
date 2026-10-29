@@ -31,7 +31,7 @@ systemd 单元细节、热 generation 计数）标注为「历史」。部署后
 | 部署时间 | **2026-10-28 切换窗口（Op-B）**，`scripts/switch_binary.sh` **只换二进制**（dry-run 后 `--execute`）：不重建库、不归档、不改 schema——库仍是 preview.37 的 schema 24 库（`state/preview.sqlite`，**1,790,316,544 B**）。切换后给 data 单元装两个 drop-in：`exec-start.conf` 把 `ExecStart` 换成一个进程绑定三个 socket（`mcp.sock`→`ops`、`research.sock`→`research`、`maint.sock`→`maint`，尾部保留 `--poll-ms 1000`）、`memory.conf` 设 cgroup `MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`（依据 XDM-84 独占测量，报告在仓库外）。逐 socket 就绪探针与回滚步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9.7；实际时刻、探针 JSON 与报告路径由切换记录填入 | 切换窗口的 `switch_binary.sh` 报告、`journalctl -u x-data-mcp-data`、`systemctl cat`/`systemctl show -p MemoryHigh`、`stat state/preview.sqlite` |
 | 部署时间（历史 preview.37） | 2026-10-28T00:21:26Z（UTC），`scripts/deploy_phase_g.sh --force-git-transport`：停 data/acquire → 归档旧 schema 24 库 → 从 release 提交读取期望 schema 后 `task_sqlite init` 全新库 → 起两个单元 → socket/工具数/schema 检查 → 写部署报告 `/opt/x-data-mcp-preview/reports/preview37-phaseg-deployment.json`（`status: DEPLOYED`，`before.schema=24`，`production: NOT_PRODUCTION_READY`）。**fresh init，不做原地升级**；部署窗口的设置：`X_DATA_MCP_TEXT_MODE=full`、`X_DATA_MCP_RUN_PREPARE_WORKERS=1`（v2 日更的准备线程串行，放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1，待独占实测） | 部署报告 JSON、`journalctl -u x-data-mcp-data/-acquire`、`readlink`/`stat` |
 | 部署时间（历史 preview.36） | 2026-10-27T12:15:43Z，`scripts/deploy_phase_g.sh --force-git-transport`（本机 gh 2.62 读不到 release asset digest，改走 `refs/dist` 的 git transport，与历次一致）：停 data/acquire → 归档 schema 21 库 → `task_sqlite init21` 全新 init 到 schema 24 → 起两个单元 → socket/工具数/schema 检查 → 写报告 `reports/preview36-phaseg-deployment.json`。每个已部署的发布目录按完整 SHA 命名，旧目录保留作回滚点。本次是全新库部署，不是热切换 | 部署报告 JSON、`readlink`/`stat`、`journalctl` |
-| 数据库 schema | 已部署：schema 24（preview.38 与上一轮预览共用同一个库，**只换二进制、未重建也未归档**：`pragma user_version` 读回 24，库 **1,790,316,544 B**；该库由上一轮部署从 release 提交读期望 schema 后全新 init；preview.36 时同为 schema 24、库 1,732,116,480 B）；代码：schema 24（M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`（当时只建表；写入路径由 M2 PR-3…PR-8 接线，preview.37 起部署）；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
+| 数据库 schema | 已部署：schema 24（preview.38 与上一轮预览共用同一个库，**只换二进制、未重建也未归档**：`pragma user_version` 读回 24，库 **1,790,316,544 B**；该库由上一轮部署从 release 提交读期望 schema 后全新 init；preview.36 时同为 schema 24、库 1,732,116,480 B）；代码：schema 25（M3 PR-1 只加来源库索引表与 `price_limit_rules.min_band_ticks` 可空列，尚未部署，生产仍是 24；M1 的 schema 22 已按 §3/§7 扩展：口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 PR-1 追加 023：证券主表、代码迁移、简称历史、股本事件、风险警示区间、停牌区间与两张规则表，并扩展 `derived_dataset_versions.dataset_kind`（当时只建表；写入路径由 M2 PR-3…PR-8 接线，preview.37 起部署）；M2 PR-2 追加 024：重建 `capital_events`，按 D-50 R-3 修订把 `category` CHECK 扩到 2/3/5/7/8/9/10，其他列、约束与索引原样保留） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION`、#383 M1 §14、#391 M2 §9 |
 | 构建 | rustc 1.99.1 (58cf8f9c3 2026-10-13)，ubuntu-24.04，最低 glibc 2.39 | `current/manifest.json` |
 | 部署目录 | `/opt/x-data-mcp-preview/current` → preview.38 的发布目录（按完整 SHA 命名，SHA 由切换记录填入）；上一个目录是 `releases/49422db…`（preview.37，保留作回滚点）。目录数量与总字节本轮未复核（历史 2026-10-24：6 个目录共 348MiB） | `readlink`（切换记录）、历史 `du -sh releases/*` |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
@@ -80,6 +80,13 @@ schema 23（`migrations/tasks/023_security_master.sql`），PR-2 追加 024
 M1 重建后部署事实已是 schema 24；schema 22/23 的库既不会被新二进制原地改写，也不会被
 024 回填（`check_schema` 直接拒绝非当前 schema）。设计见
 [M2 设计](tasks/issue-391-m2-security-master.md) §9。
+
+M3（[#446](https://github.com/liqiangcc/x-data-mcp/issues/446)）PR-1 把**代码**的迁移链推到
+schema 25（`migrations/tasks/025_m3_index_tables.sql`）：只建来源库的 5 张索引表
+（`industry_snapshots`/`industry_assignments`/`exchange_source_snapshots`/
+`generation_facts`/`retire_exemptions`）并给 `price_limit_rules` 追加可空列
+`min_band_ticks`，不改任何读写行为；**尚未部署，生产仍是 schema 24**。设计见
+[M3 设计](tasks/issue-446-m3-delisted-industry.md) §9。
 
 M2 随 preview.37 部署（PR #412/#415/#419/#420/#422/#424/#427/#428/#425，CI 绿）。六个
 解析事实数据集 `market.security_master`、`market.security_names`、`market.capital_events`、

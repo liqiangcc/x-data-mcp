@@ -524,6 +524,7 @@ impl Fixture {
                     status_class: crate::trading_rules::StatusClass::Normal,
                     listing_phase: crate::trading_rules::ListingPhase::Seasoned,
                     band_bp: Some(1000),
+                    min_band_ticks: None,
                     band_side: crate::trading_rules::BandSide::Both,
                     rounding: crate::trading_rules::Rounding::HalfUp,
                     effective_from: window[0],
