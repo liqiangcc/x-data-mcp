@@ -32,10 +32,10 @@ fn sha() -> String {
 #[test]
 fn fsync_before_failures_leave_no_manifest_line() {
     for point in [
-        FaultPoint::BeforeFileFsync,
-        FaultPoint::BeforePublish,
-        FaultPoint::BeforeDirFsync,
-        FaultPoint::BeforeManifestAppend,
+        FaultPoint::FileFsync,
+        FaultPoint::Publish,
+        FaultPoint::DirFsync,
+        FaultPoint::ManifestAppend,
     ] {
         let dir = tempfile::tempdir().unwrap();
         let store = SourceStore::new(dir.path().join("store"));
@@ -60,11 +60,7 @@ fn manifest_fsync_failure_keeps_line_and_verified_blob_only() {
     let dir = tempfile::tempdir().unwrap();
     let store = SourceStore::new(dir.path().join("store"));
     store
-        .register_inner(
-            BODY,
-            &facts("import:test"),
-            Some(FaultPoint::BeforeManifestFsync),
-        )
+        .register_inner(BODY, &facts("import:test"), Some(FaultPoint::ManifestFsync))
         .expect_err("injected fault must fail the registration");
     let records = store.records().unwrap();
     assert_eq!(

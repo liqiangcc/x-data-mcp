@@ -295,17 +295,19 @@ pub fn import(
                 index_path.display()
             ))
         })?;
-        if let Some(kind) = &options.kind {
-            if &entry.kind != kind {
-                report.skipped_unverified.push(SkippedMember {
-                    index_line: number,
-                    source_path: entry.source_path.clone(),
-                    member: "archive",
-                    reason: "kind_not_requested",
-                    detail: format!("entry kind {} requested {kind}", entry.kind),
-                });
-                continue;
-            }
+        let requested_kind = options
+            .kind
+            .as_deref()
+            .filter(|kind| *kind != entry.kind.as_str());
+        if let Some(kind) = requested_kind {
+            report.skipped_unverified.push(SkippedMember {
+                index_line: number,
+                source_path: entry.source_path.clone(),
+                member: "archive",
+                reason: "kind_not_requested",
+                detail: format!("entry kind {} requested {kind}", entry.kind),
+            });
+            continue;
         }
         if !options.tiers.iter().any(|tier| tier == &entry.tier)
             || !matches!(entry.tier.as_str(), "A" | "B")

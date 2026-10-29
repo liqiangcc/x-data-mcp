@@ -147,23 +147,25 @@ fn replay_with_mode(
         let mut scope_corrupt = false;
         let mut scope_unknown_parser = false;
         for record in &selected {
-            if let Some(version) = &record.parser_version {
-                if !known_parser_version(version) {
-                    unknown_parser = true;
-                    scope_unknown_parser = true;
-                    problems.push(BlobProblem {
-                        sha256: record.sha256.clone(),
-                        source_id: record.source_id.clone(),
-                        reason: "unknown_parser",
-                        expected: format!(
-                            "{}|{}",
-                            super::TDXHY_PARSER_VERSION,
-                            super::INCON_PARSER_VERSION
-                        ),
-                        actual: version.clone(),
-                    });
-                    continue;
-                }
+            let unsupported = record
+                .parser_version
+                .as_deref()
+                .filter(|version| !known_parser_version(version));
+            if let Some(version) = unsupported {
+                unknown_parser = true;
+                scope_unknown_parser = true;
+                problems.push(BlobProblem {
+                    sha256: record.sha256.clone(),
+                    source_id: record.source_id.clone(),
+                    reason: "unknown_parser",
+                    expected: format!(
+                        "{}|{}",
+                        super::TDXHY_PARSER_VERSION,
+                        super::INCON_PARSER_VERSION
+                    ),
+                    actual: version.to_string(),
+                });
+                continue;
             }
             if !seen.insert(record.sha256.as_str()) {
                 continue;

@@ -211,11 +211,11 @@ impl StoreError {
 /// without its blob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FaultPoint {
-    BeforeFileFsync,
-    BeforePublish,
-    BeforeDirFsync,
-    BeforeManifestAppend,
-    BeforeManifestFsync,
+    FileFsync,
+    Publish,
+    DirFsync,
+    ManifestAppend,
+    ManifestFsync,
 }
 
 fn injected(point: FaultPoint) -> StoreError {
@@ -409,12 +409,12 @@ impl SourceStore {
         let mut file = File::create(&tmp_path)?;
         if let Err(error) = (|| -> Result<(), StoreError> {
             file.write_all(bytes)?;
-            if fault == Some(FaultPoint::BeforeFileFsync) {
-                return Err(injected(FaultPoint::BeforeFileFsync));
+            if fault == Some(FaultPoint::FileFsync) {
+                return Err(injected(FaultPoint::FileFsync));
             }
             file.sync_all()?;
-            if fault == Some(FaultPoint::BeforePublish) {
-                return Err(injected(FaultPoint::BeforePublish));
+            if fault == Some(FaultPoint::Publish) {
+                return Err(injected(FaultPoint::Publish));
             }
             // A hard link publishes without replacing an existing name; the
             // staging name is unlinked right after.
@@ -434,8 +434,8 @@ impl SourceStore {
                 Err(error) => return Err(error.into()),
             }
             fs::remove_file(&tmp_path)?;
-            if fault == Some(FaultPoint::BeforeDirFsync) {
-                return Err(injected(FaultPoint::BeforeDirFsync));
+            if fault == Some(FaultPoint::DirFsync) {
+                return Err(injected(FaultPoint::DirFsync));
             }
             fsync_dir(&blobs)?;
             Ok(())
@@ -458,13 +458,13 @@ impl SourceStore {
             .create(true)
             .append(true)
             .open(self.manifest_path())?;
-        if fault == Some(FaultPoint::BeforeManifestAppend) {
-            return Err(injected(FaultPoint::BeforeManifestAppend));
+        if fault == Some(FaultPoint::ManifestAppend) {
+            return Err(injected(FaultPoint::ManifestAppend));
         }
         file.write_all(line.as_bytes())?;
         file.write_all(b"\n")?;
-        if fault == Some(FaultPoint::BeforeManifestFsync) {
-            return Err(injected(FaultPoint::BeforeManifestFsync));
+        if fault == Some(FaultPoint::ManifestFsync) {
+            return Err(injected(FaultPoint::ManifestFsync));
         }
         file.sync_all()?;
         Ok(())
