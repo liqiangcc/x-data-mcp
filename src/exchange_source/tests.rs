@@ -152,6 +152,27 @@ fn sse_and_szse_envelopes_are_parsed_without_business_fields() {
 }
 
 #[test]
+fn an_sse_total_of_zero_means_not_reported() {
+    // `COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L` reports `pageHelp.total = 0` on every
+    // page even when rows are returned (M2 A-1 evidence, #396), so 0 is "no
+    // total", not "no rows". Reading it as a declared count would reject every
+    // real listing page as `truncated`.
+    let page = envelope(&sse_body(1, 1, 0, 4), PagingFormat::SsePageHelp);
+    assert_eq!(page.rows, 4);
+    assert_eq!(page.total, None);
+    let set = validate::validate_pages(&[page], EmptyPolicy::Forbidden).unwrap();
+    assert_eq!(set.row_count, 4);
+    // The quirk must not weaken the zero-row rule.
+    let empty = envelope(&sse_body(1, 1, 0, 0), PagingFormat::SsePageHelp);
+    assert_eq!(
+        validate::validate_pages(&[empty], EmptyPolicy::Forbidden)
+            .unwrap_err()
+            .code(),
+        "unverified_zero"
+    );
+}
+
+#[test]
 fn two_page_set_sums_to_the_declared_total() {
     let pages = vec![
         envelope(&sse_body(1, 2, 3, 2), PagingFormat::SsePageHelp),
