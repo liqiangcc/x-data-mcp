@@ -1504,17 +1504,22 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
         exchange: &str,
         from: i64,
         to: &str,
-        known_at: &str,
+        known_at: Option<&str>,
         from_basis: &str,
         name_status: &str,
         member: &str,
     ) -> String {
+        // A NULL must reach the table as SQL NULL, not as the string 'NULL':
+        // the NOT NULL on `known_at` is exactly what this test asserts.
+        let known_at = known_at
+            .map(|value| format!("'{value}'"))
+            .unwrap_or_else(|| "NULL".to_string());
         format!(
             "INSERT INTO industry_assignments(exchange,code,scheme,level,industry_code,\
              name,name_status,effective_from,effective_to,known_at,effective_from_basis,\
              evidence_grade,snapshot_member_sha256) \
              VALUES('{exchange}','600000','tdx_research_industry',1,'T01','银行',\
-             '{name_status}',{from},{to},'{known_at}','{from_basis}','B',X'{member}')"
+             '{name_status}',{from},{to},{known_at},'{from_basis}','B',X'{member}')"
         )
     }
     c.execute(
@@ -1522,7 +1527,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
             "sh",
             1000,
             "NULL",
-            "2026-10-29T00:00:00Z",
+            Some("2026-10-29T00:00:00Z"),
             "publisher_last_modified",
             "resolved",
             &member,
@@ -1537,7 +1542,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "sh",
                 1000,
                 "NULL",
-                "2026-10-29T00:00:00Z",
+                Some("2026-10-29T00:00:00Z"),
                 "publisher_last_modified",
                 "resolved",
                 &member,
@@ -1552,7 +1557,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "sh",
                 1100,
                 "1100",
-                "2026-10-29T00:00:00Z",
+                Some("2026-10-29T00:00:00Z"),
                 "publisher_last_modified",
                 "resolved",
                 &member,
@@ -1567,7 +1572,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "sh",
                 1100,
                 "1099",
-                "2026-10-29T00:00:00Z",
+                Some("2026-10-29T00:00:00Z"),
                 "publisher_last_modified",
                 "resolved",
                 &member,
@@ -1582,7 +1587,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "sh",
                 1100,
                 "NULL",
-                "NULL",
+                None,
                 "publisher_last_modified",
                 "resolved",
                 &member,
@@ -1597,7 +1602,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "sh",
                 1100,
                 "NULL",
-                "2026-10-29T00:00:00Z",
+                Some("2026-10-29T00:00:00Z"),
                 "publisher_last_modified",
                 "resolved",
                 &hex32(0x64),
@@ -1612,7 +1617,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "bj",
                 1100,
                 "NULL",
-                "2026-10-29T00:00:00Z",
+                Some("2026-10-29T00:00:00Z"),
                 "publisher_last_modified",
                 "resolved",
                 &member,
@@ -1627,7 +1632,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "sh",
                 1100,
                 "NULL",
-                "2026-10-29T00:00:00Z",
+                Some("2026-10-29T00:00:00Z"),
                 "guess",
                 "resolved",
                 &member,
@@ -1642,7 +1647,7 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
                 "sh",
                 1100,
                 "NULL",
-                "2026-10-29T00:00:00Z",
+                Some("2026-10-29T00:00:00Z"),
                 "publisher_last_modified",
                 "pending",
                 &member,
