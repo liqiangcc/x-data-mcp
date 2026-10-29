@@ -287,9 +287,9 @@ pub struct PriceLimitRule {
     /// Minimum band width in minimum-tick units, `None` when the rule has no
     /// floor (schema 25; owner 2026-10-29). It expresses "沪市风险警示股前收
     /// ≤0.10 元按一 tick" and the 深市 generic one-tick floor without a second
-    /// low-price threshold column. This PR only stores and round-trips the
-    /// value: the embedded rule book leaves it `None` and limit-v1 ignores it
-    /// until the algorithm PR lands.
+    /// low-price threshold column. Only bounded rows may set it; the embedded
+    /// rule book sets it where a clause says so and limit-v1 applies it as the
+    /// band floor (D-64 §4.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_band_ticks: Option<i64>,
     pub band_side: BandSide,
@@ -364,6 +364,12 @@ impl PriceLimitRule {
         if self.min_band_ticks.is_some_and(|ticks| ticks < 1) {
             return Err(RuleError::Invalid(format!(
                 "{} has a non-positive min_band_ticks",
+                self.rule_id
+            )));
+        }
+        if self.min_band_ticks.is_some() && self.band_side == BandSide::None {
+            return Err(RuleError::Invalid(format!(
+                "{} has min_band_ticks on an unbounded row",
                 self.rule_id
             )));
         }

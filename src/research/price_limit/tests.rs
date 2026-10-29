@@ -876,6 +876,140 @@ fn rounding_matches_the_e12_half_up_definition() {
     }
 }
 
+/// The SH low-price exception (§4.3, D-64): the 2013–2023 ST row carries
+/// `min_band_ticks=1`, so a previous close ≤0.10 yuan gets a one-tick band
+/// instead of a zero-width percentage band. Constructive inputs, not a market
+/// sample: the admitted 2013–2026 sample has no bar this cheap.
+#[test]
+fn the_sh_st_low_price_row_keeps_a_one_tick_band() {
+    let book = real_book();
+    let rule = match book.price_rule(
+        RuleMarket::Sh,
+        RuleBoard::Main,
+        StatusClass::St,
+        ListingPhase::Seasoned,
+        day(2020, 1, 2),
+    ) {
+        RuleLookup::Found(rule) => rule,
+        other => panic!("the SH ST 2013–2023 row did not resolve: {other:?}"),
+    };
+    assert_eq!(rule.rule_id, "r2-sh-main-st-5pct-2013-01-01-2023-02-16");
+    assert_eq!(rule.min_band_ticks, Some(1));
+    let tick = match book.min_tick(RuleMarket::Sh, RuleBoard::Main, day(2020, 1, 2)) {
+        RuleLookup::Found(tick) => tick,
+        other => panic!("the SH tick row did not resolve: {other:?}"),
+    };
+    // 0.10 / 0.09 / 0.05 / 0.01 yuan, in cents. The band is at least one tick
+    // (0.01) even though the percentage band rounds to zero, and the down
+    // limit never falls below one tick.
+    for (prev, up, down) in [(10, 11, 9), (9, 10, 8), (5, 6, 4), (1, 2, 1)] {
+        let limits = super::compute_limit(prev, 2, rule, tick).unwrap();
+        assert_eq!(limits.up, Some(up), "prev={prev} up");
+        assert_eq!(limits.down, Some(down), "prev={prev} down");
+    }
+}
+
+/// The 10% row keeps the same one-tick floor after 2026-07-06.
+#[test]
+fn the_sh_st_ten_percent_row_keeps_a_one_tick_band() {
+    let book = real_book();
+    let rule = match book.price_rule(
+        RuleMarket::Sh,
+        RuleBoard::Main,
+        StatusClass::St,
+        ListingPhase::Seasoned,
+        day(2026, 7, 6),
+    ) {
+        RuleLookup::Found(rule) => rule,
+        other => panic!("the SH ST 10% row did not resolve: {other:?}"),
+    };
+    assert_eq!(rule.band_bp, Some(1_000));
+    assert_eq!(rule.min_band_ticks, Some(1));
+    let tick = match book.min_tick(RuleMarket::Sh, RuleBoard::Main, day(2026, 7, 6)) {
+        RuleLookup::Found(tick) => tick,
+        other => panic!("the SH tick row did not resolve: {other:?}"),
+    };
+    for (prev, up, down) in [(4, 5, 3), (5, 6, 4), (10, 11, 9)] {
+        let limits = super::compute_limit(prev, 2, rule, tick).unwrap();
+        assert_eq!(limits.up, Some(up), "prev={prev} up");
+        assert_eq!(limits.down, Some(down), "prev={prev} down");
+    }
+}
+
+/// `min_band_ticks=NULL` is not "default one tick": the pre-2013 rows keep the
+/// plain percentage answer even on an extremely low previous close. That zero
+/// width is the known-unencoded state the rule book names in §4.3/D-64, not a
+/// value to fix silently.
+#[test]
+fn a_null_min_band_ticks_row_keeps_the_plain_percentage_answer() {
+    let book = real_book();
+    let rule = match book.price_rule(
+        RuleMarket::Sh,
+        RuleBoard::Main,
+        StatusClass::St,
+        ListingPhase::Seasoned,
+        day(2010, 1, 4),
+    ) {
+        RuleLookup::Found(rule) => rule,
+        other => panic!("the SH ST 2006–2012 row did not resolve: {other:?}"),
+    };
+    assert_eq!(rule.rule_id, "r2-sh-main-st-5pct-2006-07-01-2012-12-31");
+    assert_eq!(rule.min_band_ticks, None);
+    let tick = match book.min_tick(RuleMarket::Sh, RuleBoard::Main, day(2010, 1, 4)) {
+        RuleLookup::Found(tick) => tick,
+        other => panic!("the SH tick row did not resolve: {other:?}"),
+    };
+    let limits = super::compute_limit(9, 2, rule, tick).unwrap();
+    assert_eq!(limits.up, Some(9), "0.09 x 1.05 rounds to 0.09");
+    assert_eq!(limits.down, Some(9), "0.09 x 0.95 rounds to 0.09");
+    assert_eq!(
+        limits.up, limits.down,
+        "the known-unencoded zero-width band"
+    );
+}
+
+/// The price floor is separate from the band floor: rounding down can put the
+/// down limit at zero even when the rule has no band floor, and the one-tick
+/// price invariant still has to hold.
+#[test]
+fn the_price_floor_holds_without_a_band_floor() {
+    let tick = tick("sz-main-tick", RuleMarket::Sz, RuleBoard::Main);
+    let mut limit_rule = rule(
+        "floor-only",
+        RuleMarket::Sz,
+        RuleBoard::Main,
+        StatusClass::Normal,
+        ListingPhase::Seasoned,
+        Some(500),
+        BandSide::Both,
+        day(2020, 1, 1),
+        None,
+    );
+    limit_rule.rounding = Rounding::Floor;
+    assert_eq!(limit_rule.min_band_ticks, None);
+    let limits = super::compute_limit(1, 2, &limit_rule, &tick).unwrap();
+    assert_eq!(limits.up, Some(1));
+    assert_eq!(limits.down, Some(1), "0.01 must not become 0");
+
+    // A band floor is meaningless for an unbounded row; it must not turn a
+    // known `unbounded` answer into a bounded one.
+    let mut unbounded = rule(
+        "floor-none",
+        RuleMarket::Sh,
+        RuleBoard::Main,
+        StatusClass::All,
+        ListingPhase::FirstDay,
+        None,
+        BandSide::None,
+        day(2020, 1, 1),
+        None,
+    );
+    unbounded.min_band_ticks = Some(1);
+    let limits = super::compute_limit(1, 2, &unbounded, &tick).unwrap();
+    assert_eq!(limits.up, None);
+    assert_eq!(limits.down, None);
+}
+
 /// The repository's admitted rule book (A-7 / D-44), not a hand fixture: the
 /// tests below check the actual data that the daily item writes.
 fn real_book() -> RuleBook {
@@ -893,9 +1027,14 @@ fn the_r2_switch_moves_the_main_board_st_band() {
     assert_eq!(before.state, PriceLimitState::Known);
     assert_eq!(before.status_class, Some(StatusClass::St));
     assert_eq!(before.band_bp, Some(500));
+    // D-64 §4.3 sets the one-tick floor on the SZ 2011–2023 row, but not on
+    // the SZ 2023+ rows: the SZ 2023 clause text is still the G-4 gap. Both
+    // days in this test are in the 2023+ span.
+    assert_eq!(before.min_band_ticks, None);
     let after = ask(&c, "sz.000005", days()[5]);
     assert_eq!(after.state, PriceLimitState::Known);
     assert_eq!(after.band_bp, Some(1_000));
+    assert_eq!(after.min_band_ticks, None);
     assert_ne!(before.rule_id, after.rule_id);
     assert_eq!(
         before.limit_up_units.map(|up| up - 5_003),

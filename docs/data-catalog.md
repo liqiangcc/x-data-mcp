@@ -57,9 +57,10 @@ M2 的 6 个解析事实数据集（`market.security_master`、`security_names`�
 已按 D-58/D-60/D-59 裁决准入、写入器未实现，这些部分在 item 结果里按 `pending_source` 记录；
 `security_names` 尚无写入器。未登记版本返回 `absent` 与 0 行（见 §3.1「M2 部署状态」）。
 数据库 compact schema：**生产仍是 24，代码是 25（未部署）**。代码里的 schema 25（M3 PR-1，
-[#446](tasks/issue-446-m3-delisted-industry.md) §9）只加 5 张来源库索引表与
-`price_limit_rules.min_band_ticks` 可空列，不改变上述 6 个数据集的行形状；这些表和列
-目前全部为空、无写入路径。
+[#446](tasks/issue-446-m3-delisted-industry.md) §9）加 5 张来源库索引表与
+`price_limit_rules.min_band_ticks` 可空列。5 张索引表目前为空、无写入路径；`min_band_ticks`
+已由 `limit-v1` 与规则书写入（见 §4 序号 12），导出 `price_limit_rules` 也因此多一列
+（旧 parquet 无此列为 null）。
 
 **实体身份**：`{exchange, code}`，`exchange ∈ {sh, sz}`，`code` 为 6 位数字，展示形式
 `sh.600000`（`src/data_supply/wire.rs:34-56`）。非规范实体在写入侧 fail-closed
@@ -356,7 +357,7 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
 | 9 | 历史 ST / \*ST | 缺失·计划中 | 2026-10-28 owner 按市场分档准入（D-58）：**深市** `SSGSGMXX`/`tab2` 的 ST 区间与**沪市 2000-01 起**公告索引的状态事件（事件级）为 `APPROVED_SOURCE`，沪市生效日按 GP29/行情锚定为 `OWNER_RISK_ACCEPTED`，沪市 2000 年前与北交所 `NOT_AVAILABLE`；无公告一律 `unknown`，禁止「无公告 ⇒ 非 ST」。**来源准入不再是阻塞，缺的是写入器**：`market.risk_warnings` 仍**写 0 行**（只记 `pending_source`），读取是 `absent` | #308 | M2（沪市 2000 年前为硬缺口，见 §3.3 偏差 2） | 未满足（准入已裁决、写入器未实现） |
 | 10 | 历史行业 | 部分提供 | 当前行业已提供（catalog 的 TDX 研究行业二级）；**历史区间不可回补**，只能从今天起逐代积累（每代 `tdxhy.cfg` 落变更集，不能靠留 generation 目录）。替代来源（证监会行业分类）需取证 | #1 | M3 | 未满足 → M3；历史部分首期无法达成 |
 | 11 | 停牌 | 部分提供（preview.37 部署） | 官方文件没有停牌标记，`.day` 也没有占位行。A-3 已由 D-49 准入、2026-10-28 定交付口径（D-60）：沪市 **2008 年起**可实现 `confirmed`（结构化事件表，`endStopDate`=复牌日前一自然日），**深市首期没有 `confirmed`**（无结构化源，`BULLETIN_TYPE` 过滤不可用），只到 `unresolved_gap`；深市全域可交易性统一 `unknown`（§3.3 偏差 6）。写入器未实现，`confirmed` 行数仍为 0 | #404（A-3） | M2（标记）/ M3（闭合） | 部分满足（缺口可查；`confirmed` 未实现） |
-| 12 | 涨跌停 | 部分提供（规则已入库，待发布；ST 仍缺） | 结构随 preview.37 部署（`market.price_limit_rules`，按生效日期管理、每行带 `basis_ref`/`basis_status`）。**A-7 已由 D-44 关闭**（2026-10-26，2026-10-28 复核确认，见 D-59）：规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED` 且标「推断」、R7 `NOT_AVAILABLE`。规则书（R1–R9：27 行涨跌停规则 + 2 行最小变动单位）已作为版本化规则数据入库，日更 `derived:trading_rules` item 写入两表并登记版本（不变为 `no_change`）；preview.37 实例仍是 0 行，下一次发布后生效。**D-64（2026-10-29）另补两批数据-only 行**：R2 前段 5 行（1998 起点 `OWNER_RISK_ACCEPTED`：深交所简称表首个 ST 事件 + `.day` 锚定；沪市只有 `.day`，D-58 的沪市 2000 年前 ST 状态仍 `NOT_AVAILABLE`；2006/2011/2013/2020-12 条文段 `APPROVED_SOURCE`）与 R6 首日无涨跌幅 5 行（`band_side=none`，派生 `unbounded` 而不是 `unknown`）。剩余偏差：1996-12-16 前（R7）无规则 → `unknown`；主板首日 44%/36% 段（沪 2013-12-13 起、深 2014-06-13 起）仍 `not_encoded` → `rule_missing`；沪市风险警示股前收 ≤0.10 元的一 tick 例外待 M3 schema 25 的 `min_band_ticks` 列。ST 状态未知时，仅 `status_class='all'` 的板块/时段（创业板 2020-08-24 起、科创板，以及 2023 前的首日无涨跌幅段）有确定值，其余 `unknown`（依赖 #9 写入器；规则行了不等于状态有了） | #395（A-7）、#308（ST） | M2 | 部分满足（规则行已入库；ST 未实现） |
+| 12 | 涨跌停 | 部分提供（规则已入库，待发布；ST 仍缺） | 结构随 preview.37 部署（`market.price_limit_rules`，按生效日期管理、每行带 `basis_ref`/`basis_status`）。**A-7 已由 D-44 关闭**（2026-10-26，2026-10-28 复核确认，见 D-59）：规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED` 且标「推断」、R7 `NOT_AVAILABLE`。规则书（R1–R9：27 行涨跌停规则 + 2 行最小变动单位）已作为版本化规则数据入库，日更 `derived:trading_rules` item 写入两表并登记版本（不变为 `no_change`）；preview.37 实例仍是 0 行，下一次发布后生效。**D-64（2026-10-29）另补两批数据-only 行**：R2 前段 5 行（1998 起点 `OWNER_RISK_ACCEPTED`：深交所简称表首个 ST 事件 + `.day` 锚定；沪市只有 `.day`，D-58 的沪市 2000 年前 ST 状态仍 `NOT_AVAILABLE`；2006/2011/2013/2020-12 条文段 `APPROVED_SOURCE`）与 R6 首日无涨跌幅 5 行（`band_side=none`，派生 `unbounded` 而不是 `unknown`）。剩余偏差：1996-12-16 前（R7）无规则 → `unknown`；主板首日 44%/36% 段（沪 2013-12-13 起、深 2014-06-13 起）仍 `not_encoded` → `rule_missing`；沪市风险警示股前收 ≤0.10 元的一 tick 例外已由 schema 25 的 `min_band_ticks` 落地（沪 2013-01-01…2023-02-16、沪 2023+ 的两行 ST 与深 2011-02-28…2023-02-16 的 ST 行置 1；深 2023+ 两行因 G-4 原文未取得保持 NULL，极低价仍是已知未编码的百分比结果），`limit-v1` 同时保留 1 tick 价格下限。ST 状态未知时，仅 `status_class='all'` 的板块/时段（创业板 2020-08-24 起、科创板，以及 2023 前的首日无涨跌幅段）有确定值，其余 `unknown`（依赖 #9 写入器；规则行了不等于状态有了） | #395（A-7）、#308（ST） | M2 | 部分满足（规则行已入库；ST 未实现） |
 | 13 | ETF | 缺失·计划中 | 身份只能由交易所名单锚定（新来源待准入，D-25）；`.day` 对 ETF 的价格单位是**厘**（3 位小数）、`volume` 是**份**（≥4.29e9 份时改写为手）、gbbq 还有 cat11（份额折算）未进 QFQ；现有 `cents()` 要求恰好 2dp，3dp 会被**直接拒绝**（`compact_market.rs:812-822`）。owner 2026-10-26 裁决：作为 `market.daily` 的证券类型、按序列记精度、提供不复权 + cat1/cat11 因子，放 M3（D-28） | #246 | M3 | 未满足 → M3 |
 | 14 | 财务数据 | 不在范围 | 首期范围是价量 + 股本/市值，不含财务 | #1 | 不在首期 | — |
 | 15 | 分钟线 | 不在范围 | 首期只做日线；`series_bars.trade_day` 是日序号，分钟线要改主键 | #1 | 不在首期 | — |

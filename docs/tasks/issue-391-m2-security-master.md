@@ -354,6 +354,7 @@ price_limit_rules(
   status_class TEXT NOT NULL,    -- normal / st / star_st / delisting_arrangement / all
   listing_phase TEXT NOT NULL,   -- first_day / first_5_days / seasoned / all
   band_bp INTEGER,               -- 基点，1000 = 10%；band_side='none' 时为 NULL
+  min_band_ticks INTEGER,        -- 最小带宽（tick 数），NULL = 无下限；schema 25
   band_side TEXT NOT NULL,       -- both / up_only / none
   rounding TEXT NOT NULL,        -- half_up / floor / ceil
   effective_from INTEGER NOT NULL,
@@ -370,6 +371,7 @@ min_tick_rules(rule_id, market, board, effective_from, effective_to,
 ```
 
 - **唯一键 + 测试**保证同一 `(market, board, status_class, listing_phase)` 在任一日期**恰好命中一行**；命中 0 行或 ≥2 行都 fail-closed（`rule_missing` / `rule_ambiguous`），不做「取最后一条」。
+- `min_band_ticks` 是**带宽下限**，不是价格下限（schema 25，D-64）：`NULL` = 该行没有下限条文，不得回填；`n` = `up−basis`、`basis−down` 至少 `n` 个 tick。它表达沪市风险警示股前收 ≤0.10 元按 0.01 元、以及深市「前收与限价之差低于一个最小变动单位时按一个最小变动单位」；跌停价不得为 0 的**价格下限**是 `limit-v1` 的不变量（§8.3），不是规则行的值。
 - `basis_status='pending'` 的行**不参与派生**：规则未取证 ≠ 可以用默认值。
 - 代码里不出现任何幅度常量（评审项：`src/research/` 的派生代码里不得出现 `0.05`/`0.10`/`0.20`/`1000` 这类字面量，幅度只能来自规则行）。
 
@@ -404,6 +406,7 @@ min_tick_rules(rule_id, market, board, effective_from, effective_to,
 
 - `prev_close` 用**最后一根 bar**（不是「前一个交易日」）：停牌复牌后交易所的前收就是停牌前最后收盘。缺 bar 时向前找，找不到（上市首日）→ 由 `listing_phase` 规则处理。
 - 计算在整数域：`up = floor((prev_cents × (10000 + band_bp) + 5000) / 10000)`；`down = floor((prev_cents × (10000 − band_bp) + 5000) / 10000)`（`half_up`）。`band_side='none'` → 返回 `unbounded`（不是 `unknown`：规则明确说无限制）。
+- `limit-v1` 的顺序（D-64 §4.3）：选基准（`prev_close`，首日规则只用 `band_side`）→ 按 up/down 各自算 target → 若 `min_band_ticks=Some(n)`，把 `up−basis`、`basis−down` 的下限提到 `n×tick` → 再把 `limit_up`/`limit_down` 的下限钳到 1 tick → 按行内 `rounding` 取整并对齐 tick。band floor 与 price floor 是两件事：只做前者，`prev=0.01` 会得到 `down=0`；只做后者，`prev=0.09` 的 5% 行会得到 `up=0.09`（零带宽）。两者都按整数 tick 表达，因此对齐后施加与对齐前施加等价。
 - 最小变动单位：结果按 `min_tick_rules` 的 `tick_units` 对齐（A 股 1 分 = 1 unit）。
 - **不复权**：输入必须是不复权价。用前复权价算会在除权日错（前复权序列没有跳空，交易所的涨跌停基准是除权参考价）。
 - 派生**不入库**（Q5 默认）：读时算，导出时物化；`algorithm_version='limit-v1'`。
@@ -443,11 +446,12 @@ ST 与普通同为 10%），也仍是两行、两份 `basis_ref`，不能借用�
   不变时返回 `no_change`，不重写版本行、不重复发版本；失败语义沿用 M2 derived item（本 item
   失败只影响本 item，任务进入 `partially_failed`；提交结果不确定时走 `needs_verification`）。
 - **未表达项**：主板首日 44%/36% 申报价格范围（沪 2013-12-13 起、深 2014-06-13 起；单
-  `band_bp`+`band_side` 无法表达非对称，基准是发行价、`limit-v1` 没有发行价输入）、沪市
-  风险警示股前收 ≤0.10 元时的一档最小变动单位例外（需要可空 `min_band_ticks` 列，随 M3
-  schema 25）。两者都在规则文件的 `not_encoded` 里声明；对应日期返回 `unknown`（规则缺失
-  等），不做百分比近似。44%/36% 段需要先改契约（D-64 另立任务），低价例外需要先加列，
-  都不在本批数据改动内。
+  `band_bp`+`band_side` 无法表达非对称，基准是发行价、`limit-v1` 没有发行价输入）。它
+  在规则文件的 `not_encoded` 里声明；对应日期返回 `unknown`（规则缺失等），不做百分比
+  近似。44%/36% 段需要先改契约（D-64 另立任务）。沪市风险警示股前收 ≤0.10 元的一 tick
+  例外已由 schema 25 的 `min_band_ticks` 落地（D-64 §4.3）：沪 2013-01-01 起的 ST 行与
+  深 2011-02-28…2023-02-16 的 ST 行置 1；深 2023+ 两行因 2023 版原文未取得（G-4）保持
+  `NULL`，在极低价上仍是已知未编码的百分比结果。
 
 ---
 
@@ -816,7 +820,7 @@ Member { entity, exchange, code, listing_date, delisting_date, status,
 | `capital_events.parquet` | 18,086 | exchange, code, ordinal, effective_day, category, float_after, total_after, known_at(NULL), suspicious |
 | `risk_warnings.parquet` | ~5,000（准入后） | exchange, code, effective_from/to, normalized_status, raw_status_code, announced_at, known_at, source_kind |
 | `suspensions.parquet` | 10–20 万 | exchange, code, start_day, end_day, certainty, missing_days, reason, known_at |
-| `price_limit_rules.parquet` | ~30 | rule_id, market, board, status_class, listing_phase, band_bp, band_side, rounding, effective_from/to, basis_ref, basis_status |
+| `price_limit_rules.parquet` | ~30 | rule_id, market, board, status_class, listing_phase, band_bp, min_band_ticks, band_side, rounding, effective_from/to, basis_ref, basis_status |
 | `universe_intervals.parquet` | ~15,000 | entity, member_from, member_to, basis, flags |
 | `price_limits.parquet`（可选） | 16.7M | entity, trade_day, limit_up, limit_down, state, rule_id |
 
