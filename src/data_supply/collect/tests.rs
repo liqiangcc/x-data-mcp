@@ -16,6 +16,7 @@ use crate::data_supply::generation::{Bound, GenerationSource, SOURCE_GENERATION_
 use crate::data_supply::wire::{CatalogScope, Dataset, Selection, WriteSelection};
 use crate::sqlite_market::backend::MarketBackend;
 use crate::sqlite_market::{evidence_store, series_commit};
+use crate::sqlite_supply::SqliteSupply;
 use crate::sqlite_tasks::SqliteTasks;
 use crate::task_control::{CommandKey, Contract, RequestOutcome, Status, service::TaskControl};
 use std::collections::BTreeSet;
