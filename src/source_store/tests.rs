@@ -240,6 +240,7 @@ fn a_final_line_without_newline_is_torn_even_when_it_parses() {
         size_bytes: BODY.len() as u64,
         container_sha256: None,
         import_batch: None,
+        imported_at: None,
         http_etag: None,
     };
     let line = serde_json::to_string(&record).unwrap();

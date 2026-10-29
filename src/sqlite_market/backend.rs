@@ -165,6 +165,54 @@ impl MarketBackend {
         }
     }
 
+    /// Append one M3 industry snapshot and extend its intervals (M3 PR-6,
+    /// `#446` §5.1/§10.1). The `derived:industry_snapshot` item drives this;
+    /// an already-stored `member_sha256` reports `no_change`.
+    pub(crate) fn commit_industry_snapshot(
+        &self,
+        write: &super::industry::IndustrySnapshotWrite<'_>,
+    ) -> Result<super::industry::IndustryCommit, Error> {
+        match self {
+            Self::Compact(m) => m.commit_industry_snapshot(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "industry_snapshots requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Replace the whole M3 industry table set from the source store
+    /// (`replay --scope industry`).
+    pub(crate) fn replace_industry(
+        &self,
+        rebuild: &crate::industry::Rebuild,
+    ) -> Result<super::industry::IndustryCommit, Error> {
+        match self {
+            Self::Compact(m) => m.replace_industry(rebuild),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "industry_snapshots requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Stored industry snapshots and intervals, for the replay's
+    /// `--verify-only` comparison.
+    pub(crate) fn read_industry(
+        &self,
+    ) -> Result<
+        (
+            Vec<crate::industry::SnapshotRecord>,
+            Vec<crate::industry::AssignmentRow>,
+        ),
+        Error,
+    > {
+        match self {
+            Self::Compact(m) => m.read_industry(),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "industry_snapshots requires the compact market schema".into(),
+            )),
+        }
+    }
+
     /// Every stored A-share raw daily series' span (issue-391 §4.1). The
     /// `derived:security_master` item uses them only as candidate migration
     /// leads; the read connection keeps the full scan off the write lock.

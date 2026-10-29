@@ -65,6 +65,7 @@ blob、追加清单与两次 fsync 都在锁内），因此多个写者不会交
 | `size_bytes` | 字节数 |
 | `container_sha256` | 抽取物所属容器的 sha256（可空） |
 | `import_batch` | 一次性导入批次 id（可空） |
+| `imported_at` | 该字节**首次进入本系统**的导入时间（可空；只在一次性导入时写，见 §5 的 `known_at`） |
 | `http_etag` | 交易所响应的 `ETag`（可空；`Last-Modified` 复用 `publisher_last_modified`，见 [交易所来源入口](exchange-source.md) §5） |
 
 去重键是 `(sha256, source_id, origin)`：重复执行同一导入报 `already_present`；
@@ -96,14 +97,23 @@ source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 `replay`/`verify` 按 scope 选择清单记录、逐 sha 读回校验，并输出按固定字段
 排序后的规范化摘要。scope 的写入器到位情况：`exchange` 自 PR-2 起可从清单
 重建 `exchange_source_snapshots`（见 [交易所来源入口](exchange-source.md) §4），
-`industry`/`generation_facts` 仍是 PR-1a 的 `skeleton_no_op`，分别由
-PR-6、PR-8 实现。空库返回 `store_empty`，不算失败。
+`industry` 自 PR-6 起可重建 `industry_snapshots`/`industry_assignments`，
+`generation_facts` 仍是 PR-1a 的 `skeleton_no_op`，由 PR-8 实现。`rebuilt` 取值：
+`skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）。
+空库返回 `store_empty`，不算失败。
 
 `--db` 是「只算」与「重建」的分界：不给数据库时只计算并报告摘要，不打开也
 不创建数据库；给了以后 scope 在单个事务里替换自己的索引表，写后回读并与
 重算摘要比较，`match` 才算成功，否则输出 `drift` 与前 20 条差异主键。
 `--verify-only` 只重算并比较、不写。重放在服务启动前执行，因此直接取数据库
 租约，不和在线写入竞争。
+
+`industry` 的时间线只由清单里**带发布方 `last_modified` 的登记**构成观测（见
+[行业快照设计](tasks/issue-446-m3-delisted-industry.md) §5.6.1）：相邻且内容相同的
+观测折叠为一段区间，内容变化（包括变回旧内容，A → B → A）就开新区间；没有
+`last_modified` 的登记只是同一份字节的副本，不占时间线位置，只有整份内容都没有
+发布方时间时才取最早获取时间作为唯一一次回退边界。同一内容的多条登记合并成一个
+`industry_snapshots` 行（§5.3），时间与等级取该内容全部登记的最优值。
 
 ## 5. 一次性导入（归档索引）
 
@@ -129,10 +139,16 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
 `invalid_path` 等原因；索引 JSON 语法错误是硬错误，不静默跳过。
 `--dry-run` 执行全部校验但不写任何文件。
 
+导入同时写 `imported_at`（本次导入时间）。行业区间回填的 `known_at` 取它而不是
+归档的历史获取时间——否则等于声称当时已经用上了这份数据（设计 §5.2）；重复导入
+命中 `already_present`，清单里保留第一次的 `imported_at`，重放因此稳定。
+
 ## 6. 部署钩子
 
-`scripts/deploy_phase_g.sh` 在 fresh init、服务就绪、socket 冒烟之后，写部署
-报告之前调用一次 `source_store replay --scope all`。`store_empty` 记入报告的
+`scripts/deploy_phase_g.sh` 在 fresh init 之后、**服务启动之前**调用一次
+`source_store replay --store <state>/source-store --db <market db> --scope all`
+（PR-6 起重放会写库，所以要拿数据库租约；原来的位置在服务就绪之后，会与服务
+抢租约）。`store_empty` 记入报告的
 `source_store_replay` 字段且不算失败；非 0 退出（例如 blob sha 读回不符）会让
 部署失败，而不是部署一个「探活通过、历史为空」的实例。回滚不动来源库。
 

@@ -9,7 +9,7 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
     let items = item_specs(&generation);
     assert_eq!(
         items.len(),
-        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len()
+        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len() + 1
     );
     for (item, registration) in items.iter().zip(index_registry::INDEX_SERIES.iter()) {
         assert_eq!(
@@ -38,7 +38,8 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
     assert_eq!(calendar.frozen_inputs[SOURCE_GENERATION_KEY], generation);
     // The M2 datasets follow the calendar, main table first: the suspension
     // gaps are derived from the master this same run writes (§12.1).
-    let m2 = &items[index_registry::INDEX_SERIES.len() + 1..];
+    let m2 = &items[index_registry::INDEX_SERIES.len() + 1
+        ..index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len()];
     let ids: Vec<&str> = m2.iter().map(|item| item.item_id.as_str()).collect();
     assert_eq!(ids, task_control::derived::DATASETS);
     for item in m2 {
@@ -50,6 +51,21 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
         );
         assert_eq!(item.frozen_inputs[SOURCE_GENERATION_KEY], generation);
     }
+    // The M3 industry item runs last and owns its own scope: it writes the M3
+    // index tables instead of an M2 dataset version (M3 PR-6, `#446` §10.1).
+    let industry =
+        &items[index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len()];
+    assert_eq!(industry.item_id, task_control::derived::INDUSTRY_SNAPSHOT);
+    assert_eq!(
+        industry.target,
+        task_control::derived::target(&industry.item_id)
+    );
+    assert_eq!(industry.progress_unit, PROGRESS_UNIT);
+    assert_eq!(
+        industry.scope_keys,
+        BTreeSet::from([task_control::derived::industry_scope()])
+    );
+    assert_eq!(industry.frozen_inputs[SOURCE_GENERATION_KEY], generation);
 }
 
 #[test]

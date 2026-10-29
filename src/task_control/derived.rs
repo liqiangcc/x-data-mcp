@@ -35,6 +35,11 @@ pub const SECURITY_MASTER: &str = "derived:security_master";
 pub const RISK_WARNINGS: &str = "derived:risk_warnings";
 pub const SUSPENSIONS: &str = "derived:suspensions";
 pub const TRADING_RULES: &str = "derived:trading_rules";
+/// The M3 historical-industry item (M3 PR-6, `#446` §10.1): one `tdxhy.cfg`
+/// snapshot plus its intervals and dictionary per run. It is not an M2
+/// `DATASETS` entry: its write set is the M3 index tables, not a
+/// `derived_dataset_versions` registration (§5.1).
+pub const INDUSTRY_SNAPSHOT: &str = "derived:industry_snapshot";
 /// Every M2 dataset item, in execution order: the main table first (the
 /// suspension gaps are derived from it), then the datasets whose source is
 /// still pending, then the rules (admitted by D-44; the item writes the
@@ -75,6 +80,12 @@ pub fn calendar_scope() -> String {
 /// same rule the calendar item follows).
 pub fn dataset_scope(item_id: &str) -> String {
     json!(["m2", item_id, "market"]).to_string()
+}
+
+/// Occupancy key of the M3 industry item. It owns no security series either,
+/// so it declares its own scope; the key names the M3 table set it writes.
+pub fn industry_scope() -> String {
+    json!(["m3", INDUSTRY_SNAPSHOT, "market"]).to_string()
 }
 
 /// Occupancy key of one benchmark index item — the same key the index series
@@ -125,5 +136,24 @@ mod tests {
         assert_eq!(scopes.len(), DATASETS.len());
         assert!(!scopes.contains(&calendar_scope()));
         assert_eq!(target(SUSPENSIONS), json!({"dataset": SUSPENSIONS}));
+    }
+
+    #[test]
+    fn industry_item_is_derived_and_owns_its_own_scope() {
+        assert!(is_derived(INDUSTRY_SNAPSHOT));
+        // Not an M2 `DATASETS` entry: the M2 list gates `derived_dataset_versions`
+        // writers, and the industry tables are written by a different path.
+        assert!(!DATASETS.contains(&INDUSTRY_SNAPSHOT));
+        assert_eq!(
+            target(INDUSTRY_SNAPSHOT),
+            json!({"dataset": INDUSTRY_SNAPSHOT})
+        );
+        let scopes: BTreeSet<String> = DATASETS
+            .iter()
+            .map(|id| dataset_scope(id))
+            .chain([industry_scope()])
+            .collect();
+        assert_eq!(scopes.len(), DATASETS.len() + 1);
+        assert_ne!(industry_scope(), calendar_scope());
     }
 }

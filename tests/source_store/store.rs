@@ -205,17 +205,23 @@ fn replay_twice_has_the_same_digest_and_scope_selection() {
     let fixture = fixture();
     fixture.import(&import_mod::ImportOptions::default());
     let store = fixture.store();
-    let first = replay_mod::replay(&store, Some(replay_mod::Scope::Industry), false).unwrap();
-    let second = replay_mod::replay(&store, Some(replay_mod::Scope::Industry), false).unwrap();
+    let industry = replay_mod::ReplayRequest::new(Some(replay_mod::Scope::Industry), false, None);
+    let first = replay_mod::replay(&store, &industry).unwrap();
+    let second = replay_mod::replay(&store, &industry).unwrap();
     assert_eq!(first.status, "ok");
     assert_eq!(first.digest, second.digest);
     assert_eq!(first.entries, 2);
     assert_eq!(first.scopes.len(), 1);
     assert_eq!(first.scopes[0].scope, "industry");
-    assert_eq!(first.scopes[0].rebuilt, replay_mod::SKELETON_REBUILT);
+    // M3 PR-6: the industry body is implemented, so the scope now computes the
+    // snapshot set and reports its deterministic summary (no `--db` here).
+    assert_eq!(first.scopes[0].rebuilt, replay_mod::COMPUTED_INDUSTRY_NO_DB);
+    assert!(first.scopes[0].summary.is_some());
+    assert_eq!(first.scopes[0].summary, second.scopes[0].summary);
     assert!(first.problems.is_empty());
     // A scope with no matching records is empty, not an error.
-    let exchange = replay_mod::replay(&store, Some(replay_mod::Scope::Exchange), false).unwrap();
+    let exchange = replay_mod::ReplayRequest::new(Some(replay_mod::Scope::Exchange), false, None);
+    let exchange = replay_mod::replay(&store, &exchange).unwrap();
     assert_eq!(exchange.status, "ok");
     assert_eq!(exchange.scopes[0].status, "store_empty");
 }
@@ -225,11 +231,13 @@ fn all_scope_replay_covers_every_scope_and_agrees_with_verify() {
     let fixture = fixture();
     fixture.import(&import_mod::ImportOptions::default());
     let store = fixture.store();
-    let replay = replay_mod::replay(&store, None, false).unwrap();
+    let replay =
+        replay_mod::replay(&store, &replay_mod::ReplayRequest::new(None, false, None)).unwrap();
     assert_eq!(replay.scope, "all");
     assert_eq!(replay.scopes.len(), 3);
     assert_eq!(replay.entries, 2);
-    let verify = replay_mod::verify(&store, None).unwrap();
+    let verify =
+        replay_mod::verify(&store, &replay_mod::ReplayRequest::new(None, false, None)).unwrap();
     assert_eq!(verify.mode, "verify");
     assert!(verify.verify_only);
     assert_eq!(verify.status, replay.status);
@@ -242,12 +250,14 @@ fn corrupt_blob_fails_replay_and_verify_with_source_store_corrupt() {
     fixture.import(&import_mod::ImportOptions::default());
     let store = fixture.store();
     fs::write(store.blob_path(&fixture.tdxhy_sha), b"tampered").unwrap();
-    let replay = replay_mod::replay(&store, None, false).unwrap();
+    let replay =
+        replay_mod::replay(&store, &replay_mod::ReplayRequest::new(None, false, None)).unwrap();
     assert_eq!(replay.status, "source_store_corrupt");
     assert_eq!(replay.problems[0].reason, "source_store_corrupt");
     assert_eq!(replay.problems[0].sha256, fixture.tdxhy_sha);
     assert_ne!(replay.problems[0].expected, replay.problems[0].actual);
-    let verify = replay_mod::verify(&store, None).unwrap();
+    let verify =
+        replay_mod::verify(&store, &replay_mod::ReplayRequest::new(None, true, None)).unwrap();
     assert_eq!(verify.status, "source_store_corrupt");
 }
 
@@ -255,7 +265,8 @@ fn corrupt_blob_fails_replay_and_verify_with_source_store_corrupt() {
 fn empty_store_is_store_empty_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let store = SourceStore::new(dir.path().join("store"));
-    let replay = replay_mod::replay(&store, None, false).unwrap();
+    let replay =
+        replay_mod::replay(&store, &replay_mod::ReplayRequest::new(None, false, None)).unwrap();
     assert_eq!(replay.status, "store_empty");
     assert_eq!(replay.entries, 0);
     assert!(
@@ -264,7 +275,8 @@ fn empty_store_is_store_empty_not_an_error() {
             .iter()
             .all(|scope| scope.status == "store_empty")
     );
-    let verify = replay_mod::verify(&store, None).unwrap();
+    let verify =
+        replay_mod::verify(&store, &replay_mod::ReplayRequest::new(None, false, None)).unwrap();
     assert_eq!(verify.status, "store_empty");
 }
 
@@ -275,7 +287,8 @@ fn unknown_parser_version_is_fail_closed() {
     let mut facts = registration(TDXHY_SOURCE_ID, "origin:a");
     facts.parser_version = Some("tdxhy-v99".to_string());
     store.register(TDXHY, &facts).unwrap();
-    let report = replay_mod::replay(&store, Some(replay_mod::Scope::Industry), false).unwrap();
+    let request = replay_mod::ReplayRequest::new(Some(replay_mod::Scope::Industry), false, None);
+    let report = replay_mod::replay(&store, &request).unwrap();
     assert_eq!(report.status, "unknown_parser");
     assert_eq!(report.problems[0].reason, "unknown_parser");
 }

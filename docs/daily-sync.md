@@ -221,13 +221,21 @@ Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目
 
 v7 起全市场日更改由 `plan_market_update`/`run_market_update` 完成（步骤与失败
 路由见 [generic-data-v8](contracts/generic-data-v8.md) §7）。同一次日线 run 里，
-worker 还会追加 **14** 个服务器内部派生 item（9 个指数基准 + 交易日历 + 4 个 M2
+worker 还会追加 **15** 个服务器内部派生 item（9 个指数基准 + 交易日历 + 4 个 M2
 全市场数据集：`derived:security_master`、`derived:risk_warnings`、
-`derived:suspensions`、`derived:trading_rules`）；它们的 item 级结果只用于报告
+`derived:suspensions`、`derived:trading_rules` + M3 的
+`derived:industry_snapshot`）；它们的 item 级结果只用于报告
 （`entity`/`period` 为 null），不进入实体补漏清单。4 个 M2 item 在来源未准入时
 **成功且写 0 行**（evidence 里带 `pending_sources`），只有 `error` 才是失败；tool 面
 （`get_task_progress`/`get_task`）只暴露失败项，成功项的取值按 Skill §4 用
-`list_data_versions` 回读。
+`list_data_versions` 回读（M3 item 写的是索引表而不是版本行，取值看 evidence）。
+M3 的 `derived:industry_snapshot` 只维护行业快照与区间：来源不带
+`tdxhy.cfg` 时成功且 `no_change`；文件存在但解析失败或缺字典 → item 失败，
+字节已先落来源库、上一版区间不丢。同一内容被再次观测（前一条登记内容相同且带发布方时间）只是
+延长未闭合区间、`no_change`；内容变回旧内容（A → B → A）是新的一次变更，会开新区间。
+没有发布方 `last_modified` 的登记不算观测（只证明我们持有这份字节），该内容已在表中
+时直接跳过；若这条观测会改变**已公布**区间的起点，日更 fail-closed 指向
+`source_store replay --scope industry`，不要手工改表。
 
 ### 全新数据库
 

@@ -544,14 +544,15 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
         .api
         .call("get_task_progress", json!({"task_id":task_id}))
         .unwrap();
-    // issue-383 §9.2 / issue-391 §12.1: the run appended and executed the
-    // server-internal derived items (9 indices + calendar + the 4 M2
-    // whole-market datasets) after the two entity items. The acceptance still
-    // reports the plan's eligible count, not the live item count — the
-    // internal items are not plan items.
+    // issue-383 §9.2 / issue-391 §12.1 / M3 PR-6: the run appended and
+    // executed the server-internal derived items (9 indices + calendar + the 4
+    // M2 whole-market datasets + the M3 industry snapshot) after the two
+    // entity items. The acceptance still reports the plan's eligible count,
+    // not the live item count — the internal items are not plan items.
     let derived = x_data_mcp::index_registry::INDEX_SERIES.len()
         + 1
-        + x_data_mcp::task_control::derived::DATASETS.len();
+        + x_data_mcp::task_control::derived::DATASETS.len()
+        + 1;
     assert_eq!(progress["finished"], 2 + derived);
     assert_eq!(progress["total"], 2 + derived);
     let task = r
@@ -863,6 +864,7 @@ fn internal_derived_item_failure_marks_the_run_partially_failed() {
         x_data_mcp::index_registry::INDEX_SERIES.len()
             + 1
             + x_data_mcp::task_control::derived::DATASETS.len()
+            + 1
     );
     // The missing index members fail the nine index items and the calendar
     // that reads them; the suspensions then have no calendar to bracket gaps
