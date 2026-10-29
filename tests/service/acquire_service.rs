@@ -773,7 +773,8 @@ fn ten_daily_updates_never_hit_generation_capacity() {
     let mirror = tempfile::tempdir().unwrap();
     write_mirror(mirror.path(), today_u32());
     let root = tempfile::tempdir().unwrap();
-    let service = open(root.path(), mirror.path());
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
     let mut previous: Option<String> = None;
     for day in 0..10u32 {
         remirror(mirror.path(), 600200 + day, today_u32());
@@ -782,6 +783,7 @@ fn ten_daily_updates_never_hit_generation_capacity() {
         let acceptance = install(&service, &format!("req-daily-{day}"));
         let next_gen = generation_of(&service, &acceptance.task_id);
         assert_eq!(verify(&service, &next_gen).state, "consistency_verified");
+        satisfy_gate(&service, &gate, &next_gen);
         let reply = activate(&service, &next_gen, previous.as_deref());
         assert_eq!(reply.state, "active", "day {day}: {reply:?}");
         let hot = service

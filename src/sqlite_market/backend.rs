@@ -214,11 +214,9 @@ impl MarketBackend {
     pub fn register_derived_generation_facts(&self, generation: &str) -> Result<usize, Error> {
         let facts = match self {
             Self::Compact(m) => m.derived_generation_facts(generation)?,
-            Self::Legacy(_) => {
-                return Err(Error::Invalid(
-                    "generation_facts requires the compact market schema".into(),
-                ));
-            }
+            // Legacy (schema 18) has no M3 tables at all, and its daily path
+            // predates the retirement gate; there is nothing to register.
+            Self::Legacy(_) => return Ok(0),
         };
         if facts.is_empty() {
             return Ok(0);
