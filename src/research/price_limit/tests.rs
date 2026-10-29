@@ -992,14 +992,16 @@ fn the_price_floor_holds_without_a_band_floor() {
     assert_eq!(limits.down, Some(1), "0.01 must not become 0");
 
     // A band floor is meaningless for an unbounded row; it must not turn a
-    // known `unbounded` answer into a bounded one.
+    // known `unbounded` answer into a bounded one. `band_side` decides first,
+    // even for a raw row the writer would refuse (`band_side=none` with a
+    // floor is rejected by `PriceLimitRule::validate`).
     let mut unbounded = rule(
         "floor-none",
         RuleMarket::Sh,
         RuleBoard::Main,
         StatusClass::All,
         ListingPhase::FirstDay,
-        None,
+        Some(500),
         BandSide::None,
         day(2020, 1, 1),
         None,
