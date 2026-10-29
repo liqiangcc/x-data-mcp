@@ -597,7 +597,11 @@ impl Segments {
                         // observation stays as it was (§5.1).
                         continue;
                     }
-                    if last.effective_from == day {
+                    if last.effective_to.is_some() {
+                        // The code had already ended: the closed interval is
+                        // left exactly as stored and a new one opens here.
+                        segments.push(segment);
+                    } else if last.effective_from == day {
                         // Same-day collision: the earlier same-day mapping is
                         // zero-length and is not written (§5.2).
                         *last = segment;
