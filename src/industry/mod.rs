@@ -20,10 +20,15 @@
 //! Interval rules (§5.1/§5.2), all of them "never earlier than we can prove":
 //!
 //! - the timeline is the **observation** sequence, not the set of contents: each
-//!   manifest registration is one observation, so a file that goes A → B → A was
-//!   changed twice and yields three intervals. Only *adjacent* observations of
-//!   the same content fold into one step, dated by the earliest publisher time in
-//!   that step (§5.3);
+//!   registration that carries the publisher's `last_modified` is one
+//!   observation, so a file that goes A → B → A was changed twice and yields
+//!   three intervals. Only *adjacent* observations of the same content fold into
+//!   one step, dated by the earliest publisher time in that step (§5.3);
+//! - a registration without a publisher time is not an observation: it proves
+//!   the bytes were held, not that they were current then, so copies fetched
+//!   long after publication never invent a "reverted" interval. A content with
+//!   no publisher time at all contributes one boundary dated by its earliest
+//!   acquisition (`acquisition_time`);
 //! - a code present in adjacent steps with the same `(t_code, x_code)` does not
 //!   open a new row, it extends the interval;
 //! - a changed mapping closes the old interval at the new step's start and opens
@@ -223,24 +228,36 @@ impl SnapshotRecord {
 
     /// The interval start and its basis, or `None` for grade C (stored, never
     /// interval-defining).
+    ///
+    /// The publisher time is what the interval is dated by; the acquisition day
+    /// is only the fallback for a content no registration dates (§5.2), and only
+    /// for a content that *has* no publisher time at all — see [`rebuild`].
     pub fn boundary(&self) -> Result<Option<(i64, Basis)>, Error> {
         if self.evidence_grade == "C" {
             return Ok(None);
         }
-        if let Some(last_modified) = self
-            .publisher_last_modified
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        {
+        if let Some(last_modified) = self.publisher_time() {
             let day = parse_publisher_day(last_modified)?;
             return Ok(Some((epoch_day(day), Basis::PublisherLastModified)));
         }
+        Ok(Some((self.acquisition_day()?, Basis::AcquisitionTime)))
+    }
+
+    /// The publisher's `last_modified`, when the registration carries one.
+    pub fn publisher_time(&self) -> Option<&str> {
+        self.publisher_last_modified
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    /// The day the bytes were acquired — the fallback boundary of a content no
+    /// registration dates by a publisher time (§5.2 `acquisition_time`).
+    pub fn acquisition_day(&self) -> Result<i64, Error> {
         let observed = self
             .observed_at
             .as_deref()
             .unwrap_or(self.ingested_at.as_str());
-        let day = parse_day_prefix(observed)?;
-        Ok(Some((epoch_day(day), Basis::AcquisitionTime)))
+        Ok(epoch_day(parse_day_prefix(observed)?))
     }
 
     /// §5.3 step 1: several registrations of one content describe **one**
@@ -398,8 +415,10 @@ pub struct Rebuild {
     /// Intervals, ordered by `(exchange, code, effective_from)`.
     pub assignments: Vec<AssignmentRow>,
     /// Timeline runs — adjacent identical observations folded into one step —
-    /// that defined an interval (the "boundaries"). A content that comes back
-    /// after a different one counts again: A → B → A is three.
+    /// that defined an interval (the "boundaries"). Only publisher-dated
+    /// registrations are observations, so copies without a publisher time never
+    /// add one; a content that comes back after a different one counts again:
+    /// A → B → A is three.
     pub boundaries: usize,
     /// Same-day collisions where a later snapshot superseded an earlier
     /// same-day mapping (zero-length segments are not written).
@@ -514,51 +533,116 @@ pub enum RunLink {
     Fresh,
 }
 
+/// One entry of the observation timeline: a registration that may define an
+/// interval, and the day it claims.
+struct Observation<'a> {
+    facts: &'a SnapshotFacts,
+    day: i64,
+    basis: Basis,
+}
+
 /// Deterministic rebuild of the snapshot list and the assignment intervals from
-/// a set of observations. This is the *only* implementation of §5.1: the daily
+/// a set of registrations. This is the *only* implementation of §5.1: the daily
 /// item and `replay --scope industry` both end up here, which is what makes
 /// "clear the DB and replay" reproduce the same table contents.
 ///
-/// Two different dedupe rules, because storage and history are not the same
-/// question (§5.3):
+/// Three rules, because storage, evidence and history are not the same question
+/// (§5.3):
 ///
 /// - **storage** keeps one row per content, with the evidence merged over every
 ///   registration of it (earliest publisher time, earliest observation, best
 ///   grade);
-/// - **the timeline** keeps every registration. Observations are ordered by
-///   `(interval start, ingested_at, member_sha256)` (§9.4.2) and only *adjacent*
-///   observations of the same content fold into one interval, with the earliest
-///   publisher time of the run as its start.
+/// - **the timeline** is built from the registrations that carry the publisher's
+///   `last_modified`: only those say *when* the publisher's content was that
+///   file. A copy we merely hold (archive duplicate, test fixture) proves we had
+///   the bytes at some point, not that they were current then — its fetch time
+///   is often weeks after publication. Such copies never become observations;
+///   a content that has *no* publisher time anywhere contributes exactly one
+///   fallback boundary, dated by the earliest of its copies (`acquisition_time`,
+///   grade B), so it can appear once but never "come back";
+/// - **observations** are ordered by `(interval start, ingested_at,
+///   member_sha256)` (§9.4.2) and only *adjacent* ones with the same content
+///   fold into one interval, dated by the earliest start of the run.
 pub fn rebuild(observations: &[SnapshotFacts]) -> Result<Rebuild, Error> {
-    let mut stored: BTreeMap<&str, SnapshotRecord> = BTreeMap::new();
+    // Storage: one row per content, evidence merged over every registration.
+    let mut contents: BTreeMap<&str, Vec<&SnapshotFacts>> = BTreeMap::new();
     for facts in observations {
-        let record = &facts.record;
-        match stored.get_mut(record.member_sha256.as_str()) {
-            Some(merged) => *merged = merged.merged_with(record),
-            None => {
-                stored.insert(record.member_sha256.as_str(), record.clone());
-            }
+        contents
+            .entry(facts.record.member_sha256.as_str())
+            .or_default()
+            .push(facts);
+    }
+    let mut stored: BTreeMap<&str, SnapshotRecord> = BTreeMap::new();
+    for (sha, registrations) in &contents {
+        let mut merged = registrations[0].record.clone();
+        for facts in &registrations[1..] {
+            merged = merged.merged_with(&facts.record);
         }
+        stored.insert(*sha, merged);
     }
 
-    // Grade C is stored but never defines an interval (§5.3), so it takes no
-    // part in the timeline at all.
-    let mut timeline: Vec<(&SnapshotFacts, i64, Basis)> = Vec::new();
-    for facts in observations {
-        let Some((day, basis)) = facts.record.boundary()? else {
+    // The timeline: publisher-dated registrations, or one fallback per content.
+    let mut timeline: Vec<Observation<'_>> = Vec::new();
+    for registrations in contents.values() {
+        let mut published = false;
+        for &facts in registrations {
+            // Grade C is stored but never defines an interval (§5.3), and a
+            // registration without a publisher time is not an observation.
+            if facts.record.publisher_time().is_none() {
+                continue;
+            }
+            let Some((day, _)) = facts.record.boundary()? else {
+                continue;
+            };
+            published = true;
+            timeline.push(Observation {
+                facts,
+                day,
+                basis: Basis::PublisherLastModified,
+            });
+        }
+        if published {
             continue;
-        };
-        timeline.push((facts, day, basis));
+        }
+        let mut candidate: Option<Observation<'_>> = None;
+        for &facts in registrations {
+            if facts.record.evidence_grade == "C" {
+                continue;
+            }
+            let candidate_day = facts.record.acquisition_day()?;
+            let earlier = match &candidate {
+                None => true,
+                Some(current) => {
+                    (candidate_day, facts.record.ingested_at.as_str())
+                        < (current.day, current.facts.record.ingested_at.as_str())
+                }
+            };
+            if earlier {
+                candidate = Some(Observation {
+                    facts,
+                    day: candidate_day,
+                    basis: Basis::AcquisitionTime,
+                });
+            }
+        }
+        if let Some(candidate) = candidate {
+            timeline.push(candidate);
+        }
     }
     timeline.sort_by(|left, right| {
-        left.1
-            .cmp(&right.1)
-            .then_with(|| left.0.record.ingested_at.cmp(&right.0.record.ingested_at))
+        left.day
+            .cmp(&right.day)
             .then_with(|| {
-                left.0
+                left.facts
+                    .record
+                    .ingested_at
+                    .cmp(&right.facts.record.ingested_at)
+            })
+            .then_with(|| {
+                left.facts
                     .record
                     .member_sha256
-                    .cmp(&right.0.record.member_sha256)
+                    .cmp(&right.facts.record.member_sha256)
             })
     });
 
@@ -566,38 +650,37 @@ pub fn rebuild(observations: &[SnapshotFacts]) -> Result<Rebuild, Error> {
     let mut steps = 0usize;
     let mut cursor = 0usize;
     while cursor < timeline.len() {
+        let sha = timeline[cursor].facts.record.member_sha256.as_str();
         let mut end = cursor + 1;
-        while end < timeline.len()
-            && timeline[end].0.record.member_sha256 == timeline[cursor].0.record.member_sha256
-        {
+        while end < timeline.len() && timeline[end].facts.record.member_sha256.as_str() == sha {
             end += 1;
         }
         let run = &timeline[cursor..end];
-        // §5.3: one interval per run, dated by the earliest publisher time in
-        // it, else by the earliest acquisition time, with the best grade and the
-        // earliest knowledge time of its observations.
-        let mut merged = run[0].0.record.clone();
-        let mut known_at = run[0].0.record.known_at();
-        for (facts, _, _) in &run[1..] {
-            merged = merged.merged_with(&facts.record);
-            if facts.record.known_at() < known_at {
-                known_at = facts.record.known_at();
-            }
-        }
-        let Some((day, basis)) = merged.boundary()? else {
-            return Err(Error::Invalid(format!(
-                "the run of {} lost its interval boundary in the metadata merge",
-                merged.member_sha256
-            )));
-        };
+        // §5.3: one interval per run, dated by the earliest day the run claims,
+        // with the evidence merged over *every* registration of the content: a
+        // copy without a publisher time can still improve the known time or the
+        // grade without ever being an observation itself.
+        let day = run
+            .iter()
+            .map(|observation| observation.day)
+            .min()
+            .unwrap_or(run[0].day);
+        let merged = stored.get(sha).expect("every content is stored");
+        let known_at = contents
+            .get(sha)
+            .into_iter()
+            .flatten()
+            .map(|facts| facts.record.known_at())
+            .min()
+            .unwrap_or_else(|| merged.known_at());
         steps += 1;
         let step = Step {
-            member_sha256: &merged.member_sha256,
-            members: &run[0].0.members,
-            dictionary: &run[0].0.dictionary,
-            dictionary_present: run[0].0.dictionary_present,
+            member_sha256: sha,
+            members: &run[0].facts.members,
+            dictionary: &run[0].facts.dictionary,
+            dictionary_present: run[0].facts.dictionary_present,
             day,
-            basis,
+            basis: run[0].basis,
             known_at: &known_at,
             evidence_grade: &merged.evidence_grade,
         };
@@ -633,6 +716,13 @@ pub fn rebuild(observations: &[SnapshotFacts]) -> Result<Rebuild, Error> {
 /// was seen before but is *not* the previous observation opens a new interval
 /// (A → B → A), so nothing here looks the content up in the table.
 ///
+/// A registration without a publisher time is not an observation (§5.3): it only
+/// proves we hold the bytes, not that the publisher's content was that file at
+/// that time, so it never extends or reopens an interval. It supplies the
+/// fallback boundary only for a content that no publisher time names, and such a
+/// content appears exactly once — hence the skip once the content is in the
+/// table.
+///
 /// Grade C evidence is stored as a snapshot but contributes no interval, so the
 /// rows come back unchanged.
 pub fn apply_on(
@@ -640,6 +730,13 @@ pub fn apply_on(
     facts: &SnapshotFacts,
     link: RunLink,
 ) -> Result<(Vec<AssignmentRow>, usize), Error> {
+    if facts.record.publisher_time().is_none()
+        && existing
+            .iter()
+            .any(|row| row.snapshot_member_sha256 == facts.record.member_sha256)
+    {
+        return Ok((existing.to_vec(), 0));
+    }
     let Some((day, basis)) = facts.record.boundary()? else {
         return Ok((existing.to_vec(), 0));
     };

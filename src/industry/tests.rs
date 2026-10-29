@@ -655,6 +655,112 @@ fn a_content_that_comes_back_opens_a_second_run() {
 }
 
 #[test]
+fn copies_without_a_publisher_time_are_not_observations() {
+    // The real archive shape (2026-10-29 second review): the 09-30 file has 11
+    // registrations, only one with a publisher time; the others are copies
+    // fetched on 10-08 … 10-12, i.e. *after* the 10-12 change they precede in
+    // publication order. Counting them as observations sorts them after the new
+    // content and invents a "reverted" interval; the same-day rule would even
+    // swallow the 10-12 one.
+    let old = cfg_file(&[(0, "000001", "T1001", "X500102")], "830001");
+    let new = cfg_file(&[(0, "000001", "T1001", "X500202")], "830001");
+    let mut inputs = vec![snapshot(
+        &old,
+        Some("Wed, 30 Sep 2026 00:00:00 GMT"),
+        "2026-09-30T01:00:00Z",
+        "A",
+        Some(DICT),
+    )];
+    for fetched in [
+        "2026-10-08T01:00:00Z",
+        "2026-10-09T01:00:00Z",
+        "2026-10-12T23:00:00Z",
+    ] {
+        inputs.push(snapshot(&old, None, fetched, "B", Some(DICT)));
+    }
+    inputs.push(snapshot(
+        &new,
+        Some("Mon, 12 Oct 2026 00:00:00 GMT"),
+        "2026-10-12T13:00:00Z",
+        "A",
+        Some(DICT),
+    ));
+
+    let rebuilt = rebuild(&inputs).unwrap();
+    assert_eq!(rebuilt.boundaries, 2, "two publisher-dated observations");
+    assert_eq!(rebuilt.snapshots.len(), 2, "two contents");
+    let rows = assignment(&rebuilt.assignments, "sz", "000001");
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0].industry_code, "X5001");
+    assert_eq!(rows[0].effective_from, day(2026, 9, 30));
+    assert_eq!(rows[0].effective_to, Some(day(2026, 10, 12)));
+    assert_eq!(rows[1].industry_code, "X5002");
+    assert_eq!(rows[1].effective_from, day(2026, 10, 12));
+    assert_eq!(rows[1].effective_to, None);
+
+    // The copies still feed the storage row (§5.3 step 1): the merged snapshot
+    // keeps the one publisher time, the best grade and the earliest observation.
+    let old_row = rebuilt
+        .snapshots
+        .iter()
+        .find(|row| row.member_sha256 == crate::hash::sha256(&old))
+        .unwrap();
+    assert_eq!(old_row.evidence_grade, "A");
+    assert_eq!(
+        old_row.publisher_last_modified.as_deref(),
+        Some("Wed, 30 Sep 2026 00:00:00 GMT")
+    );
+    assert_eq!(old_row.observed_at.as_deref(), Some("2026-09-30T01:00:00Z"));
+
+    // The daily path agrees: the copies change nothing, the 10-12 content opens
+    // the second interval.
+    let mut daily: Vec<AssignmentRow> = Vec::new();
+    for (index, facts) in inputs.iter().enumerate() {
+        let link =
+            if index > 0 && inputs[index - 1].record.member_sha256 == facts.record.member_sha256 {
+                RunLink::Continue
+            } else {
+                RunLink::Fresh
+            };
+        daily = apply_on(&daily, facts, link).unwrap().0;
+    }
+    assert_eq!(daily, rebuilt.assignments);
+}
+
+#[test]
+fn a_content_with_only_copies_is_dated_by_its_earliest_acquisition() {
+    // No publisher time anywhere for this content: the copies still prove it
+    // existed, so it appears exactly once — at the earliest acquisition, never
+    // as its own revert.
+    let bytes = cfg_file(&[(0, "000001", "T1001", "X500102")], "830001");
+    let inputs = vec![
+        snapshot(&bytes, None, "2026-10-12T23:00:00Z", "B", Some(DICT)),
+        snapshot(&bytes, None, "2026-10-08T01:00:00Z", "B", Some(DICT)),
+    ];
+    let rebuilt = rebuild(&inputs).unwrap();
+    assert_eq!(rebuilt.boundaries, 1, "one content, one fallback boundary");
+    assert_eq!(rebuilt.snapshots.len(), 1);
+    let rows = assignment(&rebuilt.assignments, "sz", "000001");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].effective_from,
+        day(2026, 10, 8),
+        "the earliest acquisition of the copies, not the first manifest line"
+    );
+    assert_eq!(rows[0].basis, "acquisition_time");
+    assert_eq!(rows[0].evidence_grade, "B");
+    assert_eq!(rows[0].effective_to, None);
+    assert_eq!(rows[0].known_at, "2026-10-08T01:00:00Z");
+
+    // The daily path meets the same two copies in fetch order: the earliest one
+    // opens the interval and the later one is the same content again.
+    let (first, _) = apply_on(&[], &inputs[1], RunLink::Fresh).unwrap();
+    assert_eq!(first, rebuilt.assignments);
+    let (second, _) = apply_on(&first, &inputs[0], RunLink::Continue).unwrap();
+    assert_eq!(second, first, "a copy never moves or reopens an interval");
+}
+
+#[test]
 fn identical_observations_in_a_row_are_one_interval_from_the_earliest_day() {
     let a = cfg(&[(0, "000001", "T1001", "X500102")]);
     let inputs = vec![
@@ -696,10 +802,11 @@ fn identical_observations_in_a_row_are_one_interval_from_the_earliest_day() {
 #[test]
 fn a_run_takes_the_earliest_publisher_time_and_the_best_grade() {
     // The archive holds the same bytes twice: the first registration lost its
-    // `last_modified` (B, dated by the acquisition time on 10-11), the second
-    // kept it (A, 10-12). §5.3 step 1 says the run is dated by the publisher
-    // time and graded A — taking the first registration would make the fact
-    // both weaker and earlier than it is.
+    // `last_modified` (B, 10-11), the second kept it (A, 10-12). §5.3 step 1
+    // says the content is dated by the publisher time and graded A — taking the
+    // first registration would make the fact both weaker and earlier than it
+    // is. The copy without a publisher time is not an observation, but it still
+    // feeds the merged evidence (best grade, earliest known time).
     let a = cfg(&[(0, "000001", "T1001", "X500102")]);
     let inputs = vec![
         snapshot(&a, None, "2026-10-11T01:00:00Z", "B", Some(DICT)),

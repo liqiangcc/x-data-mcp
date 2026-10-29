@@ -108,11 +108,12 @@ source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 `--verify-only` 只重算并比较、不写。重放在服务启动前执行，因此直接取数据库
 租约，不和在线写入竞争。
 
-`industry` 的时间线按清单里的**带发布方 `last_modified` 的登记**重放（见
+`industry` 的时间线只由清单里**带发布方 `last_modified` 的登记**构成观测（见
 [行业快照设计](tasks/issue-446-m3-delisted-industry.md) §5.6.1）：相邻且内容相同的
-观测折叠为一段区间，内容变化（包括变回旧内容，A → B → A）就开新区间；同一内容的
-多条登记合并成一个 `industry_snapshots` 行（§5.3），时间与等级取该内容全部登记的
-最优值。
+观测折叠为一段区间，内容变化（包括变回旧内容，A → B → A）就开新区间；没有
+`last_modified` 的登记只是同一份字节的副本，不占时间线位置，只有整份内容都没有
+发布方时间时才取最早获取时间作为唯一一次回退边界。同一内容的多条登记合并成一个
+`industry_snapshots` 行（§5.3），时间与等级取该内容全部登记的最优值。
 
 ## 5. 一次性导入（归档索引）
 
