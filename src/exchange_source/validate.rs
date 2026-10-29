@@ -27,7 +27,9 @@ pub struct PageEnvelope {
     pub page_count: u32,
     pub rows: usize,
     /// Publisher-declared total for the *whole window* (SSE `pageHelp.total`,
-    /// SZSE `metadata.recordcount`), when the envelope exposes one.
+    /// SZSE `metadata.recordcount`), when the envelope exposes one. An SSE
+    /// `total` of `0` is reported as `None`: that endpoint uses 0 for "no
+    /// total", not for "no rows" (§6.2 A-1 evidence).
     pub total: Option<u64>,
 }
 
@@ -163,7 +165,14 @@ fn parse_sse(value: &Value) -> Result<PageEnvelope, ValidateError> {
         page: clamp_u32(page),
         page_count: clamp_u32(page_count),
         rows: rows.len(),
-        total: help.get("total").and_then(number),
+        // `pageHelp.total` is `0` on several SSE sqlIds even when rows are
+        // returned (M2 A-1 evidence: `GPLB_GP_L` reports 0 for every page), so
+        // a zero means "not reported", not "no rows". Treating it as a count
+        // would reject every real listing page as `truncated`.
+        total: help
+            .get("total")
+            .and_then(number)
+            .filter(|total| *total > 0),
     })
 }
 

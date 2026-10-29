@@ -29,6 +29,8 @@ use crate::security_master::{
     IssuerResolution, ListingSource, SecurityLifecycleFact, is_admitted_category,
 };
 
+pub mod a1a2;
+
 /// One anchored field: name, dBase type byte, length, decimals (#399 A-5).
 #[derive(Debug, Clone, Copy)]
 struct FieldAnchor {
