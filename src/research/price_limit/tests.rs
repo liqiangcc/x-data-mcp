@@ -956,6 +956,7 @@ fn an_unknown_st_status_still_answers_when_every_status_shares_the_band() {
 #[test]
 fn a_pre_2023_first_day_is_unbounded_not_unknown() {
     let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
     let sh_day = [day(1996, 12, 16)];
     let sz_2011_day = [day(2011, 3, 1)];
     let sz_2013_day = [day(2013, 12, 13)];
@@ -1024,6 +1025,7 @@ fn a_pre_2023_first_day_is_unbounded_not_unknown() {
 #[test]
 fn the_declared_range_first_day_is_still_rule_missing() {
     let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
     let sh_2013 = [day(2013, 12, 13)];
     let sz_2013 = [day(2013, 12, 13)];
     let sz_2014 = [day(2014, 6, 13)];
@@ -1097,6 +1099,7 @@ fn the_declared_range_first_day_is_still_rule_missing() {
 #[test]
 fn the_r2_pre_2000_sh_row_does_not_make_an_unknown_st_status_known() {
     let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
     let legacy = [
         day(1998, 4, 20),
         day(1998, 4, 21),
