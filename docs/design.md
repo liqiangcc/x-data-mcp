@@ -369,6 +369,13 @@ PreconditionChanged 不自动扩大范围或无限重跑；OutcomeUnknown 保留
 **不进**其输入序列的 `version_id`（派生数据集自己的版本单独登记）；④ 与源事实同一事务提交，
 避免“源没变、派生变了”的中间态。
 
+**来源快照（M3 起作为独立一类）**：从网站获取的官方事实（交易所名单、公告/状态事件、简称与
+停牌）必须可冻结、可重放、可版本化，且不属于 generation artifact。冻结字节落在**系统自有的
+库外内容寻址存储 + 只追加清单**，SQLite 表只作索引；fresh-init 后按 sha256 重放即可重建，
+退役前必须已按 sha256 读回。落位与入口见 [来源库](source-store.md)、
+[交易所来源入口](exchange-source.md)；设计见 [M3 设计](tasks/issue-446-m3-delisted-industry.md)
+§9.4，这里不复述格式。
+
 ### 扩展契约
 
 - task_kind / operation 标识具体用例，contract_version 标识其参数与重放语义；
@@ -387,6 +394,15 @@ PreconditionChanged 不自动扩大范围或无限重跑；OutcomeUnknown 保留
   独立数据集、带依据引用与生效区间，代码里不写死幅度；规则变更只加一行数据，不改代码。
 - **时点证券主表**按生效区间记录，目录快照只是主表在某一时点的投影；新类别不强行套用目录的
   “当前快照”语义。
+- **成员集与目录快照分离**：目录是当前快照的投影，成员集来自主表与官方包成员；新的 `scope`
+  命名带类别，只写选择不改变目录语义（catalog 数据集拒绝该 scope）。落地记录见
+  [数据目录](data-catalog.md) §2.1 与 M3 PR-4/PR-7。
+- **回填行的 `known_at` 不得早于入库时间**：归档/回填只证明「我们现在持有这份字节」，不能
+  声称当时已经用上；导入时间作为知晓时间下限，发布方时间只作 `effective_from`。落地记录见
+  [来源库](source-store.md) §6。
+- **0 行不是证据**：范围查询必须分段（沪公告索引 ≤1 季度）并校验返回计数；0 行按
+  `not_observed`/`unverified_zero` fail-closed，不能写成「无事件/无变更」。落地记录见
+  [交易所来源入口](exchange-source.md) 与 M3 AC-M3-10。
 - **价格精度是序列属性**：整数价格必须按序列声明的 `price_scale` 解释，读取方不得假定 2 位或
   6 位小数（M1 的不复权、前复权、指数与未来的 ETF 厘靠这一条共存）。
 - **`outputSchema` 不进 `tools/list`**：工具定义只保证“不查帮助也能传对参数”（名称、描述、输入形状）；
@@ -398,6 +414,28 @@ PreconditionChanged 不自动扩大范围或无限重跑；OutcomeUnknown 保留
 初期在一个 Rust 仓库内以静态装配的用例处理器实现扩展，不预建动态插件系统、
 跨服务总线或通用 DSL。只有新增真实用例暴露重复且语义相同，才提取公共机制。
 未来是否拆 crate、服务或仓库，由独立部署、发布和维护需求决定。
+
+### M3 模块落位与数据流（已合并，未部署）
+
+M3（[#446](https://github.com/liqiangcc/x-data-mcp/issues/446)）按上面的分离点落地，下面只
+记落位与指向，实现细节见各自落地记录；PR-1a…PR-9 已合并，PR-10/11/12（历史 ST、停复牌、
+简称写入器）未做，全部未部署。拆分、依赖与每项落地记录（含已合并 PR 号）见
+[M3 设计](tasks/issue-446-m3-delisted-industry.md) §14 与 §14.3 的部署前验收清单。
+
+| 层 | 落位 | 落地记录 |
+|---|---|---|
+| 来源获取/冻结/绑定 | `src/exchange_source/` | [exchange-source](exchange-source.md) |
+| 库外来源库与重放 | `src/source_store/`（blob + `manifest.jsonl`，DB 只作索引） | [source-store](source-store.md) |
+| 解析事实 | `src/official_security/a1a2.rs`（A-1/A-2）、`src/sqlite_market/industry.rs`（行业快照/区间） | [data-catalog](data-catalog.md) §3.2 #6/#7/#10 |
+| 读模型 | `src/research/industry.rs`、`src/research/universe.rs` + `src/sqlite_supply/industry.rs` | [data-catalog](data-catalog.md) §3.2 #10、[generic-data-v8](contracts/generic-data-v8.md) |
+| 采集/日更维护 | `src/data_supply/wire.rs`（`sh_sz_a_listed_ever`）、`src/data_supply/delisted_series.rs`、`derived:industry_snapshot` | [data-catalog](data-catalog.md) §3.2 #8、[daily-sync](daily-sync.md) |
+| 退役门禁 | `src/generation_gate.rs` 前置检查 + `source_store replay --scope generation_facts` | [daily-sync](daily-sync.md)、[source-store](source-store.md) §5 |
+| 导出 | `src/research/mod.rs` 的 `file_plans`（v3 两文件与 universe 新列） | [data-catalog](data-catalog.md) §5.3 |
+
+数据流：generation 字节与冻结的来源快照（库外、按 sha256）→ 解析事实（行业区间、主表、
+ST/停牌/简称）→ 派生（`universe`、退市序列检查、收尾清单）；派生不进输入序列的 `version_id`。
+fresh-init 后由 `source_store replay` 从 active generation 与来源库重建，重放摘要 `match`
+才算成功；部署前的私有栈验收清单见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §14.3。
 
 ### 新能力接入验收
 
