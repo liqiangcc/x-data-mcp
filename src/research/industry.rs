@@ -247,6 +247,22 @@ pub fn dataset_identity(c: &Connection) -> Result<IndustryIdentity, Error> {
     })
 }
 
+/// Every stored interval, projected to [`AssignedIndustry`], in the storage
+/// adapter's `(exchange, code, effective_from)` order.
+///
+/// This is the export shape (#446 §10.4 `industry_assignments`): the whole
+/// interval table, not a per-`as_of` answer. Exporting the answers would freeze
+/// today's `coverage_start` into the file and lose the intervals a consumer
+/// needs to rebuild an earlier point in time. The `entity` comes from
+/// `(exchange, code)`, the same identity the read model joins to the main
+/// table.
+pub fn interval_rows(c: &Connection) -> Result<Vec<AssignedIndustry>, Error> {
+    let rows = store::read_assignments(c)?;
+    rows.iter()
+        .map(|row| assigned(row, &format!("{}.{}", row.exchange, row.code)))
+        .collect()
+}
+
 fn coverage_start(rows: &[AssignmentRow]) -> Result<Option<NaiveDate>, Error> {
     crate::industry::coverage_start(rows)
         .map(|day| epoch_date(day, "effective_from"))

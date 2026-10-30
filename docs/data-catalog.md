@@ -523,8 +523,10 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
 - 过滤条件：`market.daily`/`market.yearly` 只有日期/年份区间；`securities.catalog` 只有
   `code`/`name_query`/`industry_code`（`wire.rs:79-92`）。**没有**价格、成交量、市值、ST 等谓词。
 - 版本选择：`latest_per_entity` / 显式版本映射 / 目录版本（`wire.rs:97-104`）。
-- 目录读 scope 只有 `current_sh_sz_a`；`CatalogScope` 的 `sh_sz_a_listed_ever` 仅用于
-  `market.daily` `start_collection` v2，目录读写都拒绝（`wire.rs`、`src/data_supply/query.rs`）。
+- 目录读 scope 只有 `current_sh_sz_a`；`CatalogScope` 的 `sh_sz_a_listed_ever` 可用于
+  `market.daily` 的 `start_collection` v2 与 `selection.kind=universe` 的 `scope`（#446 PR-9），
+  目录数据集仍一律拒绝（`wire.rs`、`src/data_supply/query.rs`）。`universe.scope` 只接受
+  `sh_sz_a_listed_ever`，与 `catalog_version` 互斥，且不传时行为不变。
 - `query_data` 是纯读：不触发采集、修复或换源（`src/data_supply/registry.rs:139`）。
 - 工具清单、参数与返回形状用 `get_data_capabilities` 查（`registry.rs` 的 `entries()`），本文不复述；
   data 侧当前部署三个入口（单进程三 socket）：`ops` 15 个 data 工具、`research`（只读研究面）
@@ -541,7 +543,7 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
 - 脚本只读、无写，不是服务/MCP/契约的一部分，也没有稳定性承诺。
 - 需要可复现结论时，必须自己记录 `market_series.version_id` 与目录版本（§5.3 的清单形状）。
 
-### 5.3 研究快照导出（preview.36 起部署，preview.37 起 `research-snapshot.v2`）
+### 5.3 研究快照导出（preview.36 起部署，preview.37 起 `research-snapshot.v2`；v3 未部署）
 
 - **随发布包部署**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
   它；`scripts/build_release.sh` 自 #413 固定 `--features export` 并在打包后断言该命令存在），
@@ -549,25 +551,37 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
   `/root/x-data-exports/`（`src/research/mod.rs:894`；D-29）。
 - **MCP 仍没有 `export_data`**：v8 只设计、不实现（D-39）；工具数与 `capability_revision` 不因此变化。
 - **只读**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`，并要求库的 `user_version` 等于
-  代码的 `COMPACT_SCHEMA_VERSION`（当前 24，即 D-08 的全新 init；`src/research/read.rs:69-78`）。
-- **导出范围**（`research-snapshot.v2`，preview.37）：M1 的 5 个文件（目录 + 日线
-  `daily_raw`/`daily_qfq` + 因子 `factors` + 日历 `calendar` + 指数 `index_daily`）加 M2 的 7 个
-  文件（`security_master`、`security_names`、`capital_events`、`risk_warnings`、`suspensions`、
-  `price_limit_rules`、`universe_intervals`），文件名固定、顺序固定
-  （`src/research/mod.rs:630`；`src/research/manifest.rs:42`）。不复权、因子、日历、指数与 M2
-  数据集在主线读取面上不都可读，但在导出里可见（AC-M1-10、AC-M2-11）。`files[]` 每项带
-  `dataset` 与 `temporal`（`as_of`/`known_at`/`known_at_coverage`），所以导出的时序能力跟着
-  文件走。
+  代码的 `COMPACT_SCHEMA_VERSION`（当前代码 25，即 D-08 的全新 init；`src/research/read.rs:69-78`）。
+- **导出范围**（`research-snapshot.v3`，代码已实现、**未部署**；已部署的仍是 v2）：M1 的 5 个文件
+  （日线 `daily_raw`/`daily_qfq` + 因子 `factors` + 日历 `calendar` + 指数 `index_daily`）加 M2 的
+  7 个文件（`security_master`、`security_names`、`capital_events`、`risk_warnings`、`suspensions`、
+  `price_limit_rules`、`universe_intervals`），v3 再加 M3 的 2 个（`industry_assignments`、
+  `code_migrations`），文件名固定、顺序固定（`src/research/mod.rs` 的 `file_plans`；
+  `src/research/manifest.rs` 的 `SCHEMA`）。不复权、因子、日历、指数与 M2/M3 数据集在主线读取面上
+  不都可读，但在导出里可见（AC-M1-10、AC-M2-11）。`files[]` 每项带 `dataset` 与 `temporal`
+  （`as_of`/`known_at`/`known_at_coverage`），所以导出的时序能力跟着文件走。
+- **v3 新列与覆盖**：`universe_intervals` 加 `canonical_entity`/`aliases`（与
+  `market.security_master`+`universe` 的读模型同值，别名只来自 confirmed 迁移）；
+  `industry_assignments` 带 `effective_from`/`effective_to`/`known_at`/`effective_from_basis`/
+  `evidence_grade`/`source_snapshot_sha256`，所以每条归属可追到证明它的 `tdxhy.cfg`；
+  `code_migrations` 带 `certainty`（candidate 不是证据）。清单加 `industry`（绑定 §9.4.2 的
+  内容摘要版本）与 `coverage.delisted_series`/`industry_coverage_start`；早于
+  `industry_coverage_start` 的日期在快照里没有行业，消费方必须按 `unknown` 处理，不能用当前行业补。
 - **清单必须同时带**：目录版本、每序列 `version_id`、每条序列/派生数据集的来源 generation
   （manifest 与成员 sha256，逐项 `source_generation`；顶部 `generations` 是去重列表）、文件
   sha256，以及已知偏差说明（`src/research/manifest.rs`；`src/research/mod.rs` 的
-  `LIMITATIONS`）。原因：`version_id` 只锚定 bar 取值，不含 coverage 与来源
+  `LIMITATIONS`，v3 起含行业起点、回填名称 `unknown` 与 candidate 迁移三条）。原因：
+  `version_id` 只锚定 bar 取值，不含 coverage 与来源
   （[latest-only-storage](latest-only-storage.md) §3），单靠它无法复现「这份数据从哪来」。
 - **跨代导出（M1 修复 B）**：日更跨过 generation 切换后仍可全量导出；每一项记录自己的来源代，
   只有 binding 查不到（血缘无法证明）才拒绝。`manifest.json` 不写运行时间/WAL，两次同输入导出
-  逐字节相同。
+  逐字节相同（v3 同一断言已覆盖）。
+- **旧快照可读**：schema 升版不改读取方约定——`scripts/export_smoke.py` 同时接受 v2/v3，v2 目录
+  不要求 M3 文件、`universe_intervals` 按 5 列校验；`snapshot_id` 定义不变，但 schema 字符串在
+  身份里，所以同一输入的 v2/v3 `snapshot_id` 不同、不会互相覆盖。
 - **实测**：preview.36 部署后全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行，见
-  [STATUS](STATUS.md)）；含 M2 文件的 v2 导出耗时在 preview.37 部署后回填。本机校验用
+  [STATUS](STATUS.md)）；含 M2 文件的 v2 导出耗时在 preview.37 部署后回填。v3 新增文件的体积与
+  耗时尚未在部署实例测量（M3 数据未上线）；夹具层面 v3 不改变既有文件的编码。本机校验用
   `/root` 下的独立 venv（`scripts/export_smoke.py`，CI 里由 `export` job 跑）。
 
 ## 6. 维护规则

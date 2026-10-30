@@ -253,8 +253,12 @@ impl ReadRepository for SqliteSupply {
                 }])
             });
         }
-        let entities = if let Selection::Universe { catalog_version } = &args.selection {
-            self.universe_members(args.dataset, catalog_version.as_deref(), None, None)?
+        let entities = if let Selection::Universe {
+            catalog_version,
+            scope,
+        } = &args.selection
+        {
+            self.universe_members(args.dataset, catalog_version.as_deref(), *scope, None, None)?
                 .1
         } else {
             entities(args.dataset, &args.selection, access)?
@@ -330,6 +334,7 @@ impl ReadRepository for SqliteSupply {
         &self,
         dataset: Dataset,
         catalog_version: Option<&str>,
+        scope: Option<CatalogScope>,
         as_of: Option<NaiveDate>,
         known_at: Option<NaiveDate>,
     ) -> Result<(String, Vec<Security>), Error> {
@@ -344,6 +349,22 @@ impl ReadRepository for SqliteSupply {
                 Ok((String::new(), members))
             }
             Dataset::Daily | Dataset::AdjustmentEvents => {
+                // #446 §10.3: the listed-ever scope takes its members from the
+                // main table, not a catalog snapshot. A member without a
+                // published series answers `absent` per series; the member set
+                // itself is not silently reduced to what the catalog holds.
+                if scope == Some(CatalogScope::ShSzAListedEver) {
+                    debug_assert_eq!(dataset, Dataset::Daily);
+                    return self.market.read(|c| {
+                        let entities =
+                            crate::research::universe::listed_ever_entities(c).map_err(storage)?;
+                        let members = entities
+                            .iter()
+                            .map(|entity| Security::parse(entity).map_err(Error::Integrity))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok((String::new(), members))
+                    });
+                }
                 self.market.read(|c| catalog_members(c, catalog_version))
             }
             Dataset::SecurityMaster

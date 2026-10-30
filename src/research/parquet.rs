@@ -37,11 +37,13 @@ use rusqlite::Connection;
 use super::export::Compression;
 use super::read::{self, BarRow, FactorRow};
 use super::{
-    CALENDAR_FILE, CAPITAL_EVENTS_COLUMNS, CAPITAL_EVENTS_FILE, DAILY_QFQ_FILE, DAILY_RAW_FILE,
-    Error, FACTORS_FILE, FileStat, INDEX_FILE, PRICE_LIMIT_RULES_COLUMNS, PRICE_LIMIT_RULES_FILE,
-    RISK_WARNINGS_COLUMNS, RISK_WARNINGS_FILE, SECURITY_MASTER_COLUMNS, SECURITY_MASTER_FILE,
-    SECURITY_NAMES_COLUMNS, SECURITY_NAMES_FILE, SUSPENSIONS_COLUMNS, SUSPENSIONS_FILE,
-    SeriesEntry, SnapshotPlan, UNIVERSE_INTERVALS_COLUMNS, UNIVERSE_INTERVALS_FILE,
+    CALENDAR_FILE, CAPITAL_EVENTS_COLUMNS, CAPITAL_EVENTS_FILE, CODE_MIGRATIONS_COLUMNS,
+    CODE_MIGRATIONS_FILE, DAILY_QFQ_FILE, DAILY_RAW_FILE, Error, FACTORS_FILE, FileStat,
+    INDEX_FILE, INDUSTRY_ASSIGNMENTS_COLUMNS, INDUSTRY_ASSIGNMENTS_FILE, PRICE_LIMIT_RULES_COLUMNS,
+    PRICE_LIMIT_RULES_FILE, RISK_WARNINGS_COLUMNS, RISK_WARNINGS_FILE, SECURITY_MASTER_COLUMNS,
+    SECURITY_MASTER_FILE, SECURITY_NAMES_COLUMNS, SECURITY_NAMES_FILE, SUSPENSIONS_COLUMNS,
+    SUSPENSIONS_FILE, SeriesEntry, SnapshotPlan, UNIVERSE_INTERVALS_COLUMNS,
+    UNIVERSE_INTERVALS_FILE,
 };
 use crate::market_data::{Adjustment, INSTRUMENT_CLASS_STOCK};
 
@@ -913,16 +915,16 @@ fn write_index(
 }
 
 // ---------------------------------------------------------------------------
-// M2 security-master files (§12.4)
+// M2 security-master and M3 whole-market files (§12.4, #446 §10.4)
 // ---------------------------------------------------------------------------
 //
-// These seven tables are small (5k–200k rows) and already materialised by the
-// read model, so the writer is one generic encoder instead of seven batching
+// These nine tables are small (5k–200k rows) and already materialised by the
+// read model, so the writer is one generic encoder instead of nine batching
 // types: a row is a `Vec<Option<Cell>>` and the column's [`ColumnType`] says how
 // to write it. The schema string, the manifest's column list and the type list
-// are three views of the same contract; `m2_schemas_match_the_columns` parses
-// every schema and compares all three (AC-M2-11 "新文件列类型"), so a column
-// cannot be added to one view and forgotten in another.
+// are three views of the same contract; `m2_schemas_match_their_columns_and_types`
+// parses every schema and compares all three (AC-M2-11 "新文件列类型", AC-M3-9),
+// so a column cannot be added to one view and forgotten in another.
 
 const SECURITY_MASTER_SCHEMA: &str = "
 message security_master {
@@ -1013,10 +1015,40 @@ message price_limit_rules {
 const UNIVERSE_INTERVALS_SCHEMA: &str = "
 message universe_intervals {
   REQUIRED BINARY entity (STRING);
+  REQUIRED BINARY canonical_entity (STRING);
+  REQUIRED BINARY aliases (STRING);
   REQUIRED INT32 member_from (DATE);
   OPTIONAL INT32 member_to (DATE);
   REQUIRED BINARY basis (STRING);
   REQUIRED BINARY flags (STRING);
+}";
+
+const INDUSTRY_ASSIGNMENTS_SCHEMA: &str = "
+message industry_assignments {
+  REQUIRED BINARY entity (STRING);
+  REQUIRED BINARY exchange (STRING);
+  REQUIRED BINARY code (STRING);
+  REQUIRED BINARY scheme (STRING);
+  REQUIRED INT64 level;
+  REQUIRED BINARY industry_code (STRING);
+  OPTIONAL BINARY name (STRING);
+  REQUIRED BINARY name_status (STRING);
+  REQUIRED INT32 effective_from (DATE);
+  OPTIONAL INT32 effective_to (DATE);
+  REQUIRED INT32 known_at (DATE);
+  REQUIRED BINARY effective_from_basis (STRING);
+  REQUIRED BINARY evidence_grade (STRING);
+  REQUIRED BINARY source_snapshot_sha256 (STRING);
+}";
+
+const CODE_MIGRATIONS_SCHEMA: &str = "
+message code_migrations {
+  REQUIRED BINARY from (STRING);
+  REQUIRED BINARY to (STRING);
+  REQUIRED INT32 effective_from (DATE);
+  REQUIRED BINARY certainty (STRING);
+  REQUIRED BINARY source_kind (STRING);
+  OPTIONAL INT32 known_at (DATE);
 }";
 
 /// The physical type of one exported column.
@@ -1175,12 +1207,50 @@ const UNIVERSE_INTERVALS_SPEC: TableSpec = TableSpec {
     columns: UNIVERSE_INTERVALS_COLUMNS,
     types: &[
         ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Text,
         ColumnType::Date,
         ColumnType::DateOpt,
         ColumnType::Text,
         ColumnType::Text,
     ],
     schema: UNIVERSE_INTERVALS_SCHEMA,
+};
+
+const INDUSTRY_ASSIGNMENTS_SPEC: TableSpec = TableSpec {
+    path: INDUSTRY_ASSIGNMENTS_FILE,
+    columns: INDUSTRY_ASSIGNMENTS_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Int64,
+        ColumnType::Text,
+        ColumnType::TextOpt,
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::DateOpt,
+        ColumnType::Date,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Text,
+    ],
+    schema: INDUSTRY_ASSIGNMENTS_SCHEMA,
+};
+
+const CODE_MIGRATIONS_SPEC: TableSpec = TableSpec {
+    path: CODE_MIGRATIONS_FILE,
+    columns: CODE_MIGRATIONS_COLUMNS,
+    types: &[
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::Date,
+        ColumnType::Text,
+        ColumnType::Text,
+        ColumnType::DateOpt,
+    ],
+    schema: CODE_MIGRATIONS_SCHEMA,
 };
 
 fn text(value: impl Into<String>) -> Option<Cell> {
@@ -1471,6 +1541,8 @@ fn universe_interval_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row
             let flags: Vec<&str> = row.flags.iter().map(|flag| flag.as_str()).collect();
             vec![
                 text(row.entity),
+                text(row.canonical_entity),
+                text(row.aliases.join(",")),
                 date(row.member_from),
                 opt_date(row.member_to),
                 text(row.basis.as_str()),
@@ -1480,10 +1552,52 @@ fn universe_interval_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row
         .collect())
 }
 
-/// The table spec of one M2 file, or `None` for a file this module does not
-/// write. Shared by [`write_all`] and the schema test, so "planned but not
-/// writable" cannot hide.
-fn m2_spec(path: &str) -> Option<&'static TableSpec> {
+fn industry_assignment_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::industry_assignment_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                text(row.entity),
+                text(row.exchange),
+                text(row.code),
+                text(row.scheme),
+                Some(Cell::Int64(row.level)),
+                text(row.industry_code),
+                opt_text(row.name),
+                text(row.name_status),
+                date(row.effective_from),
+                opt_date(row.effective_to),
+                date(row.known_at),
+                text(row.effective_from_basis),
+                text(row.evidence_grade),
+                text(row.source_snapshot_sha256),
+            ]
+        })
+        .collect())
+}
+
+fn code_migration_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+    let rows = read::code_migration_rows(c, &plan.request)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                text(row.from_entity()),
+                text(row.to_entity()),
+                date(row.effective_from),
+                text(row.certainty.as_str()),
+                text(row.source_kind),
+                opt_date(row.known_at),
+            ]
+        })
+        .collect())
+}
+
+/// The table spec of one whole-market file, or `None` for a file this module
+/// does not write with the generic encoder. Shared by [`write_all`] and the
+/// schema test, so "planned but not writable" cannot hide.
+fn table_spec(path: &str) -> Option<&'static TableSpec> {
     Some(match path {
         SECURITY_MASTER_FILE => &SECURITY_MASTER_SPEC,
         SECURITY_NAMES_FILE => &SECURITY_NAMES_SPEC,
@@ -1492,11 +1606,13 @@ fn m2_spec(path: &str) -> Option<&'static TableSpec> {
         SUSPENSIONS_FILE => &SUSPENSIONS_SPEC,
         PRICE_LIMIT_RULES_FILE => &PRICE_LIMIT_RULES_SPEC,
         UNIVERSE_INTERVALS_FILE => &UNIVERSE_INTERVALS_SPEC,
+        INDUSTRY_ASSIGNMENTS_FILE => &INDUSTRY_ASSIGNMENTS_SPEC,
+        CODE_MIGRATIONS_FILE => &CODE_MIGRATIONS_SPEC,
         _ => return None,
     })
 }
 
-fn m2_rows(path: &str, c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
+fn table_rows(path: &str, c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, Error> {
     match path {
         SECURITY_MASTER_FILE => security_master_rows(c, plan),
         SECURITY_NAMES_FILE => security_name_rows(c, plan),
@@ -1505,6 +1621,8 @@ fn m2_rows(path: &str, c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, 
         SUSPENSIONS_FILE => suspension_rows(c, plan),
         PRICE_LIMIT_RULES_FILE => price_limit_rule_rows(c, plan),
         UNIVERSE_INTERVALS_FILE => universe_interval_rows(c, plan),
+        INDUSTRY_ASSIGNMENTS_FILE => industry_assignment_rows(c, plan),
+        CODE_MIGRATIONS_FILE => code_migration_rows(c, plan),
         other => Err(Error::Integrity(format!("no row source for {other}"))),
     }
 }
@@ -1542,11 +1660,11 @@ pub(crate) fn write_all(
             FACTORS_FILE => write_factors(&path, c, plan, compression, row_group_rows)?,
             CALENDAR_FILE => write_calendar(&path, c, plan, compression, row_group_rows)?,
             INDEX_FILE => write_index(&path, c, plan, compression, row_group_rows)?,
-            other => match m2_spec(other) {
+            other => match table_spec(other) {
                 Some(spec) => write_table(
                     &path,
                     spec,
-                    &m2_rows(spec.path, c, plan)?,
+                    &table_rows(spec.path, c, plan)?,
                     compression,
                     row_group_rows,
                 )?,
@@ -1577,6 +1695,8 @@ mod tests {
             &SUSPENSIONS_SPEC,
             &PRICE_LIMIT_RULES_SPEC,
             &UNIVERSE_INTERVALS_SPEC,
+            &INDUSTRY_ASSIGNMENTS_SPEC,
+            &CODE_MIGRATIONS_SPEC,
         ]
     }
 
@@ -1662,19 +1782,20 @@ mod tests {
     }
 
     /// The manifest's column list is the schema's, in the same order, for every
-    /// file the export plans (M1 and M2). `daily_raw` is included so the M1
+    /// file the export plans (M1, M2 and M3). `daily_raw` is included so the M1
     /// files cannot drift either.
     #[test]
-    fn every_planned_m2_file_has_a_spec_with_the_manifest_columns() {
+    fn every_planned_table_file_has_a_spec_with_the_manifest_columns() {
         let request = crate::research::ExportRequest::default();
         for file in crate::research::file_plans(&request) {
-            let Some(spec) = m2_spec(file.path) else {
+            let Some(spec) = table_spec(file.path) else {
                 continue;
             };
             assert_eq!(file.columns, spec.columns, "{}", file.path);
             assert_eq!(spec.path, file.path);
         }
-        // The M2 selection must plan exactly the seven M2 files.
+        // The security selection must plan exactly the M2 files plus the M3
+        // whole-market additions (#446 §10.4), in that order.
         let planned: Vec<&str> = crate::research::file_plans(&crate::research::ExportRequest {
             dataset: crate::research::DatasetSelection::Security,
             ..Default::default()
@@ -1692,6 +1813,8 @@ mod tests {
                 SUSPENSIONS_FILE,
                 PRICE_LIMIT_RULES_FILE,
                 UNIVERSE_INTERVALS_FILE,
+                INDUSTRY_ASSIGNMENTS_FILE,
+                CODE_MIGRATIONS_FILE,
             ]
         );
     }

@@ -2229,3 +2229,256 @@ fn default_write_selection_rejects_extra_keys() {
     assert_eq!(error.code, "invalid_arguments");
     assert!(error.message.contains("symbols"), "{}", error.message);
 }
+
+/// M3 PR-9 (#446 §10.3): rows of the main table only — no catalog needed.
+fn seed_security_master(f: &Fixture, rows: &[(&str, Option<NaiveDate>)]) {
+    use crate::security_master::assembly::Assembly;
+    use crate::security_master::{
+        DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
+        SecurityLifecycleFact,
+    };
+    let from = NaiveDate::from_ymd_opt(2018, 1, 1).unwrap();
+    let facts: Vec<SecurityLifecycleFact> = rows
+        .iter()
+        .map(|(entity, delisting)| {
+            let (exchange, code) = entity.split_once('.').unwrap();
+            SecurityLifecycleFact {
+                exchange: if exchange == "sh" {
+                    Exchange::Sh
+                } else {
+                    Exchange::Sz
+                },
+                code: code.into(),
+                effective_from: from,
+                effective_to: None,
+                instrument_class: 0,
+                issuer_key: None,
+                issuer_resolution: IssuerResolution::CodeDate,
+                listing_date: Some(from),
+                listing_date_tdx: Some(from),
+                listing_source: ListingSource::ExchangeList,
+                b_listing_date: None,
+                delisting_date: *delisting,
+                delisting_date_tdx: *delisting,
+                delisting_source: if delisting.is_some() {
+                    DelistingSource::ExchangeList
+                } else {
+                    DelistingSource::Unknown
+                },
+                delisting_reason_class: DelistingReason::Unknown,
+                arrangement_start: None,
+                arrangement_end: None,
+                listing_conflict: false,
+                delisting_conflict: false,
+                known_at: Some(from),
+            }
+        })
+        .collect();
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        crate::sqlite_market::security::replace_security_master(
+            c,
+            &Assembly {
+                rows: facts,
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(from),
+            },
+            [0x0b; 32],
+            "task-master",
+            "derived:security_master",
+        )
+    })
+    .unwrap();
+}
+
+/// AC-M3-1/§10.3: `universe.scope=sh_sz_a_listed_ever` resolves the member set
+/// from the main table, including a code the catalog does not hold, and no
+/// catalog version is echoed. All three read tools agree on the members.
+#[test]
+fn market_daily_universe_scope_resolves_the_main_table() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    publish_catalog(
+        &f,
+        "catalog-scope",
+        &[("600006", crate::catalog::Exchange::Shanghai)],
+    );
+    // 000003 is not in the catalog and has no series: it must still be a
+    // member, because the scope is the historical member set (absent rows are
+    // a per-series answer, not a reason to drop the entity).
+    seed_security_master(
+        &f,
+        &[
+            ("sh.600006", None),
+            ("sz.000001", None),
+            (
+                "sz.000003",
+                Some(NaiveDate::from_ymd_opt(2019, 6, 1).unwrap()),
+            ),
+        ],
+    );
+    let selection = json!({"kind":"universe","scope":"sh_sz_a_listed_ever"});
+    let page = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.daily",
+                "contract_version":"v2",
+                "selection":selection,
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        page["entities"],
+        json!(["sh.600006", "sz.000001", "sz.000003"]),
+        "main-table members, sorted"
+    );
+    assert!(page.get("catalog_version").is_none(), "{page}");
+
+    let versions = f
+        .api
+        .call(
+            "list_data_versions",
+            json!({
+                "dataset":"market.daily",
+                "contract_version":"v2",
+                "selection":selection,
+            }),
+        )
+        .unwrap();
+    // The version list is per published series, so the absent members have no
+    // row (the tool resolves the same member set, then reads what exists).
+    let mut listed: Vec<&str> = versions["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["entity"].as_str().unwrap())
+        .collect();
+    listed.sort();
+    assert_eq!(listed, vec!["sh.600006"]);
+
+    let availability = f
+        .api
+        .call(
+            "get_data_availability",
+            json!({
+                "dataset":"market.daily",
+                "contract_version":"v2",
+                "selection":selection,
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    // A universe availability is one aggregate row, not one row per member.
+    assert_eq!(availability["columns"]["universe"][0]["entities"], 3);
+    assert_eq!(
+        availability["columns"]["universe"][0]["present"],
+        1,
+        "only the seeded series is present"
+    );
+    assert_eq!(availability["columns"]["universe"][0]["absent"], 2);
+}
+
+/// §10.3: the scope is `market.daily`-only, cannot be combined with a catalog
+/// version, rejects the catalog default, and needs contract_version v2.
+#[test]
+fn universe_scope_is_rejected_where_the_design_says_so() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    publish_catalog(
+        &f,
+        "catalog-scope",
+        &[("600006", crate::catalog::Exchange::Shanghai)],
+    );
+    seed_security_master(&f, &[("sh.600006", None)]);
+    let query = |selection: Value, contract: &str| {
+        f.api
+            .call(
+                "query_data",
+                json!({
+                    "dataset":"market.daily",
+                    "contract_version":contract,
+                    "selection":selection,
+                    "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                    "version":{"kind":"latest_per_entity"}
+                }),
+            )
+            .unwrap_err()
+    };
+    let error = query(
+        json!({"kind":"universe","catalog_version":"catalog-scope","scope":"sh_sz_a_listed_ever"}),
+        "v2",
+    );
+    assert_eq!(error.code, "invalid_arguments", "{error:?}");
+    assert!(
+        error.message.contains("mutually exclusive"),
+        "{}",
+        error.message
+    );
+    let error = query(json!({"kind":"universe","scope":"current_sh_sz_a"}), "v2");
+    assert!(
+        error.message.contains("current_sh_sz_a"),
+        "{}",
+        error.message
+    );
+    // v1 rejects the universe selection itself, so it cannot acquire the scope.
+    let error = query(
+        json!({"kind":"universe","scope":"sh_sz_a_listed_ever"}),
+        "v1",
+    );
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error.message.contains("requires contract_version v2"),
+        "{}",
+        error.message
+    );
+    // Only market.daily may resolve the listed-ever scope.
+    let error = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.security_master",
+                "contract_version":"v2",
+                "selection":{"kind":"universe","scope":"sh_sz_a_listed_ever"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error.message.contains("only supported for market.daily"),
+        "{}",
+        error.message
+    );
+    // list_data_versions accepts `universe` in v1, but not the v2 scope field.
+    let error = f
+        .api
+        .call(
+            "list_data_versions",
+            json!({
+                "dataset":"market.daily",
+                "contract_version":"v1",
+                "selection":{"kind":"universe","scope":"sh_sz_a_listed_ever"},
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error
+            .message
+            .contains("selection.scope requires contract_version v2"),
+        "{}",
+        error.message
+    );
+}

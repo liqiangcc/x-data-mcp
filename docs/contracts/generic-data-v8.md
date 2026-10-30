@@ -21,7 +21,7 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 | `capability_revision` | `generic-data-v7` | `generic-data-v8`（2026-10-27 部署日翻） | 客户端按 revision 握手，不匹配即停 |
 | data 工具数 | 23 | 代码 24（+ 只读 `list_catalog_facets`）；最小切换部署的 `ops` 入口 15 | 旧工具名全部保留，无重命名、无删除 |
 | 入口 | 1 个 data socket（23 工具） | **3 个入口**：research 5 / ops 15 / maint 9（`src/data_supply/registry.rs:43,51,70`） | `mcp.sock` 变成编排入口；旧单元不带 `--entry` 时默认 `ops`（`src/bin/data_service.rs:44`） |
-| `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支；写面只有 `market.daily` 的 `start_collection` v2 scope） | 缺省仍是 `v1`；v1 字节不变 |
+| `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支；写面只有 `market.daily` 的 `start_collection` v2 scope；读面有 `universe.scope`，§5.2） | 缺省仍是 `v1`；v1 字节不变 |
 | `tools/list` | 含 `outputSchema` | **不含** `outputSchema`，描述 ≤240 B | 客户端失去内联校验；schema 从 capabilities 按需取 |
 | 入参 | 结构体实体、严格日期、必填契约版本 | 别名归一化 + 缺省值（§6） | 旧写法继续可用 |
 | 时点参数 | 无 | `as_of`/`known_at` 只在 `temporal` 声明为 `true` 的 dataset 上接受（M2 的 6 个数据集，见 §4.6 矩阵）；其他 dataset/工具仍以 `unsupported_for_dataset:` 拒绝 | 声明式放宽，未声明的面仍是新增错误而不是新语义 |
@@ -36,7 +36,7 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 - 写受理契约（`start_collection`/`update_data`/`backfill_data`/`republish_data`/`retry_task`/
   `cancel_task`）与核实工具仍是 `v1`、`WriteAcceptance` 形状不变（`src/data_supply/wire.rs:56-65`）；
   唯一例外是 M3 PR-4 的 `market.daily` `start_collection` v2 member scope（§5.1），
-  `WriteAcceptance` 形状仍不变。
+  `WriteAcceptance` 形状仍不变；M3 PR-9 的读面 `universe.scope`（§5.2）也只改选择解码，不改写受理。
 - 入口不是权限：研究入口没有写/核实/采集工具，边界靠 allowlist + 交集为空的测试守住
   （`tests/mcp/v8_tool_surface.rs:37-102`）。
 
@@ -82,10 +82,10 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
 - stdio/dev 面（`EntryKind::All`）不是部署面：`data_service` 不接受 `--entry all`
   （`src/data_supply/registry.rs:82-90`，`tests/mcp/v8_tool_surface.rs:254-263`）。
 
-`tools/list` 预算（CI 断言，`tests/mcp/v8_tool_surface.rs:104-142`）：研究 5 工具
-≤11,700 B、编排 15 ≤28,700 B、运维 9 ≤14,500 B（M2 数据集枚举与 M3 PR-4 的 v2 scope 分支
-带来的已记录增长）；每条描述 ≤240 B；无 `outputSchema`；
-`inputSchema.type` 为 `object`。
+`tools/list` 预算（CI 断言，`tests/mcp/v8_tool_surface.rs:104-145`）：研究 5 工具
+≤12,200 B、编排 15 ≤29,300 B、运维 9 ≤14,500 B（M2 数据集枚举、M3 PR-4 的 v2 scope 分支与
+M3 PR-9 的 `universe.scope` 字段/`market.industry_assignments` 枚举值带来的已记录增长）；
+每条描述 ≤240 B；无 `outputSchema`；`inputSchema.type` 为 `object`。
 
 ### 2.1 写边界（v8 P2 §2.2(c)，D-56）
 
@@ -179,7 +179,7 @@ dataset 矩阵（实现已核）：
 | dataset | selection.kind | filter.kind | version.kind | v2 layout | `temporal`（`as_of` / `known_at` / `known_at_coverage`） | 备注 |
 |---|---|---|---|---|---|---|
 | `securities.catalog` | `catalog`（`scope:"current_sh_sz_a"`） | `catalog`（`code`/`name_query`/`industry_code` 可选） | `latest_per_entity` 或 `catalog_version` | `table` | `false` / `false` / `none` | 无实体行键 |
-| `market.daily` | `single`/`batch`/`universe` | `daily`/`cross_section` | `latest_per_entity`/`explicit_version_map` | `panel`/`cross_section` | `false` / `false` / `none` | 只读**前复权**序列（§12） |
+| `market.daily` | `single`/`batch`/`universe`（可带 `scope:sh_sz_a_listed_ever`，§5.2） | `daily`/`cross_section` | `latest_per_entity`/`explicit_version_map` | `panel`/`cross_section` | `false` / `false` / `none` | 只读**前复权**序列（§12） |
 | `market.yearly` | `single`/`batch`（`universe` 被归一化层拒绝） | `yearly` | `latest_per_entity`/`explicit_version_map` | `panel` | `false` / `false` / `none` | 本地自然年派生 |
 | `market.index` | `single`/`batch`/`universe` | `daily`/`cross_section` | `latest_per_entity`/`explicit_version_map` | `panel`/`cross_section` | `false` / `false` / `none` | 指数基准；`universe` 来自静态登记（9 条），不回显 `catalog_version` |
 | `market.adjustment_events` | `single`/`batch`/`universe` | `daily`（生效日区间） | `latest_per_entity`/`explicit_version_map` | `table` | `false` / `false` / `none` | `known_at` 不输出 |
@@ -213,6 +213,10 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 `selection.kind=universe` + `filter.as_of`（或 pinned `catalog_version`，二者互斥）。
 `selection.kind=universe`：服务端解析目录版本（缺省 `latest`），把**具体版本 id** 回显到
 `catalog_version`；`market.index` 的成员来自 `src/index_registry.rs:131` 的 9 条登记。
+M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：`sh_sz_a_listed_ever`，且只对
+`market.daily` 生效（成员取 `security_master` 的沪深 A 股，不取目录，所以退市/无序列代码也在集内）；
+它与 `catalog_version` 互斥，解析时不回显 `catalog_version`。不传 `scope` 的请求行为与 v2 完全一致，
+`market.index`/M2 数据集上携带 scope → `invalid_arguments`（见 §5.2）。
 `selection.kind=market` 只用于 `market.calendar`（`src/data_supply/wire.rs:166-192`）。
 
 `cross_section` 窗口按交易日历解析，**最多 5 个交易日**；超出 → `invalid_arguments`，消息给出
@@ -241,7 +245,7 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 | `columns` | 见 §4.3 |
 | `versions` | 版本清单，每个 manifest 条目一行（§4.4） |
 | `metadata` | 共享元数据（§4.4） |
-| `catalog_version` | `universe` 解析出的目录版本（仅查询类工具） |
+| `catalog_version` | `universe` 解析出的目录版本（仅查询类工具；`scope=sh_sz_a_listed_ever` 时为 `null`，见 §5.2） |
 | `tasks`、`limitations`（顶层） | 仅 `get_data_availability`：相关任务对象共享一次 |
 | `temporal` | M2 数据集：`as_of`、`known_at`（可 `null`）、`unknown_known_at_rows`、`datasets_without_known_at[]`（`src/sqlite_supply/m2.rs:88-103`） |
 
@@ -368,6 +372,26 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
   日更 AI 不得自行调用。
 - `securities.catalog` 读写都**拒绝**该 scope（`invalid_arguments`，不降级为当前成员子集）；
   v1 请求携带 `selection.kind=scope` 同样拒绝。
+
+### 5.2 读面例外：`universe.scope`（M3 PR-9，Refs #446）
+
+```json
+{"dataset":"market.daily","contract_version":"v2",
+ "selection":{"kind":"universe","scope":"sh_sz_a_listed_ever"}}
+```
+
+- `selection.scope` 是 **v2 附加字段**（`Selection::Universe` 的 `Option<CatalogScope>`）：
+  不传时 `universe` 的行为与 v8 字节不变；v1 请求本来就被拒绝（`selection.kind=universe` 需 v2），
+  `list_data_versions` 的 v1 分支虽接受 `universe`，但携带 `scope` 时同样拒绝（
+  `src/data_supply/query.rs` 的 `versions_page`）。
+- 只接受 `sh_sz_a_listed_ever`，且只对 `market.daily` 生效：成员来自 `security_master` 中
+  `instrument_class=0`、`exchange ∈ {sh,sz}` 的实体（`src/research/universe.rs` 的
+  `listed_ever_entities`），不取目录。退市代码、以及尚无 published daily series 的代码都在集内；
+  没有序列的成员按 `absent` 返回，不被静默剔除（§7.3 的 `has_series`/`absent` 语义不变）。
+- 与 `catalog_version` 互斥（两种成员源不得静默覆盖）；`scope=current_sh_sz_a` 被拒绝（目录默认值，
+  省略即可）。其它数据集（`market.index`、M2/M3 表）上携带 scope → `invalid_arguments`，不降级。
+- `catalog_version` 不回显（没有目录版本参与）；`filter.as_of` 仍不受支持（`market.daily` 无历史成员
+  回放）。写入面对应的 `selection.kind=scope` 在 §5.1，两者同名不同面。
 
 ## 6. 入参归一化（解码层，不改语义）
 

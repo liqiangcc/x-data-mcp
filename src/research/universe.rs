@@ -273,6 +273,26 @@ pub struct MemberInterval {
     pub flags: Vec<MemberFlag>,
 }
 
+/// The listed-ever member set: every main-table row that is a SH/SZ ordinary A
+/// share, regardless of catalog membership (#446 §4.1/§10.3).
+///
+/// This is the v8 `universe.scope=sh_sz_a_listed_ever` resolution. A delisted
+/// code stays in the set, and so does a code with no published series: the
+/// point of the scope is the historical member set, not today's catalog. The
+/// exchange `.day` member intersection is a collection-time concern, so the
+/// read side neither performs it nor hides a member whose series is absent.
+/// Ordering is the entity string's, so the resolved member list is stable.
+pub fn listed_ever_entities(c: &Connection) -> Result<Vec<String>, Error> {
+    let rows = security::read_security_master(c).map_err(Error::from)?;
+    let members: BTreeSet<String> = rows
+        .into_iter()
+        .filter(|row| row.instrument_class == 0)
+        .filter(|row| matches!(row.exchange, Exchange::Sh | Exchange::Sz))
+        .map(|row| row.entity())
+        .collect();
+    Ok(members.into_iter().collect())
+}
+
 /// Every member interval this database defines (§12.4 `universe_intervals`).
 ///
 /// Ordered by entity then `member_from`, so the export is deterministic. The

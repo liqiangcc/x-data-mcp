@@ -343,6 +343,68 @@ impl Fixture {
         .unwrap();
 
         Self::populate_security_master(c, binding);
+        Self::populate_industry(c);
+    }
+
+    /// The M3 industry intervals (#446 §10.4 `industry_assignments`).
+    ///
+    /// Built through PR-6's production path (`industry::rebuild` +
+    /// `sqlite_market::industry::replace_industry`), so the export reads the
+    /// same interval rows the v8 dataset serves. One snapshot gives one open
+    /// interval per code and puts `coverage_start` at the fixture's first day.
+    fn populate_industry(c: &Connection) {
+        let rebuild =
+            crate::industry::rebuild(&[Self::industry_facts(days()[0], "X5001")]).unwrap();
+        crate::sqlite_market::industry::replace_industry(c, &rebuild).unwrap();
+    }
+
+    /// One `tdxhy.cfg` snapshot dated at `day`, with a same-generation
+    /// dictionary. `sh_code` is the parameter the identity test reclassifies.
+    fn industry_facts(day: NaiveDate, sh_code: &str) -> crate::industry::SnapshotFacts {
+        use crate::industry::{IndustryMember, SnapshotFacts, SnapshotRecord, SourceKind};
+        use std::collections::BTreeMap;
+        let member_sha256 =
+            crate::hash::sha256(format!("fixture:tdxhy.cfg:{day}:{sh_code}").as_bytes());
+        SnapshotFacts {
+            record: SnapshotRecord {
+                member_sha256: member_sha256.clone(),
+                store_sha256: member_sha256,
+                base_zip_sha256: None,
+                generation_manifest_sha256: None,
+                source_kind: SourceKind::Generation,
+                publisher_last_modified: Some(day.to_string()),
+                observed_at: Some(format!("{day}T02:00:00Z")),
+                ingested_at: format!("{day}T02:00:00Z"),
+                imported_at: None,
+                evidence_grade: "A".into(),
+                parser_version: "fixture".into(),
+                row_count: 2,
+                scope_member_count: 2,
+                dictionary_sha256: None,
+                notes: None,
+            },
+            members: vec![
+                IndustryMember {
+                    exchange: "sh".into(),
+                    code: "600000".into(),
+                    level: 2,
+                    industry_code: sh_code.into(),
+                    t_code: "T5001".into(),
+                },
+                IndustryMember {
+                    exchange: "sz".into(),
+                    code: "000001".into(),
+                    level: 2,
+                    industry_code: "X5002".into(),
+                    t_code: "T5002".into(),
+                },
+            ],
+            dictionary: BTreeMap::from([
+                (sh_code.to_owned(), "软件服务".to_owned()),
+                ("X5002".to_owned(), "硬件设备".to_owned()),
+            ]),
+            dictionary_present: true,
+        }
     }
 
     /// The M2 parsed-fact rows the export's security files carry (§12.4).
@@ -353,7 +415,7 @@ impl Fixture {
     /// inserted directly — the export only needs rows to prove the file, and
     /// the DDL CHECKs are the contract until the writer exists.
     fn populate_security_master(c: &Connection, binding: Digest) {
-        use crate::security_master::assembly::Assembly;
+        use crate::security_master::assembly::{Assembly, CodeMigrationFact, MigrationCertainty};
         use crate::security_master::{
             CapitalEvent, CapitalEventSet, Exchange, IssuerResolution, ListingSource,
             SuspensionCertainty, SuspensionInterval, SuspensionReason,
@@ -363,6 +425,10 @@ impl Fixture {
             .into_iter()
             .map(|entity| {
                 let (exchange, code) = entity.split_once('.').unwrap();
+                // One delisted member so the manifest's `coverage.delisted_series`
+                // is a non-zero count and the universe file has to express the
+                // closed interval (#446 §10.4).
+                let delisted = entity == "sz.000001";
                 SecurityLifecycleFact {
                     exchange: if exchange == "sh" {
                         Exchange::Sh
@@ -379,9 +445,13 @@ impl Fixture {
                     listing_date_tdx: Some(window[0]),
                     listing_source: ListingSource::ExchangeList,
                     b_listing_date: None,
-                    delisting_date: None,
+                    delisting_date: delisted.then_some(window[1]),
                     delisting_date_tdx: None,
-                    delisting_source: crate::security_master::DelistingSource::Unknown,
+                    delisting_source: if delisted {
+                        crate::security_master::DelistingSource::ExchangeList
+                    } else {
+                        crate::security_master::DelistingSource::Unknown
+                    },
                     delisting_reason_class: crate::security_master::DelistingReason::Unknown,
                     arrangement_start: None,
                     arrangement_end: None,
@@ -391,11 +461,40 @@ impl Fixture {
                 }
             })
             .collect();
+        // The two real M3 code changes (§11 deviation 4): 300114 is confirmed
+        // by the exchange list, 600849 is only a candidate. Neither code is in
+        // `rows`, so the identity columns (`canonical_entity`/`aliases`) of the
+        // two fixture intervals stay unchanged and the export carries both
+        // certainties.
+        let migrations = vec![
+            CodeMigrationFact {
+                from_exchange: Exchange::Sz,
+                from_code: "300114".into(),
+                to_exchange: Exchange::Sz,
+                to_code: "302132".into(),
+                effective_from: window[0],
+                certainty: MigrationCertainty::Confirmed,
+                source_kind: "exchange_announcement".into(),
+                source_record_id: Some("fixture-confirmed".into()),
+                known_at: Some(window[0]),
+            },
+            CodeMigrationFact {
+                from_exchange: Exchange::Sh,
+                from_code: "600849".into(),
+                to_exchange: Exchange::Sh,
+                to_code: "601607".into(),
+                effective_from: window[1],
+                certainty: MigrationCertainty::Candidate,
+                source_kind: "bar_evidence".into(),
+                source_record_id: None,
+                known_at: Some(window[1]),
+            },
+        ];
         security::replace_security_master(
             c,
             &Assembly {
                 rows,
-                migrations: Vec::new(),
+                migrations,
                 conflicts: Vec::new(),
                 pending_sources: Vec::new(),
                 unresolved: Vec::new(),
@@ -737,7 +836,11 @@ fn plan_binds_the_four_layers_and_is_deterministic() {
         6,
         "2 factor sets + 1 calendar + 3 whole-market M2 registrations"
     );
-    assert_eq!(first.files.len(), 12, "5 M1 files + 7 M2 files");
+    assert_eq!(
+        first.files.len(),
+        14,
+        "5 M1 files + 7 M2 files + 2 M3 files"
+    );
 
     // The identity excludes the output facts and the timestamp.
     assert!(first.identity.get("created_at").is_none());
@@ -1128,6 +1231,54 @@ fn decimals_are_scaled_exactly_once() {
 }
 
 #[test]
+fn the_manifest_binds_the_m3_industry_identity_and_coverage() {
+    let fixture = Fixture::new();
+    let first = plan(&fixture.read(), &ExportRequest::default()).unwrap();
+    let identity = crate::research::industry::dataset_identity(&fixture.read()).unwrap();
+    // The industry block is content-bound: it names the same `.version_id` the
+    // v8 read surface reports (#446 §9.4.2), so two databases that differ only
+    // in industry rows cannot share a snapshot id.
+    let industry = first.industry.as_ref().expect("industry is exported");
+    assert_eq!(industry.version_id, identity.version_id);
+    assert_eq!(industry.snapshot_rows, 1);
+    assert_eq!(industry.assignment_rows, 2);
+    assert_eq!(
+        first.identity["industry"]["version_id"],
+        json!(identity.version_id.as_str())
+    );
+    assert_eq!(
+        first.identity["industry"]["dataset"],
+        json!("market.industry_assignments")
+    );
+    // Two stocks: one interval open, one closed by the market-table delisting
+    // date. The fixture marks exactly `sz.000001` as delisted.
+    assert_eq!(first.coverage.delisted_series, 1);
+    assert_eq!(
+        first.coverage.industry_coverage_start,
+        Some(days()[0]),
+        "coverage starts at the first interval-defining snapshot"
+    );
+    assert_eq!(
+        first.identity["coverage"],
+        json!({"delisted_series": 1, "industry_coverage_start": "2026-10-20"})
+    );
+
+    // A reclassifying snapshot moves the industry version and the snapshot id.
+    let facts = vec![
+        Fixture::industry_facts(days()[0], "X5001"),
+        Fixture::industry_facts(days()[1], "X5003"),
+    ];
+    let rebuild = crate::industry::rebuild(&facts).unwrap();
+    crate::sqlite_market::industry::replace_industry(&fixture.write(), &rebuild).unwrap();
+    let second = plan(&fixture.read(), &ExportRequest::default()).unwrap();
+    assert_ne!(first.snapshot_id, second.snapshot_id);
+    let changed = second.industry.as_ref().unwrap();
+    assert_ne!(changed.version_id, industry.version_id);
+    assert_eq!(changed.assignment_rows, 3, "X5001 closes, X5003 opens");
+    assert_eq!(second.coverage.industry_coverage_start, Some(days()[0]));
+}
+
+#[test]
 fn the_public_read_surface_cannot_see_the_export_only_datasets() {
     let fixture = Fixture::new();
     let c = fixture.read();
@@ -1212,6 +1363,8 @@ mod with_export {
             super::super::SUSPENSIONS_FILE,
             super::super::PRICE_LIMIT_RULES_FILE,
             super::super::UNIVERSE_INTERVALS_FILE,
+            super::super::INDUSTRY_ASSIGNMENTS_FILE,
+            super::super::CODE_MIGRATIONS_FILE,
         ] {
             assert!(directory.join(name).is_file(), "missing {name}");
         }
@@ -1245,7 +1398,7 @@ mod with_export {
         // Layer 4: every recorded sha256 is the file's sha256, and the row
         // count is what the export streamed.
         let files = manifest["files"].as_array().unwrap();
-        assert_eq!(files.len(), 12);
+        assert_eq!(files.len(), 14);
         let mut total_rows = 0i64;
         for file in files {
             let path = directory.join(file["path"].as_str().unwrap());
@@ -1262,8 +1415,9 @@ mod with_export {
         // 2 stocks × 3 bars × 2 口径 + 2 factors + 3 calendar days + 3 index bars
         // + 2 master intervals + 0 names + 2 capital events + 2 risk warnings
         // + 1 suspension + 1 price-limit rule + 2 universe intervals
-        assert_eq!(total_rows, 12 + 2 + 3 + 3 + 2 + 2 + 2 + 1 + 1 + 2);
-        assert_eq!(outcome.files.len(), 12);
+        // + 2 industry intervals + 2 code migrations (#446 §10.4)
+        assert_eq!(total_rows, 12 + 2 + 3 + 3 + 2 + 2 + 2 + 1 + 1 + 2 + 2 + 2);
+        assert_eq!(outcome.files.len(), 14);
     }
 
     #[test]
@@ -1408,7 +1562,7 @@ mod with_export {
         )
         .unwrap();
         assert_eq!(manifest["snapshot_id"], snapshot.snapshot_id);
-        assert_eq!(manifest["files"].as_array().unwrap().len(), 12);
+        assert_eq!(manifest["files"].as_array().unwrap().len(), 14);
         assert!(manifest["files"][0]["sha256"].is_null());
         assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
     }
@@ -1498,6 +1652,16 @@ mod with_export {
         check(
             super::super::UNIVERSE_INTERVALS_FILE,
             super::super::UNIVERSE_INTERVALS_COLUMNS,
+            2,
+        );
+        check(
+            super::super::INDUSTRY_ASSIGNMENTS_FILE,
+            super::super::INDUSTRY_ASSIGNMENTS_COLUMNS,
+            2,
+        );
+        check(
+            super::super::CODE_MIGRATIONS_FILE,
+            super::super::CODE_MIGRATIONS_COLUMNS,
             2,
         );
 
@@ -1637,6 +1801,18 @@ mod with_export {
                 2,
                 "market.universe",
                 (true, false, "none"),
+            ),
+            (
+                super::super::INDUSTRY_ASSIGNMENTS_FILE,
+                2,
+                "market.industry_assignments",
+                (true, true, "partial"),
+            ),
+            (
+                super::super::CODE_MIGRATIONS_FILE,
+                2,
+                "market.code_migrations",
+                (true, true, "partial"),
             ),
         ] {
             let entry = by_path(name);

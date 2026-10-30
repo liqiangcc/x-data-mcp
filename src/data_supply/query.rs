@@ -60,6 +60,10 @@ impl QueryPlan {
                 ));
             }
         }
+        // M3 #446 §10.3: `universe.scope` is a v2-only widening; v1 above
+        // already rejects every `universe` selection, so a v1 request cannot
+        // quietly acquire the listed-ever member set.
+        universe_scope(args.dataset, &args.selection)?;
         let entities = entities(args.dataset, &args.selection, access)?;
         match (&args.filter, args.dataset) {
             (
@@ -148,7 +152,8 @@ impl QueryPlan {
             && matches!(
                 &args.selection,
                 Selection::Universe {
-                    catalog_version: Some(_)
+                    catalog_version: Some(_),
+                    ..
                 }
             )
             && as_of.is_some()
@@ -196,10 +201,16 @@ impl QueryPlan {
         let (as_of, known_at) = self
             .temporal
             .map_or((None, None), |t| (Some(t.as_of), t.known_at));
-        if let Selection::Universe { catalog_version } = &mut self.args.selection {
+        if let Selection::Universe {
+            catalog_version,
+            scope,
+        } = &mut self.args.selection
+        {
+            let scope = *scope;
             let (resolved, members) = repo.universe_members(
                 self.args.dataset,
                 catalog_version.as_deref(),
+                scope,
                 as_of,
                 known_at,
             )?;
@@ -242,6 +253,42 @@ fn valid_range(start_date: NaiveDate, end_date: NaiveDate) -> bool {
     start_date <= end_date
         && start_date >= NaiveDate::from_ymd_opt(1, 1, 1).unwrap()
         && end_date <= NaiveDate::from_ymd_opt(9999, 12, 31).unwrap()
+}
+
+/// Validate the optional `universe.scope` (#446 §10.3).
+///
+/// `None` is the pre-M3 member set (a catalog version, or the as-of universe
+/// for the M2 datasets), so omitting the field changes nothing. The only
+/// accepted value resolves `market.daily`'s members from the main table, and it
+/// cannot be combined with `catalog_version`: two different member sources must
+/// not silently override one another.
+fn universe_scope(dataset: Dataset, selection: &Selection) -> Result<(), Error> {
+    let Selection::Universe {
+        catalog_version,
+        scope,
+    } = selection
+    else {
+        return Ok(());
+    };
+    match scope {
+        None => Ok(()),
+        Some(CatalogScope::CurrentShSzA) => Err(invalid(
+            "selection.scope current_sh_sz_a is the catalog default; omit scope",
+        )),
+        Some(CatalogScope::ShSzAListedEver) => {
+            if dataset != Dataset::Daily {
+                return Err(invalid(
+                    "selection.scope sh_sz_a_listed_ever is only supported for market.daily",
+                ));
+            }
+            if catalog_version.is_some() {
+                return Err(invalid(
+                    "selection.catalog_version and selection.scope are mutually exclusive",
+                ));
+            }
+            Ok(())
+        }
+    }
 }
 fn checked_members(
     dataset: Dataset,
@@ -352,10 +399,13 @@ pub trait ReadRepository {
     /// empty label (no catalog is involved). M2 datasets resolve the T-day
     /// stock pool from `security_master` (issue-391 §11), using `as_of` when
     /// the caller supplied one and the last trading day up to today otherwise.
+    /// `scope=sh_sz_a_listed_ever` (#446 §10.3) resolves `market.daily` from
+    /// the main table instead and has no catalog version to echo.
     fn universe_members(
         &self,
         dataset: Dataset,
         catalog_version: Option<&str>,
+        scope: Option<CatalogScope>,
         as_of: Option<NaiveDate>,
         known_at: Option<NaiveDate>,
     ) -> Result<(String, Vec<Security>), Error>;
@@ -660,6 +710,7 @@ impl<R: ReadRepository> Queries<R> {
         let mut out = super::columnar::versions_table(args.dataset, &page.items, &meta);
         if let Selection::Universe {
             catalog_version: Some(catalog_version),
+            ..
         } = &args.selection
             && let Some(object) = out.as_object_mut()
         {
@@ -680,10 +731,27 @@ impl<R: ReadRepository> Queries<R> {
                 args.dataset.name()
             )));
         }
-        if let Selection::Universe { catalog_version } = &mut args.selection {
+        // The versions list accepted `universe` in v1; the M3 scope is a v2
+        // field, so a v1 request carrying it is rejected rather than served
+        // with a member set its contract version cannot describe.
+        if args.contract_version == ReadContractVersion::V1
+            && matches!(&args.selection, Selection::Universe { scope: Some(_), .. })
+        {
+            return Err(invalid("selection.scope requires contract_version v2"));
+        }
+        // M3 #446 §10.3: the versions list resolves the same member set the
+        // data query would, so a scope-only universe must be validated here too
+        // (this path does not build a `QueryPlan`).
+        universe_scope(args.dataset, &args.selection)?;
+        if let Selection::Universe {
+            catalog_version,
+            scope,
+        } = &mut args.selection
+        {
             let (resolved, members) = self.repository.universe_members(
                 args.dataset,
                 catalog_version.as_deref(),
+                *scope,
                 None,
                 None,
             )?;

@@ -23,8 +23,8 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use super::{
-    CatalogBinding, DerivedDataset, DerivedEntry, Error, ExportRequest, FilePlan, FileStat,
-    GenerationBinding, SeriesEntry,
+    CatalogBinding, Coverage, DerivedDataset, DerivedEntry, Error, ExportRequest, FilePlan,
+    FileStat, GenerationBinding, IndustryBinding, SeriesEntry,
 };
 
 /// `source_binding_digest` → generation. A named alias rather than the bare
@@ -33,13 +33,15 @@ use super::{
 /// reason `security_master::ExcludedCategories` exists).
 type LineageIndex = BTreeMap<String, GenerationBinding>;
 
-/// `manifest.json.schema` (§7.3). v2 adds `files[].dataset`/`files[].temporal`
-/// (§12.4/§12.5): the same request now names the M2 security-master files and
-/// says, per file, whether `as_of`/`known_at` would bound it. `snapshot_id`
-/// keeps its definition (canonical identity → first 32 hex), and the schema
-/// string is part of the identity, so a v1 directory and a v2 directory with
-/// otherwise identical inputs must differ.
-pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v2";
+/// `manifest.json.schema` (§7.3, #446 §10.4). v2 added
+/// `files[].dataset`/`files[].temporal` (§12.4/§12.5); v3 adds the M3 industry
+/// intervals and de-duplicated code migrations, the universe identity columns
+/// (`canonical_entity`/`aliases`), the bound industry dataset version and the
+/// `coverage` block. `snapshot_id` keeps its definition (canonical identity →
+/// first 32 hex), and the schema string is part of the identity, so a v2
+/// directory and a v3 directory with otherwise identical inputs differ (a v2
+/// directory stays readable — see `scripts/export_smoke.py`).
+pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v3";
 
 /// Prefix of every snapshot id (§7.3).
 pub const ID_PREFIX: &str = "snapshot-";
@@ -120,6 +122,11 @@ fn derived_value(entry: &DerivedEntry, lineage: &LineageIndex) -> Result<Value, 
 
 /// The identity document (§7.3). Its canonical JSON is what `snapshot_id`
 /// hashes, so nothing time- or output-dependent may enter it.
+///
+/// v3 adds two input facts (#446 §10.4): the M3 industry dataset identity (so a
+/// database that differs only in industry rows cannot reuse a `snapshot_id`)
+/// and the `coverage` block (`delisted_series`, `industry_coverage_start`). Both
+/// are functions of the bound inputs, so the manifest stays byte-reproducible.
 pub fn identity(
     request: &ExportRequest,
     catalog: &CatalogBinding,
@@ -127,6 +134,8 @@ pub fn identity(
     lineage: &LineageIndex,
     series: &[SeriesEntry],
     derived: &[DerivedEntry],
+    industry: Option<&IndustryBinding>,
+    coverage: &Coverage,
 ) -> Result<Value, Error> {
     let series = series
         .iter()
@@ -136,6 +145,14 @@ pub fn identity(
         .iter()
         .map(|entry| derived_value(entry, lineage))
         .collect::<Result<Vec<_>, _>>()?;
+    let industry = industry.map_or(Value::Null, |binding| {
+        json!({
+            "dataset": super::INDUSTRY_DATASET,
+            "version_id": binding.version_id,
+            "snapshot_rows": binding.snapshot_rows,
+            "assignment_rows": binding.assignment_rows,
+        })
+    });
     Ok(json!({
         "schema": SCHEMA,
         "request": request_value(request),
@@ -152,6 +169,11 @@ pub fn identity(
             }))
             .collect::<Vec<_>>(),
         "algorithms": algorithms(),
+        "coverage": {
+            "delisted_series": coverage.delisted_series,
+            "industry_coverage_start": coverage.industry_coverage_start.map(|day| day.to_string()),
+        },
+        "industry": industry,
         "series": series,
         "derived": derived,
     }))
