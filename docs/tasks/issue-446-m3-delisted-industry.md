@@ -586,7 +586,7 @@ fetch（HTTP，bounded retries，Referer/UA）
 
 ### 7.5 PR-3 修复二落位：SZSE 名单按 `tabkey` 选块（2026-10-30，XDM-124）
 
-状态：**代码已提交，待 PR/CI（XDM-124）；未部署**。范围只含深市 A-1/A-2 名单；沪市分页与字段已在 §7.4 交付。
+状态：**PR #470，CI 全绿（run 41054257928：`rust`/`export` 均 pass），待审核；未合并、未部署**。范围只含深市 A-1/A-2 名单；沪市分页与字段已在 §7.4 交付。
 依据同一份 2026-10-30 真实响应取证（`reports/x-data-mcp/a1a2-forensics.md` §0 第 2/4 点、
 §(b) 第 3 点）：深市响应恒为两个 block——`tab1` 暂停上市 0 行 `pagecount=0`，`tab2`
 终止上市有数据——而 `parse_szse` 取 `blocks.first()`，于是 `page_count is 0`；
@@ -623,6 +623,9 @@ fetch（HTTP，bounded retries，Referer/UA）
 - **验证**：本机不编译，Rust 正确性只由 PR 的 CI（fmt、clippy `-D warnings`、nextest、
   export feature）证明；推送前跑 `scripts/check_current_facts.py` 与
   `prepush_check.py --repo <worktree> --base origin/main`，输出摘要贴 PR 正文。
+  首轮 CI 的唯一失败是 `snapshot_ids` 断言：它按**计划种类**计 7 项，而深市 main 的两页
+  在同一个 `szse_delisting_main` 项里；断言期望被误写成 8。已改为 7，并保留「每个种类
+  的 id 列表都非空」检查；请求数 8 与两页采集断言不变，没有放宽覆盖。
 
 ## 8. generation 保留与裁剪
 
