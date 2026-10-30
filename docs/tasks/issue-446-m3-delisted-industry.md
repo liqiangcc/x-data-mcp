@@ -1040,6 +1040,24 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 
 §9.4 的来源库不是新增裁决项：它是 D-08（fresh-init 重建只能靠 active generation）+ Q7（内容寻址文件 + 表索引）的直接推论，本 PR 按默认设计给出。若 owner 要改为存整个 `base.zip` 容器、或要异地备份/删除策略，属新裁决，不影响 PR-1a 的布局。
 
+### 14.2.1 PR-10 历史 ST 写入器落地记录（草稿）
+
+状态：**计划已提交，实现未开始**。归属 #308，准入按 D-58 分档；本记录只写计划与完成后的证据，不把计划写成已交付。
+
+| 工作项 | 计划 | 证据/落点 | 状态 |
+|---|---|---|---|
+| 深市区间 | 用冻结的 `SSGSGMXX`/`tab2` 简称变更链，按每只代码的变更日期构造 `ST`/`*ST` 区间；只用「变更后简称」开启区间，非警示简称关闭区间；同日多次变更或无法闭合的链 fail-closed | 新适配器解析器版本 + `RiskWarningInterval` | 未开始 |
+| 沪市事件级 | 用 2000-01 起公告索引的 `BULLETIN_TYPE_DESC`/标题、`SSEDATE`、代码与公告 URL 识别实施/撤销；生效日按公告日锚定并标 `OWNER_RISK_ACCEPTED`，不生成简称区间；同日冲突、缺生效日、孤立撤销 fail-closed | `source_kind=exchange_announcement`，证据记录事件计数与锚定方式 | 未开始 |
+| 未观察 | 0 行不是「无事件」：冻结分段的空结果记 `not_observed`，写入集合带覆盖窗口；沪市 2000 年前与北交所不请求、不推断，保持 `NOT_AVAILABLE` | 集合级 coverage/evidence，读取端不返回 `normal` | 未开始 |
+| 共享入口 | 两类来源都走 PR-2 的 `Entry`（fetch/freeze/validate/bind）与 source store；未配置 source store 时 item 记 `pending_source`，配置后抓取失败则 item 失败且保留上一版 | `src/official_security/risk_warnings.rs` | 未开始 |
+| 写入器 | 整表替换 `risk_warning_intervals` 并在调用方事务内登记 `derived_dataset_versions`；空集合删除行与登记；版本绑定与 `security_master` 同一 generation | `src/sqlite_market/risk_warnings.rs` + `MarketBackend` | 未开始 |
+| 日更接入 | `derived:risk_warnings` 调用适配器，成功时写库并返回行数/`not_observed`/绑定摘要；未准入时仍写 0 行且明确 `pending_source` | `src/data_supply/derived.rs` | 未开始 |
+| 重放 | `source_store replay` 增加 ST 消费者 scope：只读来源库已冻结字节，重建 `risk_warning_intervals` 与登记；与首次写入摘要逐项 `match`，全程离线 | `src/source_store/replay.rs`、`src/bin/source_store.rs` | 未开始 |
+| 夹具 | 深市实施/撤销区间、同日冲突、未知生效日、0 行 `not_observed`、沪事件级与深区间级共存；全部离线 | `tests/fixtures/exchange-risk-warnings/` + 单测 | 未开始 |
+| 文档 | 数据目录缺口行与本文 PR-10 行只在合并且部署条件满足后改写；状态词只用固定词表（`代码已合并`/`未部署`），不宣称已部署 | `docs/data-catalog.md`、§14 表 | 未开始 |
+
+验证：本机只跑 `cargo fmt` 与文档门禁；Rust 由 PR CI（fmt/clippy/nextest/export feature）证明。推送前逐字贴出 `python3 scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main` 的输出。
+
 ### 14.3 验收清单（私有栈，部署前）
 
 本节是 PR-13 的验收半边：PR-13a 只交付文档（本表与数据目录/设计同步），**下表没有执行过任何一项**，状态一律「未执行」。执行前提：包含 PR-1a…PR-9 的 release 部署到私有栈，配置 `X_DATA_MCP_SOURCE_STORE`（指向部署状态目录下的来源库）与 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（仅本地验收）；生产实例与 `/opt` 不动。证据（命令输出、JSON、行数、sha256）逐条贴回 #446，不写进本仓库。
