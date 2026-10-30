@@ -584,6 +584,40 @@ fetch（HTTP，bounded retries，Referer/UA）
   export feature）证明；推送前跑 `scripts/check_current_facts.py` 与
   `prepush_check.py`，输出摘要贴 PR 正文。
 
+### 7.5 PR-3 修复二落位：SZSE 名单按 `tabkey` 选块（2026-10-30，XDM-124）
+
+状态：**实现中（XDM-124）**。范围只含深市 A-1/A-2 名单；沪市分页与字段已在 §7.4 交付。
+依据同一份 2026-10-30 真实响应取证（`reports/x-data-mcp/a1a2-forensics.md` §0 第 2/4 点、
+§(b) 第 3 点）：深市响应恒为两个 block——`tab1` 暂停上市 0 行 `pagecount=0`，`tab2`
+终止上市有数据——而 `parse_szse` 取 `blocks.first()`，于是 `page_count is 0`；
+`a1a2::rows` 也读同一个空 block，行数同样为 0。
+
+- **选块规则（两处一致）**：`validate::parse_szse` 与 `a1a2::rows` 共用同一个选择函数。
+  先按 `metadata.tabkey == "tab2"` 选；没有 `tab2` 时只接受**唯一一个 `data` 非空的 block**；
+  单个 block 的旧形状仍可读；多 block、无 `tab2`、又有多个非空 `data`（或全空）时
+  `source_invalid`，**不再静默退回 `blocks.first()`**。页码/`pagecount`/`recordcount`
+  与行数组都取自同一个被选中的 block。
+- **`page_count is 0`**：不是放宽零页校验；选到 `tab2` 后读它的 `pagecount`（真实 main=9、
+  nm=3），`tab1` 的 0 不再进入信封。`pageNo`/`pageno` 两种拼写继续兼容，且同样从被选中的
+  block 读取。
+- **解析器版本**：信封 `exchange-szse-page-v1` → `exchange-szse-page-v2`。v1 快照仍可重放，
+  但按 v1 的旧语义（`[0]` 第一个 block）重算行数/页数，不会用新选块规则改写旧索引；
+  新写入一律 v2。业务字段 parser `exchange-a1a2-v2` → `exchange-a1a2-v3`，避免旧证据按
+  新选块规则重放。
+- **夹具**：`szse_delisting_main.json` / `szse_delisting_nm.json` 改为两个 block
+  （`tab1` 空 + `tab2` 有数据），`metadata` 带 `tabkey/pageno/pagesize/pagecount/recordcount`，
+  日期用带连字符形态；新增 `szse_delisting_main_p2.json`（`PAGENO=2`）证明分页。真实样本的
+  main/nm 首页无交集，因此删除「`000003` 同时在 main/nm」的去重断言，改在单测里用构造的
+  「同一代码出现在两个模块」场景覆盖合并去重，并在夹具 README 注明该场景是构造的。
+- **测试**：信封（`tab2` 优先、唯一非空 block 回退、多义 block fail-closed、v1 旧语义）、
+  `a1a2::rows` 与信封选块一致、两页 main 采集（`PAGENO=1`/`PAGENO=2`）与重放快照数。
+- **文档**：`docs/exchange-source.md` §2/§6 的 SZSE 信封/选块口径；`docs/data-catalog.md`
+  §3.2 第 7 行的深市终止上市请求与选块说明。不改 SLO 门禁、`docs/STATUS.md` 部署事实，
+  不部署、不联网。
+- **验证**：本机不编译，Rust 正确性只由 PR 的 CI（fmt、clippy `-D warnings`、nextest、
+  export feature）证明；推送前跑 `scripts/check_current_facts.py` 与
+  `prepush_check.py --repo <worktree> --base origin/main`，输出摘要贴 PR 正文。
+
 ## 8. generation 保留与裁剪
 
 ### 8.1 现状
