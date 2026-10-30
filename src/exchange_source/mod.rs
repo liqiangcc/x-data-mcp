@@ -71,7 +71,7 @@ pub use request::{
 pub use transport::{
     Client, Helper, HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError,
 };
-pub use validate::{EmptyPolicy, FailureClass, PageEnvelope, PageSet, ValidateError};
+pub use validate::{EmptyPolicy, FailureClass, PageEnvelope, PageSet, ValidateError, ZeroPolicy};
 
 /// Logical source ids of the five consumers (§6.2 and the schema-25 comment).
 ///

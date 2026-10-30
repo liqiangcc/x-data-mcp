@@ -32,7 +32,7 @@ use super::bind::{self, SnapshotBinding};
 use super::freeze::{FrozenBytes, FrozenSnapshot, freeze_bytes, record_snapshots};
 use super::request::{ExchangeRequest, PagingFormat, Segment};
 use super::transport::{Client, HttpRequest};
-use super::validate::{self, EmptyPolicy, FailureClass, PageEnvelope, PageSet};
+use super::validate::{self, EmptyPolicy, FailureClass, PageEnvelope, PageSet, ZeroPolicy};
 use super::{BasisStatus, SourceId, default_headers};
 use crate::source_store::SourceStore;
 use crate::sqlite_market::backend::MarketBackend;
@@ -112,6 +112,10 @@ pub struct AcquisitionPlan {
     /// `source_not_admitted` before any request is sent (§6.3).
     pub required_basis: BasisStatus,
     pub max_pages: u32,
+    /// What a 0-row window means to this consumer (BR-M3-10). Default
+    /// [`ZeroPolicy::FailClosed`]; A-3 asks for [`ZeroPolicy::NotObserved`]
+    /// because it only derives positive facts.
+    pub zero_policy: ZeroPolicy,
 }
 
 impl AcquisitionPlan {
@@ -124,6 +128,7 @@ impl AcquisitionPlan {
             basis_status: source_id.default_basis(),
             required_basis: BasisStatus::ApprovedSource,
             max_pages: MAX_PAGES,
+            zero_policy: ZeroPolicy::FailClosed,
         }
     }
 
@@ -144,6 +149,13 @@ impl AcquisitionPlan {
 
     pub fn max_pages(mut self, max_pages: u32) -> Self {
         self.max_pages = max_pages;
+        self
+    }
+
+    /// Record 0-row windows as `not_observed` instead of failing them
+    /// (BR-M3-10; only for consumers that store positive facts only).
+    pub fn zero_rows_not_observed(mut self) -> Self {
+        self.zero_policy = ZeroPolicy::NotObserved;
         self
     }
 
@@ -522,7 +534,7 @@ impl<'a> Entry<'a> {
         }
         let envelopes: Vec<PageEnvelope> =
             pages.into_iter().map(|(_, envelope)| envelope).collect();
-        let set = validate::validate_pages(&envelopes, policy).map_err(|error| {
+        let set = validate::validate_pages(&envelopes, policy, plan.zero_policy).map_err(|error| {
             AcquireError::Invalid {
                 code: error.code(),
                 detail: error.to_string(),
