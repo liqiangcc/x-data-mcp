@@ -604,6 +604,90 @@ pub(crate) fn raw_daily_spans(c: &Connection) -> Result<BTreeMap<String, RawDail
     Ok(spans)
 }
 
+/// The raw-series registration facts of one entity: the identity, the day
+/// bounds and the content digest the M3 delisting check compares against
+/// (M3 PR-5, `#446` §4.5). `last_event_seq` names the state transition the row
+/// currently reflects, so a later run can tell "nothing happened" from "an
+/// event happened but the facts look similar".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RawDailySummary {
+    pub record_count: i64,
+    pub first_day: i64,
+    pub last_day: i64,
+    /// `market_series.version_id` (hex of the content digest).
+    pub version_id: String,
+    pub last_event_seq: i64,
+}
+
+fn raw_daily_summary_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<(String, RawDailySummary)> {
+    Ok((
+        r.get(0)?,
+        RawDailySummary {
+            record_count: r.get(1)?,
+            first_day: r.get(2)?,
+            last_day: r.get(3)?,
+            version_id: r.get(4)?,
+            last_event_seq: r.get(5)?,
+        },
+    ))
+}
+
+const RAW_DAILY_SUMMARY_COLUMNS: &str =
+    "entity,record_count,first_day,last_day,version_id,last_event_seq";
+
+/// Every stock 不复权 daily series registration, keyed by entity. The 不复权
+/// series is the source-faithful bar fact: its digest only changes when the
+/// stored bars do, while the 前复权 series also changes when corporate-action
+/// factors change (#446 §4.5 keeps those two questions apart).
+pub(crate) fn raw_daily_summaries(
+    c: &Connection,
+) -> Result<BTreeMap<String, RawDailySummary>, Error> {
+    let mut statement = c
+        .prepare(&format!(
+            "SELECT {RAW_DAILY_SUMMARY_COLUMNS} FROM market_series \
+             WHERE period=?1 AND adjustment=?2 AND instrument_class=?3 ORDER BY entity"
+        ))
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(
+            params![
+                super::compact_repo::period_code(Period::Day),
+                Adjustment::Raw.code(),
+                INSTRUMENT_CLASS_STOCK
+            ],
+            raw_daily_summary_row,
+        )
+        .map_err(storage)?;
+    let mut summaries = BTreeMap::new();
+    for row in rows {
+        let (entity, summary) = row.map_err(storage)?;
+        summaries.insert(entity, summary);
+    }
+    Ok(summaries)
+}
+
+/// One entity's 不复权 daily series registration; `None` when it has no series.
+pub(crate) fn raw_daily_summary(
+    c: &Connection,
+    entity: &str,
+) -> Result<Option<RawDailySummary>, Error> {
+    c.query_row(
+        &format!(
+            "SELECT {RAW_DAILY_SUMMARY_COLUMNS} FROM market_series \
+             WHERE entity=?1 AND period=?2 AND adjustment=?3 AND instrument_class=?4"
+        ),
+        params![
+            entity,
+            super::compact_repo::period_code(Period::Day),
+            Adjustment::Raw.code(),
+            INSTRUMENT_CLASS_STOCK
+        ],
+        |r| raw_daily_summary_row(r).map(|(_, summary)| summary),
+    )
+    .optional()
+    .map_err(storage)
+}
+
 /// The 不复权 close of one entity on exactly `day`, with the series' price
 /// scale; `None` when the series has no bar that day (a gap, a holiday, or a
 /// day outside the span). One indexed lookup, no bar materialization.

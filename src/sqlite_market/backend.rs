@@ -194,6 +194,36 @@ impl MarketBackend {
         }
     }
 
+    /// Resolve the delisting-check registrations for one run (M3 PR-5,
+    /// `#446` §4.5). Read-only, one snapshot: the main table's terminal
+    /// entities joined with their 不复权 series facts.
+    pub fn resolve_delisted_series(
+        &self,
+        today: chrono::NaiveDate,
+    ) -> Result<Option<crate::data_supply::delisted_series::Resolution>, Error> {
+        match self {
+            // Legacy (schema 18) has no main table and no M3 lifecycle facts.
+            Self::Legacy(_) => Ok(None),
+            Self::Compact(m) => {
+                m.read(|c| crate::data_supply::delisted_series::resolve(c, today).map(Some))
+            }
+        }
+    }
+
+    /// Re-check the registered terminal series against the current facts (M3
+    /// PR-5, `#446` §4.5). Read-only: no repair, no delete.
+    pub fn check_delisted_series(
+        &self,
+        baseline: &crate::data_supply::delisted_series::Baseline,
+    ) -> Result<Option<crate::data_supply::delisted_series::Report>, Error> {
+        match self {
+            Self::Legacy(_) => Ok(None),
+            Self::Compact(m) => {
+                m.read(|c| crate::data_supply::delisted_series::check(c, baseline).map(Some))
+            }
+        }
+    }
+
     /// Register the derived facts one successful writer produced (M3 PR-8,
     /// `#446` §8.2/§8.3). The retire gate reads the source store first; this
     /// table is the rebuildable index it consults second.

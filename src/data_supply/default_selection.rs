@@ -1,7 +1,10 @@
-//! Internal #92 default-selector resolution: current valid catalog members
-//! intersected with daily securities whose first-collection items carry a
-//! committed execution-start marker, packaged as freezeable evidence.
-//! No MCP/wire, no task creation, no gap or range semantics.
+//! Internal #92 default-selector resolution: catalog members intersected with
+//! daily securities whose first-collection items carry a committed
+//! execution-start marker, packaged as freezeable evidence. "Catalog members"
+//! is the current head **plus** the members of the version published right
+//! before it (M3 PR-5, `#446` §4.5), so a member that leaves the catalog cannot
+//! lose the delisting day's last bars. No MCP/wire, no task creation, no gap or
+//! range semantics.
 //!
 //! Contract-family recognition (application layer, never SQL): a marker counts
 //! when its task's stored `command_key_json` is exactly the typed
@@ -53,6 +56,14 @@ pub struct StartIdentity {
 pub struct DefaultDailySelection {
     pub catalog_version_id: String,
     pub catalog_digest: String,
+    /// Version whose members are unioned into the eligible set (M3 PR-5,
+    /// `#446` §4.5); `None` when the head is the first published version.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_catalog_version_id: Option<String>,
+    /// Selected symbols that only the previous version still lists: the
+    /// delisting-tail survivors this rule exists for. Sorted, usually empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub retained_members: Vec<String>,
     /// Sorted unique `sh.600006`-style symbols.
     pub securities: Vec<String>,
     /// Selected symbol -> every qualifying marker identity, sorted.
@@ -67,6 +78,8 @@ type StartProofs = BTreeMap<String, Vec<StartIdentity>>;
 struct DigestInput<'a> {
     catalog_version_id: &'a str,
     catalog_digest: &'a str,
+    previous_catalog_version_id: Option<&'a str>,
+    retained_members: &'a [String],
     securities: &'a [String],
     starts: &'a StartProofs,
 }
@@ -158,7 +171,20 @@ fn resolve_facts(
         .clone()
         .ok_or_else(|| invalid("catalog head version unreadable"))?;
     let catalog_digest = crate::sqlite_catalog::digest(&version).map_err(invalid)?;
-    let members: BTreeSet<String> = version.records.iter().filter_map(member_symbol).collect();
+    // M3 PR-5 (`#446` §4.5): the eligible set is the current catalog *plus*
+    // the previous catalog version's members. A member that leaves the catalog
+    // between two versions can still own bars from the delisting day, so
+    // dropping it here would lose that tail; the union keeps it eligible for
+    // `update_data` until its series reaches the delisting day. A member that
+    // never had a first-collection marker is still not selected, and an active
+    // member is selected exactly as before (the union only adds symbols).
+    let mut members: BTreeSet<String> = version.records.iter().filter_map(member_symbol).collect();
+    let current_members = members.clone();
+    let mut previous_catalog_version_id = None;
+    if let Some(previous) = &facts.previous_catalog {
+        members.extend(previous.members.iter().cloned());
+        previous_catalog_version_id = Some(previous.version_id.clone());
+    }
     let mut starts: BTreeMap<String, Vec<StartIdentity>> = BTreeMap::new();
     for fact in &facts.starts {
         let Some(symbol) = started_symbol(fact)? else {
@@ -183,9 +209,20 @@ fn resolve_facts(
     if securities.is_empty() {
         return Err(SelectionError::EmptySelection);
     }
+    // Evidence: which selected symbols exist only because of the retained
+    // previous version. Usually empty (the catalog publisher refuses member
+    // disappearance, `catalog::RejectReason::MemberDisappeared`), so a
+    // non-empty list always names a real tail case.
+    let retained_members: Vec<String> = securities
+        .iter()
+        .filter(|symbol| !current_members.contains(*symbol))
+        .cloned()
+        .collect();
     let input = DigestInput {
         catalog_version_id: &version_id,
         catalog_digest: &catalog_digest,
+        previous_catalog_version_id: previous_catalog_version_id.as_deref(),
+        retained_members: &retained_members,
         securities: &securities,
         starts: &starts,
     };
@@ -197,6 +234,8 @@ fn resolve_facts(
     Ok(DefaultDailySelection {
         catalog_version_id: version_id,
         catalog_digest,
+        previous_catalog_version_id,
+        retained_members,
         securities,
         starts,
         evidence_digest,

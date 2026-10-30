@@ -48,13 +48,24 @@ pub const PROGRESS_UNIT: &str = "derived_dataset";
 
 /// The internal items a daily plan-run task maintains, in execution order:
 /// the nine benchmark indices first, the calendar next (its inputs are index
-/// members, §9.2), then the four M2 whole-market datasets (issue-391 §12.1) and
-/// finally the M3 industry snapshot (M3 PR-6, `#446` §10.1).
+/// members, §9.2), then the four M2 whole-market datasets (issue-391 §12.1),
+/// the M3 industry snapshot (M3 PR-6, `#446` §10.1) and finally the M3
+/// delisted-series check (M3 PR-5, `#446` §4.5), which must observe the state
+/// the entity items of this run left behind — hence last.
 /// `derived:security_master` runs before `derived:suspensions` because the gap
 /// derivation reads the main table this run assembled.
-pub fn item_specs(generation: &Value) -> Vec<ItemSpec> {
+///
+/// `delisted` carries the registrations resolved before the entity items ran.
+/// `None` means the backend keeps no M3 lifecycle/series tables (legacy schema
+/// 18), where the check has nothing to read and is therefore not part of the
+/// item set instead of being a permanent no-op.
+pub fn item_specs(
+    generation: &Value,
+    delisted: Option<&crate::data_supply::delisted_series::Resolution>,
+) -> Vec<ItemSpec> {
+    let extra = usize::from(delisted.is_some());
     let mut items = Vec::with_capacity(
-        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len() + 1,
+        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len() + 1 + extra,
     );
     for registration in &index_registry::INDEX_SERIES {
         let item_id = task_control::derived::index(registration.entity);
@@ -94,6 +105,16 @@ pub fn item_specs(generation: &Value) -> Vec<ItemSpec> {
         scope_keys: BTreeSet::from([task_control::derived::industry_scope()]),
         item_id: industry.to_string(),
     });
+    // The M3 delisted-series check runs last: it compares the registrations
+    // frozen before the entity items with the series facts they left behind,
+    // so it must observe the finished state (§4.5 item 2).
+    if let Some(resolution) = delisted {
+        items.push(crate::data_supply::delisted_series::item_spec(
+            generation,
+            &resolution.baseline,
+            &resolution.skipped,
+        ));
+    }
     items
 }
 
@@ -142,22 +163,42 @@ pub fn run(
             Change::StartItem(item.item_id.clone()),
         )?;
         let revision = head.state_revision;
-        let outcome = match session {
-            Some(session) => execute(
-                market,
-                session,
-                generation_id,
-                generation_manifest_sha256,
-                task_id,
-                run_id,
-                item,
-                revision,
-                &source_cache,
-            ),
-            None => Err(Error::Invalid(format!(
-                "{} needs a verified official source; none is installed for this run",
-                item.item_id
-            ))),
+        let outcome = if item.item_id == task_control::derived::DELISTED_SERIES_CHECK {
+            // The registrations were frozen into the item on this task's first
+            // turn; a resumed turn must compare against the same numbers
+            // (`#446` §4.5), not against a state that already absorbed the
+            // commits this run made before it stopped. The stored spec is
+            // authoritative whenever it carries a baseline.
+            let frozen = &binding.item.spec;
+            let spec = if frozen
+                .frozen_inputs
+                .get(crate::data_supply::delisted_series::BASELINE_KEY)
+                .is_some()
+            {
+                frozen
+            } else {
+                item
+            };
+            check_delisted_series(market, spec)
+        } else {
+            match session {
+                Some(session) => execute(
+                    market,
+                    session,
+                    generation_id,
+                    generation_manifest_sha256,
+                    task_id,
+                    run_id,
+                    item,
+                    revision,
+                    &source_cache,
+                )
+                .map_err(ItemFailure::Plain),
+                None => Err(ItemFailure::Plain(Error::Invalid(format!(
+                    "{} needs a verified official source; none is installed for this run",
+                    item.item_id
+                )))),
+            }
         };
         match outcome {
             Ok(evidence) => {
@@ -177,7 +218,7 @@ pub fn run(
                     )?;
                 }
             }
-            Err(error) if uncertain(&error) => {
+            Err(ItemFailure::Plain(error)) if uncertain(&error) => {
                 let mut head = market.task_head(task_id)?;
                 let Some(mut binding) = market.task_item_binding(task_id, &item.item_id)? else {
                     return Err(Error::Integrity("derived item vanished".into()));
@@ -197,7 +238,7 @@ pub fn run(
                 }
                 return Ok(());
             }
-            Err(error) => {
+            Err(ItemFailure::Plain(error)) => {
                 finish(
                     market,
                     task_id,
@@ -208,9 +249,82 @@ pub fn run(
                     None,
                 )?;
             }
+            // A check that *finds* something is a finding, not an unknown
+            // commit: the item keeps the evidence of what it saw and the run
+            // ends `partially_failed` like any other failed internal item.
+            Err(ItemFailure::Evidence(error, evidence)) => {
+                finish(
+                    market,
+                    task_id,
+                    run_id,
+                    &item.item_id,
+                    false,
+                    Some(error.to_string()),
+                    Some(evidence),
+                )?;
+            }
         }
     }
     close(market, task_id, run_id)
+}
+
+/// Why an internal item ended without an outcome. A check item's failure *is* a
+/// finding, so it travels with the evidence of what was found; every other
+/// failure has only a message.
+enum ItemFailure {
+    Plain(Error),
+    Evidence(Error, Value),
+}
+
+/// Execute `derived:delisted_series_check` (M3 PR-5, `#446` §4.5). The baseline
+/// comes from the item's frozen inputs — resolved before the entity items ran —
+/// and is compared with the series facts they left behind. The item writes no
+/// business table: a mismatch fails *this item* with the offending entities and
+/// the run ends `partially_failed`; nothing is rebuilt, rewritten or deleted.
+fn check_delisted_series(market: &MarketBackend, item: &ItemSpec) -> Result<Value, ItemFailure> {
+    use crate::data_supply::delisted_series;
+    let started = std::time::Instant::now();
+    let baseline = item
+        .frozen_inputs
+        .get(delisted_series::BASELINE_KEY)
+        .ok_or_else(|| {
+            ItemFailure::Plain(Error::Integrity(
+                "delisted series check item carries no baseline".into(),
+            ))
+        })
+        .and_then(|value| delisted_series::decode_baseline(value).map_err(ItemFailure::Plain))?;
+    let report = market
+        .check_delisted_series(&baseline)
+        .map_err(ItemFailure::Plain)?
+        .ok_or_else(|| {
+            ItemFailure::Plain(Error::Invalid(
+                "delisted series check requires the compact market schema".into(),
+            ))
+        })?;
+    let failed = report.failed();
+    let evidence = json!({
+        "dataset": item.item_id,
+        "as_of": baseline.as_of,
+        "checked": report.registered,
+        "unchanged": report.unchanged,
+        "tail_extended": report.tail_extended,
+        "failures": report.failures,
+        // Why a terminal entity was not registered (ambiguous issuer, no
+        // series yet): evidence, so a smaller `checked` is explainable.
+        "skipped": item
+            .frozen_inputs
+            .get(delisted_series::SKIPPED_KEY)
+            .cloned()
+            .unwrap_or(Value::Null),
+        "elapsed_ms": elapsed_ms(started),
+    });
+    if failed {
+        return Err(ItemFailure::Evidence(
+            Error::Invalid(report.failure_message()),
+            evidence,
+        ));
+    }
+    Ok(evidence)
 }
 
 /// One internal item's acquisition + commit, returning the evidence recorded

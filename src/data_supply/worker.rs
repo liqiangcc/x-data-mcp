@@ -241,7 +241,13 @@ pub fn run_once(
                     .cloned()
             })
             .unwrap_or(serde_json::Value::Null);
-        let items = crate::data_supply::derived::item_specs(&generation);
+        // M3 PR-5 (`#446` §4.5): the delisting check's registrations are the
+        // state *before* this run's entity items commit, so they are resolved
+        // here — ahead of the bulk/per-item update below — and freeze into the
+        // check item. Resolving after the update would compare the run with
+        // itself and could never catch a rewrite.
+        let delisted = market.resolve_delisted_series(crate::calendar::shanghai_today())?;
+        let items = crate::data_supply::derived::item_specs(&generation, delisted.as_ref());
         control.repository.ensure_derived_items(
             &candidate.task.task_id,
             &control.run_id,

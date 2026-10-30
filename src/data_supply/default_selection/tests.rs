@@ -831,3 +831,168 @@ fn resolution_is_read_only_and_creates_nothing() {
     let after: Vec<i64> = tables.iter().map(|t| count(t)).collect();
     assert_eq!(before, after);
 }
+
+/// Seed a catalog version whose member set **shrinks**, by writing the version
+/// rows directly.
+///
+/// The publisher refuses a disappeared member (`RejectReason::MemberDisappeared`,
+/// AC-08), so a real delisting suspends catalog publication until the change is
+/// verified; the M3 eligible-set union (`#446` §4.5) is the rule that keeps the
+/// delisting day's tail collectable *when* such a verified version lands. Every
+/// other fixture in this file goes through `publish`; this is the one state the
+/// public path cannot produce.
+fn withdraw_member(tasks: &SqliteTasks, catalog: &SqliteCatalog, from: &str, id: &str, code: &str) {
+    let base = catalog.fixed(from).unwrap();
+    let version = crate::catalog::CatalogVersion {
+        version_id: id.into(),
+        published_at: Utc::now(),
+        source: base.source.clone(),
+        acquired_at: base.acquired_at,
+        records: base
+            .records
+            .into_iter()
+            .filter(|record| record.symbol != code)
+            .collect(),
+    };
+    let c = Connection::open(tasks.path()).unwrap();
+    c.execute(
+        "INSERT INTO catalog_versions VALUES(?1,?2,?3,?4,?5,?6)",
+        params![
+            id,
+            version.published_at.to_rfc3339(),
+            version.source,
+            version.acquired_at.to_rfc3339(),
+            serde_json::to_string(&version).unwrap(),
+            crate::sqlite_catalog::digest(&version).unwrap()
+        ],
+    )
+    .unwrap();
+    for row in crate::sqlite_catalog::projection(&version) {
+        c.execute(
+            "INSERT INTO catalog_members VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                id, row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7]
+            ],
+        )
+        .unwrap();
+    }
+    c.execute(
+        "INSERT INTO catalog_head VALUES(1,?1) ON CONFLICT(singleton) DO UPDATE SET version_id=excluded.version_id",
+        [id],
+    )
+    .unwrap();
+    // The seeded version must still read back through the integrity check,
+    // otherwise the fixture would test a corrupt catalog instead of a shrink.
+    assert_eq!(catalog.fixed(id).unwrap().version_id, id);
+}
+
+#[test]
+fn a_member_that_left_the_catalog_keeps_its_tail_eligible() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog) = open(&dir);
+    publish(
+        &catalog,
+        "v1",
+        &[
+            ("600006", CatalogExchange::Shanghai),
+            ("600007", CatalogExchange::Shanghai),
+        ],
+        None,
+    );
+    let c = ctl(&tasks, "run-a");
+    let (ta, ia) = accept_typed(&c, "req-a", &[("sh", "600006")]);
+    start(&tasks, "run-a", &ta, &ia[0]);
+    let (tb, ib) = accept_typed(&c, "req-b", &[("sh", "600007")]);
+    start(&tasks, "run-a", &tb, &ib[0]);
+    let before = resolve(&catalog).unwrap();
+    assert!(before.retained_members.is_empty());
+    // 600007 is verified as gone from the new catalog version: its terminal
+    // bars may still be missing, so the daily run must keep planning it.
+    withdraw_member(&tasks, &catalog, "v1", "v2", "600007");
+    let after = resolve(&catalog).unwrap();
+    assert_eq!(after.catalog_version_id, "v2");
+    assert_eq!(after.previous_catalog_version_id.as_deref(), Some("v1"));
+    assert_eq!(after.securities, vec!["sh.600006", "sh.600007"]);
+    assert_eq!(after.retained_members, vec!["sh.600007"]);
+    // The active member is planned exactly as before: the union only adds.
+    assert!(after.starts.contains_key("sh.600006"));
+    // The retained set is part of the frozen evidence, so a plan made under
+    // the wider set can never be replayed as the narrower one.
+    assert_ne!(before.evidence_digest, after.evidence_digest);
+}
+
+#[test]
+fn the_union_still_requires_a_first_collection_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog) = open(&dir);
+    publish(
+        &catalog,
+        "v1",
+        &[
+            ("600006", CatalogExchange::Shanghai),
+            ("600007", CatalogExchange::Shanghai),
+        ],
+        None,
+    );
+    let c = ctl(&tasks, "run-a");
+    // Only 600006 was ever collected: a catalog member without a first
+    // collection is not a daily target, whether current or retained.
+    let (ta, ia) = accept_typed(&c, "req-a", &[("sh", "600006")]);
+    start(&tasks, "run-a", &ta, &ia[0]);
+    withdraw_member(&tasks, &catalog, "v1", "v2", "600007");
+    let after = resolve(&catalog).unwrap();
+    assert_eq!(after.securities, vec!["sh.600006"]);
+    assert!(after.retained_members.is_empty());
+    assert!(!after.starts.contains_key("sh.600007"));
+}
+
+#[test]
+fn a_growing_catalog_selects_current_members_as_before() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog) = open(&dir);
+    publish(
+        &catalog,
+        "v1",
+        &[("600006", CatalogExchange::Shanghai)],
+        None,
+    );
+    let c = ctl(&tasks, "run-a");
+    let (ta, ia) = accept_typed(&c, "req-a", &[("sh", "600006")]);
+    start(&tasks, "run-a", &ta, &ia[0]);
+    // A new listing joins the catalog without a first collection yet: the
+    // union must not invent a target for it, and the active member stays.
+    publish(
+        &catalog,
+        "v2",
+        &[
+            ("600006", CatalogExchange::Shanghai),
+            ("600008", CatalogExchange::Shanghai),
+        ],
+        Some("v1"),
+    );
+    let after = resolve(&catalog).unwrap();
+    assert_eq!(after.catalog_version_id, "v2");
+    assert_eq!(after.securities, vec!["sh.600006"]);
+    assert!(after.retained_members.is_empty());
+}
+
+#[test]
+fn the_first_published_catalog_has_no_previous_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let (tasks, catalog) = open(&dir);
+    publish(
+        &catalog,
+        "v1",
+        &[("600006", CatalogExchange::Shanghai)],
+        None,
+    );
+    let c = ctl(&tasks, "run-a");
+    let (ta, ia) = accept_typed(&c, "req-a", &[("sh", "600006")]);
+    start(&tasks, "run-a", &ta, &ia[0]);
+    let facts = catalog.selection_facts().unwrap();
+    assert!(facts.previous_catalog.is_none());
+    let selection = resolve(&catalog).unwrap();
+    assert_eq!(selection.previous_catalog_version_id, None);
+    assert!(selection.retained_members.is_empty());
+    assert_eq!(selection.securities, vec!["sh.600006"]);
+}
