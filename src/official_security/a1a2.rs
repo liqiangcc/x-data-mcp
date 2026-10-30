@@ -55,7 +55,11 @@
 //!
 //! Acquisition failures come straight from PR-2's entry
 //! (`source_unavailable` / `source_invalid` / `source_not_admitted` /
-//! `partially_failed`); a source page that cannot be parsed is `source_invalid`.
+//! `partially_failed` / `page_size_ignored`); a source page that cannot be
+//! parsed is `source_invalid`. `page_size_ignored` is the single-page list
+//! dialect failing closed: the SSE list must arrive in one page (2026-10-30
+//! evidence), so a `pageCount>1` answer means the request's `pageHelp.pageSize`
+//! was ignored and the first page cannot stand for the whole list.
 //! The caller (the `derived:security_master` item) turns any of them into a
 //! failed item, so the previously committed main-table version stays readable
 //! and the TDX daily run is not blocked.
