@@ -1,0 +1,26 @@
+[
+  {
+    "metadata": {
+      "catalogid": "1793_ssgs",
+      "tabkey": "tab1",
+      "pagesize": 20,
+      "pageno": 2,
+      "pagecount": 0,
+      "recordcount": 0
+    },
+    "data": []
+  },
+  {
+    "metadata": {
+      "catalogid": "1793_ssgs",
+      "tabkey": "tab2",
+      "pagesize": 20,
+      "pageno": 2,
+      "pagecount": 2,
+      "recordcount": 3
+    },
+    "data": [
+      {"zqdm": "000005", "zqjc": "ST星源", "ssrq": "1990-12-10", "zzrq": "2024-04-26"}
+    ]
+  }
+]
