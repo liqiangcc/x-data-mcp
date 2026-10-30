@@ -333,7 +333,8 @@ mod tests {
         assert_eq!(set.rows[0].name, "ST深安达");
         assert_eq!(set.rows[0].effective_from, day(1998, 4, 28));
         assert_eq!(set.rows[0].effective_to, Some(day(1999, 4, 27)));
-        assert_eq!(set.rows[2].name, "深安达A");
+        // The last interval holds the name the last change moved *to*.
+        assert_eq!(set.rows[2].name, "深安达");
         assert_eq!(set.rows[2].certainty, names::NameCertainty::Unbounded);
         // The B-share row of the fixture is skipped, not turned into a name.
         assert!(set.rows.iter().all(|row| row.code != "200001"));
