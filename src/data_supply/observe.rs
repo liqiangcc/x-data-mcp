@@ -98,7 +98,7 @@ fn availability_item(
         Availability::Absent
     } else if dataset == Dataset::Catalog
         || dataset == Dataset::Calendar
-        || (dataset.is_m2()
+        || (dataset.is_temporal_fact()
             && f.manifest
                 .as_ref()
                 .is_some_and(|m| m.status == ManifestStatus::Present))

@@ -34,7 +34,7 @@
 //! writer (the old code's interval ends on the migration day); the read model
 //! re-checks it so a hand-written or stale row cannot be counted twice.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use rusqlite::Connection;
@@ -89,6 +89,14 @@ impl UniverseRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Member {
     pub entity: String,
+    /// The code that identifies this issuer across a confirmed code migration
+    /// (§4.3): the newest code in the confirmed chain, or `entity` when the
+    /// chain has none. Stable before and after the migration, so a consumer
+    /// can group member intervals without counting one issuer twice.
+    pub canonical_entity: String,
+    /// The other codes in the confirmed chain, sorted. Candidate migrations
+    /// never add an alias: they are not proven (§4.3).
+    pub aliases: Vec<String>,
     pub exchange: Exchange,
     pub code: String,
     pub listing_date: Option<NaiveDate>,
@@ -108,6 +116,8 @@ impl From<MemberState> for Member {
             .basis()
             .expect("only included states become members");
         Self {
+            canonical_entity: state.entity.clone(),
+            aliases: Vec::new(),
             entity: state.entity,
             exchange: state.exchange,
             code: state.code,
@@ -190,16 +200,28 @@ pub struct Universe {
 pub(crate) struct Selection {
     pub states: Vec<MemberState>,
     pub temporal: TemporalReport,
+    /// The migrations admitted by the information-set filter. `universe` uses
+    /// them to attach the canonical identity; `member_state` does not need it.
+    pub migrations: Vec<CodeMigrationFact>,
 }
 
 /// `universe(as_of = T)` (§11.1, AC-M2-4).
 pub fn universe(c: &Connection, request: &UniverseRequest) -> Result<Universe, Error> {
-    let selection = select(c, request, None)?;
+    let Selection {
+        states,
+        temporal,
+        migrations,
+    } = select(c, request, None)?;
     let mut exclusions = UniverseExclusions::default();
     let mut members = Vec::new();
-    for state in selection.states {
+    for state in states {
         match state.membership {
-            Membership::In(_) => members.push(Member::from(state)),
+            Membership::In(_) => {
+                let mut member = Member::from(state);
+                (member.canonical_entity, member.aliases) =
+                    canonical_identity(&member.entity, &migrations);
+                members.push(member);
+            }
             Membership::Out(reason) => exclusions.record(reason),
         }
     }
@@ -217,7 +239,7 @@ pub fn universe(c: &Connection, request: &UniverseRequest) -> Result<Universe, E
         strict: request.strict,
         members,
         exclusions,
-        temporal: selection.temporal,
+        temporal,
         master_version,
     })
 }
@@ -241,6 +263,10 @@ pub fn universe(c: &Connection, request: &UniverseRequest) -> Result<Universe, E
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberInterval {
     pub entity: String,
+    /// See [`Member::canonical_entity`].
+    pub canonical_entity: String,
+    /// See [`Member::aliases`].
+    pub aliases: Vec<String>,
     pub member_from: NaiveDate,
     pub member_to: Option<NaiveDate>,
     pub basis: MembershipBasis,
@@ -254,6 +280,7 @@ pub struct MemberInterval {
 /// universe today, and this file does not pretend otherwise.
 pub fn member_intervals(c: &Connection) -> Result<Vec<MemberInterval>, Error> {
     let rows = security::read_security_master(c).map_err(Error::from)?;
+    let migrations = security::read_code_migrations(c).map_err(Error::from)?;
     let spans = series::raw_daily_spans(c).map_err(Error::from)?;
     let mut intervals = Vec::new();
     for row in &rows {
@@ -287,8 +314,11 @@ pub fn member_intervals(c: &Connection) -> Result<Vec<MemberInterval>, Error> {
         if row.issuer_resolution == IssuerResolution::Ambiguous {
             flags.push(MemberFlag::AmbiguousIssuer);
         }
+        let (canonical_entity, aliases) = canonical_identity(&entity, &migrations);
         intervals.push(MemberInterval {
             entity,
+            canonical_entity,
+            aliases,
             member_from: start,
             member_to: end,
             basis,
@@ -408,7 +438,59 @@ pub(crate) fn select(
     Ok(Selection {
         states,
         temporal: report,
+        migrations: admitted,
     })
+}
+
+/// The canonical code and aliases of `entity` from confirmed migrations only
+/// (§4.3). The canonical code is the end of the outgoing chain; the alias set
+/// is the whole confirmed connected component, so both sides of a migration
+/// answer with the same identity. Candidate migrations are deliberately
+/// ignored: they change no membership and prove no rename.
+fn canonical_identity(entity: &str, migrations: &[CodeMigrationFact]) -> (String, Vec<String>) {
+    let mut confirmed: Vec<&CodeMigrationFact> = migrations
+        .iter()
+        .filter(|migration| migration.certainty == MigrationCertainty::Confirmed)
+        .collect();
+    confirmed.sort_by(|left, right| {
+        left.from_entity()
+            .cmp(&right.from_entity())
+            .then(left.effective_from.cmp(&right.effective_from))
+            .then(left.to_entity().cmp(&right.to_entity()))
+    });
+    let mut canonical = entity.to_owned();
+    let mut seen = BTreeSet::new();
+    while seen.insert(canonical.clone()) {
+        let Some(next) = confirmed
+            .iter()
+            .filter(|migration| migration.from_entity() == canonical)
+            .max_by_key(|migration| (migration.effective_from, migration.to_entity()))
+        else {
+            break;
+        };
+        canonical = next.to_entity();
+    }
+    let mut codes = BTreeSet::new();
+    codes.insert(entity.to_owned());
+    loop {
+        let mut grew = false;
+        for migration in &confirmed {
+            let from = migration.from_entity();
+            let to = migration.to_entity();
+            if codes.contains(&from) || codes.contains(&to) {
+                grew |= codes.insert(from);
+                grew |= codes.insert(to);
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let aliases = codes
+        .into_iter()
+        .filter(|code| code != &canonical)
+        .collect();
+    (canonical, aliases)
 }
 
 /// Per-entity 不复权 span index. The alias exists so the pre-push arity
@@ -434,6 +516,17 @@ fn membership_of(
     }
     if row.effective_to.is_some_and(|to| as_of >= to) {
         return Membership::Out(NotMemberReason::AfterInterval);
+    }
+    // The new code of a confirmed migration does not exist as a separate
+    // member before the migration day. The writer normally moves its interval
+    // start there; re-check the verdict so a stale or hand-written row cannot
+    // show both codes at once (§4.3).
+    if migrations.iter().any(|migration| {
+        migration.certainty == MigrationCertainty::Confirmed
+            && migration.to_entity() == entity
+            && as_of < migration.effective_from
+    }) {
+        return Membership::Out(NotMemberReason::Migrated);
     }
     let basis = match row.listing_date {
         Some(listing) if as_of < listing => {

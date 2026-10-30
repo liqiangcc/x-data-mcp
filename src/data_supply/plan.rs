@@ -174,6 +174,7 @@ impl Plan {
             Dataset::RiskWarnings => "market.risk_warnings",
             Dataset::Suspensions => "market.suspensions",
             Dataset::PriceLimitRules => "market.price_limit_rules",
+            Dataset::IndustryAssignments => "market.industry_assignments",
         }
     }
     /// Canonical serialization — the exact digest input.
@@ -497,7 +498,8 @@ pub fn resolve_plan(
             | Dataset::CapitalEvents
             | Dataset::RiskWarnings
             | Dataset::Suspensions
-            | Dataset::PriceLimitRules => Err(iinvalid(
+            | Dataset::PriceLimitRules
+            | Dataset::IndustryAssignments => Err(iinvalid(
                 "plan_market_update supports market.daily and market.yearly",
             )),
         })
@@ -538,7 +540,8 @@ pub fn resolve_run(
                 | Dataset::CapitalEvents
                 | Dataset::RiskWarnings
                 | Dataset::Suspensions
-                | Dataset::PriceLimitRules => Err(iinvalid(
+                | Dataset::PriceLimitRules
+                | Dataset::IndustryAssignments => Err(iinvalid(
                     "run_market_update supports market.daily and market.yearly",
                 )),
             }?;

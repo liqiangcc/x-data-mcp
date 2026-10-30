@@ -30,6 +30,7 @@ impl Access {
                 Dataset::RiskWarnings,
                 Dataset::Suspensions,
                 Dataset::PriceLimitRules,
+                Dataset::IndustryAssignments,
             ]),
             securities: None,
         }

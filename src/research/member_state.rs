@@ -89,7 +89,9 @@ pub enum NotMemberReason {
     ExcludedByKnownAt,
     /// The row is not an A share (the universe is A-share only in M2).
     NotAShare,
-    /// A confirmed code migration replaced this code before `as_of`.
+    /// A confirmed code migration decides this code's identity: the old code
+    /// is gone from `effective_from`, and the new code does not exist before
+    /// it.
     Migrated,
     /// `strict`: the interval's issuer is ambiguous (code reuse).
     StrictAmbiguousIssuer,

@@ -9,6 +9,7 @@ use crate::{
 };
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
+mod industry;
 mod m2;
 #[derive(Clone)]
 pub struct SqliteSupply {
@@ -258,6 +259,9 @@ impl ReadRepository for SqliteSupply {
         } else {
             entities(args.dataset, &args.selection, access)?
         };
+        if args.dataset == Dataset::IndustryAssignments {
+            return self.market.read(|c| industry::versions(c, &entities));
+        }
         if args.dataset.is_m2() {
             return self
                 .market
@@ -346,7 +350,8 @@ impl ReadRepository for SqliteSupply {
             | Dataset::SecurityNames
             | Dataset::CapitalEvents
             | Dataset::RiskWarnings
-            | Dataset::Suspensions => self.market.read(|c| {
+            | Dataset::Suspensions
+            | Dataset::IndustryAssignments => self.market.read(|c| {
                 if let Some(id) = catalog_version {
                     // §11's "today" mode: the catalog is the main table's
                     // projection of today. It cannot be combined with `as_of`
@@ -475,7 +480,8 @@ fn dataset_shape(dataset: Dataset) -> Option<(crate::market_data::Adjustment, i6
         | Dataset::CapitalEvents
         | Dataset::RiskWarnings
         | Dataset::Suspensions
-        | Dataset::PriceLimitRules => None,
+        | Dataset::PriceLimitRules
+        | Dataset::IndustryAssignments => None,
     }
 }
 
@@ -667,6 +673,9 @@ pub(crate) fn query(
 ) -> Result<QuerySnapshot, Error> {
     if plan.args.dataset.is_m2() {
         return m2::query(c, plan, access);
+    }
+    if plan.args.dataset == Dataset::IndustryAssignments {
+        return industry::query(c, plan, access);
     }
     let mut result = QuerySnapshot {
         manifest: vec![],
@@ -1994,6 +2003,8 @@ fn verify_versions_conn(
             )?
             .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
             derived_reference(r.dataset, None, &registration)
+        } else if r.dataset == Dataset::IndustryAssignments {
+            industry::version_ref(c, &r)?
         } else if r.dataset.is_m2() {
             m2::version_ref(c, &r)?
         } else {
@@ -2083,6 +2094,8 @@ fn verify_versions_meta_conn(
                 )?
                 .ok_or_else(|| Error::Integrity("trading calendar vanished".into()))?;
                 derived_reference(r.dataset, None, &registration)
+            } else if r.dataset == Dataset::IndustryAssignments {
+                industry::version_ref(c, &r)?
             } else if r.dataset.is_m2() {
                 m2::version_ref(c, &r)?
             } else {
@@ -2445,7 +2458,9 @@ impl ObservationRepository for SqliteSupply {
             );
             drop(task_span);
             let mut out = vec![];
-            let m2_snapshot = if plan.args.dataset.is_m2() {
+            let m2_snapshot = if plan.args.dataset == Dataset::IndustryAssignments {
+                Some(industry::query(c, plan, access)?)
+            } else if plan.args.dataset.is_m2() {
                 Some(m2::query(c, plan, access)?)
             } else {
                 None

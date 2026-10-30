@@ -549,6 +549,7 @@ fn temporal_declaration_matches_the_read_model() {
         Dataset::RiskWarnings,
         Dataset::Suspensions,
         Dataset::PriceLimitRules,
+        Dataset::IndustryAssignments,
     ] {
         let declaration = dataset.temporal();
         assert!(declaration.as_of, "{} should declare as_of", dataset.name());

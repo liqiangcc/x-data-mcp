@@ -85,7 +85,7 @@ fn manifest(
 /// The `temporal` block for one answer (issue-391 §12.2). A dataset whose
 /// declaration says `known_at_coverage: none` is named even when it has zero
 /// rows, so the caller never reads "no rows" as "no limitation".
-fn temporal_block(dataset: Dataset, report: &TemporalReport) -> TemporalBlock {
+pub(super) fn temporal_block(dataset: Dataset, report: &TemporalReport) -> TemporalBlock {
     let mut without: Vec<String> = report
         .datasets_without_known_at()
         .into_iter()
@@ -535,7 +535,7 @@ fn pin_is_current(
     Ok(())
 }
 
-fn check_budget(result: &QuerySnapshot) -> Result<(), Error> {
+pub(super) fn check_budget(result: &QuerySnapshot) -> Result<(), Error> {
     if result.rows.len() > crate::data_supply::query::MAX_ROWS {
         return Err(invalid("snapshot row budget exceeded"));
     }

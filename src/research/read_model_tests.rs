@@ -571,6 +571,21 @@ impl Fixture {
         super::read::open_read_only(&self.path).unwrap()
     }
 
+    /// Promote the fixture's candidate migration to confirmed. The interval
+    /// bounds are deliberately left stale: both codes still have an open
+    /// interval from day 0, so the read model itself must return only one of
+    /// them on each side of the migration day.
+    fn with_confirmed_migration() -> Self {
+        let fixture = Self::build(true);
+        let c = Connection::open(&fixture.path).unwrap();
+        c.execute(
+            "UPDATE code_migrations SET certainty='confirmed' WHERE from_exchange='sz' AND from_code='300114'",
+            [],
+        )
+        .unwrap();
+        fixture
+    }
+
     fn bar_entities(&self, as_of: NaiveDate) -> BTreeSet<String> {
         self.bars
             .iter()
@@ -851,6 +866,63 @@ fn strict_drops_only_the_two_ambiguity_cases() {
     let strict = universe(&c, &UniverseRequest::new(days[MIGRATION_DAY]).strict(true)).unwrap();
     assert!(entities(&strict).contains(&"sz.302132"));
     assert!(!entities(&strict).contains(&"sh.600018"));
+}
+
+#[test]
+fn a_confirmed_migration_returns_one_code_with_canonical_and_aliases() {
+    let fixture = Fixture::with_confirmed_migration();
+    let c = fixture.read();
+    let days = days();
+
+    // Before the migration: only the old code, canonical already the new code.
+    let before = universe(&c, &UniverseRequest::new(days[MIGRATION_DAY - 1])).unwrap();
+    assert!(entities(&before).contains(&"sz.300114"));
+    assert!(!entities(&before).contains(&"sz.302132"));
+    let old = before
+        .members
+        .iter()
+        .find(|member| member.entity == "sz.300114")
+        .unwrap();
+    assert_eq!(old.canonical_entity, "sz.302132");
+    assert_eq!(old.aliases, vec!["sz.300114".to_owned()]);
+
+    // On/after the migration day: only the new code, same canonical identity.
+    let after = universe(&c, &UniverseRequest::new(days[MIGRATION_DAY])).unwrap();
+    assert!(!entities(&after).contains(&"sz.300114"));
+    assert!(entities(&after).contains(&"sz.302132"));
+    let new = after
+        .members
+        .iter()
+        .find(|member| member.entity == "sz.302132")
+        .unwrap();
+    assert_eq!(new.canonical_entity, "sz.302132");
+    assert_eq!(new.aliases, vec!["sz.300114".to_owned()]);
+
+    // The whole interval file carries the same identity on both sides.
+    let intervals = super::universe::member_intervals(&c).unwrap();
+    for interval in intervals
+        .iter()
+        .filter(|row| row.entity == "sz.300114" || row.entity == "sz.302132")
+    {
+        assert_eq!(interval.canonical_entity, "sz.302132");
+        assert_eq!(interval.aliases, vec!["sz.300114".to_owned()]);
+    }
+}
+
+#[test]
+fn a_candidate_migration_does_not_create_aliases() {
+    let fixture = Fixture::new();
+    let c = fixture.read();
+    let answer = universe(&c, &UniverseRequest::new(days()[0])).unwrap();
+    for entity in ["sz.300114", "sz.302132"] {
+        let member = answer
+            .members
+            .iter()
+            .find(|member| member.entity == entity)
+            .unwrap();
+        assert_eq!(member.canonical_entity, entity);
+        assert!(member.aliases.is_empty());
+    }
 }
 
 #[test]

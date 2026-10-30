@@ -78,6 +78,7 @@ impl KnownAtCoverage {
     pub fn declared(dataset: &str) -> Self {
         match dataset {
             "security_master" | "security_names" | "risk_warnings" | "suspensions" => Self::Partial,
+            "industry_assignments" => Self::Partial,
             "capital_events" | "price_limit_rules" => Self::None,
             _ => Self::None,
         }
