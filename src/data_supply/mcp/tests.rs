@@ -2381,8 +2381,7 @@ fn market_daily_universe_scope_resolves_the_main_table() {
     // A universe availability is one aggregate row, not one row per member.
     assert_eq!(availability["columns"]["universe"][0]["entities"], 3);
     assert_eq!(
-        availability["columns"]["universe"][0]["present"],
-        1,
+        availability["columns"]["universe"][0]["present"], 1,
         "only the seeded series is present"
     );
     assert_eq!(availability["columns"]["universe"][0]["absent"], 2);
