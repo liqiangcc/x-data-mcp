@@ -194,6 +194,103 @@ impl MarketBackend {
         }
     }
 
+    /// Register the derived facts one successful writer produced (M3 PR-8,
+    /// `#446` §8.2/§8.3). The retire gate reads the source store first; this
+    /// table is the rebuildable index it consults second.
+    pub fn record_generation_facts(
+        &self,
+        facts: &[crate::generation_gate::GenerationFact],
+    ) -> Result<(), Error> {
+        match self {
+            Self::Compact(m) => m.record_generation_facts(facts),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "generation_facts requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Register the market-derived facts of one generation from the derived
+    /// tables (the daily run's post-commit hook).
+    pub fn register_derived_generation_facts(&self, generation: &str) -> Result<usize, Error> {
+        let facts = match self {
+            Self::Compact(m) => m.derived_generation_facts(generation)?,
+            // Legacy (schema 18) has no M3 tables at all, and its daily path
+            // predates the retirement gate; there is nothing to register.
+            Self::Legacy(_) => return Ok(0),
+        };
+        if facts.is_empty() {
+            return Ok(0);
+        }
+        self.record_generation_facts(&facts)?;
+        Ok(facts.len())
+    }
+
+    /// Replace the whole `generation_facts` index (`replay --scope
+    /// generation_facts`), in one transaction.
+    pub fn replace_generation_facts(
+        &self,
+        facts: &[crate::generation_gate::GenerationFact],
+    ) -> Result<(), Error> {
+        match self {
+            Self::Compact(m) => m.replace_generation_facts(facts),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "generation_facts requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Every stored generation fact, for the replay's `--verify-only`
+    /// comparison.
+    pub fn read_generation_facts(
+        &self,
+    ) -> Result<Vec<crate::generation_gate::GenerationFact>, Error> {
+        match self {
+            Self::Compact(m) => m.read_generation_facts(),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "generation_facts requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Every generation's market-derived facts (replay's DB half).
+    pub fn all_derived_generation_facts(
+        &self,
+    ) -> Result<Vec<crate::generation_gate::GenerationFact>, Error> {
+        match self {
+            Self::Compact(m) => m.all_derived_generation_facts(),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "generation_facts requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// The generation's recorded exemptions (forensics/tests).
+    pub fn read_retire_exemptions(
+        &self,
+        generation: &str,
+    ) -> Result<Vec<crate::generation_gate::RetireExemption>, Error> {
+        match self {
+            Self::Compact(m) => m.read_retire_exemptions(generation),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "retire_exemptions requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Record one operator exemption (`source_store exempt`). Blank reasons
+    /// are refused (`retire_exemptions.reason` is also CHECKed non-empty).
+    pub fn record_retire_exemption(
+        &self,
+        exemption: &crate::generation_gate::RetireExemption,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Compact(m) => m.record_retire_exemption(exemption),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "retire_exemptions requires the compact market schema".into(),
+            )),
+        }
+    }
+
     /// Stored industry snapshots and intervals, for the replay's
     /// `--verify-only` comparison.
     pub(crate) fn read_industry(

@@ -523,6 +523,8 @@ retire(generation) 前置：
 
 自动策略（保留最新 2 代）不变；它只决定「何时尝试退役」，不决定「能否退役」。手动 `retire_generation` 走同一门禁。这条把临时归档从「靠人记得」变成「**不从来源库读回就不能删**」，且 fresh-init 后门禁仍有依据（DB 索引可重建，字节在来源库）。
 
+**PR-8 落地（2026-10-29，XDM-108）**：门禁实现在 acquire 进程（`src/generation_gate.rs`），手动 `retire_generation` 与激活后的自动保留都经过同一个 `RetireGate::check`，字节删除前没有旁路。读面不写市场库：acquire 以只读连接（`query_only`）读 `generation_facts`/`retire_exemptions`，WAL 读不占 data_service 的写租约（D-56）。来源库根沿用 `X_DATA_MCP_SOURCE_STORE`，默认 `<market db parent>/source-store`；acquire 服务需要显式 `--market-db`，未配置时退役一律 `retire_gate_unconfigured`，不会静默放行。证据检查对每个 role 取清单里**该代 manifest sha 的全部登记**逐一按 sha 读回，任一可读即视为证据在库（重复登记不误报）；全部失败或未登记才报 `source_store_evidence_missing`，并列出 `(role, source_id, sha256)`。派生事实按 `(role, fact_kind)` 集合判断，缺失时 `derived_facts_missing` 并提示 `replay --scope generation_facts`；索引可重建，不作为唯一依据。豁免由 `source_store exempt` 写入（必需非空 reason、recorded_by、时间；`source_store_evidence` 键另需 `--owner-approve-evidence`），退役成功时回复 `detail=exemptions: <keys>` 留痕，豁免行不随字节删除。
+
 ### 8.4 磁盘与性能估算（只估算，不否决正确性优先）
 
 | 项 | 估算 | 依据 |
@@ -758,6 +760,8 @@ maint replay_source_store --scope industry|exchange|generation_facts|all [--veri
 
 见 §8.3：必须是「按 sha 从来源库读回原始字节」才算证据；`generation_facts` 只是加速索引，可重建。这样 fresh-init 之后门禁仍有依据，且不依赖任何 owner 私有目录。
 
+PR-8 的重放实现：`--scope generation_facts` 从清单里 `store_kind=generation_member` 的行业成员重建 `base.zip → industry_snapshot`/`industry_dictionary` 与 `gbbq.zip → industry_dictionary` 三类行（按 manifest sha 选每类最新登记，逐 sha 读回）；给了 `--db` 时再叠加 `source_bindings` 已绑定的 `capital_events`/`adjustment_events`/`daily_series` 派生摘要，没有绑定就不造行。`--verify-only` 重算摘要与库内行比较，`drift` 列出前 20 条 `(generation, role, kind)`。登记时（`generation_facts` 不可再生行）也先按 sha 读回，避免写入无法解释的 `evidence_sha256`。摘要不含 `registered_at`，所以清空表后重放得到同一 `summary`。
+
 #### 9.4.4 一次性导入（owner 私有归档）
 
 ```text
@@ -938,7 +942,7 @@ v2 的文件集不变，新增：
 | **PR-5** 日更尾巴 + 不消失检查 | eligible 集加「上一版目录成员」；`derived:delisted_series_check`；失败实体清单 | AC-M3-6 | 夹具：退市日当天最后 3 根 bar 不漏；活跃股不受影响；摘要变化 → 失败且不重写；缺序列 → 清单 | PR-4 |
 | **PR-6** 行业落库 + 回填 | `derived:industry_snapshot`；区间计算（相邻快照、同日/缺失 `last_modified` 规则）；字典 `incon.dat`；`--scope industry` 重放；maint 回填命令（A/B/C 档，只读来源库） | AC-M3-3/4 | 夹具：7 个历史 cfg（含同内容 3 个 blob）；成员增删/重分类；同日冲突；缺字典 → `unknown_dictionary`；回填幂等；早于起点 `unknown`；来源库重放后摘要 `match` | PR-1a；PR-1（不依赖 PR-2/3）；**已交付 2026-10-29（XDM-104）** |
 | **PR-7** 行业读模型 | `src/research/industry.rs`；`market.industry_assignments` 分支；`status=assigned/unknown`；`universe` 的 `canonical_entity/aliases` | AC-M3-3 | 10 个 `as_of` 夹具；`known_at` 排除 NULL 并计数；before_coverage/missing_in_snapshot；迁移前后只一个代码 | PR-6 |
-| **PR-8** 退役门禁 | `generation_facts` 登记（各派生 item 写，含 `evidence_sha256`）；`--scope generation_facts` 重放；`retire_bytes` 前置检查（先来源库按 sha 读回，再查索引）；`source_store_evidence_missing`/`derived_facts_missing`；豁免表与 maint 命令 | AC-M3-5 | 缺任一 kind → 拒绝并给清单；来源库有字节但索引缺行 → 拒绝 + 提示重放；blob 读不回 → 拒绝；有豁免 → 成功且留痕；active/pin 检查不回归；自动退役走同一门禁 | PR-1a；PR-1；PR-3/5/6 登记源 |
+| **PR-8** 退役门禁（已交付 2026-10-29，XDM-108） | `generation_facts` 登记（各派生 item 写，含 `evidence_sha256`）；`--scope generation_facts` 重放；`retire_bytes` 前置检查（先来源库按 sha 读回，再查索引）；`source_store_evidence_missing`/`derived_facts_missing`；豁免表与 maint 命令 | AC-M3-5 | 缺任一 kind → 拒绝并给清单；来源库有字节但索引缺行 → 拒绝 + 提示重放；blob 读不回 → 拒绝；有豁免 → 成功且留痕；active/pin 检查不回归；自动退役走同一门禁 | PR-1a；PR-1；PR-3/5/6 登记源 |
 | **PR-9** 导出 + v8 | `research-snapshot.v3`（`industry_assignments.parquet`、`code_migrations.parquet`、universe 新列）；`Dataset`/capabilities/`scope` 解码 | AC-M3-9（复现）；AC-M3-3（读面） | 清单确定性；旧 v2 快照可读；v1 拒新 dataset/scope；三入口同结果 | PR-7 |
 | **PR-10** 历史 ST 写入器（#308） | 深 `SSGSGMXX/tab2` ST 区间 + 沪公告索引状态事件；GP29/行情锚定标 `OWNER_RISK_ACCEPTED`；沪 2000 前/北交所 `NOT_AVAILABLE` | 归 #308（M3 只接 AC-M3-9） | 夹具：ST 实施/撤销区间、同日冲突、未知生效日；不把 0 行当无事件 | PR-2；#308 门禁 |
 | **PR-11** 停复牌写入器（A-3） | 沪 `GW_PL_JYTS_TFPXX` 2008 起 `confirmed`；深首期无 `confirmed`（保留 `unresolved_gap`） | 归 A-3 | 夹具：停牌起止与撤销；深市不写 `confirmed`；与 `unresolved_gap` 不双计 | PR-2 |

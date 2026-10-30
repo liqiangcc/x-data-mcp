@@ -128,6 +128,10 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。热�
 冷归档仍需 #259 容量目标与 #260 另行裁定，被自动退役的字节不再可用于完整 source replay。任何被 task/session 引用的 generation
 必须保留，状态需区分 hot、cold、evidence-only 和 unavailable，不能在删除原字节后继续声称可完整 source replay。
 
+退役前有 M3 门禁（`#446` §8.3，PR-8）：该代不可再生的行业原始成员必须已按 sha 在来源库读回，且 `generation_facts` 覆盖全部必需 kind。任一项不满足就拒绝删除，返回 `source_store_evidence_missing` 或 `derived_facts_missing`（附缺失清单；索引缺失先跑 `source_store replay --scope generation_facts`），自动保留遇到拒绝只跳过该代、不使激活失败，下轮再试。人工退役因门禁被拒时，只有 owner 能用 `source_store exempt` 写豁免；Skill/agent 不得自行豁免。
+
+`acquire_generation` 被 `generation_capacity` 拒绝时，同样需要 owner/operator 先腾出热代；退役现在可能被上述门禁拦下，所以「腾位」不再是必然成功的动作：先按提示重放索引，来源库证据缺失只能由 owner 修复/重新导入，或由 owner 显式写证据豁免（`source_store exempt ... --owner-approve-evidence`）。不要为了腾位删除 generation 目录或绕过 acquire。
+
 ## 目标工具职责
 
 ### `x-data-acquire`
@@ -141,7 +145,7 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。热�
 | `get_acquisition_request` | 在响应丢失或超时后按 request identity 恢复事实 |
 | `verify_generation` | 使用 #131 契约和显式 CompatibilityEvidence 产生 consistency decision；不激活 |
 | `activate_generation` | 对 `consistency_verified` generation 执行 expected-previous 条件激活；不更新行情。激活成功后自动保留：按安装时间保留最近 2 个 `superseded` generation（含刚被取代的前一代），更旧者自动退役为 `evidence_only`（字节删除）；有 live pin 或在途获取任务的代跳过且不使激活失败；回复 `retired_generations` 列出本次退役的 id，replay 返回同一列表 |
-| `retire_generation` | owner/operator 显式确认后按引用与留存规则退役 generation；与上面的自动保留共用同一 pin/在途任务检查，active 代永不退役 |
+| `retire_generation` | owner/operator 显式确认后按引用与留存规则退役 generation；与上面的自动保留共用同一 pin/在途任务检查与 M3 退役门禁，active 代永不退役；门禁拒绝时返回 `source_store_evidence_missing`/`derived_facts_missing`（或未配置/不可读时为 `retire_gate_unconfigured`/`retire_gate_unavailable`），原字节保留 |
 | `sync_status` | 只读返回 active/pending generation、manifest 和 consistency 状态 |
 | `run_worker_once` | operator/debug-only；正常长期服务不由 Skill 调用 |
 

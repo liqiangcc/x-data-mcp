@@ -15,8 +15,11 @@
 //!   and the intervals are recomputed (§5.1/§5.2, deterministic); the table set
 //!   is replaced in one transaction and `--verify-only` compares the recomputed
 //!   summary with the stored rows (`match` / `drift`).
-//! - `generation_facts`: still the PR-1a skeleton (`rebuilt:
-//!   "skeleton_no_op"`); its writer is PR-8.
+//! - `generation_facts` (M3 PR-8): the industry rows are rebuilt from the
+//!   source-store manifest, the market-derived rows (capital/adjustment
+//!   events, daily series) from the derived tables' generation bindings; the
+//!   table is replaced in one transaction and `--verify-only` compares the
+//!   recomputed summary with the stored rows (`match` / `drift`).
 //!
 //! Determinism: two replays of one store with one parser version produce the
 //! same summary digest — the summary is sha256 over the canonical row lines, so
@@ -48,9 +51,14 @@ pub const COMPUTED_EXCHANGE_NO_DB: &str = "computed_no_db";
 pub const REBUILT_INDUSTRY: &str = "rebuilt";
 /// The industry table set was recomputed but no `--db` was given.
 pub const COMPUTED_INDUSTRY_NO_DB: &str = "computed_no_db";
+/// The generation-facts index was recomputed and written.
+pub const REBUILT_GENERATION_FACTS: &str = "rebuilt";
+/// The generation-facts index was recomputed but no `--db` was given (only
+/// the source-store industry rows can be computed without a database).
+pub const COMPUTED_GENERATION_FACTS_NO_DB: &str = "computed_no_db";
 
-pub const NOTE: &str = "`exchange` (M3 PR-2) and `industry` (M3 PR-6) rebuild their index \
-tables from the store; `generation_facts` still reports `skeleton_no_op` (PR-8).";
+pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6) and `generation_facts` \
+(M3 PR-8) rebuild their index tables from the store.";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -154,6 +162,9 @@ pub struct ScopeReport {
     /// Same-day collisions that dropped a zero-length segment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded: Option<usize>,
+    /// Registered generation facts (`generation_facts`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facts: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -337,6 +348,30 @@ fn run(
                 }
             }
         }
+        if *scope == Scope::GenerationFacts && status == "ok" {
+            match rebuild_generation_facts(store, request) {
+                Ok(outcome) => {
+                    rebuilt = outcome.rebuilt;
+                    summary = Some(outcome.summary);
+                    database_verdict = outcome.database;
+                    drift_keys = outcome.drift;
+                    snapshot_count = Some(outcome.facts);
+                    if outcome.status != "ok" {
+                        status = outcome.status;
+                    }
+                }
+                Err(error) => {
+                    status = "generation_facts_rebuild_failed";
+                    problems.push(BlobProblem {
+                        sha256: String::new(),
+                        source_id: "generation_facts".to_string(),
+                        reason: "generation_facts_rebuild_failed",
+                        expected: "a readable source store and market database".to_string(),
+                        actual: error,
+                    });
+                }
+            }
+        }
         scope_reports.push(ScopeReport {
             scope: scope.name(),
             status,
@@ -351,6 +386,9 @@ fn run(
             assignments: counts.0,
             boundaries: counts.1,
             superseded: counts.2,
+            facts: (*scope == Scope::GenerationFacts)
+                .then_some(snapshot_count)
+                .flatten(),
         });
     }
     let selected_all: Vec<&ManifestRecord> = records
@@ -476,6 +514,84 @@ fn rebuild_exchange(
     outcome.status = "drift";
     outcome.database = Some("drift");
     outcome.drift = crate::exchange_source::index::drift(&rebuild.rows, &stored, 20);
+    Ok(outcome)
+}
+
+/// The generation-facts scope's outcome, or the reason no table set was
+/// produced.
+struct GenerationFactsOutcome {
+    status: &'static str,
+    rebuilt: &'static str,
+    summary: String,
+    database: Option<&'static str>,
+    drift: Vec<String>,
+    facts: usize,
+}
+
+/// Rebuild `generation_facts` from its two authorities (§9.4.2): the
+/// source-store manifest (industry snapshot + dictionary) and the derived
+/// tables' generation bindings (capital/adjustment events, daily series).
+fn rebuild_generation_facts(
+    store: &SourceStore,
+    request: &ReplayRequest<'_>,
+) -> Result<GenerationFactsOutcome, String> {
+    let mut computed = crate::generation_gate::industry_fact_rows_from_store(store)
+        .map_err(|error| error.to_string())?;
+    let Some(database) = request.database else {
+        return Ok(GenerationFactsOutcome {
+            status: "ok",
+            rebuilt: COMPUTED_GENERATION_FACTS_NO_DB,
+            summary: crate::generation_gate::facts_summary(&computed),
+            database: None,
+            drift: Vec::new(),
+            facts: computed.len(),
+        });
+    };
+    let backend = open_database(database)?;
+    computed.extend(
+        backend
+            .all_derived_generation_facts()
+            .map_err(|error| error.to_string())?,
+    );
+    let summary = crate::generation_gate::facts_summary(&computed);
+    let mut outcome = GenerationFactsOutcome {
+        status: "ok",
+        rebuilt: COMPUTED_GENERATION_FACTS_NO_DB,
+        summary,
+        database: None,
+        drift: Vec::new(),
+        facts: computed.len(),
+    };
+    if request.verify_only {
+        let stored = backend
+            .read_generation_facts()
+            .map_err(|error| error.to_string())?;
+        let stored_summary = crate::generation_gate::facts_summary(&stored);
+        if stored_summary == outcome.summary {
+            outcome.database = Some("match");
+            return Ok(outcome);
+        }
+        outcome.status = "drift";
+        outcome.database = Some("drift");
+        outcome.drift = crate::generation_gate::drift_keys(&computed, &stored, 20);
+        return Ok(outcome);
+    }
+    backend
+        .replace_generation_facts(&computed)
+        .map_err(|error| error.to_string())?;
+    outcome.rebuilt = REBUILT_GENERATION_FACTS;
+    // A write only counts once it reads back as the computed rows.
+    let stored = backend
+        .read_generation_facts()
+        .map_err(|error| error.to_string())?;
+    let stored_summary = crate::generation_gate::facts_summary(&stored);
+    if stored_summary == outcome.summary {
+        outcome.database = Some("match");
+        return Ok(outcome);
+    }
+    outcome.status = "drift";
+    outcome.database = Some("drift");
+    outcome.drift = crate::generation_gate::drift_keys(&computed, &stored, 20);
     Ok(outcome)
 }
 

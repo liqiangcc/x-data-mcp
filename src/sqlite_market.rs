@@ -1106,6 +1106,10 @@ pub(crate) mod evidence_store;
 // `replay --scope exchange`; consumer writers land in PR-3/PR-10/PR-11/PR-12.
 pub(crate) mod exchange_source;
 pub(crate) mod gaps;
+// M3 retirement gate (PR-8): the `generation_facts` index writer/reader and
+// the `retire_exemptions` rows. The acquire process reads them through a
+// separate read-only connection (`read_state_readonly`), never this writer.
+pub(crate) mod generation_facts;
 // M3 industry snapshots/intervals (PR-6): written by `derived:industry_snapshot`
 // and rebuilt by `replay --scope industry`. The read model (PR-7) reuses the
 // readers here.

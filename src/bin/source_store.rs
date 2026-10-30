@@ -13,12 +13,16 @@
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir>
 //!                     [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+//! source_store exempt --db <market.sqlite> --generation <manifest sha> \
+//!                     --missing <key> --reason <text> --recorded-by <who> \
+//!                     [--owner-approve-evidence]
 //! ```
 //!
 //! `--db` is what turns a replay into a rebuild: M3 PR-2's `exchange` scope
-//! replaces `exchange_source_snapshots` and M3 PR-6's `industry` scope replaces
-//! `industry_snapshots`/`industry_assignments` from the store, each in one
-//! transaction; `--verify-only` compares the recomputed summary with the stored
+//! replaces `exchange_source_snapshots`, M3 PR-6's `industry` scope replaces
+//! `industry_snapshots`/`industry_assignments` and M3 PR-8's
+//! `generation_facts` scope replaces the retirement gate's fact index, each in
+//! one transaction; `--verify-only` compares the recomputed summary with the stored
 //! rows instead of writing. Without `--db` a scope only computes and reports its
 //! summary, so a read never touches a database or creates the store. `verify`
 //! always compares, even if `--verify-only` is also given.
@@ -29,6 +33,7 @@
 
 use std::path::PathBuf;
 
+use x_data_mcp::generation_gate::{RetireExemption, timestamp};
 use x_data_mcp::source_store::{SourceStore, import, replay};
 
 const USAGE: &str = "\
@@ -38,7 +43,9 @@ usage:
   source_store verify --store <dir> [--scope industry|exchange|generation_facts|all] \
 [--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
-[--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]";
+[--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+  source_store exempt --db <market.sqlite> --generation <manifest sha> \
+--missing <key> --reason <text> --recorded-by <who> [--owner-approve-evidence]";
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -60,7 +67,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         println!("{USAGE}");
         return Ok(0);
     }
-    if !matches!(command, "replay" | "verify" | "import") {
+    if !matches!(command, "replay" | "verify" | "import" | "exempt") {
         return Err(format!("unknown command {command}"));
     }
     let mut store: Option<PathBuf> = None;
@@ -73,6 +80,11 @@ fn run(args: &[String]) -> Result<i32, String> {
     let mut kind: Option<String> = None;
     let mut batch: Option<String> = None;
     let mut dry_run = false;
+    let mut generation: Option<String> = None;
+    let mut missing: Option<String> = None;
+    let mut reason: Option<String> = None;
+    let mut recorded_by: Option<String> = None;
+    let mut owner_approve_evidence = false;
     let mut position = 1;
     while position < args.len() {
         let flag = args[position].as_str();
@@ -97,6 +109,11 @@ fn run(args: &[String]) -> Result<i32, String> {
             "--batch" => batch = Some(value(args, position + 1)?),
             "--verify-only" => verify_only = true,
             "--dry-run" => dry_run = true,
+            "--generation" => generation = Some(value(args, position + 1)?),
+            "--missing" => missing = Some(value(args, position + 1)?),
+            "--reason" => reason = Some(value(args, position + 1)?),
+            "--recorded-by" => recorded_by = Some(value(args, position + 1)?),
+            "--owner-approve-evidence" => owner_approve_evidence = true,
             other => return Err(format!("unknown argument {other}")),
         }
         position += if flag.starts_with("--") && needs_value(flag) {
@@ -104,6 +121,16 @@ fn run(args: &[String]) -> Result<i32, String> {
         } else {
             1
         };
+    }
+    if command == "exempt" {
+        return exempt(
+            database.ok_or_else(|| "--db is required".to_string())?,
+            generation.ok_or_else(|| "--generation is required".to_string())?,
+            missing.ok_or_else(|| "--missing is required".to_string())?,
+            reason.ok_or_else(|| "--reason is required".to_string())?,
+            recorded_by.ok_or_else(|| "--recorded-by is required".to_string())?,
+            owner_approve_evidence,
+        );
     }
     let store_path = store.ok_or_else(|| "--store is required".to_string())?;
     let store = SourceStore::new(store_path);
@@ -141,10 +168,85 @@ fn run(args: &[String]) -> Result<i32, String> {
     }
 }
 
+/// Record one `retire_exemptions` row (M3 PR-8, `#446` §8.3 step 4).
+///
+/// An exemption is not the default path: the reason and the recorder must be
+/// non-blank, and an exemption that covers *missing source-store evidence*
+/// needs the explicit owner flag. The command writes the market database, so
+/// it must run while `data_service` is stopped (the service holds the
+/// single-writer lease).
+fn exempt(
+    database: PathBuf,
+    generation: String,
+    missing: String,
+    reason: String,
+    recorded_by: String,
+    owner_approve_evidence: bool,
+) -> Result<i32, String> {
+    if reason.trim().is_empty() {
+        return Err("--reason must not be blank".to_string());
+    }
+    if recorded_by.trim().is_empty() {
+        return Err("--recorded-by must not be blank".to_string());
+    }
+    if missing.trim().is_empty() {
+        return Err("--missing must not be blank".to_string());
+    }
+    if !missing.starts_with(x_data_mcp::generation_gate::EVIDENCE_KEY_PREFIX)
+        && !missing.starts_with(x_data_mcp::generation_gate::FACT_KEY_PREFIX)
+    {
+        return Err(format!(
+            "{missing} is not a gate key; expected source_store_evidence:<role>:<source_id> \
+             or derived_fact:<role>:<fact_kind>"
+        ));
+    }
+    if missing.starts_with(x_data_mcp::generation_gate::EVIDENCE_KEY_PREFIX)
+        && !owner_approve_evidence
+    {
+        return Err(format!(
+            "{missing} excuses missing source-store evidence; that needs the \
+             owner's explicit approval, pass --owner-approve-evidence only after \
+             it is recorded"
+        ));
+    }
+    let tasks = x_data_mcp::sqlite_tasks::SqliteTasks::new(&database);
+    let backend = x_data_mcp::sqlite_market::backend::MarketBackend::open(&tasks)
+        .map_err(|error| format!("database_unavailable: {}: {error}", database.display()))?;
+    let exemption = RetireExemption {
+        generation_manifest_sha256: generation.clone(),
+        missing_kind: missing.clone(),
+        reason,
+        recorded_by: recorded_by.clone(),
+        recorded_at: timestamp(chrono::Utc::now()),
+    };
+    backend
+        .record_retire_exemption(&exemption)
+        .map_err(|error| error.to_string())?;
+    print_json(&serde_json::json!({
+        "status": "ok",
+        "generation": generation,
+        "missing_kind": missing,
+        "recorded_by": recorded_by,
+        "recorded_at": exemption.recorded_at,
+    }))?;
+    Ok(0)
+}
+
 fn needs_value(flag: &str) -> bool {
     matches!(
         flag,
-        "--store" | "--db" | "--scope" | "--index" | "--blobs" | "--tiers" | "--kind" | "--batch"
+        "--store"
+            | "--db"
+            | "--scope"
+            | "--index"
+            | "--blobs"
+            | "--tiers"
+            | "--kind"
+            | "--batch"
+            | "--generation"
+            | "--missing"
+            | "--reason"
+            | "--recorded-by"
     )
 }
 
