@@ -12,7 +12,7 @@ use std::time::Duration;
 use chrono::NaiveDate;
 
 use super::index::{self, SnapshotRow};
-use super::request::{SSE_PARSER_VERSION, SSE_SOA_PARSER_VERSION};
+use super::request::{SSE_PARSER_VERSION, SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION};
 use super::*;
 use crate::source_store::{
     ManifestRecord, Registration, SourceStore, StoreError, StoreKind, known_parser_version,
@@ -189,6 +189,13 @@ fn the_sse_dialect_pages_by_page_help_page_no() {
     assert!(known_parser_version(SSE_PARSER_VERSION));
     assert_eq!(
         PagingFormat::from_parser_version(SSE_PARSER_VERSION),
+        Some(PagingFormat::SsePageHelp)
+    );
+    // Snapshots frozen before the dialect change still replay: they have no
+    // `pageHelp.pageNo`, so `beginPage` is read exactly as before.
+    assert!(known_parser_version(SSE_PARSER_VERSION_V1));
+    assert_eq!(
+        PagingFormat::from_parser_version(SSE_PARSER_VERSION_V1),
         Some(PagingFormat::SsePageHelp)
     );
 }

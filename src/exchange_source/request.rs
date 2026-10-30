@@ -236,6 +236,10 @@ pub enum PagingFormat {
 
 /// Parser version recorded for SSE `pageHelp` envelopes.
 pub const SSE_PARSER_VERSION: &str = "exchange-sse-page-v2";
+/// The SSE `pageHelp` version written before the 2026-10-30 dialect change.
+/// Old snapshots stay replayable: they carry no `pageHelp.pageNo`, so both
+/// versions read the page from `beginPage`.
+pub const SSE_PARSER_VERSION_V1: &str = "exchange-sse-page-v1";
 /// Parser version recorded for SSE `commonSoaQuery.do` envelopes.
 pub const SSE_SOA_PARSER_VERSION: &str = "exchange-sse-soa-page-v1";
 /// Parser version recorded for SZSE `metadata` envelopes.
@@ -257,7 +261,7 @@ impl PagingFormat {
 
     pub fn from_parser_version(value: &str) -> Option<Self> {
         match value {
-            SSE_PARSER_VERSION => Some(Self::SsePageHelp),
+            SSE_PARSER_VERSION | SSE_PARSER_VERSION_V1 => Some(Self::SsePageHelp),
             SSE_SOA_PARSER_VERSION => Some(Self::SseSoaPageNo),
             SZSE_PARSER_VERSION => Some(Self::SzseMetadata),
             _ => None,

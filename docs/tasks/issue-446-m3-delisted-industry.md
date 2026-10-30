@@ -551,6 +551,10 @@ fetch（HTTP，bounded retries，Referer/UA）
   实测依据：两种分页参数都只回第 1 页同一批 50 行，而 `pageHelp.pageNo=1&pageHelp.pageSize=2000`
   一次返回全部 1,845 行（`pageCount=1`、`total=1,845`，自洽）。`parse_sse` 的页码读
   `pageHelp.pageNo`，缺失回退 `beginPage`。
+- **旧版本可重放**：`from_parser_version` 仍接受 `exchange-sse-page-v1`（新增
+  `SSE_PARSER_VERSION_V1` 常量），否则已冻结的 v1 快照在 `--scope exchange` 重放时
+  判 `unknown_parser`、索引行消失。v1 页没有 `pageHelp.pageNo`，两种版本读到的页号相同，
+  重算结果不变；新写入一律用 v2。
 - **单页 fail-closed**：A-1/A-2 的四个 SSE 计划标记「一次取完」（`AcquisitionPlan::single_page_only`）。
   第 1 页信封 `pageCount>1` 即失败，错误码 `page_size_ignored`，detail 以
   `declared total … but collected …` 开头并写明 `pageCount` 与 `pageSize`。**不回退多页循环、
