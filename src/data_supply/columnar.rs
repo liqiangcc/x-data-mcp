@@ -128,6 +128,36 @@ pub const PRICE_LIMIT_RULES_FIELDS: &[&str] = &[
     "basis_ref",
     "basis_status",
 ];
+/// M3 PR-7 historical industry assignments (#446 §5.5). `status`/`reason`
+/// make the `unknown` answer observable; the remaining fields are the
+/// interval identity and its evidence.
+pub const INDUSTRY_ASSIGNMENTS_FIELDS: &[&str] = &[
+    "status",
+    "reason",
+    "scheme",
+    "level",
+    "industry_code",
+    "name",
+    "name_status",
+    "effective_from",
+    "effective_to",
+    "known_at",
+    "effective_from_basis",
+    "evidence_grade",
+    "source_snapshot_sha256",
+];
+pub const INDUSTRY_ASSIGNMENTS_DEFAULT: &[&str] = &[
+    "status",
+    "reason",
+    "scheme",
+    "level",
+    "industry_code",
+    "name",
+    "name_status",
+    "effective_from",
+    "effective_to",
+    "known_at",
+];
 /// `get_data_availability` columns (v8 §4.1): per-entity facts plus the
 /// related-task ids; the task objects themselves are shared once under
 /// `tasks`.
@@ -166,6 +196,7 @@ pub fn query_fields(dataset: Dataset) -> (&'static [&'static str], &'static [&'s
         Dataset::RiskWarnings => (RISK_WARNINGS_FIELDS, RISK_WARNINGS_FIELDS),
         Dataset::Suspensions => (SUSPENSIONS_FIELDS, SUSPENSIONS_FIELDS),
         Dataset::PriceLimitRules => (PRICE_LIMIT_RULES_FIELDS, PRICE_LIMIT_RULES_FIELDS),
+        Dataset::IndustryAssignments => (INDUSTRY_ASSIGNMENTS_FIELDS, INDUSTRY_ASSIGNMENTS_DEFAULT),
     }
 }
 

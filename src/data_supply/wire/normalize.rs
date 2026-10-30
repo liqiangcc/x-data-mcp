@@ -191,7 +191,8 @@ fn selection_kind(name: &str, map: &Fields, dataset: &str) -> Result<(), ApiErro
         | "market.security_names"
         | "market.capital_events"
         | "market.risk_warnings"
-        | "market.suspensions" => &["single", "batch", "universe"],
+        | "market.suspensions"
+        | "market.industry_assignments" => &["single", "batch", "universe"],
         _ => return Ok(()),
     };
     let Some(kind) = map
@@ -233,7 +234,8 @@ fn filter(name: &str, map: &mut Fields, dataset: &str) -> Result<(), ApiError> {
         | "market.capital_events"
         | "market.risk_warnings"
         | "market.suspensions"
-        | "market.price_limit_rules" => &["daily"],
+        | "market.price_limit_rules"
+        | "market.industry_assignments" => &["daily"],
         _ => return Ok(()),
     };
     let Some(filter) = map.get("filter").cloned() else {

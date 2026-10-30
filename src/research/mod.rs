@@ -25,11 +25,12 @@
 pub mod manifest;
 pub mod read;
 
-// M2 read model (issue-391 §16 PR-4…PR-7, separation points 3/4/7). These
-// modules answer research questions; none of them is reachable from an MCP
-// tool (v8 wiring is PR-9). The export reads `universe` for the member-interval
-// file and the storage adapters for the parsed facts, so the read model stays
-// the only place that decides membership.
+// M2 read model (issue-391 §16 PR-4…PR-7, separation points 3/4/7) plus the
+// M3 industry intervals (#446 §5.5). These modules answer research questions;
+// the export reads `universe` for the member-interval file and the storage
+// adapters for the parsed facts, so the read model stays the only place that
+// decides membership. The v8 entry only projects these answers (M3 PR-7).
+pub mod industry;
 pub mod market_cap;
 pub mod member_state;
 pub mod price_limit;

@@ -81,6 +81,7 @@ impl QueryPlan {
                     | Dataset::RiskWarnings
                     | Dataset::Suspensions
                     | Dataset::PriceLimitRules
+                    | Dataset::IndustryAssignments
             ) && valid_range(*start_date, *end_date) => {}
             (
                 Filter::CrossSection {
@@ -143,7 +144,7 @@ impl QueryPlan {
         // §11: `catalog_version` (the main table's projection of today) and
         // `as_of` (a historical membership time point) cannot both define the
         // same universe.
-        if args.dataset.is_m2()
+        if args.dataset.is_temporal_fact()
             && matches!(
                 &args.selection,
                 Selection::Universe {
@@ -153,23 +154,23 @@ impl QueryPlan {
             && as_of.is_some()
         {
             return Err(invalid(
-                "selection.catalog_version and filter.as_of are mutually exclusive for M2 universes",
+                "selection.catalog_version and filter.as_of are mutually exclusive for point-in-time universes",
             ));
         }
-        let temporal = args
-            .dataset
-            .is_m2()
-            .then(|| crate::data_supply::query::TemporalPlan {
-                as_of: as_of.unwrap_or_else(|| {
-                    // Replaced in `resolve` once the calendar is available; the
-                    // value here only keeps `TemporalPlan` non-optional.
-                    match &args.filter {
-                        Filter::Daily { end_date, .. } => *end_date,
-                        _ => NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-                    }
-                }),
-                known_at: args.known_at,
-            });
+        let temporal =
+            args.dataset
+                .is_temporal_fact()
+                .then(|| crate::data_supply::query::TemporalPlan {
+                    as_of: as_of.unwrap_or_else(|| {
+                        // Replaced in `resolve` once the calendar is available; the
+                        // value here only keeps `TemporalPlan` non-optional.
+                        match &args.filter {
+                            Filter::Daily { end_date, .. } => *end_date,
+                            _ => NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+                        }
+                    }),
+                    known_at: args.known_at,
+                });
         Ok(Self {
             args,
             entities,
@@ -292,7 +293,8 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
             | Dataset::SecurityNames
             | Dataset::CapitalEvents
             | Dataset::RiskWarnings
-            | Dataset::Suspensions,
+            | Dataset::Suspensions
+            | Dataset::IndustryAssignments,
             Selection::Single { entity },
         ) => vec![entity.clone()],
         (
@@ -304,7 +306,8 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
             | Dataset::SecurityNames
             | Dataset::CapitalEvents
             | Dataset::RiskWarnings
-            | Dataset::Suspensions,
+            | Dataset::Suspensions
+            | Dataset::IndustryAssignments,
             Selection::Batch { entities },
         ) => entities.clone(),
         _ => return Err(invalid("invalid selection for dataset")),
@@ -534,7 +537,7 @@ impl<R: ReadRepository> Queries<R> {
                 &fields,
                 &meta,
             ),
-            dataset if dataset.is_m2() => super::columnar::fact_table(
+            dataset if dataset.is_temporal_fact() => super::columnar::fact_table(
                 dataset,
                 &page.version_manifest,
                 &page.records,
