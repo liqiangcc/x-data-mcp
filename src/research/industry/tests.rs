@@ -151,6 +151,10 @@ impl Fixture {
             .unwrap();
         let path = dir.path().join("market.db");
         SqliteTasks::new(&path).initialize_compact().unwrap();
+        // The compact backend requires a private runtime file; the default
+        // umask in CI leaves the fresh database group/other-readable.
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .unwrap();
         if with_snapshots {
             let connection = Connection::open(&path).unwrap();
             let rebuild = rebuild(&snapshots()).unwrap();
@@ -391,7 +395,7 @@ fn null_known_at_is_excluded_and_counted() {
         .dataset(DATASET_INDUSTRY_ASSIGNMENTS)
         .expect("dataset was observed");
     assert_eq!(observed.unknown_known_at_rows, 1);
-    assert_eq!(observed.excluded_known_at_rows, 0);
+    assert_eq!(observed.excluded_known_at_rows, 1);
 }
 
 #[test]
