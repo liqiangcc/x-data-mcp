@@ -90,6 +90,23 @@ fn a_vanished_or_rewritten_series_fails_with_a_distinct_reason() {
 }
 
 #[test]
+fn a_registration_already_past_the_delisting_day_fails_even_when_unchanged() {
+    // The registered state is impossible on its own: a delisted code cannot
+    // own a bar after its delisting day, so "nothing changed since" must not
+    // turn it into a clean `unchanged`.
+    let mut registration = registration();
+    registration.delisting_day = registration.last_day - 1;
+    let seen = observed(&registration);
+    assert_eq!(
+        classify(&registration, &seen, || Err(Error::Integrity(
+            "events must not be read".into()
+        )))
+        .unwrap(),
+        Verdict::Failed(LAST_DAY_BEYOND_DELISTING)
+    );
+}
+
+#[test]
 fn a_recorded_tail_append_is_the_one_allowed_change() {
     let mut seen = observed(&registration());
     seen.last_day += 1;

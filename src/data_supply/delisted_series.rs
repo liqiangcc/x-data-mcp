@@ -311,6 +311,12 @@ fn classify(
     observed: &Observed,
     events_after: impl FnOnce() -> EventKinds,
 ) -> Result<Verdict, Error> {
+    // The registered state itself can be impossible: a delisted code cannot
+    // own a bar after its delisting day. That is a finding even when nothing
+    // changed since the registration, so it is checked before "unchanged".
+    if registration.last_day > registration.delisting_day {
+        return Ok(Verdict::Failed(LAST_DAY_BEYOND_DELISTING));
+    }
     if observed.first_day == registration.first_day
         && observed.last_day == registration.last_day
         && observed.record_count == registration.record_count

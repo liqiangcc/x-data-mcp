@@ -238,7 +238,8 @@ M3 的 `derived:delisted_series_check` 是**只读**检查（不写业务表）�
 的实体，把 `record_count`/`first_day`/`last_day`/`content_digest` 冻结进自己的 item，
 实体 item 跑完后逐个比对。唯一允许的变化是补采尾巴（`last_day` 前进到退市日以内、
 首日不变、条数增加，且登记以来的事件全是 append）；其余（序列消失、变短、同区间换内容、
-越过退市日、改写事件）→ item 失败并在 error/evidence 里列出实体，run 收尾
+越过退市日——含「登记值本身末根就晚于退市日、本次没变」——或改写事件）→ item 失败并在
+error/evidence 里列出实体，run 收尾
 `partially_failed`，**不重建、不删除**；被源改写的历史走 `republish_data`。
 退市日未知或代码被两个发行主体复用的实体不登记，只写进 evidence 的 `skipped`。
 首次登记发生在写主表那一代之后的一代，所以升级后的第一代日更 `checked` 可能为 0。

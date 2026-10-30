@@ -241,7 +241,9 @@ start_collection{dataset: market.daily, contract_version: v2,
     `record_count`/`first_day`/`last_day`/`content_digest`(`version_id`)/`last_event_seq`
     /`delisting_day`，冻结进 item 的 `frozen_inputs`。同一任务恢复执行时读**存下来的**
     baseline（不是重新解析），所以本次 run 早先提交的改动不会被当成"上一代"而漏检。
-  - item 最后执行（在所有写者之后），逐个比对当前事实：完全一致 → `unchanged`；
+  - item 最后执行（在所有写者之后），逐个比对当前事实。登记值本身越过退市日
+    （`last_day > delisting_day`）先判 `last_day_beyond_delisting`：这是不可能的
+    状态，即使本次一个字节都没变也不能算 `unchanged`。其余：完全一致 → `unchanged`；
     **唯一允许的变化**是尾巴补采——`first_day` 不变、`last_day` / `record_count` 增加、
     `last_day ≤ delisting_day`，且登记以来的事件全是 `append`（append 路径已证明新 bar
     是旧条目的前缀）→ `tail_extended`，item 成功。
@@ -267,8 +269,9 @@ start_collection{dataset: market.daily, contract_version: v2,
 - **夹具**：`tests/mcp/plan_run.rs::a_withdrawn_member_keeps_its_terminal_series_in_the_daily_plan`
   （成员移出目录后仍在 eligible、活跃股不变、check 登记并 `unchanged`、末根=退市日的 3 根
   终态 bar 不动）、`::a_terminal_series_that_grows_past_the_delisting_day_fails_the_check_without_a_rewrite`
-  （源在退市日之后又给了一根 bar → `last_day_beyond_delisting`、`partially_failed` +
-  实体清单，已落库的序列不被检查重写；其余失败原因在单代夹具里无法自然发生，改冻结
+  （源在退市日之后又给了一根 bar：第一代写主表、第二代登记即判
+  `last_day_beyond_delisting` → `partially_failed` + 实体清单，已落库的序列不被检查
+  重写；其余失败原因在单代夹具里无法自然发生，改冻结
   输入构造，由 `delisted_series/tests.rs` 的判定表覆盖）、
   `src/data_supply/delisted_series/tests.rs`（判定表，含 `tail_extended` 的 append 允许
   分支与各失败原因）、`src/data_supply/default_selection/tests.rs`（union、保留成员证据、

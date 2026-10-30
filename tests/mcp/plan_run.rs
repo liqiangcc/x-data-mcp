@@ -3605,6 +3605,10 @@ fn a_withdrawn_member_keeps_its_terminal_series_in_the_daily_plan() {
 /// what the source has (the commit path knows nothing about the main table),
 /// and the check reports `last_day_beyond_delisting` — a delisted code cannot
 /// trade again, so that bar is a source contract violation, not a tail.
+///
+/// Two runs: the first writes the main table (the delisting day is only known
+/// after `derived:security_master` ran), the second is the one whose check
+/// registers the entity and finds the impossible terminal state.
 #[test]
 fn a_terminal_series_that_grows_past_the_delisting_day_fails_the_check_without_a_rewrite() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3621,21 +3625,34 @@ fn a_terminal_series_that_grows_past_the_delisting_day_fails_the_check_without_a
         .unwrap()
         .to_string();
     r.api.call("run_worker_once", json!({})).unwrap();
-    let task = r.tasks.read_task(&t0).unwrap().unwrap();
+    // The first run writes the main table (and the series) but has nothing to
+    // register yet: the delisting day is a product of its own main-table item.
     assert_eq!(
-        task.task.status,
-        x_data_mcp::task_control::Status::PartiallyFailed,
-        "{:?}",
-        task.task.result
+        r.tasks.read_task(&t0).unwrap().unwrap().task.status,
+        x_data_mcp::task_control::Status::Succeeded
     );
     // The source's three bars were stored as delivered: the finding is about
-    // them, so the check cannot have silently dropped or rewritten one.
+    // them, so the entity item neither dropped nor rewrote one.
     let before = series_facts(&r.tasks, "sh.600007");
     assert_eq!(before.0, 3, "three stored bars");
     assert_eq!(
         before.2,
         epoch_of(day_u32(1)),
         "the last stored bar is after the delisting day"
+    );
+
+    let p1 = plan(&r.api, "market.daily");
+    let t1 = run(&r.api, "market.daily", "run-1", &p1)["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    r.api.call("run_worker_once", json!({})).unwrap();
+    let task = r.tasks.read_task(&t1).unwrap().unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::PartiallyFailed,
+        "{:?}",
+        task.task.result
     );
     let check = item_outcome(&task, "derived:delisted_series_check");
     assert!(!check.success, "{check:?}");
