@@ -534,12 +534,13 @@ impl<'a> Entry<'a> {
         }
         let envelopes: Vec<PageEnvelope> =
             pages.into_iter().map(|(_, envelope)| envelope).collect();
-        let set = validate::validate_pages(&envelopes, policy, plan.zero_policy).map_err(|error| {
-            AcquireError::Invalid {
-                code: error.code(),
-                detail: error.to_string(),
-            }
-        })?;
+        let set =
+            validate::validate_pages(&envelopes, policy, plan.zero_policy).map_err(|error| {
+                AcquireError::Invalid {
+                    code: error.code(),
+                    detail: error.to_string(),
+                }
+            })?;
         Ok((set, snapshots))
     }
 

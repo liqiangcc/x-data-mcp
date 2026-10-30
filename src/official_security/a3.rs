@@ -80,7 +80,7 @@ use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use crate::exchange_source::{
-    AcquisitionPlan, AcquireError, Client, Entry, PagingFormat, RunCache, Segment, SnapshotBinding,
+    AcquireError, AcquisitionPlan, Client, Entry, PagingFormat, RunCache, Segment, SnapshotBinding,
     SnapshotRow, SourceId,
 };
 use crate::security_master::assembly::PendingSource;
@@ -144,6 +144,8 @@ pub enum A3Error {
     Acquire(#[from] AcquireError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Transport(#[from] crate::exchange_source::TransportError),
     #[error("{code}: {detail}")]
     Invalid { code: &'static str, detail: String },
 }
@@ -153,6 +155,7 @@ impl A3Error {
         match self {
             Self::Acquire(error) => error.code(),
             Self::Store(error) => error.code(),
+            Self::Transport(error) => error.code(),
             Self::Invalid { code, .. } => code,
         }
     }
@@ -168,14 +171,18 @@ impl A3Error {
 /// The one acquisition plan of this adapter. The window bounds and paging are
 /// added by the shared entry.
 pub fn plan() -> AcquisitionPlan {
-    AcquisitionPlan::new(SourceId::SseSuspension, SSE_SOA_URL, PagingFormat::SseSoaPageNo)
-        .param("isPagination", "true")
-        .param("sqlId", SQL_ID)
-        .param("productCode", "")
-        .param("keyWords", "")
-        // A quiet window is not evidence of absence (BR-M3-10); it is recorded
-        // as `not_observed` instead of failing every quarter forever.
-        .zero_rows_not_observed()
+    AcquisitionPlan::new(
+        SourceId::SseSuspension,
+        SSE_SOA_URL,
+        PagingFormat::SseSoaPageNo,
+    )
+    .param("isPagination", "true")
+    .param("sqlId", SQL_ID)
+    .param("productCode", "")
+    .param("keyWords", "")
+    // A quiet window is not evidence of absence (BR-M3-10); it is recorded
+    // as `not_observed` instead of failing every quarter forever.
+    .zero_rows_not_observed()
 }
 
 /// The quarter-aligned windows of one derivation: `2008-01-01` through
@@ -185,8 +192,8 @@ pub fn plan() -> AcquisitionPlan {
 /// period: an event announced today is picked up by the next run instead of
 /// being read as an incomplete window (§6.4 "0 行不是证据").
 pub fn windows(today: NaiveDate) -> Result<Vec<Segment>, A3Error> {
-    let start = NaiveDate::parse_from_str(ARCHIVE_START, "%Y-%m-%d")
-        .expect("2008-01-01 is a valid date");
+    let start =
+        NaiveDate::parse_from_str(ARCHIVE_START, "%Y-%m-%d").expect("2008-01-01 is a valid date");
     let Some(end) = today.pred_opt() else {
         return Err(A3Error::invalid("today has no previous day"));
     };
@@ -220,7 +227,6 @@ struct Counters {
     unclassified_skipped: usize,
     duplicate_rows: usize,
     merged_overlaps: usize,
-    unclosed: usize,
     unknown_entities: usize,
     unknown_entity_samples: Vec<String>,
     clipped: usize,
@@ -280,7 +286,10 @@ impl Admitted {
         counters.clipped = clipped;
         counters.outside_window_dropped = outside_window_dropped;
         Self {
-            snapshot: ConfirmedSuspensionSnapshot { as_of: today, facts },
+            snapshot: ConfirmedSuspensionSnapshot {
+                as_of: today,
+                facts,
+            },
             bindings,
             snapshot_ids,
             not_observed_windows,
@@ -434,15 +443,14 @@ pub fn reparse(
     }
     let mut windows: BTreeMap<(NaiveDate, NaiveDate), (bool, Vec<&SnapshotRow>)> = BTreeMap::new();
     for row in latest.values() {
-        let request = crate::exchange_source::ExchangeRequest::from_fingerprint(
-            &row.request_fingerprint,
-        )
-        .map_err(|error| {
-            A3Error::invalid(format!(
-                "{}: the registered fingerprint is not readable: {error}",
-                row.snapshot_id
-            ))
-        })?;
+        let request =
+            crate::exchange_source::ExchangeRequest::from_fingerprint(&row.request_fingerprint)
+                .map_err(|error| {
+                    A3Error::invalid(format!(
+                        "{}: the registered fingerprint is not readable: {error}",
+                        row.snapshot_id
+                    ))
+                })?;
         let start = request.params.get(FROM_PARAM).ok_or_else(|| {
             A3Error::invalid(format!(
                 "{}: the fingerprint names no {FROM_PARAM}",
@@ -468,9 +476,8 @@ pub fn reparse(
     let mut not_observed_windows = Vec::new();
     let mut snapshot_ids = Vec::new();
     for ((start, end), (empty, rows)) in &windows {
-        let window =
-            Segment::parse(&start.format("%Y-%m-%d"), &end.format("%Y-%m-%d"))
-                .map_err(|error| A3Error::invalid(error.to_string()))?;
+        let window = Segment::parse(&start.format("%Y-%m-%d"), &end.format("%Y-%m-%d"))
+            .map_err(|error| A3Error::invalid(error.to_string()))?;
         if *empty {
             not_observed_windows.push(window_label(window));
             continue;
@@ -510,11 +517,7 @@ fn window_label(window: Segment) -> String {
 
 /// Read one frozen page. `window` supplies the end of an unclosed interval
 /// (empty `endStopDate`); `snapshot_id` becomes part of `source_record_id`.
-fn parse_page(
-    bytes: &[u8],
-    window: Segment,
-    snapshot_id: &str,
-) -> Result<ParsedPage, A3Error> {
+fn parse_page(bytes: &[u8], window: Segment, snapshot_id: &str) -> Result<ParsedPage, A3Error> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|error| A3Error::invalid(format!("{snapshot_id}: not JSON: {error}")))?;
     let data = value
@@ -650,7 +653,9 @@ fn merge_overlaps(
     let mut unique: Vec<ParsedEvent> = Vec::with_capacity(events.len());
     for event in events {
         match unique.last_mut() {
-            Some(previous) if previous.code == event.code && previous.start_day == event.start_day => {
+            Some(previous)
+                if previous.code == event.code && previous.start_day == event.start_day =>
+            {
                 counters.duplicate_rows += 1;
                 previous.unclosed &= event.unclosed;
                 if event.end_day > previous.end_day {
@@ -664,7 +669,9 @@ fn merge_overlaps(
     let mut merged: Vec<ParsedEvent> = Vec::with_capacity(unique.len());
     for event in unique {
         match merged.last_mut() {
-            Some(previous) if previous.code == event.code && event.start_day <= previous.end_day => {
+            Some(previous)
+                if previous.code == event.code && event.start_day <= previous.end_day =>
+            {
                 counters.merged_overlaps += 1;
                 if event.end_day > previous.end_day {
                     previous.end_day = event.end_day;

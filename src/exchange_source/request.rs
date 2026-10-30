@@ -236,7 +236,10 @@ impl PagingFormat {
                 params.insert("endPage".to_string(), page);
             }
             Self::SseSoaPageNo => {
-                params.insert("pageHelp.pageSize".to_string(), SSE_SOA_PAGE_SIZE.to_string());
+                params.insert(
+                    "pageHelp.pageSize".to_string(),
+                    SSE_SOA_PAGE_SIZE.to_string(),
+                );
                 params.insert("pageHelp.pageNo".to_string(), page);
             }
             Self::SzseMetadata => {

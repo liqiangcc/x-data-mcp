@@ -1125,16 +1125,26 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 | 跨日停牌 | 跨越周末/多日的区间按交易日计 `missing_days`，非交易日不计 |
 | 深市不写 `confirmed` | 深市不配置来源 → `pending_source`，`confirmed_rows=0`，缺口照常 |
 | 不双计 | 缺口日被 confirmed 覆盖后 `gap_rows` 减少、`confirmed_rows` 增加，重叠行为 0 |
-| 0 行 | 0 行窗口 → `unverified_zero`，不写 `confirmed`，item 失败 |
+| 0 行 | 0 行窗口 → `not_observed`（证据里列窗口），不写 `confirmed`，item 成功；页数与行数自相矛盾才 `unverified_zero`/`truncated` fail-closed |
 | 盘中临时停牌 | `stopTime=930/AM/PM` 行不产生 `confirmed`，计入证据 |
 | 未复牌 | `endStopDate` 空 → `end_day` = 段末日，计入未闭合计数 |
 | 非 A 股/主表外实体 | 债券、优先股、主表没有的代码不产生行，证据里有计数与样例 |
 | 重放 | 冻结后断网再解析，事实逐位相同；`--scope exchange --verify-only` = `match` |
 
+**实现状态**：本 PR 已实现，未部署。
+
+- 适配器与解析：`src/official_security/a3.rs`（`plan()`、`acquire()`、`reparse()`、
+  `parse_page()`、`merge_overlaps()`、`confirm()`），parser 版本 `exchange-a3-v1`。
+- 分页方言：`PagingFormat::SseSoaPageNo`（`exchange-sse-soa-page-v1`）与
+  `ZeroPolicy::NotObserved` 在 `src/exchange_source/{request,validate,fetch}.rs`。
+- 写入：`src/data_supply/derived.rs` 的 `derived:suspensions` 分支走
+  `a3::run_source` → `suspension_source(Some(snapshot))` → `assemble_suspensions`，
+  结果证据增加 `exchange_source`；未配置来源库仍是 `pending_source`（深市口径不变）。
+- 夹具：`tests/fixtures/exchange-a3/`（2008 Q1 空窗口、Q2 两页、2026-10 真实页）。
+
 **文档**：`docs/exchange-source.md` 增加 A-3 消费者一节与第三个分页方言；
 `docs/data-catalog.md` §3.3 偏差 6 与 `docs/daily-sync.md` 的 `derived:suspensions`
-口径同步（沪市 2008 起 `confirmed`、深市只有 `unresolved_gap`）；D-60 的状态由
-「写入器未实现」改为「写入器已实现（PR-11），未部署」。
+口径同步（沪市 2008 起 `confirmed`、深市只有 `unresolved_gap`）。
 
 ## 15. 本机与 CI 验证方式
 

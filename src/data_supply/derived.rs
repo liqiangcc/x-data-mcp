@@ -544,7 +544,11 @@ fn execute(
             ))
         })? {
             crate::official_security::a3::RunSource::Pending(pending) => {
-                (crate::security_master::suspensions::suspension_source(None), pending_json(&[pending]))
+                let evidence = json!(pending_json(&[pending]));
+                (
+                    crate::security_master::suspensions::suspension_source(None),
+                    evidence,
+                )
             }
             crate::official_security::a3::RunSource::Admitted(admitted) => {
                 let evidence = admitted.evidence();

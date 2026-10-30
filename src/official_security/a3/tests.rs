@@ -19,17 +19,20 @@ use crate::exchange_source::{HttpRequest, HttpResponse, RetryPolicy, Transport, 
 use crate::security_master::suspensions::{assemble_suspensions, suspension_source};
 use crate::security_master::{
     DelistingSource, Exchange, IssuerResolution, ListingSource, SecurityLifecycleFact,
-    SuspensionCertainty,
+    SuspensionCertainty, SuspensionReason,
 };
 use crate::source_store::SourceStore;
 use crate::sqlite_market::backend::MarketBackend;
 use crate::sqlite_tasks::SqliteTasks;
 
 const Q1_EMPTY: &[u8] = include_bytes!("../../../tests/fixtures/exchange-a3/window_2008_q1.json");
-const Q2_PAGE1: &[u8] = include_bytes!("../../../tests/fixtures/exchange-a3/window_2008_q2_p1.json");
-const Q2_PAGE2: &[u8] = include_bytes!("../../../tests/fixtures/exchange-a3/window_2008_q2_p2.json");
-const REAL_20261024: &[u8] =
-    include_bytes!("../../../tests/fixtures/exchange-a3/sse_gw_pl_jyts_tfpxx_20261001_20261024_p1.json");
+const Q2_PAGE1: &[u8] =
+    include_bytes!("../../../tests/fixtures/exchange-a3/window_2008_q2_p1.json");
+const Q2_PAGE2: &[u8] =
+    include_bytes!("../../../tests/fixtures/exchange-a3/window_2008_q2_p2.json");
+const REAL_20261024: &[u8] = include_bytes!(
+    "../../../tests/fixtures/exchange-a3/sse_gw_pl_jyts_tfpxx_20261001_20261024_p1.json"
+);
 
 fn day(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -233,22 +236,13 @@ fn plan_uses_the_soa_dialect_and_treats_quiet_windows_as_not_observed() {
     assert_eq!(plan.source_id, SourceId::SseSuspension);
     assert_eq!(plan.format, PagingFormat::SseSoaPageNo);
     assert_eq!(plan.zero_policy, ZeroPolicy::NotObserved);
-    assert_eq!(
-        plan.params.get("sqlId").map(String::as_str),
-        Some(SQL_ID)
-    );
+    assert_eq!(plan.params.get("sqlId").map(String::as_str), Some(SQL_ID));
     assert_eq!(
         plan.params.get("isPagination").map(String::as_str),
         Some("true")
     );
-    assert_eq!(
-        plan.params.get("productCode").map(String::as_str),
-        Some("")
-    );
-    assert_eq!(
-        plan.params.get("keyWords").map(String::as_str),
-        Some("")
-    );
+    assert_eq!(plan.params.get("productCode").map(String::as_str), Some(""));
+    assert_eq!(plan.params.get("keyWords").map(String::as_str), Some(""));
 
     let window = Segment::parse("2008-04-01", "2008-06-30").unwrap();
     let request = plan.request(2, Some(window), FROM_PARAM, TO_PARAM);
@@ -283,8 +277,14 @@ fn acquire_keeps_only_full_day_sse_a_share_events() {
     );
     assert_eq!(admitted.snapshot.as_of, day(2008, 7, 10));
     assert_eq!(admitted.counters.rows_read, 6);
-    assert_eq!(admitted.counters.non_a_share_skipped, 1, "the bond is not an A share");
-    assert_eq!(admitted.counters.intraday_skipped, 1, "stopTime=930 is an intraday halt");
+    assert_eq!(
+        admitted.counters.non_a_share_skipped, 1,
+        "the bond is not an A share"
+    );
+    assert_eq!(
+        admitted.counters.intraday_skipped, 1,
+        "stopTime=930 is an intraday halt"
+    );
     assert_eq!(
         admitted.counters.unclassified_skipped, 1,
         "a multi-day LSTP is not a whole-day halt"
@@ -320,14 +320,29 @@ fn acquire_keeps_only_full_day_sse_a_share_events() {
 
     // Every request is a closed quarter, never "today".
     let requests = pages.requests();
-    assert_eq!(requests.len(), 3, "two Q1 pages? no: Q1 has one page, Q2 two");
-    assert!(requests.iter().all(|url| url.contains("sqlId=GW_PL_JYTS_TFPXX")));
-    assert!(!requests.iter().any(|url| url.contains("endStopDate=20080710")));
+    assert_eq!(
+        requests.len(),
+        3,
+        "two Q1 pages? no: Q1 has one page, Q2 two"
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|url| url.contains("sqlId=GW_PL_JYTS_TFPXX"))
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|url| url.contains("endStopDate=20080710"))
+    );
 
     let evidence = admitted.evidence();
     assert_eq!(evidence["adapter"], json!("A-3"));
     assert_eq!(evidence["parser_version"], json!(PARSER_VERSION));
-    assert_eq!(evidence["not_observed_windows"][0], json!("2008-01-01..2008-03-31"));
+    assert_eq!(
+        evidence["not_observed_windows"][0],
+        json!("2008-01-01..2008-03-31")
+    );
     assert_eq!(evidence["confirmed_rows"], json!(3));
 }
 
@@ -428,7 +443,8 @@ fn a_member_window_before_the_event_drops_it() {
 fn confirmed_and_unresolved_gaps_are_never_double_counted() {
     let fixture = Fixture::new();
     let pages = Pages::serving_fixtures();
-    let admitted = acquired(&fixture, &pages, &sh_members());
+    let members = vec![sh("600001"), sh("600018")];
+    let admitted = acquired(&fixture, &pages, &members);
 
     let calendar = [
         day(2008, 5, 2),
@@ -453,7 +469,6 @@ fn confirmed_and_unresolved_gaps_are_never_double_counted() {
         "sh.600018".to_string(),
         vec![day(2008, 6, 2), day(2008, 6, 5)],
     );
-    let members = vec![sh("600001"), sh("600018")];
     let set = assemble_suspensions(
         &suspension_source(Some(admitted.snapshot.clone())),
         &members,
@@ -480,7 +495,9 @@ fn confirmed_and_unresolved_gaps_are_never_double_counted() {
     for gap in &gaps {
         for fact in &confirmed {
             assert!(
-                gap.code != fact.code || gap.end_day < fact.start_day || fact.end_day < gap.start_day,
+                gap.code != fact.code
+                    || gap.end_day < fact.start_day
+                    || fact.end_day < gap.start_day,
                 "gap {gap:?} overlaps confirmed {fact:?}"
             );
         }
@@ -538,7 +555,10 @@ fn the_real_2026_10_page_is_read_with_the_recorded_field_names() {
     let window = Segment::parse("2026-10-01", "2026-10-24").unwrap();
     let page = parse_page(REAL_20261024, window, "fixture").expect("the sampled page parses");
     assert_eq!(page.rows_read, 25);
-    assert_eq!(page.non_a_share_skipped, 18, "bonds, preferred stock, funds");
+    assert_eq!(
+        page.non_a_share_skipped, 18,
+        "bonds, preferred stock, funds"
+    );
     assert_eq!(page.intraday_skipped, 0);
     assert_eq!(page.unclassified_skipped, 0);
     assert_eq!(page.events.len(), 7, "{:#?}", page.events);

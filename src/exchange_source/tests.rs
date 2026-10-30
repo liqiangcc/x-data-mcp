@@ -173,10 +173,7 @@ fn the_soa_dialect_pages_by_page_help_page_no() {
     );
     let mut params = std::collections::BTreeMap::new();
     PagingFormat::SseSoaPageNo.apply_page(&mut params, 2);
-    assert_eq!(
-        params.get("pageHelp.pageNo").map(String::as_str),
-        Some("2")
-    );
+    assert_eq!(params.get("pageHelp.pageNo").map(String::as_str), Some("2"));
     assert_eq!(
         params.get("pageHelp.pageSize").map(String::as_str),
         Some("25")
@@ -229,7 +226,8 @@ fn an_sse_total_of_zero_means_not_reported() {
     let page = envelope(&sse_body(1, 1, 0, 4), PagingFormat::SsePageHelp);
     assert_eq!(page.rows, 4);
     assert_eq!(page.total, None);
-    let set = validate::validate_pages(&[page], EmptyPolicy::Forbidden, ZeroPolicy::FailClosed).unwrap();
+    let set =
+        validate::validate_pages(&[page], EmptyPolicy::Forbidden, ZeroPolicy::FailClosed).unwrap();
     assert_eq!(set.row_count, 4);
     // The quirk must not weaken the zero-row rule.
     let empty = envelope(&sse_body(1, 1, 0, 0), PagingFormat::SsePageHelp);
@@ -247,7 +245,8 @@ fn two_page_set_sums_to_the_declared_total() {
         envelope(&sse_body(1, 2, 3, 2), PagingFormat::SsePageHelp),
         envelope(&sse_body(2, 2, 3, 1), PagingFormat::SsePageHelp),
     ];
-    let set = validate::validate_pages(&pages, EmptyPolicy::Forbidden, ZeroPolicy::FailClosed).unwrap();
+    let set =
+        validate::validate_pages(&pages, EmptyPolicy::Forbidden, ZeroPolicy::FailClosed).unwrap();
     assert_eq!(set.row_count, 3);
     assert_eq!(set.page_count, 2);
 }
@@ -255,10 +254,16 @@ fn two_page_set_sums_to_the_declared_total() {
 #[test]
 fn empty_data_is_unverified_zero_unless_the_window_is_declared_empty() {
     let pages = vec![envelope(&sse_body(1, 1, 0, 0), PagingFormat::SsePageHelp)];
-    let error = validate::validate_pages(&pages, EmptyPolicy::Forbidden, ZeroPolicy::FailClosed).unwrap_err();
+    let error = validate::validate_pages(&pages, EmptyPolicy::Forbidden, ZeroPolicy::FailClosed)
+        .unwrap_err();
     assert_eq!(error.code(), "unverified_zero");
     assert_eq!(error.class(), FailureClass::SourceInvalid);
-    let accepted = validate::validate_pages(&pages, EmptyPolicy::DeclaredEmptyWindow, ZeroPolicy::FailClosed).unwrap();
+    let accepted = validate::validate_pages(
+        &pages,
+        EmptyPolicy::DeclaredEmptyWindow,
+        ZeroPolicy::FailClosed,
+    )
+    .unwrap();
     assert_eq!(accepted.row_count, 0);
     // Only a window that starts after "today" may be declared empty.
     let future = Segment::parse("2030-01-01", "2030-03-31").unwrap();
