@@ -196,14 +196,7 @@ struct Snapshot {
 /// `include_derived = false` builds a generation that carries only the
 /// caller's members — the fixture for "a source that cannot serve the
 /// derived datasets" (internal item failure semantics, issue-383 §9.2).
-fn snapshot_with(
-    day_members: &[(&str, &[u8])],
-    codes: &[(&str, &str, u32)],
-    include_derived: bool,
-) -> Snapshot {
-    snapshot_with_delisting(day_members, codes, include_derived, None)
-}
-
+///
 /// `delisting` names one code and its TDX arrangement end (the M3 main table's
 /// delisting day when no exchange source wins, `#446` §4.3): the fixture the
 /// delisted-series check needs a terminal entity for.

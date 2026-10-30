@@ -34,6 +34,19 @@ fn verdict(observed: &Observed, events: &[&str]) -> Verdict {
     classify(&registration(), observed, kinds(events)).unwrap()
 }
 
+/// A registration whose delisting day still leaves room for a tail: the
+/// fixture entry above is delisted on its last stored day, so nothing may
+/// follow it.
+fn open_registration() -> Registration {
+    let mut registration = registration();
+    registration.delisting_day = registration.last_day + 30;
+    registration
+}
+
+fn tail_verdict(observed: &Observed, events: &[&str]) -> Verdict {
+    classify(&open_registration(), observed, kinds(events)).unwrap()
+}
+
 #[test]
 fn identical_facts_are_unchanged_without_reading_events() {
     let registration = registration();
@@ -81,24 +94,30 @@ fn a_recorded_tail_append_is_the_one_allowed_change() {
     let mut seen = observed(&registration());
     seen.last_day += 1;
     seen.record_count += 1;
-    assert_eq!(verdict(&seen, &["append"]), Verdict::TailExtended);
+    assert_eq!(tail_verdict(&seen, &["append"]), Verdict::TailExtended);
     // Two appended bars in one run are still one tail.
     let mut seen = observed(&registration());
     seen.last_day += 3;
     seen.record_count += 3;
-    assert_eq!(verdict(&seen, &["append", "append"]), Verdict::TailExtended);
+    assert_eq!(
+        tail_verdict(&seen, &["append", "append"]),
+        Verdict::TailExtended
+    );
     // A replace event (or an append after a rewrite) is not a tail.
     assert_eq!(
-        verdict(&seen, &["replace"]),
+        tail_verdict(&seen, &["replace"]),
         Verdict::Failed(HISTORY_REWRITTEN)
     );
     assert_eq!(
-        verdict(&seen, &["append", "replace"]),
+        tail_verdict(&seen, &["append", "replace"]),
         Verdict::Failed(HISTORY_REWRITTEN)
     );
     // Facts that changed with no recorded transition are corruption, not a
     // tail: the commit path always writes an event.
-    assert_eq!(verdict(&seen, &[]), Verdict::Failed(TRANSITION_UNRECORDED));
+    assert_eq!(
+        tail_verdict(&seen, &[]),
+        Verdict::Failed(TRANSITION_UNRECORDED)
+    );
 }
 
 #[test]
