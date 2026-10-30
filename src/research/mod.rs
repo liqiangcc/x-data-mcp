@@ -976,8 +976,10 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
         &lineage.by_digest,
         &series,
         &derived,
-        industry.as_ref(),
-        &coverage,
+        &manifest::WholeMarket {
+            industry: industry.as_ref(),
+            coverage: &coverage,
+        },
     )?;
     let snapshot_id = manifest::snapshot_id(&identity)?;
     Ok(SnapshotPlan {

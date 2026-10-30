@@ -120,6 +120,14 @@ fn derived_value(entry: &DerivedEntry, lineage: &LineageIndex) -> Result<Value, 
     Ok(value)
 }
 
+/// The v3 whole-market inputs the identity binds (#446 §10.4): the M3 industry
+/// dataset identity and the `coverage` block. Grouped so `identity` keeps a
+/// readable argument list (both are M3 facts, not top-level identity families).
+pub struct WholeMarket<'a> {
+    pub industry: Option<&'a IndustryBinding>,
+    pub coverage: &'a Coverage,
+}
+
 /// The identity document (§7.3). Its canonical JSON is what `snapshot_id`
 /// hashes, so nothing time- or output-dependent may enter it.
 ///
@@ -134,9 +142,10 @@ pub fn identity(
     lineage: &LineageIndex,
     series: &[SeriesEntry],
     derived: &[DerivedEntry],
-    industry: Option<&IndustryBinding>,
-    coverage: &Coverage,
+    whole_market: &WholeMarket<'_>,
 ) -> Result<Value, Error> {
+    let WholeMarket { industry, coverage } = whole_market;
+    let industry = *industry;
     let series = series
         .iter()
         .map(|entry| series_value(entry, lineage))
