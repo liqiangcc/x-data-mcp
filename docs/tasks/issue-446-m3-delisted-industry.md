@@ -572,6 +572,11 @@ fetch（HTTP，bounded retries，Referer/UA）
 - **文档**：`docs/exchange-source.md` §2/§6 的分页方言与失败码；`docs/data-catalog.md`
   §3.2 第 6/7 行的 `parser_version` 与分页口径。状态词只用文件开头声明的固定取值
   （「代码已合并，未部署」），不写部署事实，不改 SLO 门禁与 `docs/STATUS.md`。
+- **端到端分页测试换方言**：`tests/source_store/exchange.rs` 原用「SSE 两页名单」验证「按页冻结 + 重放
+  字节一致」。新方言下名单 `pageCount>1` 是 fail-closed（`page_size_ignored`），这个场景对名单已不成立；
+  因此改用**深市多页方言**（`PAGENO` + `metadata.pagecount`，本任务不改其解析）保护同一不变量，
+  请求断言仍逐页检查 `PAGENO=1`/`PAGENO=2`（不放宽到「不检查请求」）；另新增一条
+  `exchange-sse-page-v1` 冻结页的重放测试，验证重放别名（不然后续重放会把旧快照判 `unknown_parser`）。
 - **影响面（未验证项）**：`derived:risk_warnings`（PR-10）的沪市公告复用同一个
   `PagingFormat::SsePageHelp`，因此也改发 `pageHelp.pageNo`/`pageSize=2000`。该公告端点
   本次未重新取证，部署前需在私有栈验证翻页行为；本任务不改 PR-10 代码。

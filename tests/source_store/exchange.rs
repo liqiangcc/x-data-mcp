@@ -12,18 +12,44 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use chrono::NaiveDate;
+use x_data_mcp::exchange_source::request::SSE_PARSER_VERSION_V1;
 use x_data_mcp::exchange_source::transport::{HttpRequest, HttpResponse};
+use x_data_mcp::exchange_source::validate::parse_page;
 use x_data_mcp::exchange_source::{
-    AcquireError, AcquisitionPlan, BasisStatus, Client, Entry, PagingFormat, RetryPolicy, RunCache,
-    Segment, SourceId, Transport, TransportError, bind,
+    AcquireError, AcquisitionPlan, BasisStatus, Client, Entry, ExchangeRequest, PagingFormat,
+    RetryPolicy, RunCache, Segment, SourceId, Transport, TransportError, bind, freeze_page,
 };
 use x_data_mcp::source_store::SourceStore;
 use x_data_mcp::sqlite_market::backend::MarketBackend;
 use x_data_mcp::sqlite_tasks::SqliteTasks;
 
+/// A `pageHelp` page in the dialect written since 2026-10-30
+/// (`pageHelp.pageNo`/`pageSize`).
 fn sse_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
     let data: Vec<serde_json::Value> = (0..rows)
-        .map(|index| serde_json::json!({"SECURITY_CODE": format!("60000{index}")}))
+        .map(|index| serde_json::json!({"code": format!("60000{index}")}))
+        .collect();
+    serde_json::json!({
+        "pageHelp": {
+            "beginPage": 1,
+            "endPage": null,
+            "pageNo": page,
+            "pageSize": 2000,
+            "pageCount": page_count,
+            "total": total,
+            "data": data,
+        }
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// A `pageHelp` page in the shape frozen before 2026-10-30
+/// (`exchange-sse-page-v1`: the page number is `beginPage`, there is no
+/// `pageHelp.pageNo`). Only the legacy-replay test uses it.
+fn sse_v1_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
+    let data: Vec<serde_json::Value> = (0..rows)
+        .map(|index| serde_json::json!({"code": format!("60000{index}")}))
         .collect();
     serde_json::json!({
         "pageHelp": {
@@ -34,6 +60,26 @@ fn sse_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
             "data": data,
         }
     })
+    .to_string()
+    .into_bytes()
+}
+
+/// A SZSE page: `metadata.pageNo`/`pagecount`/`recordcount` plus `PAGENO` as the
+/// request page. This is the multi-page dialect this suite uses for the paging
+/// invariants (the SSE list dialect is single-page since 2026-10-30).
+fn szse_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
+    let data: Vec<serde_json::Value> = (0..rows)
+        .map(|index| serde_json::json!({"zqdm": format!("00000{index}")}))
+        .collect();
+    serde_json::json!([{
+        "metadata": {
+            "pageno": page,
+            "pagecount": page_count,
+            "recordcount": total,
+            "pagesize": 20,
+        },
+        "data": data,
+    }])
     .to_string()
     .into_bytes()
 }
@@ -130,6 +176,14 @@ fn plan(source: SourceId, url: &str) -> AcquisitionPlan {
     AcquisitionPlan::new(source, url, PagingFormat::SsePageHelp)
 }
 
+fn szse_plan() -> AcquisitionPlan {
+    AcquisitionPlan::new(
+        SourceId::SzseListing,
+        "https://example.invalid/szse-list",
+        PagingFormat::SzseMetadata,
+    )
+}
+
 fn cli(store: &SourceStore, db: &Path, command: &str) -> serde_json::Value {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_source_store"))
         .args([
@@ -167,22 +221,26 @@ fn snapshot_count(db: &Path, source: SourceId) -> usize {
     }
 }
 
+/// The paging invariant: every page of a multi-page window is frozen as its own
+/// snapshot, indexed as its own row, and replay rebuilds exactly that index from
+/// the store alone. SZSE is the multi-page dialect (the SSE list dialect is
+/// single-page since 2026-10-30: a `pageCount>1` answer fails closed with
+/// `page_size_ignored`, see `a_listing_page_that_ignores_the_page_size_fails_closed`
+/// in the adapter tests).
 #[test]
-fn sse_two_page_listing_is_frozen_page_by_page() {
+fn a_two_page_listing_is_frozen_page_by_page() {
     let scenario = Scenario::new();
     let store = scenario.store();
     let db = scenario.db();
     let fixture = Fixture::new(vec![
-        Ok(ok(sse_body(1, 2, 3, 2), "page-1")),
-        Ok(ok(sse_body(2, 2, 3, 1), "page-2")),
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
     ]);
     let client = client(&fixture);
     {
         let backend = open(&db);
         let entry = Entry::new(&store, &backend, &client);
-        let outcome = entry
-            .acquire(&plan(SourceId::SseListing, "https://example.invalid/list"))
-            .unwrap();
+        let outcome = entry.acquire(&szse_plan()).unwrap();
         assert_eq!(outcome.row_count, 3);
         assert_eq!(outcome.page_count, 2);
         assert_eq!(outcome.snapshots.len(), 2);
@@ -206,9 +264,51 @@ fn sse_two_page_listing_is_frozen_page_by_page() {
     }
     assert_eq!(fixture.calls(), 2);
     let requests = fixture.requests();
-    assert!(requests[0].contains("beginPage=1"));
-    assert!(requests[0].contains("endPage=1"));
-    assert!(requests[1].contains("beginPage=2"));
+    // Each page is its own request: the page selector is what replay reads back
+    // from the manifest, so it must carry the page the response belongs to.
+    assert!(requests[0].contains("PAGENO=1"), "url: {}", requests[0]);
+    assert!(requests[1].contains("PAGENO=2"), "url: {}", requests[1]);
+    assert_ne!(requests[0], requests[1]);
+    assert_eq!(store.records().unwrap().len(), 2);
+    assert_eq!(snapshot_count(&db, SourceId::SzseListing), 2);
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["status"], "ok");
+    assert_eq!(replay["scopes"][0]["rebuilt"], "rebuilt");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 2);
+}
+
+/// The 2026-10-30 dialect change writes `pageHelp.pageNo`/`pageSize`, but pages
+/// frozen before it (`exchange-sse-page-v1`) must still replay from the store
+/// alone. `PagingFormat::from_parser_version` keeps that alias; without it the
+/// replay would report every old SSE page as `unknown_parser` and drop its index
+/// row.
+#[test]
+fn legacy_sse_pages_still_replay_after_the_dialect_change() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    {
+        let backend = open(&db);
+        for (page, rows) in [(1_u32, 2_usize), (2, 1)] {
+            let request =
+                ExchangeRequest::new(SourceId::SseListing, "https://example.invalid/list")
+                    .paged(PagingFormat::SsePageHelp, page);
+            let response = ok(sse_v1_body(page, 2, 3, rows), &format!("page-{page}"));
+            let envelope = parse_page(PagingFormat::SsePageHelp, &response.body).unwrap();
+            freeze_page(
+                &store,
+                &backend,
+                &request,
+                &response,
+                &envelope,
+                SSE_PARSER_VERSION_V1,
+                BasisStatus::ApprovedSource,
+                "2026-10-30T02:00:00Z",
+            )
+            .unwrap();
+        }
+    }
     assert_eq!(store.records().unwrap().len(), 2);
     assert_eq!(snapshot_count(&db, SourceId::SseListing), 2);
     let replay = cli(&store, &db, "replay");
@@ -216,6 +316,7 @@ fn sse_two_page_listing_is_frozen_page_by_page() {
     assert_eq!(replay["scopes"][0]["rebuilt"], "rebuilt");
     assert_eq!(replay["scopes"][0]["database"], "match");
     assert_eq!(replay["scopes"][0]["snapshots"], 2);
+    assert_eq!(snapshot_count(&db, SourceId::SseListing), 2);
 }
 
 #[test]
@@ -347,16 +448,16 @@ fn the_same_fingerprint_and_bytes_do_not_add_a_snapshot() {
     let store = scenario.store();
     let db = scenario.db();
     let fixture = Fixture::new(vec![
-        Ok(ok(sse_body(1, 2, 3, 2), "page-1")),
-        Ok(ok(sse_body(2, 2, 3, 1), "page-2")),
-        Ok(ok(sse_body(1, 2, 3, 2), "page-1")),
-        Ok(ok(sse_body(2, 2, 3, 1), "page-2")),
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
     ]);
     let client = client(&fixture);
     {
         let backend = open(&db);
         let entry = Entry::new(&store, &backend, &client);
-        let plan = plan(SourceId::SseListing, "https://example.invalid/list");
+        let plan = szse_plan();
         let first = entry.acquire(&plan).unwrap();
         assert_eq!(first.reused, 0);
         let second = entry.acquire(&plan).unwrap();
@@ -369,7 +470,7 @@ fn the_same_fingerprint_and_bytes_do_not_add_a_snapshot() {
         );
     }
     assert_eq!(store.records().unwrap().len(), 2);
-    assert_eq!(snapshot_count(&db, SourceId::SseListing), 2);
+    assert_eq!(snapshot_count(&db, SourceId::SzseListing), 2);
     let replay = cli(&store, &db, "replay");
     assert_eq!(replay["scopes"][0]["snapshots"], 2);
 }
@@ -380,15 +481,15 @@ fn a_run_cache_serves_the_same_request_without_a_second_download() {
     let store = scenario.store();
     let db = scenario.db();
     let fixture = Fixture::new(vec![
-        Ok(ok(sse_body(1, 2, 3, 2), "page-1")),
-        Ok(ok(sse_body(2, 2, 3, 1), "page-2")),
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
     ]);
     let client = client(&fixture);
     let cache = Arc::new(RunCache::new());
     {
         let backend = open(&db);
         let entry = Entry::new(&store, &backend, &client).with_cache(cache.clone());
-        let plan = plan(SourceId::SseListing, "https://example.invalid/list");
+        let plan = szse_plan();
         let first = entry.acquire(&plan).unwrap();
         assert_eq!(first.reused, 0);
         assert_eq!(first.row_count, 3);
@@ -407,16 +508,14 @@ fn replay_rebuilds_the_exact_index_after_a_wipe() {
     let store = scenario.store();
     let db = scenario.db();
     let fixture = Fixture::new(vec![
-        Ok(ok(sse_body(1, 2, 3, 2), "page-1")),
-        Ok(ok(sse_body(2, 2, 3, 1), "page-2")),
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
     ]);
     let client = client(&fixture);
     {
         let backend = open(&db);
         let entry = Entry::new(&store, &backend, &client);
-        entry
-            .acquire(&plan(SourceId::SseListing, "https://example.invalid/list"))
-            .unwrap();
+        entry.acquire(&szse_plan()).unwrap();
     }
     let before = cli(&store, &db, "replay");
     assert_eq!(before["scopes"][0]["database"], "match");
@@ -424,14 +523,14 @@ fn replay_rebuilds_the_exact_index_after_a_wipe() {
     assert!(summary.is_string());
 
     wipe(&db);
-    assert_eq!(snapshot_count(&db, SourceId::SseListing), 0);
+    assert_eq!(snapshot_count(&db, SourceId::SzseListing), 0);
 
     let after = cli(&store, &db, "replay");
     assert_eq!(after["status"], "ok");
     assert_eq!(after["scopes"][0]["database"], "match");
     assert_eq!(after["scopes"][0]["summary"], summary);
     assert_eq!(after["scopes"][0]["snapshots"], 2);
-    assert_eq!(snapshot_count(&db, SourceId::SseListing), 2);
+    assert_eq!(snapshot_count(&db, SourceId::SzseListing), 2);
 
     let verify = cli(&store, &db, "verify");
     assert_eq!(verify["scopes"][0]["database"], "match");
