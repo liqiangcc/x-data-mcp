@@ -642,7 +642,7 @@ fn rebuild_risk_warnings(
         .filter(|window| !window.observed)
         .map(|window| (window.from, window.to))
         .collect();
-    let set = risk_warnings::replay(&pages, &gaps, coverage)
+    let set = crate::official_security::risk_warnings::replay(&pages, &gaps, coverage)
         .map_err(|error| format!("{}: {error}", error.code()))?;
     let summary = crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&set.rows));
     let mut outcome = ExchangeOutcome {

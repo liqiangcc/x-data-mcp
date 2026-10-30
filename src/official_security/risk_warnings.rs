@@ -45,7 +45,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{NaiveDate, Utc};
 use serde_json::{Value, json};
 
 use crate::exchange_source::{

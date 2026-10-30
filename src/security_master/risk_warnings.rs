@@ -244,7 +244,7 @@ pub fn assemble_sh(
         by_code.entry(event.code.as_str()).or_default().push(event);
     }
     let mut intervals = Vec::new();
-    for (code, mut events) in by_code {
+    for (_code, mut events) in by_code {
         events.sort_by(|left, right| {
             (left.day, action_rank(left.action)).cmp(&(right.day, action_rank(right.action)))
         });
