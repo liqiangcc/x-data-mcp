@@ -166,6 +166,15 @@ impl SqliteCompactMarket {
         self.tx(|c| super::suspensions::commit_suspensions(c, write))
     }
 
+    /// Replace the derived name-history dataset and register its version in
+    /// one transaction (issue-308 S-6 / #446 PR-12).
+    pub(crate) fn commit_security_names(
+        &self,
+        write: &super::security_names::SecurityNameWrite<'_>,
+    ) -> Result<Option<super::derived::DerivedVersionRow>, Error> {
+        self.tx(|c| super::security_names::commit_security_names(c, write))
+    }
+
     /// Replace the derived risk-warning dataset and register its version in
     /// one transaction (issue-308 / #446 PR-10).
     pub(crate) fn commit_risk_warnings(

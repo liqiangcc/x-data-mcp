@@ -238,8 +238,10 @@ pub enum RunSource {
 ///
 /// Not configured is not a fetch failure: the item records `pending_source`
 /// and writes zero rows instead of failing the daily run. A configured store
-/// whose fetch fails is a real failure.
-pub fn run_source(market: &MarketBackend) -> Result<RunSource, Error> {
+/// whose fetch fails is a real failure. `cache` is the run-level download
+/// cache (§10.1): the SZSE table is shared with `derived:security_names`
+/// (PR-12), which asks for the same request in the same run.
+pub fn run_source(market: &MarketBackend, cache: Arc<RunCache>) -> Result<RunSource, Error> {
     let Some(root) = std::env::var_os(SOURCE_STORE_ENV) else {
         return Ok(RunSource::Pending(PendingSource {
             dataset: risk_warnings::DATASET_KIND,
@@ -255,7 +257,56 @@ pub fn run_source(market: &MarketBackend) -> Result<RunSource, Error> {
         market,
         &client,
         Utc::now().date_naive(),
+        cache,
     )?))
+}
+
+/// One frozen SZSE short-name table: the dated change rows both derived
+/// datasets read (ST intervals, PR-10; name intervals, PR-12), the per-page
+/// snapshot ids and the counters the item evidence reports.
+#[derive(Debug, Clone)]
+pub(crate) struct SzShortNameTable {
+    pub changes: Vec<SzNameChange>,
+    pub snapshot_ids: Vec<String>,
+    pub rows: usize,
+    pub skipped_codes: usize,
+    pub binding: SnapshotBinding,
+}
+
+/// Acquire, freeze and parse the SZSE `SSGSGMXX`/`tab2` table through PR-2's
+/// entry. This is the only acquisition of the dated name source; a second
+/// consumer must call it rather than open its own request or parser.
+///
+/// An empty A-share change set is not an answer: the table is a whole-market
+/// snapshot, so the caller decides (both consumers fail closed).
+pub(crate) fn acquire_sz_short_name_table(
+    entry: &Entry<'_>,
+    store: &SourceStore,
+) -> Result<SzShortNameTable, Error> {
+    let (_, plan) = plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == Kind::SzseShortName)
+        .expect("the SZSE plan is static");
+    let outcome = entry.acquire(&plan)?;
+    let mut changes = Vec::new();
+    let mut rows = 0usize;
+    let mut skipped_codes = 0usize;
+    let mut snapshot_ids = Vec::new();
+    for snapshot in &outcome.snapshots {
+        let bytes = store.read_verified(snapshot.snapshot_id())?;
+        let (mut parsed, page_rows, page_skipped) = parse_sz_page(&bytes, snapshot.snapshot_id())?;
+        rows += page_rows;
+        skipped_codes += page_skipped;
+        changes.append(&mut parsed);
+        snapshot_ids.push(snapshot.snapshot_id().to_string());
+    }
+    Ok(SzShortNameTable {
+        changes,
+        snapshot_ids,
+        rows,
+        skipped_codes,
+        binding: outcome.binding,
+    })
 }
 
 fn acquire_today(
@@ -263,31 +314,21 @@ fn acquire_today(
     market: &MarketBackend,
     client: &Client,
     today: NaiveDate,
+    cache: Arc<RunCache>,
 ) -> Result<Admitted, Error> {
     let entry = Entry::new(store, market, client)
-        .with_cache(Arc::new(RunCache::new()))
+        .with_cache(cache)
         .with_today(today);
     let mut snapshot_ids: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
-    let mut sz_changes = Vec::new();
-    let mut sz_skipped = 0usize;
-    let mut sz_snapshot_rows = 0usize;
-
-    let (sz_kind, sz_plan) = plans()
+    let (sz_kind, _) = plans()
         .into_iter()
         .find(|(kind, _)| *kind == Kind::SzseShortName)
         .expect("the SZSE plan is static");
-    let sz_outcome = entry.acquire(&sz_plan)?;
-    for snapshot in &sz_outcome.snapshots {
-        let bytes = store.read_verified(snapshot.snapshot_id())?;
-        let mut parsed = parse_sz_page(&bytes, snapshot.snapshot_id())?;
-        sz_snapshot_rows += parsed.1;
-        sz_skipped += parsed.2;
-        sz_changes.append(&mut parsed.0);
-        snapshot_ids
-            .entry(sz_kind.label())
-            .or_default()
-            .push(snapshot.snapshot_id().to_string());
-    }
+    let sz = acquire_sz_short_name_table(&entry, store)?;
+    let sz_changes = sz.changes;
+    let sz_skipped = sz.skipped_codes;
+    let sz_snapshot_rows = sz.rows;
+    snapshot_ids.insert(sz_kind.label(), sz.snapshot_ids);
     let sz_days: Vec<NaiveDate> = sz_changes.iter().map(|change| change.day).collect();
     let sz_coverage = match (sz_days.iter().min(), sz_days.iter().max()) {
         (Some(from), Some(to)) => vec![CoverageWindow {
@@ -424,7 +465,10 @@ fn acquire_today(
 }
 
 /// Parse one SZSE page: `(changes, rows_read, skipped_non_a_codes)`.
-fn parse_sz_page(
+///
+/// Shared with the name-history adapter (`official_security::security_names`,
+/// PR-12): one source row shape must not get a second parser.
+pub(crate) fn parse_sz_page(
     bytes: &[u8],
     snapshot_id: &str,
 ) -> Result<(Vec<SzNameChange>, usize, usize), Error> {

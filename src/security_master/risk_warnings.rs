@@ -23,6 +23,11 @@ use chrono::NaiveDate;
 use super::assembly::PendingSource;
 use super::{Exchange, RiskStatus, RiskWarningInterval};
 
+/// One acquisition window and whether it produced rows. The shared shape lives
+/// in [`super::coverage`] because the name history records the same windows
+/// (PR-12); the re-export keeps this module's existing paths.
+pub use super::coverage::CoverageWindow;
+
 /// Dataset name the daily item reports and the read model consumes
 /// (`derived_dataset_versions.dataset_kind`, §3.2).
 pub const DATASET_KIND: &str = "risk_warnings";
@@ -67,20 +72,6 @@ pub struct RiskWarningStatusEvent {
     pub source_kind: String,
     pub source_record_id: String,
     pub source_document_sha256: String,
-}
-
-/// One acquisition window and whether it produced rows. `observed=false` is a
-/// `not_observed` window: no row is derived from it, and an open interval is
-/// cut at its start instead of being claimed across the gap.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoverageWindow {
-    pub source_kind: String,
-    pub exchange: Exchange,
-    pub from: NaiveDate,
-    pub to: NaiveDate,
-    pub observed: bool,
-    pub rows: usize,
-    pub reason: String,
 }
 
 /// The complete admitted answer for one dataset version.

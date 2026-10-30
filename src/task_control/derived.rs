@@ -32,6 +32,10 @@ pub const CALENDAR: &str = "derived:calendar";
 /// The M2 whole-market datasets maintained by the same daily run (issue-391
 /// §12.1). Each is one item because one write covers the whole market.
 pub const SECURITY_MASTER: &str = "derived:security_master";
+/// The M3 name-history item (M3 PR-12, `#446` §10.1). Its write set is the SZ
+/// dated short-name intervals plus their version registration; SH/BJ are
+/// `NOT_AVAILABLE` and write no row.
+pub const SECURITY_NAMES: &str = "derived:security_names";
 pub const RISK_WARNINGS: &str = "derived:risk_warnings";
 pub const SUSPENSIONS: &str = "derived:suspensions";
 pub const TRADING_RULES: &str = "derived:trading_rules";
@@ -45,11 +49,19 @@ pub const INDUSTRY_SNAPSHOT: &str = "derived:industry_snapshot";
 /// business table: it compares terminal series against the registration frozen
 /// at run start and reports, so it owns a read-only scope.
 pub const DELISTED_SERIES_CHECK: &str = "derived:delisted_series_check";
-/// Every M2 dataset item, in execution order: the main table first (the
-/// suspension gaps are derived from it), then the datasets whose source is
-/// still pending, then the rules (admitted by D-44; the item writes the
-/// versioned rule book and reports `no_change` when it is already stored).
-pub const DATASETS: [&str; 4] = [SECURITY_MASTER, RISK_WARNINGS, SUSPENSIONS, TRADING_RULES];
+/// Every whole-market dataset item, in execution order: the main table first
+/// (the suspension gaps are derived from it), then the name history (M3 PR-12;
+/// it shares the SZSE short-name table with the ST item), then the datasets
+/// whose source is still pending, then the rules (admitted by D-44; the item
+/// writes the versioned rule book and reports `no_change` when it is already
+/// stored).
+pub const DATASETS: [&str; 5] = [
+    SECURITY_MASTER,
+    SECURITY_NAMES,
+    RISK_WARNINGS,
+    SUSPENSIONS,
+    TRADING_RULES,
+];
 /// Prefix of the per-benchmark index items (§9.2); the suffix is the entity.
 pub const INDEX_PREFIX: &str = "derived:index:";
 
@@ -143,7 +155,7 @@ mod tests {
     #[test]
     fn m2_dataset_items_own_distinct_whole_market_scopes() {
         assert!(is_derived(SECURITY_MASTER));
-        assert_eq!(DATASETS.len(), 4);
+        assert_eq!(DATASETS.len(), 5);
         let scopes: BTreeSet<String> = DATASETS.iter().map(|id| dataset_scope(id)).collect();
         assert_eq!(scopes.len(), DATASETS.len());
         assert!(!scopes.contains(&calendar_scope()));

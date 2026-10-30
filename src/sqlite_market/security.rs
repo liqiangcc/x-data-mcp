@@ -894,11 +894,10 @@ pub(crate) fn read_risk_warning_intervals(
     Ok(intervals)
 }
 
-/// One `security_name_history` row. The names dataset has **no writer yet**
-/// (no name source is admitted), so this decoder keeps the stored vocabulary
-/// verbatim instead of inventing a domain enum ahead of the writer: the DDL
-/// CHECK lists are the contract until a source adapter exists. The export reads
-/// the table so the file's shape is fixed and its row count is honest (0 today).
+/// One `security_name_history` row, in the stored vocabulary (§4.4). The
+/// writer ([`super::security_names`], M3 PR-12) owns the encoding; this decoder
+/// validates the two CHECK vocabularies against the domain enums and keeps the
+/// stored strings, so the export's shape does not change when a writer lands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityNameRow {
     pub exchange: String,
@@ -937,6 +936,17 @@ pub(crate) fn read_security_names(c: &Connection) -> Result<Vec<SecurityNameRow>
     for row in rows {
         let (exchange, code, from, to, name, certainty, known_at, source_kind) =
             row.map_err(storage)?;
+        // The DDL CHECKs already restrict both columns; validating them here
+        // means a database written by another binary cannot be read as a
+        // vocabulary this binary does not understand (fail closed).
+        let certainty = crate::security_master::names::NameCertainty::parse(&certainty)
+            .ok_or_else(|| integrity("security_name_history certainty is unregistered"))?
+            .as_str()
+            .to_string();
+        let source_kind = crate::security_master::names::NameSourceKind::parse(&source_kind)
+            .ok_or_else(|| integrity("security_name_history source_kind is unregistered"))?
+            .as_str()
+            .to_string();
         names.push(SecurityNameRow {
             exchange,
             code,

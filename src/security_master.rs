@@ -32,6 +32,7 @@ use rust_decimal::Decimal;
 use crate::gbbq;
 
 pub mod assembly;
+pub mod coverage;
 pub mod names;
 pub mod risk_warnings;
 pub mod suspensions;
