@@ -15,7 +15,9 @@ use chrono::NaiveDate;
 use serde_json::json;
 
 use super::*;
-use crate::exchange_source::{HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError};
+use crate::exchange_source::{
+    HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError, ZeroPolicy,
+};
 use crate::security_master::suspensions::{assemble_suspensions, suspension_source};
 use crate::security_master::{
     DelistingSource, Exchange, IssuerResolution, ListingSource, SecurityLifecycleFact,
@@ -215,12 +217,12 @@ fn acquired(fixture: &Fixture, pages: &Arc<Pages>, members: &[SecurityLifecycleF
 
 #[test]
 fn windows_cover_2008_to_yesterday_in_quarters() {
-    let windows = windows(day(2008, 7, 10)).unwrap();
-    assert_eq!(windows.len(), 2);
-    assert_eq!(windows[0].start(), day(2008, 1, 1));
-    assert_eq!(windows[0].end(), day(2008, 3, 31));
-    assert_eq!(windows[1].start(), day(2008, 4, 1));
-    assert_eq!(windows[1].end(), day(2008, 6, 30));
+    let quarters = windows(day(2008, 7, 10)).unwrap();
+    assert_eq!(quarters.len(), 2);
+    assert_eq!(quarters[0].start(), day(2008, 1, 1));
+    assert_eq!(quarters[0].end(), day(2008, 3, 31));
+    assert_eq!(quarters[1].start(), day(2008, 4, 1));
+    assert_eq!(quarters[1].end(), day(2008, 6, 30));
 
     // Today is never queried: an incomplete day cannot prove anything.
     let later = windows(day(2026, 10, 30)).unwrap();

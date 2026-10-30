@@ -476,8 +476,12 @@ pub fn reparse(
     let mut not_observed_windows = Vec::new();
     let mut snapshot_ids = Vec::new();
     for ((start, end), (empty, rows)) in &windows {
-        let window = Segment::parse(&start.format("%Y-%m-%d"), &end.format("%Y-%m-%d"))
-            .map_err(|error| A3Error::invalid(error.to_string()))?;
+        let (from, to) = (
+            start.format("%Y-%m-%d").to_string(),
+            end.format("%Y-%m-%d").to_string(),
+        );
+        let window =
+            Segment::parse(&from, &to).map_err(|error| A3Error::invalid(error.to_string()))?;
         if *empty {
             not_observed_windows.push(window_label(window));
             continue;
