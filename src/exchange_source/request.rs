@@ -123,10 +123,42 @@ impl Segment {
         self.start > today
     }
 
-    /// Put the window into the request parameters the source expects.
+    /// Put the window into the request parameters the source expects, as
+    /// `YYYY-MM-DD` (see [`DateFormat`] for the compact shape).
     pub fn apply(self, params: &mut BTreeMap<String, String>, from: &str, to: &str) {
-        params.insert(from.to_string(), self.start_text());
-        params.insert(to.to_string(), self.end_text());
+        self.apply_with(params, from, to, DateFormat::Iso);
+    }
+
+    /// Same, in the date shape the source documents.
+    pub fn apply_with(
+        self,
+        params: &mut BTreeMap<String, String>,
+        from: &str,
+        to: &str,
+        format: DateFormat,
+    ) {
+        params.insert(from.to_string(), format.text(self.start));
+        params.insert(to.to_string(), format.text(self.end));
+    }
+}
+
+/// How a window bound is written into a request parameter.
+///
+/// It is part of the canonical fingerprint, so the choice cannot be lost
+/// between acquisition and replay: `commonSoaQuery` silently answers 0 rows for
+/// dashed dates (PR-11 evidence), which would read as a quiet window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DateFormat {
+    Iso,
+    Compact,
+}
+
+impl DateFormat {
+    pub fn text(self, date: NaiveDate) -> String {
+        match self {
+            Self::Iso => date_text(date),
+            Self::Compact => date.format("%Y%m%d").to_string(),
+        }
     }
 }
 

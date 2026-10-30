@@ -16,7 +16,7 @@ use serde_json::json;
 
 use super::*;
 use crate::exchange_source::{
-    HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError, ZeroPolicy,
+    DateFormat, HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError, ZeroPolicy,
 };
 use crate::security_master::suspensions::{assemble_suspensions, suspension_source};
 use crate::security_master::{
@@ -256,14 +256,17 @@ fn plan_uses_the_soa_dialect_and_treats_quiet_windows_as_not_observed() {
         request.params.get("pageHelp.pageSize").map(String::as_str),
         Some("25")
     );
+    // Compact bounds are part of the fingerprint: the endpoint silently reads
+    // the dashed shape as 0 rows, so a regression here must fail a test.
     assert_eq!(
         request.params.get(FROM_PARAM).map(String::as_str),
-        Some("2008-04-01")
+        Some("20080401")
     );
     assert_eq!(
         request.params.get(TO_PARAM).map(String::as_str),
-        Some("2008-06-30")
+        Some("20080630")
     );
+    assert_eq!(plan.date_format, DateFormat::Compact);
 }
 
 #[test]

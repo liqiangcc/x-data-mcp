@@ -183,6 +183,9 @@ pub fn plan() -> AcquisitionPlan {
     // A quiet window is not evidence of absence (BR-M3-10); it is recorded
     // as `not_observed` instead of failing every quarter forever.
     .zero_rows_not_observed()
+    // The endpoint silently answers 0 rows for `2008-01-01`-style bounds; the
+    // compact shape is the one the live source documents.
+    .compact_dates()
 }
 
 /// The quarter-aligned windows of one derivation: `2008-01-01` through
@@ -465,7 +468,19 @@ pub fn reparse(
                 row.snapshot_id
             ))
         })?;
-        let window = Segment::parse(start, end)
+        let start = parse_bound(start).ok_or_else(|| {
+            A3Error::invalid(format!(
+                "{}: {FROM_PARAM} {start:?} is not a date",
+                row.snapshot_id
+            ))
+        })?;
+        let end = parse_bound(end).ok_or_else(|| {
+            A3Error::invalid(format!(
+                "{}: {TO_PARAM} {end:?} is not a date",
+                row.snapshot_id
+            ))
+        })?;
+        let window = Segment::new(start, end)
             .map_err(|error| A3Error::invalid(format!("{}: {error}", row.snapshot_id)))?;
         let entry = windows
             .entry((window.start(), window.end()))
@@ -772,6 +787,14 @@ fn confirm(events: Vec<ParsedEvent>, members: &[SecurityLifecycleFact]) -> Confi
         (left.code.as_str(), left.start_day).cmp(&(right.code.as_str(), right.start_day))
     });
     confirmed
+}
+
+/// A window bound from a fingerprint: `YYYY-MM-DD` (the shared default) or
+/// `YYYYMMDD` (this source's request shape).
+fn parse_bound(text: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(text.trim(), "%Y-%m-%d")
+        .ok()
+        .or_else(|| parse_day(text))
 }
 
 /// `YYYYMMDD`, the date shape of the event table.

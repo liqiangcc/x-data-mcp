@@ -30,7 +30,7 @@ use chrono::{NaiveDate, Utc};
 
 use super::bind::{self, SnapshotBinding};
 use super::freeze::{FrozenBytes, FrozenSnapshot, freeze_bytes, record_snapshots};
-use super::request::{ExchangeRequest, PagingFormat, Segment};
+use super::request::{DateFormat, ExchangeRequest, PagingFormat, Segment};
 use super::transport::{Client, HttpRequest};
 use super::validate::{self, EmptyPolicy, FailureClass, PageEnvelope, PageSet, ZeroPolicy};
 use super::{BasisStatus, SourceId, default_headers};
@@ -116,6 +116,9 @@ pub struct AcquisitionPlan {
     /// [`ZeroPolicy::FailClosed`]; A-3 asks for [`ZeroPolicy::NotObserved`]
     /// because it only derives positive facts.
     pub zero_policy: ZeroPolicy,
+    /// Date shape of the window bounds; [`DateFormat::Iso`] unless the source
+    /// documents the compact shape.
+    pub date_format: DateFormat,
 }
 
 impl AcquisitionPlan {
@@ -129,6 +132,7 @@ impl AcquisitionPlan {
             required_basis: BasisStatus::ApprovedSource,
             max_pages: MAX_PAGES,
             zero_policy: ZeroPolicy::FailClosed,
+            date_format: DateFormat::Iso,
         }
     }
 
@@ -159,6 +163,13 @@ impl AcquisitionPlan {
         self
     }
 
+    /// Write the window bounds as `YYYYMMDD` (the `commonSoaQuery` sources
+    /// ignore requests with the dashed shape).
+    pub fn compact_dates(mut self) -> Self {
+        self.date_format = DateFormat::Compact;
+        self
+    }
+
     /// Canonical request of one page, including the window bounds when the
     /// source takes them as request parameters.
     pub fn request(
@@ -173,7 +184,7 @@ impl AcquisitionPlan {
             .paged(self.format, page);
         if let Some(segment) = window {
             let mut params = BTreeMap::new();
-            segment.apply(&mut params, from_param, to_param);
+            segment.apply_with(&mut params, from_param, to_param, self.date_format);
             request = request.with_params(&params);
         }
         request
