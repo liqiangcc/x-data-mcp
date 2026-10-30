@@ -49,7 +49,7 @@ use chrono::{Datelike, NaiveDate, Utc};
 use serde_json::{Value, json};
 
 use crate::exchange_source::{
-    AcquireError, AcquisitionPlan, Client, Entry, PagingFormat, RequestError, RunCache, Segment,
+    AcquireError, AcquisitionPlan, Client, Entry, PagingFormat, RequestError, RunCache,
     SnapshotBinding, SourceId, TransportError, quarter_segments,
 };
 use crate::security_master::assembly::PendingSource;
