@@ -599,7 +599,7 @@ fn acquire_merges_the_four_lists_and_the_five_key_codes() {
         ]
     );
     let ids = evidence["snapshot_ids"].as_object().unwrap();
-    assert_eq!(ids.len(), 8);
+    assert_eq!(ids.len(), 7, "one snapshots entry per plan kind");
     assert!(
         ids.values()
             .all(|list| !list.as_array().unwrap().is_empty())
