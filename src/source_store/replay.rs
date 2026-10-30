@@ -630,12 +630,11 @@ fn rebuild_risk_warnings(
         };
 
     let mut coverage = Vec::new();
-    if let Some(backend) = &backend {
-        if let Some((stored_coverage, _)) =
+    if let Some(backend) = &backend
+        && let Some((stored_coverage, _)) =
             registered_coverage(backend).map_err(|e| e.to_string())?
-        {
-            coverage = stored_coverage;
-        }
+    {
+        coverage = stored_coverage;
     }
     let gaps: Vec<(NaiveDate, NaiveDate)> = coverage
         .iter()

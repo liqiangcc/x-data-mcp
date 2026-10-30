@@ -201,10 +201,10 @@ pub fn assemble_sz(
                 current.effective_to = Some(change.day);
                 intervals.push(current);
             }
-            if let Some(status) = after {
-                if open.is_none() {
-                    open = Some(interval_from_sz(code, change, status));
-                }
+            if let Some(status) = after
+                && open.is_none()
+            {
+                open = Some(interval_from_sz(code, change, status));
             }
             current_name = change.after_name.clone();
         }
@@ -257,7 +257,7 @@ pub fn assemble_sh(
             .collect();
         for day in code_gaps {
             while cursor < events.len() && events[cursor].day <= day {
-                apply_sh_event(&mut open, &mut intervals, &events[cursor]);
+                apply_sh_event(&mut open, &mut intervals, events[cursor]);
                 cursor += 1;
             }
             close_at(&mut open, &mut intervals, day);
@@ -269,7 +269,7 @@ pub fn assemble_sh(
             intervals.push(interval);
         }
     }
-    coverage.sort_by(|left, right| (left.from, left.to).cmp(&(right.from, right.to)));
+    coverage.sort_by_key(|left| (left.from, left.to));
     Ok(RiskWarningSet {
         rows: intervals,
         coverage,
