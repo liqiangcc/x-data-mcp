@@ -358,7 +358,7 @@ fn execute(
     item: &ItemSpec,
     expected_task_revision: u64,
     source_cache: &RefCell<Option<DatasetSource>>,
-    run_cache: &RefCell<Option<Arc<RunCache>>>,
+    run_cache_cell: &RefCell<Option<Arc<RunCache>>>,
 ) -> Result<Value, Error> {
     if let Some(entity) = task_control::derived::index_entity(&item.item_id) {
         let index = session
@@ -513,13 +513,16 @@ fn execute(
         // table per run. Without the source store the item stays
         // `pending_source` (0 rows); a configured store that cannot be fetched
         // fails this item and leaves the previous version readable.
-        match crate::official_security::security_names::run_source(market, run_cache(run_cache))
-            .map_err(|error| {
-                Error::Invalid(format!(
-                    "security name-history source: {}: {error}",
-                    error.code()
-                ))
-            })? {
+        match crate::official_security::security_names::run_source(
+            market,
+            run_cache(run_cache_cell),
+        )
+        .map_err(|error| {
+            Error::Invalid(format!(
+                "security name-history source: {}: {error}",
+                error.code()
+            ))
+        })? {
             crate::official_security::security_names::RunSource::Pending(pending) => {
                 let pending = vec![pending];
                 return Ok(json!({
@@ -560,7 +563,7 @@ fn execute(
     if item.item_id == task_control::derived::RISK_WARNINGS {
         let started = std::time::Instant::now();
         let source = dataset_source(session, source_cache)?;
-        match crate::official_security::risk_warnings::run_source(market, run_cache(run_cache))
+        match crate::official_security::risk_warnings::run_source(market, run_cache(run_cache_cell))
             .map_err(|error| {
                 Error::Invalid(format!(
                     "historical ST/risk-warning source: {}: {error}",

@@ -128,8 +128,14 @@ fn round_trip_keeps_provenance_and_registers_counts() {
     .unwrap()
     .expect("non-empty set registers");
     assert_eq!(registration.record_count, 2);
-    assert_eq!(registration.first_day, day(1999, 4, 27));
-    assert_eq!(registration.last_day, day(2001, 3, 7));
+    assert_eq!(
+        registration.first_day,
+        compact_market::epoch_day(day(1999, 4, 27))
+    );
+    assert_eq!(
+        registration.last_day,
+        compact_market::epoch_day(day(2001, 3, 7))
+    );
     let stored = read_names(&f.c).unwrap();
     assert_eq!(stored.len(), 2);
     assert_eq!(stored[0].name, "深安达A");

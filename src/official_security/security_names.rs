@@ -148,6 +148,9 @@ pub enum Error {
     Request(#[from] RequestError),
     #[error(transparent)]
     Domain(#[from] names::Error),
+    /// A failure inside PR-10's frozen SZSE acquisition/parse entry.
+    #[error(transparent)]
+    Szse(#[from] risk_warnings::Error),
     #[error("{code}: {detail}")]
     Invalid { code: &'static str, detail: String },
 }
@@ -160,6 +163,7 @@ impl Error {
             Self::Transport(error) => error.code(),
             Self::Request(error) => error.code(),
             Self::Domain(_) => "source_invalid",
+            Self::Szse(error) => error.code(),
             Self::Invalid { code, .. } => code,
         }
     }
