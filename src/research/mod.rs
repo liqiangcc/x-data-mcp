@@ -131,9 +131,11 @@ pub enum DatasetSelection {
     Index,
     Calendar,
     Factors,
-    /// The M2 security-master datasets (§12.4): master intervals, names,
-    /// capital events, risk warnings, suspensions, price-limit rules and the
-    /// universe interval skeleton. `all` includes them.
+    /// The M2 security-master datasets (§12.4) plus the M3 whole-market facts
+    /// (industry intervals and code migrations, #446 §10.4): master intervals,
+    /// names, capital events, risk warnings, suspensions, price-limit rules,
+    /// the universe interval skeleton, industry assignments and code
+    /// migrations. `all` includes them.
     Security,
 }
 
@@ -318,6 +320,38 @@ pub struct CatalogBinding {
 pub struct GenerationBinding {
     pub generation_id: String,
     pub manifest_sha256: String,
+}
+
+/// The M3 industry dataset identity the manifest binds (#446 §9.4.2/§10.4).
+///
+/// The industry tables carry no `derived_dataset_versions` row (they are M3
+/// tables, not derived registrations), so the version is the §9.4.2 content
+/// summary over `industry_snapshots` + `industry_assignments` — the same id the
+/// v8 read surface names in `version_ref`. Putting it in the identity means two
+/// databases that differ only in industry rows cannot produce the same
+/// `snapshot_id` (and a daily run that rewrites the intervals mid-export is an
+/// `EXPORT_DRIFT`, not a half-old file).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndustryBinding {
+    pub version_id: String,
+    pub coverage_start: Option<NaiveDate>,
+    pub snapshot_rows: usize,
+    pub assignment_rows: usize,
+}
+
+/// The manifest `coverage` block (#446 §10.4): what the snapshot covers beyond
+/// its file list. Both numbers are functions of the bound inputs, so they live
+/// in the identity and two exports of the same state agree byte for byte.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Coverage {
+    /// Distinct exported stock entities whose `security_master` row carries a
+    /// `delisting_date`. `daily_raw` includes them because its member set comes
+    /// from the main table, not the current catalog (§4.1); the count is how a
+    /// consumer sees that the survivor bias is addressed.
+    pub delisted_series: i64,
+    /// The first day an industry interval exists (§5.4 `coverage_start`);
+    /// `null` when no interval-defining snapshot was ever ingested.
+    pub industry_coverage_start: Option<NaiveDate>,
 }
 
 /// Per-index unit/scope metadata (§3.9, BR-M1-6). It is data, so the exporter
@@ -606,8 +640,52 @@ pub const PRICE_LIMIT_RULES_COLUMNS: &[&str] = &[
     "basis_ref",
     "basis_status",
 ];
-pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] =
-    &["entity", "member_from", "member_to", "basis", "flags"];
+/// `research-snapshot.v3` adds the confirmed-identity columns M3 PR-7 put on
+/// the read model (#446 §4.3/§10.4): the canonical code of a confirmed code
+/// migration and the other codes in its chain. Candidates never add an alias,
+/// so the file cannot be used to collapse an unproven rename.
+pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] = &[
+    "entity",
+    "canonical_entity",
+    "aliases",
+    "member_from",
+    "member_to",
+    "basis",
+    "flags",
+];
+
+/// The M3 industry intervals (#446 §10.4). One row per stored interval, with
+/// the snapshot that proved it, so a consumer can trace an assignment back to
+/// the `tdxhy.cfg` content rather than only to the export.
+pub const INDUSTRY_ASSIGNMENTS_COLUMNS: &[&str] = &[
+    "entity",
+    "exchange",
+    "code",
+    "scheme",
+    "level",
+    "industry_code",
+    "name",
+    "name_status",
+    "effective_from",
+    "effective_to",
+    "known_at",
+    "effective_from_basis",
+    "evidence_grade",
+    "source_snapshot_sha256",
+];
+
+/// The de-duplicated code migrations (#446 §10.4). M2 has stored this table
+/// since schema 23 but never exported it, so a consumer could only infer a
+/// rename from interval changes. `certainty` is the column that keeps a
+/// `candidate` from being read as proof.
+pub const CODE_MIGRATIONS_COLUMNS: &[&str] = &[
+    "from",
+    "to",
+    "effective_from",
+    "certainty",
+    "source_kind",
+    "known_at",
+];
 
 pub const SECURITY_MASTER_FILE: &str = "security_master.parquet";
 pub const SECURITY_NAMES_FILE: &str = "security_names.parquet";
@@ -616,6 +694,14 @@ pub const RISK_WARNINGS_FILE: &str = "risk_warnings.parquet";
 pub const SUSPENSIONS_FILE: &str = "suspensions.parquet";
 pub const PRICE_LIMIT_RULES_FILE: &str = "price_limit_rules.parquet";
 pub const UNIVERSE_INTERVALS_FILE: &str = "universe_intervals.parquet";
+pub const INDUSTRY_ASSIGNMENTS_FILE: &str = "industry_assignments.parquet";
+pub const CODE_MIGRATIONS_FILE: &str = "code_migrations.parquet";
+/// The dataset names the two M3 files (and the manifest's `industry` block)
+/// carry. `market.industry_assignments` is a v8 dataset name; the
+/// de-duplicated migration table has no tool surface, so its name is the read
+/// model's own (`research/universe.rs`).
+pub const INDUSTRY_DATASET: &str = "market.industry_assignments";
+pub const CODE_MIGRATIONS_DATASET: &str = "market.code_migrations";
 
 pub const DAILY_RAW_FILE: &str = "daily_raw.parquet";
 pub const DAILY_QFQ_FILE: &str = "daily_qfq.parquet";
@@ -722,6 +808,27 @@ pub fn file_plans(request: &ExportRequest) -> Vec<FilePlan> {
                 // here would promise a filter it cannot implement.
                 TemporalDecl::AS_OF_ONLY,
             ),
+            (
+                INDUSTRY_ASSIGNMENTS_FILE,
+                INDUSTRY_ASSIGNMENTS_COLUMNS,
+                INDUSTRY_DATASET,
+                // Same declaration the v8 dataset publishes: every row has a
+                // `known_at`, but backfilled rows carry the import day, so a
+                // point-in-time filter is meaningful and never complete.
+                TemporalDecl::PARTIAL,
+            ),
+            (
+                CODE_MIGRATIONS_FILE,
+                CODE_MIGRATIONS_COLUMNS,
+                // No v8 dataset names the de-duplicated migration table: the
+                // tool surface exposes it only through `universe`
+                // (`canonical_entity`/`aliases`). The manifest still names the
+                // dataset so a consumer can join the file to the read model
+                // vocabulary (`src/research/universe.rs`'s
+                // `DATASET_CODE_MIGRATIONS`), not to a tool that does not exist.
+                CODE_MIGRATIONS_DATASET,
+                TemporalDecl::PARTIAL,
+            ),
         ] {
             files.push(FilePlan {
                 path,
@@ -750,6 +857,12 @@ pub struct SnapshotPlan {
     pub lineage: BTreeMap<String, GenerationBinding>,
     pub series: Vec<SeriesEntry>,
     pub derived: Vec<DerivedEntry>,
+    /// M3 industry dataset identity; `None` when no interval-defining snapshot
+    /// exists (the file is then written as a real empty file, like the M2 files
+    /// whose writer has not run yet).
+    pub industry: Option<IndustryBinding>,
+    /// Manifest `coverage` block (#446 §10.4).
+    pub coverage: Coverage,
     pub files: Vec<FilePlan>,
     /// The canonical identity document the `snapshot_id` hashes. Printed by
     /// `--dry-run`; also the base of `manifest.json`.
@@ -851,6 +964,11 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
     }
 
     let lineage = read::resolve_lineage(c, &series, &derived)?;
+    let industry = read::industry_binding(c)?;
+    let coverage = Coverage {
+        delisted_series: read::delisted_series_count(c, &series)?,
+        industry_coverage_start: industry.as_ref().and_then(|row| row.coverage_start),
+    };
     let identity = manifest::identity(
         &request,
         &catalog.binding,
@@ -858,6 +976,10 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
         &lineage.by_digest,
         &series,
         &derived,
+        &manifest::WholeMarket {
+            industry: industry.as_ref(),
+            coverage: &coverage,
+        },
     )?;
     let snapshot_id = manifest::snapshot_id(&identity)?;
     Ok(SnapshotPlan {
@@ -868,6 +990,8 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
         lineage: lineage.by_digest,
         series,
         derived,
+        industry,
+        coverage,
         files: file_plans(&request),
         identity,
     })
@@ -919,4 +1043,15 @@ pub const LIMITATIONS: &[&str] = &[
     "price_limit_rules rows with basis_status='pending' record a known rule \
      whose text is not admitted; they are provenance, never selected by the \
      derivation, so a date without an admitted rule is `unknown` (§8.1/§8.5)",
+    "industry_assignments start at the first ingested tdxhy.cfg snapshot \
+     (coverage.industry_coverage_start); a day before it is `unknown{before_coverage}`, \
+     never the current industry, and `snapshot_member_sha256` names the snapshot \
+     that proved each interval (§5.4, M3 data-catalog deviation 2)",
+    "industry_assignments.name is `unknown` for intervals whose snapshot had no \
+     same-generation incon.dat; the industry code and interval are still usable \
+     and the name is never filled from a later dictionary (§5.3)",
+    "code_migrations rows with certainty='candidate' are bar-evidence leads, not \
+     proof: they change no membership, add no `aliases`, and must not be used to \
+     collapse two histories; only certainty='confirmed' rows are canonical \
+     (#446 §4.3)",
 ];

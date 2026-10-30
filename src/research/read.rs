@@ -900,3 +900,94 @@ pub fn universe_interval_rows(
         .filter(|row| interval_in_range(row.member_from, row.member_to, request.start, request.end))
         .collect())
 }
+
+/// The stored industry intervals (§10.4 `industry_assignments`).
+///
+/// This is the read-model projection of §5.1's interval rows, not a per-`as_of`
+/// answer: the file carries every interval the database holds so a consumer can
+/// build any point-in-time view itself. The `unknown{before_coverage}` answer
+/// stays a read-time fact ([`super::industry`]) — exporting it as a row would
+/// freeze today's coverage boundary into the file.
+pub fn industry_assignment_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<super::industry::AssignedIndustry>, Error> {
+    let rows = super::industry::interval_rows(c)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| {
+            interval_in_range(
+                row.effective_from,
+                row.effective_to,
+                request.start,
+                request.end,
+            )
+        })
+        .collect())
+}
+
+/// The de-duplicated code migrations (§10.4 `code_migrations`).
+///
+/// The storage adapter already returns them in `(from_exchange, from_code,
+/// effective_from)` order, so the file order is a function of the table.
+pub fn code_migration_rows(
+    c: &Connection,
+    request: &ExportRequest,
+) -> Result<Vec<crate::security_master::assembly::CodeMigrationFact>, Error> {
+    let rows = crate::sqlite_market::security::read_code_migrations(c).map_err(Error::from)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| day_in_range(row.effective_from, request.start, request.end))
+        .collect())
+}
+
+/// The M3 industry dataset identity the manifest binds (#446 §9.4.2).
+/// `None` when the database holds no interval-defining snapshot: the v8 read
+/// surface calls that state `absent` and the export writes an empty file
+/// instead of inventing a version.
+pub fn industry_binding(c: &Connection) -> Result<Option<super::IndustryBinding>, Error> {
+    let identity = super::industry::dataset_identity(c)?;
+    if identity.snapshot_rows == 0 {
+        if identity.assignment_rows > 0 {
+            return Err(integrity(
+                "industry_assignments has rows without an industry_snapshots parent",
+            ));
+        }
+        return Ok(None);
+    }
+    Ok(Some(super::IndustryBinding {
+        version_id: identity.version_id,
+        coverage_start: identity.coverage_start,
+        snapshot_rows: identity.snapshot_rows,
+        assignment_rows: identity.assignment_rows,
+    }))
+}
+
+/// Distinct exported stock entities that the main table marks as delisted
+/// (§10.4 manifest `coverage.delisted_series`).
+///
+/// The count is taken from `security_master`, not from the catalog: the point
+/// of M3 is that `daily_raw`'s member set includes the delisted tail, so the
+/// manifest has to say how much of that tail this snapshot actually carries.
+/// A row without a `delisting_date` (the two remaining `unknown` cases in
+/// §11) is not counted — the number reports proven coverage, not a guess.
+pub fn delisted_series_count(c: &Connection, series: &[SeriesEntry]) -> Result<i64, Error> {
+    if series.is_empty() {
+        return Ok(0);
+    }
+    let rows = crate::sqlite_market::security::read_security_master(c).map_err(Error::from)?;
+    let delisted: BTreeSet<String> = rows
+        .iter()
+        .filter(|row| row.instrument_class == 0 && row.delisting_date.is_some())
+        .map(|row| row.entity())
+        .collect();
+    let exported: BTreeSet<&str> = series
+        .iter()
+        .filter(|entry| entry.instrument_class == INSTRUMENT_CLASS_STOCK)
+        .map(|entry| entry.entity.as_str())
+        .collect();
+    Ok(exported
+        .iter()
+        .filter(|entity| delisted.contains(**entity))
+        .count() as i64)
+}

@@ -108,11 +108,15 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // research/ops payloads grew to 11_511 / 28_220 B while maint (no
     // dataset enum) stayed at 13_493 B. M3 PR-4 adds the v2
     // `selection.kind=scope` branch and the v1/v2 contract_version enum to
-    // `start_collection` only (ops), so the ops budget carries that
-    // documented surface growth too; it is not relaxed for any other reason.
+    // `start_collection` only (ops). M3 PR-9 (#446 §10.3) adds the optional
+    // `selection.scope` field (one enum value) to the shared `Selection`
+    // schema, which three read tools carry, plus the
+    // `market.industry_assignments` value M3 PR-7 put in the `Dataset` enum.
+    // The research/ops budgets carry that documented surface growth; they are
+    // not relaxed for any other reason.
     let budgets = [
-        (EntryKind::Research, 5usize, 11_700usize),
-        (EntryKind::Ops, 15usize, 28_700usize),
+        (EntryKind::Research, 5usize, 12_200usize),
+        (EntryKind::Ops, 15usize, 29_300usize),
         (
             EntryKind::Maint,
             if cfg!(target_os = "linux") { 9 } else { 8 },

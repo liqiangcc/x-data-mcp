@@ -192,12 +192,64 @@ CONTRACT = {
     },
     "universe_intervals.parquet": {
         "entity": pa.string(),
+        "canonical_entity": pa.string(),
+        "aliases": pa.string(),
         "member_from": pa.date32(),
         "member_to": pa.date32(),
         "basis": pa.string(),
         "flags": pa.string(),
     },
+    # M3 whole-market files (#446 §10.4). `source_snapshot_sha256` is the
+    # `tdxhy.cfg` content that proved the interval, so an assignment can be
+    # traced past the export. `certainty` is the column that keeps a candidate
+    # migration from reading as proof.
+    "industry_assignments.parquet": {
+        "entity": pa.string(),
+        "exchange": pa.string(),
+        "code": pa.string(),
+        "scheme": pa.string(),
+        "level": pa.int64(),
+        "industry_code": pa.string(),
+        "name": pa.string(),
+        "name_status": pa.string(),
+        "effective_from": pa.date32(),
+        "effective_to": pa.date32(),
+        "known_at": pa.date32(),
+        "effective_from_basis": pa.string(),
+        "evidence_grade": pa.string(),
+        "source_snapshot_sha256": pa.string(),
+    },
+    "code_migrations.parquet": {
+        "from": pa.string(),
+        "to": pa.string(),
+        "effective_from": pa.date32(),
+        "certainty": pa.string(),
+        "source_kind": pa.string(),
+        "known_at": pa.date32(),
+    },
 }
+
+# The snapshots this reader accepts. v2 stays readable: a directory written
+# before #446 PR-9 has no M3 files and the five-column universe file.
+SCHEMAS = {
+    "x-data-mcp.research-snapshot.v2": 2,
+    "x-data-mcp.research-snapshot.v3": 3,
+}
+V3_ONLY_FILES = ("industry_assignments.parquet", "code_migrations.parquet")
+V2_UNIVERSE_COLUMNS = ("entity", "member_from", "member_to", "basis", "flags")
+
+
+def contract_for(name: str, version: int) -> dict[str, pa.DataType] | None:
+    """The column contract of one listed file for the manifest's schema."""
+    expected = CONTRACT.get(name)
+    if expected is None:
+        return None
+    if version < 3:
+        if name in V3_ONLY_FILES:
+            return None
+        if name == "universe_intervals.parquet":
+            return {column: expected[column] for column in V2_UNIVERSE_COLUMNS}
+    return expected
 
 # The day column each file orders by; the M2 files are intervals, so their
 # first day is the lower bound (§12.4).
@@ -210,6 +262,8 @@ DAY_COLUMN = {
     "suspensions.parquet": "start_day",
     "price_limit_rules.parquet": "effective_from",
     "universe_intervals.parquet": "member_from",
+    "industry_assignments.parquet": "effective_from",
+    "code_migrations.parquet": "effective_from",
 }
 
 failures: list[str] = []
@@ -322,25 +376,37 @@ def check_snapshot(directory: pathlib.Path) -> None:
     if not manifest_path.is_file():
         return
     manifest = json.loads(manifest_path.read_text())
+    version = SCHEMAS.get(manifest.get("schema"))
     check(
-        manifest.get("schema") == "x-data-mcp.research-snapshot.v2",
-        f"manifest schema {manifest.get('schema')!r}",
+        version is not None,
+        f"manifest schema {manifest.get('schema')!r} is not one of {sorted(SCHEMAS)}",
     )
+    if version is None:
+        return
     check(
         directory.name == manifest.get("snapshot_id"),
         f"directory {directory.name} != manifest snapshot_id {manifest.get('snapshot_id')}",
     )
     files = manifest.get("files") or []
     check(len(files) > 0, "manifest lists no file")
+    listed = {entry.get("path") for entry in files}
+    # §10.4: a v3 snapshot always carries the M3 files, even when the intervals
+    # are empty (a real empty file, not an absent one). A v2 snapshot never
+    # does.
+    for name in V3_ONLY_FILES:
+        check(
+            (name in listed) == (version >= 3),
+            f"{name}: listed={name in listed} for schema v{version}",
+        )
     for entry in files:
         name = entry["path"]
         path = directory / name
         check(path.is_file(), f"{name}: listed in the manifest but missing")
         if not path.is_file():
             continue
-        expected = CONTRACT.get(name)
+        expected = contract_for(name, version)
         if expected is None:
-            check(False, f"{name}: no type contract in this script")
+            check(False, f"{name}: no type contract in this script for schema v{version}")
             continue
         check(
             list(entry.get("columns") or []) == list(expected),
@@ -370,6 +436,19 @@ def self_check() -> None:
     """Exercise the readers and the §7.4 type contract without Rust."""
     import datetime
     import decimal
+
+    # #446 PR-9: a v2 snapshot stays readable. Its universe file has the five
+    # pre-M3 columns and it never lists the M3 files, so the reader must not
+    # demand them (checked on a real directory by `--snapshot-dir`).
+    check(
+        list(contract_for("universe_intervals.parquet", 2)) == list(V2_UNIVERSE_COLUMNS),
+        "v2 universe_intervals contract changed",
+    )
+    for name in V3_ONLY_FILES:
+        check(
+            contract_for(name, 2) is None and contract_for(name, 3) is not None,
+            f"{name}: version-gated contract is wrong",
+        )
 
     for name, expected in CONTRACT.items():
         with tempfile.TemporaryDirectory() as tmp:

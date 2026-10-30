@@ -392,6 +392,13 @@ pub enum Selection {
     Universe {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         catalog_version: Option<String>,
+        // v2 附加字段 (M3 #446 §10.3): resolve the members from the main table
+        // (`sh_sz_a_listed_ever`) instead of a catalog version. Omitting it
+        // keeps the pre-M3 behavior byte for byte; the only accepted value is
+        // the listed-ever scope, and only for `market.daily`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(schema_with = "listed_ever_scope")]
+        scope: Option<CatalogScope>,
     },
     // A market-level dataset with no security entity (`market.calendar`).
     // Struct variant, not a unit: `deny_unknown_fields` ignores extra keys on
@@ -413,6 +420,12 @@ pub enum CatalogScope {
 /// listed-ever scope; the schema must not advertise it either.
 fn current_catalog_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({"type": "string", "enum": ["current_sh_sz_a"]})
+}
+/// A `universe` selection's optional scope. Only the listed-ever scope is a
+/// read selection (the catalog scope is what `catalog` already means), so the
+/// schema must not advertise `current_sh_sz_a` here either.
+fn listed_ever_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "string", "enum": ["sh_sz_a_listed_ever"]})
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

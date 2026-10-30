@@ -901,6 +901,8 @@ v2 的文件集不变，新增：
 - `snapshot_id` 规则不变（内容摘要）；同一输入同 `snapshot_id` 逐位重现；schema 升 v3、旧 v2 快照仍可读（只读目录）。
 - `universe_intervals.parquet` 加 `canonical_entity`/`aliases` 列（v3 新列）。
 
+**PR-9 落地（2026-10-30，XDM-115）**：`manifest.schema=x-data-mcp.research-snapshot.v3` 已实现；两个新文件由 `security` 数据集（即 `--dataset all` 的组成部分）固定导出，v3 即使为空也写真实空文件。列名与本节一致，仅把两处笔误落成唯一列名：`industry_code`（本节写作 `level/code`，同一文件不能有两列 `code`）与 `effective_from_basis`（§5.1 的 `basis`）。清单身份新增两块：`industry`（`dataset`/`version_id`/`snapshot_rows`/`assignment_rows`，`version_id` 即 §9.4.2 内容摘要，与 v8 `market.industry_assignments` 的 `version_ref` 同值）与 `coverage`（`delisted_series` = 导出股票中主表 `delisting_date` 非空的不同实体数，`industry_coverage_start` = 第一条区间日）；两者都是输入函数，所以逐位重现仍成立，而只差分行业行的两个库不可能复用同一 `snapshot_id`。`universe_intervals` 的 `aliases` 是逗号分隔的 STRING（与 `flags` 同形），只由 confirmed 迁移产生，candidate 不加别名。读取方：`scripts/export_smoke.py` 同时接受 v2/v3（v2 不要求新文件、`universe_intervals` 按 5 列校验），`scripts/smoke_release.py` 的清单断言同样接受两版；v1 读写路径不变（`market.daily` 之外的 `selection.scope` 与 v1 携带 scope 都被拒绝）。
+
 ### 10.5 契约影响
 
 | 面 | 影响 | 处理 |
@@ -1002,7 +1004,7 @@ v2 的文件集不变，新增：
 | **PR-6** 行业落库 + 回填 | `derived:industry_snapshot`；区间计算（相邻快照、同日/缺失 `last_modified` 规则）；字典 `incon.dat`；`--scope industry` 重放；maint 回填命令（A/B/C 档，只读来源库） | AC-M3-3/4 | 夹具：7 个历史 cfg（含同内容 3 个 blob）；成员增删/重分类；同日冲突；缺字典 → `unknown_dictionary`；回填幂等；早于起点 `unknown`；来源库重放后摘要 `match` | PR-1a；PR-1（不依赖 PR-2/3）；**已交付 2026-10-29（XDM-104）** |
 | **PR-7** 行业读模型 | `src/research/industry.rs`；`market.industry_assignments` 分支；`status=assigned/unknown`；`universe` 的 `canonical_entity/aliases` | AC-M3-3 | 10 个 `as_of` 夹具；`known_at` 排除 NULL 并计数；before_coverage/missing_in_snapshot；迁移前后只一个代码 | PR-6 |
 | **PR-8** 退役门禁（已交付 2026-10-29，XDM-108） | `generation_facts` 登记（各派生 item 写，含 `evidence_sha256`）；`--scope generation_facts` 重放；`retire_bytes` 前置检查（先来源库按 sha 读回，再查索引）；`source_store_evidence_missing`/`derived_facts_missing`；豁免表与 maint 命令 | AC-M3-5 | 缺任一 kind → 拒绝并给清单；来源库有字节但索引缺行 → 拒绝 + 提示重放；blob 读不回 → 拒绝；有豁免 → 成功且留痕；active/pin 检查不回归；自动退役走同一门禁 | PR-1a；PR-1；PR-3/5/6 登记源 |
-| **PR-9** 导出 + v8 | `research-snapshot.v3`（`industry_assignments.parquet`、`code_migrations.parquet`、universe 新列）；`Dataset`/capabilities/`scope` 解码 | AC-M3-9（复现）；AC-M3-3（读面） | 清单确定性；旧 v2 快照可读；v1 拒新 dataset/scope；三入口同结果 | PR-7 |
+| **PR-9** 导出 + v8 | `research-snapshot.v3`（`industry_assignments.parquet`、`code_migrations.parquet`、universe 新列）；`Dataset`/capabilities/`scope` 解码 | AC-M3-9（复现）；AC-M3-3（读面） | 清单确定性；旧 v2 快照可读；v1 拒新 dataset/scope；三入口同结果 | PR-7；**已交付 2026-10-30（XDM-115）** |
 | **PR-10** 历史 ST 写入器（#308） | 深 `SSGSGMXX/tab2` ST 区间 + 沪公告索引状态事件；GP29/行情锚定标 `OWNER_RISK_ACCEPTED`；沪 2000 前/北交所 `NOT_AVAILABLE` | 归 #308（M3 只接 AC-M3-9） | 夹具：ST 实施/撤销区间、同日冲突、未知生效日；不把 0 行当无事件 | PR-2；#308 门禁 |
 | **PR-11** 停复牌写入器（A-3） | 沪 `GW_PL_JYTS_TFPXX` 2008 起 `confirmed`；深首期无 `confirmed`（保留 `unresolved_gap`） | 归 A-3 | 夹具：停牌起止与撤销；深市不写 `confirmed`；与 `unresolved_gap` 不双计 | PR-2 |
 | **PR-12** 简称写入器（S-6） | 深 `SSGSGMXX/tab2` 区间；沪/北 `unbounded`/`unknown` | 归 S-6 | 夹具：变更链、XD/XR 规范化、同日多变更、无 dated 源 | PR-2 |
