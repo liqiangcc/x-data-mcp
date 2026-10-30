@@ -1057,6 +1057,85 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 | AC-M3-9 | fresh init 空库 `source_store replay --store … --db … --scope all`（期望 `store_empty`）→ `source_store import …` → `source_store replay --scope all --db`（期望 `match`）→ `source_store verify`；全程断网 | 三次 JSON（`store_empty`、导入统计、`summary` 与 `rebuilt`）、`manifest.jsonl` 的 sha256、重建表行数 | 未执行（五个使用方全覆盖还依赖 PR-10/11/12；本批只能覆盖 A-1/A-2、行业与 `generation_facts`） |
 | AC-M3-10 | 用交易所来源入口抓一个已知有数据的季度、一个 0 行窗口，并用一个 >1 季度窗口做对照；检查分段（≤1 季度）与分页计数 | 请求指纹、每个窗口的返回计数、`not_observed`/`unverified_zero`/失败分类；证明没有写出「无事件/无变更」 | 未执行 |
 
+### 14.4 PR-11 落地记录（A-3 停复牌写入器）
+
+状态：实现中（XDM-119）。本节先记计划，落地后逐条补证据；未执行的项写「未执行」。
+
+**入口与请求**（§6.3，D-49/D-60）
+
+- 来源：上交所结构化停复牌事件表 `GW_PL_JYTS_TFPXX`，端点
+  `https://query.sse.com.cn/commonSoaQuery.do`；请求参数固定为
+  `isPagination=true`、`sqlId=GW_PL_JYTS_TFPXX`、`pageHelp.pageSize=25`、
+  `pageHelp.pageNo=<n>`、`productCode=`、`keyWords=`、`startStopDate`/`endStopDate`。
+- 分页方言是 PR-2 的第三个值 `SseSoaPageNo`（清单 `parser_version`
+  `exchange-sse-soa-page-v1`）：该端点只认 `pageHelp.pageNo`，`beginPage`/`endPage`
+  被忽略（实测：发 `beginPage=2&endPage=2` 仍返回第 1 页且 `pageHelp.beginPage=1`），
+  信封的页号也从 `pageHelp.pageNo` 读。
+- 分段：`2008-01-01` 起、按自然季度对齐、下界固定，上界取「昨天」（日更运行时不查询
+  尚未结束的当天窗口；当天事件在下一次运行落库）。每段一次请求集合，段内按页号翻页。
+- 冻结/校验/绑定全部走 PR-2 的 `Entry`：字节先入来源库（`store_kind=http_fetch`、
+  `source_id=sse_suspension`），信封计数（`pageHelp.total`/`pageCount`/行数）校验，
+  分档 `approved_source`。来源库未配置（`X_DATA_MCP_SOURCE_STORE` 缺失）时保持
+  `pending_source`，只写 `unresolved_gap`，日更不因此失败。
+
+**行语义（D-49/D-60）**
+
+- `type=LXTP`（连续停牌）且 `stopTime` 为空：区间 = `[startStopDate, endStopDate]`，
+  两者都是日期级、闭区间；`endStopDate` 是复牌日前一自然日，直接作为 `end_day`，
+  不做加减。`endStopDate` 为空（尚未复牌）= 未闭合：`end_day` 取本段窗口末日，
+  并在证据里计数（下一次运行会把区间往后延）。
+- `type=LSTP`（临时停牌）且 `stopTime=WH`（全天）且 `startStopDate=endStopDate`：
+  单日全天停牌，写一行。
+- `stopTime ∈ {AM, PM, 930}`（盘中临时停牌）与其它未知 `stopTime`：不写 `confirmed`
+  （D-49 把盘中临时停牌记为 `NOT_AVAILABLE`），计入证据；未知 `type`/缺字段按
+  `source_invalid` fail-closed。
+- 身份：只取 6 位、以 `6` 开头的沪市 A 股代码；同一 `(exchange, code, start_day)`
+  的重复行合并（去重计数）。其它产品（债券/优先股/基金）不写，计入证据。
+- 主表里没有的实体（历史代码、B 股、非 A 股产品）不写 `confirmed`：`assemble_suspensions`
+  对未知实体是 fail-closed，适配器在交给领域层之前按主表成员过滤，并把被过滤的实体
+  计数与样例写进 item 证据，不静默丢行、也不让一行无关产品失败整次日更。
+- `known_at = NULL`：事件表没有公告发布日，D-49 明确「公告日不得冒充 `known_at`」，
+  因此 confirmed 行的 `known_at` 为空（点时序查询排除 NULL，fail-closed）。
+- `reason=exchange_announcement`、`source_kind=exchange_suspension_event`、
+  `source_record_id` = `<snapshot_id>:<productCode>:<type>:<startStopDate>`（可回到冻结字节）。
+
+**失败语义**
+
+- 任一段失败（网络/格式/计数不一致/0 行）：`confirmed` 一行不写，item 失败（本次运行
+  `partially_failed`），上一版停牌数据集保持可读；0 行是 `unverified_zero`，不是
+  「没有停牌」（BR-M3-10）。
+- 与 `unresolved_gap` 不双计：confirmed 区间作为 `explained` 交给
+  `derive_gaps`，被解释的交易日从缺口行里切掉；行身份 `(exchange, code, start_day)`
+  冲突由 `validate_set` 拒绝（`Duplicate`）。
+
+**重放**
+
+- 冻结响应由 `--scope exchange` 选中并重建 `exchange_source_snapshots`（不重发 HTTP）；
+  清单里的 parser 版本 `exchange-sse-soa-page-v1` 进 `known_parser_version`，
+  否则重放会 `unknown_parser`。
+- 适配器另提供「只读来源库」的再解析入口（同一 parser 读回同一批 sha256），测试断言
+  两次解析得到的行集合逐位相同；不新增 scope。
+
+**测试清单（CI，夹具，不联网）**
+
+| 场景 | 断言 |
+|---|---|
+| 停牌起止 | LXTP 行 → 一行 `confirmed`，`start_day`/`end_day` 与事件表一致 |
+| 撤销/复牌 | `endStopDate` 闭合后再出现同码新 `startStopDate` → 两行区间，不重叠 |
+| 跨日停牌 | 跨越周末/多日的区间按交易日计 `missing_days`，非交易日不计 |
+| 深市不写 `confirmed` | 深市不配置来源 → `pending_source`，`confirmed_rows=0`，缺口照常 |
+| 不双计 | 缺口日被 confirmed 覆盖后 `gap_rows` 减少、`confirmed_rows` 增加，重叠行为 0 |
+| 0 行 | 0 行窗口 → `unverified_zero`，不写 `confirmed`，item 失败 |
+| 盘中临时停牌 | `stopTime=930/AM/PM` 行不产生 `confirmed`，计入证据 |
+| 未复牌 | `endStopDate` 空 → `end_day` = 段末日，计入未闭合计数 |
+| 非 A 股/主表外实体 | 债券、优先股、主表没有的代码不产生行，证据里有计数与样例 |
+| 重放 | 冻结后断网再解析，事实逐位相同；`--scope exchange --verify-only` = `match` |
+
+**文档**：`docs/exchange-source.md` 增加 A-3 消费者一节与第三个分页方言；
+`docs/data-catalog.md` §3.3 偏差 6 与 `docs/daily-sync.md` 的 `derived:suspensions`
+口径同步（沪市 2008 起 `confirmed`、深市只有 `unresolved_gap`）；D-60 的状态由
+「写入器未实现」改为「写入器已实现（PR-11），未部署」。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
