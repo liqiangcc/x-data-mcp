@@ -894,11 +894,10 @@ pub(crate) fn read_risk_warning_intervals(
     Ok(intervals)
 }
 
-/// One `security_name_history` row. The names dataset has **no writer yet**
-/// (no name source is admitted), so this decoder keeps the stored vocabulary
-/// verbatim instead of inventing a domain enum ahead of the writer: the DDL
-/// CHECK lists are the contract until a source adapter exists. The export reads
-/// the table so the file's shape is fixed and its row count is honest (0 today).
+/// One `security_name_history` row (§4.4). The writer
+/// ([`super::security_names`], M3 PR-12) owns the encoding; this decoder is
+/// shared with the export and with `source-store replay`, and validates the two
+/// CHECK vocabularies against the domain enums.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityNameRow {
     pub exchange: String,
@@ -906,9 +905,10 @@ pub struct SecurityNameRow {
     pub effective_from: NaiveDate,
     pub effective_to: Option<NaiveDate>,
     pub name: String,
-    pub certainty: String,
+    pub certainty: crate::security_master::names::NameCertainty,
     pub known_at: Option<NaiveDate>,
-    pub source_kind: String,
+    pub source_kind: crate::security_master::names::NameSourceKind,
+    pub source_record_id: Option<String>,
 }
 
 /// All stored `security_name_history` rows, ordered by the row identity.
@@ -916,7 +916,8 @@ pub(crate) fn read_security_names(c: &Connection) -> Result<Vec<SecurityNameRow>
     let mut statement = c
         .prepare(
             "SELECT exchange,code,effective_from,effective_to,name,certainty,known_at,\
-             source_kind FROM security_name_history ORDER BY exchange,code,effective_from",
+             source_kind,source_record_id FROM security_name_history \
+             ORDER BY exchange,code,effective_from",
         )
         .map_err(storage)?;
     let rows = statement
@@ -930,13 +931,21 @@ pub(crate) fn read_security_names(c: &Connection) -> Result<Vec<SecurityNameRow>
                 r.get::<_, String>(5)?,
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, String>(7)?,
+                r.get::<_, Option<String>>(8)?,
             ))
         })
         .map_err(storage)?;
     let mut names = Vec::new();
     for row in rows {
-        let (exchange, code, from, to, name, certainty, known_at, source_kind) =
+        let (exchange, code, from, to, name, certainty, known_at, source_kind, record) =
             row.map_err(storage)?;
+        // The DDL CHECKs already restrict both columns; validating them here
+        // means a database written by another binary cannot be read as a
+        // vocabulary this binary does not understand (fail closed).
+        let certainty = crate::security_master::names::NameCertainty::parse(&certainty)
+            .ok_or_else(|| integrity("security_name_history certainty is unregistered"))?;
+        let source_kind = crate::security_master::names::NameSourceKind::parse(&source_kind)
+            .ok_or_else(|| integrity("security_name_history source_kind is unregistered"))?;
         names.push(SecurityNameRow {
             exchange,
             code,
@@ -946,6 +955,7 @@ pub(crate) fn read_security_names(c: &Connection) -> Result<Vec<SecurityNameRow>
             certainty,
             known_at: read_text_day(known_at, "security_name_history.known_at")?,
             source_kind,
+            source_record_id: record,
         });
     }
     Ok(names)

@@ -150,6 +150,20 @@ impl MarketBackend {
         }
     }
 
+    /// Replace the derived name-history dataset (issue-308 S-6 / #446 PR-12).
+    /// The `derived:security_names` item drives this.
+    pub(crate) fn commit_security_names(
+        &self,
+        write: &super::security_names::SecurityNameWrite<'_>,
+    ) -> Result<Option<super::derived::DerivedVersionRow>, Error> {
+        match self {
+            Self::Compact(m) => m.commit_security_names(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "security_name_history requires the compact market schema".into(),
+            )),
+        }
+    }
+
     /// Replace the derived risk-warning dataset (issue-308 / #446 PR-10).
     /// The `derived:risk_warnings` item drives this.
     pub(crate) fn commit_risk_warnings(

@@ -1,0 +1,29 @@
+[
+  {
+    "metadata": {
+      "catalogid": "SSGSGMXX",
+      "name": "简称变更",
+      "tabkey": "tab2",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 1,
+      "recordcount": 2
+    },
+    "data": [
+      {
+        "bgrq": "2001-03-07",
+        "zqdm": "000004",
+        "zqjc": "深安达B",
+        "bgqzqjc": "深安达A",
+        "bghzqjc": "深安达B"
+      },
+      {
+        "bgrq": "2001-03-07",
+        "zqdm": "000004",
+        "zqjc": "深安达C",
+        "bgqzqjc": "深安达B",
+        "bghzqjc": "深安达C"
+      }
+    ]
+  }
+]

@@ -27,9 +27,11 @@ use chrono::Utc;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::{
     data_supply::generation::SOURCE_GENERATION_KEY,
+    exchange_source::RunCache,
     index_registry,
     market_storage::{Error, MarketRepository},
     official_market::MaterializeSession,
@@ -37,7 +39,7 @@ use crate::{
     sqlite_market::{
         backend::MarketBackend, calendar::CalendarWrite, index::IndexWrite,
         risk_warnings::RiskWarningWrite, rules::TradingRulesWrite, security::SecurityMasterWrite,
-        suspensions::SuspensionWrite,
+        security_names::SecurityNameWrite, suspensions::SuspensionWrite,
     },
     task_control::{self, Change, ItemOutcome, ItemSpec, Stage, Status, TaskItem},
     trading_calendar::TradingCalendar,
@@ -49,12 +51,14 @@ pub const PROGRESS_UNIT: &str = "derived_dataset";
 
 /// The internal items a daily plan-run task maintains, in execution order:
 /// the nine benchmark indices first, the calendar next (its inputs are index
-/// members, §9.2), then the four M2 whole-market datasets (issue-391 §12.1),
-/// the M3 industry snapshot (M3 PR-6, `#446` §10.1) and finally the M3
-/// delisted-series check (M3 PR-5, `#446` §4.5), which must observe the state
-/// the entity items of this run left behind — hence last.
-/// `derived:security_master` runs before `derived:suspensions` because the gap
-/// derivation reads the main table this run assembled.
+/// members, §9.2), then the whole-market dataset items (issue-391 §12.1 plus
+/// the M3 name history, PR-12), the M3 industry snapshot (M3 PR-6, `#446`
+/// §10.1) and finally the M3 delisted-series check (M3 PR-5, `#446` §4.5),
+/// which must observe the state the entity items of this run left behind —
+/// hence last. `derived:security_master` runs before `derived:suspensions`
+/// because the gap derivation reads the main table this run assembled; the
+/// name history runs before `derived:risk_warnings` so the shared SZSE table is
+/// downloaded once and the ST item re-uses the frozen page.
 ///
 /// `delisted` carries the registrations resolved before the entity items ran.
 /// `None` means the backend keeps no M3 lifecycle/series tables (legacy schema
@@ -138,6 +142,10 @@ pub fn run(
     // suspension binding both need the same member facts, so one worker turn
     // parses them at most once (issue-391 §12.1).
     let source_cache: RefCell<Option<DatasetSource>> = RefCell::new(None);
+    // One download cache per run (§10.1): `derived:risk_warnings` and
+    // `derived:security_names` both read the SZSE short-name table, so the
+    // second item re-uses the frozen page instead of fetching it again.
+    let run_cache: RefCell<Option<Arc<RunCache>>> = RefCell::new(None);
     for item in items {
         let Some(mut binding) = market.task_item_binding(task_id, &item.item_id)? else {
             continue;
@@ -193,6 +201,7 @@ pub fn run(
                     item,
                     revision,
                     &source_cache,
+                    &run_cache,
                 )
                 .map_err(ItemFailure::Plain),
                 None => Err(ItemFailure::Plain(Error::Invalid(format!(
@@ -269,6 +278,14 @@ pub fn run(
     close(market, task_id, run_id)
 }
 
+/// The run-level download cache (`§10.1`), created on first use and shared by
+/// every item of this run.
+fn run_cache(cell: &RefCell<Option<Arc<RunCache>>>) -> Arc<RunCache> {
+    let mut slot = cell.borrow_mut();
+    slot.get_or_insert_with(|| Arc::new(RunCache::new()))
+        .clone()
+}
+
 /// Why an internal item ended without an outcome. A check item's failure *is* a
 /// finding, so it travels with the evidence of what was found; every other
 /// failure has only a message.
@@ -341,6 +358,7 @@ fn execute(
     item: &ItemSpec,
     expected_task_revision: u64,
     source_cache: &RefCell<Option<DatasetSource>>,
+    run_cache_cell: &RefCell<Option<Arc<RunCache>>>,
 ) -> Result<Value, Error> {
     if let Some(entity) = task_control::derived::index_entity(&item.item_id) {
         let index = session
@@ -449,22 +467,13 @@ fn execute(
             &candidates,
         )
         .map_err(|e| Error::Invalid(e.to_string()))?;
-        // The item's write set is 主表 + 简称 + 上市/退市 + 迁移 (§12.1). The
-        // name history stays `pending_source` (#308 S-6) until its writer
-        // exists, so no name row is written and no "current name" is invented
-        // from an unadmitted interval. The exchange pending entry, when the
-        // branch is not admitted, is already in `assembled.pending_sources`.
-        let mut pending = assembled.pending_sources.clone();
-        match crate::security_master::names::name_history_source(None) {
-            crate::security_master::names::NameSource::Pending(source) => pending.push(source),
-            crate::security_master::names::NameSource::Admitted(rows) if rows.is_empty() => {}
-            crate::security_master::names::NameSource::Admitted(_) => {
-                return Err(Error::Integrity(
-                    "an admitted name history has no storage writer yet; refusing to drop it"
-                        .into(),
-                ));
-            }
-        }
+        // The item's write set is 主表 + 上市/退市 + 迁移 (§12.1). The name
+        // history is its own M3 item (`derived:security_names`, #446 PR-12),
+        // so this item neither writes a name row nor reports a name
+        // `pending_source`: no "current name" is invented here. The exchange
+        // pending entry, when the branch is not admitted, is already in
+        // `assembled.pending_sources`.
+        let pending = assembled.pending_sources.clone();
         // The generation binding digest is shared by every whole-market item of
         // one generation (`derived:suspensions` and friends recompute it and
         // refuse a master assembled from another generation), so the A-1/A-2
@@ -486,7 +495,6 @@ fn execute(
             "version_id": registration.version_id,
             "row_count": registration.record_count,
             "migration_count": assembled.migrations.len(),
-            "name_rows": 0,
             // Official `base.dbf` ships byte-identical repeat records; the
             // parser collapses them and names the record indices here, so a
             // later audit can tell a dedupe from a missing row (XDM-70, #391).
@@ -496,15 +504,72 @@ fn execute(
             "elapsed_ms": elapsed_ms(started),
         }));
     }
-    if item.item_id == task_control::derived::RISK_WARNINGS {
+    if item.item_id == task_control::derived::SECURITY_NAMES {
         let started = std::time::Instant::now();
         let source = dataset_source(session, source_cache)?;
-        match crate::official_security::risk_warnings::run_source(market).map_err(|error| {
+        // M3 PR-12 (D-61): the SZSE `SSGSGMXX`/`tab2` table is the only dated
+        // name source; SH/BJ are `NOT_AVAILABLE` and write no row. The adapter
+        // shares PR-10's frozen entry and parse, so both items read one frozen
+        // table per run. Without the source store the item stays
+        // `pending_source` (0 rows); a configured store that cannot be fetched
+        // fails this item and leaves the previous version readable.
+        match crate::official_security::security_names::run_source(
+            market,
+            run_cache(run_cache_cell),
+        )
+        .map_err(|error| {
             Error::Invalid(format!(
-                "historical ST/risk-warning source: {}: {error}",
+                "security name-history source: {}: {error}",
                 error.code()
             ))
         })? {
+            crate::official_security::security_names::RunSource::Pending(pending) => {
+                let pending = vec![pending];
+                return Ok(json!({
+                    "dataset": item.item_id,
+                    "version_id": Value::Null,
+                    "row_count": 0,
+                    "pending_sources": pending_json(&pending),
+                    "elapsed_ms": elapsed_ms(started),
+                }));
+            }
+            crate::official_security::security_names::RunSource::Admitted(admitted) => {
+                let evidence = admitted.evidence();
+                let generation_evidence = source.generation_evidence(generation_manifest_sha256);
+                let registration = market.commit_security_names(&SecurityNameWrite {
+                    set: &admitted.set,
+                    task_id,
+                    item_id: &item.item_id,
+                    generation_id,
+                    generation_manifest_sha256,
+                    member_sha256: &source.base_member_sha256,
+                    security_event_sha256: &source.security_event_sha256,
+                    generation_evidence: &generation_evidence,
+                })?;
+                let pending = admitted.set.pending_sources.clone();
+                return Ok(json!({
+                    "dataset": item.item_id,
+                    "version_id": registration.map(|row| row.version_id),
+                    "row_count": admitted.set.rows.len(),
+                    "coverage_windows": admitted.set.coverage.len(),
+                    "not_observed_windows": admitted.set.not_observed_windows(),
+                    "source": evidence,
+                    "pending_sources": pending_json(&pending),
+                    "elapsed_ms": elapsed_ms(started),
+                }));
+            }
+        }
+    }
+    if item.item_id == task_control::derived::RISK_WARNINGS {
+        let started = std::time::Instant::now();
+        let source = dataset_source(session, source_cache)?;
+        match crate::official_security::risk_warnings::run_source(market, run_cache(run_cache_cell))
+            .map_err(|error| {
+                Error::Invalid(format!(
+                    "historical ST/risk-warning source: {}: {error}",
+                    error.code()
+                ))
+            })? {
             crate::official_security::risk_warnings::RunSource::Pending(pending) => {
                 let pending = vec![pending];
                 return Ok(json!({

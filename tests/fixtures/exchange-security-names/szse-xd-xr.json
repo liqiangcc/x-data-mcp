@@ -1,0 +1,36 @@
+[
+  {
+    "metadata": {
+      "catalogid": "SSGSGMXX",
+      "name": "简称变更",
+      "tabkey": "tab2",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 1,
+      "recordcount": 2
+    },
+    "data": [
+      {
+        "bgrq": "2001-06-01",
+        "zqdm": "000002",
+        "zqjc": "万科企业",
+        "bgqzqjc": "万科A",
+        "bghzqjc": "万科企业"
+      },
+      {
+        "bgrq": "2000-06-01",
+        "zqdm": "000002",
+        "zqjc": "XD万科A",
+        "bgqzqjc": "万科A",
+        "bghzqjc": "XD万科A"
+      },
+      {
+        "bgrq": "1999-06-01",
+        "zqdm": "000001",
+        "zqjc": "深发展A",
+        "bgqzqjc": "XR深发展A",
+        "bghzqjc": "深发展A"
+      }
+    ]
+  }
+]

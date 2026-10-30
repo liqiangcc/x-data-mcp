@@ -769,6 +769,7 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
     assert_eq!(rules_version.1, rules + ticks);
     for (id, expected_dataset) in [
         ("derived:security_master", "security_master"),
+        ("derived:security_names", "security_names"),
         ("derived:risk_warnings", "risk_warnings"),
         ("derived:suspensions", "suspensions"),
         ("derived:trading_rules", "price_limit_rules"),
@@ -787,7 +788,7 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
             evidence["elapsed_ms"].as_u64().is_some(),
             "{id} records its elapsed time: {evidence}"
         );
-        if matches!(id, "derived:risk_warnings") {
+        if matches!(id, "derived:risk_warnings" | "derived:security_names") {
             assert_eq!(evidence["row_count"], 0);
             assert_eq!(evidence["pending_sources"][0]["dataset"], expected_dataset);
             assert!(evidence["pending_sources"][0]["source"].is_string());
@@ -808,24 +809,30 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
                 "{id} wrote its admitted rows: {evidence}"
             );
         }
-        if id == "derived:security_master" {
-            // §12.1 puts 简称 in the same item's write set; the name history is
-            // #308 (S-6) blocked, so the item reports it pending and writes no
-            // name row, while the TDX rows above still land.
-            assert_eq!(evidence["name_rows"], 0);
-            let pending_ids: Vec<&str> = evidence["pending_sources"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|source| source["dataset"].as_str().unwrap())
-                .collect();
-            assert!(pending_ids.contains(&"security_names"), "{pending_ids:?}");
+        if id == "derived:security_names" {
+            // PR-12: the name history is its own dataset item. Without the
+            // source store it reports `pending_source` and writes neither a
+            // row nor a version; §12.1 no longer lists 简称 under
+            // `derived:security_master`.
+            assert_eq!(evidence["version_id"], Value::Null);
+            assert_eq!(evidence["row_count"], 0);
             let names: i64 = c
                 .query_row("SELECT count(*) FROM security_name_history", [], |row| {
                     row.get(0)
                 })
                 .unwrap();
             assert_eq!(names, 0);
+            let names_version: i64 = c
+                .query_row(
+                    "SELECT count(*) FROM derived_dataset_versions WHERE dataset_kind='security_names'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(
+                names_version, 0,
+                "security_names must not register a version while pending"
+            );
         }
     }
 
