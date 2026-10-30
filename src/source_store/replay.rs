@@ -35,10 +35,13 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use chrono::NaiveDate;
 use serde::Serialize;
 
 use super::{ManifestRecord, SourceStore, StoreError, known_parser_version};
 use crate::hash::sha256;
+use crate::security_master::Exchange;
+use crate::security_master::risk_warnings::{self, CoverageWindow};
 use crate::sqlite_market::backend::MarketBackend;
 
 /// Marks a scope report whose rebuild body is not implemented yet.
@@ -56,9 +59,13 @@ pub const REBUILT_GENERATION_FACTS: &str = "rebuilt";
 /// The generation-facts index was recomputed but no `--db` was given (only
 /// the source-store industry rows can be computed without a database).
 pub const COMPUTED_GENERATION_FACTS_NO_DB: &str = "computed_no_db";
+/// The risk-warning table set was recomputed and written.
+pub const REBUILT_RISK_WARNINGS: &str = "rebuilt";
+/// The risk-warning table set was recomputed but no `--db` was given.
+pub const COMPUTED_RISK_WARNINGS_NO_DB: &str = "computed_no_db";
 
-pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6) and `generation_facts` \
-(M3 PR-8) rebuild their index tables from the store.";
+pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6), `generation_facts` \
+(M3 PR-8) and `risk_warnings` (M3 PR-10) rebuild their tables from the store.";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -66,16 +73,23 @@ pub enum Scope {
     Industry,
     Exchange,
     GenerationFacts,
+    RiskWarnings,
 }
 
 impl Scope {
-    pub const ALL: [Scope; 3] = [Scope::Industry, Scope::Exchange, Scope::GenerationFacts];
+    pub const ALL: [Scope; 4] = [
+        Scope::Industry,
+        Scope::Exchange,
+        Scope::GenerationFacts,
+        Scope::RiskWarnings,
+    ];
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "industry" => Some(Self::Industry),
             "exchange" => Some(Self::Exchange),
             "generation_facts" => Some(Self::GenerationFacts),
+            "risk_warnings" => Some(Self::RiskWarnings),
             _ => None,
         }
     }
@@ -85,6 +99,7 @@ impl Scope {
             Self::Industry => "industry",
             Self::Exchange => "exchange",
             Self::GenerationFacts => "generation_facts",
+            Self::RiskWarnings => "risk_warnings",
         }
     }
 
@@ -108,6 +123,13 @@ impl Scope {
                     || record.source_id.starts_with("szse_")
             }
             Self::GenerationFacts => record.store_kind == super::StoreKind::GenerationMember,
+            Self::RiskWarnings => {
+                record.store_kind == super::StoreKind::HttpFetch
+                    && matches!(
+                        record.source_id.as_str(),
+                        "sse_bulletin" | "szse_short_name"
+                    )
+            }
         }
     }
 }
@@ -348,6 +370,30 @@ fn run(
                 }
             }
         }
+        if *scope == Scope::RiskWarnings && status == "ok" {
+            match rebuild_risk_warnings(store, &selected, request.verify_only, request.database) {
+                Ok(outcome) => {
+                    rebuilt = outcome.rebuilt;
+                    summary = Some(outcome.summary);
+                    database_verdict = outcome.database;
+                    drift_keys = outcome.drift;
+                    snapshot_count = Some(outcome.snapshots);
+                    if outcome.status != "ok" {
+                        status = outcome.status;
+                    }
+                }
+                Err(error) => {
+                    status = "risk_warnings_rebuild_failed";
+                    problems.push(BlobProblem {
+                        sha256: String::new(),
+                        source_id: "risk_warnings".to_string(),
+                        reason: "risk_warnings_rebuild_failed",
+                        expected: "a readable source store and market database".to_string(),
+                        actual: error,
+                    });
+                }
+            }
+        }
         if *scope == Scope::GenerationFacts && status == "ok" {
             match rebuild_generation_facts(store, request) {
                 Ok(outcome) => {
@@ -515,6 +561,268 @@ fn rebuild_exchange(
     outcome.database = Some("drift");
     outcome.drift = crate::exchange_source::index::drift(&rebuild.rows, &stored, 20);
     Ok(outcome)
+}
+
+/// Rebuild `risk_warning_intervals` from the frozen SZSE short-name table and
+/// SSE bulletin pages. No HTTP request is made; the live coverage windows (and
+/// therefore the gaps that cut open SH intervals) are read back from the
+/// registration evidence when a database is supplied.
+fn rebuild_risk_warnings(
+    store: &SourceStore,
+    records: &[&ManifestRecord],
+    verify_only: bool,
+    database: Option<&Path>,
+) -> Result<ExchangeOutcome, String> {
+    let mut selected: Vec<&ManifestRecord> = records
+        .iter()
+        .copied()
+        .filter(|record| {
+            matches!(
+                record.source_id.as_str(),
+                "sse_bulletin" | "szse_short_name"
+            )
+        })
+        .collect();
+    selected.sort_by(|left, right| {
+        (
+            left.source_id.as_str(),
+            left.acquired_at.as_str(),
+            left.sha256.as_str(),
+        )
+            .cmp(&(
+                right.source_id.as_str(),
+                right.acquired_at.as_str(),
+                right.sha256.as_str(),
+            ))
+    });
+    // The SZSE table is a whole snapshot, not an append log. Replay only the
+    // latest frozen acquisition; older snapshots would duplicate the same
+    // change chain and look like same-day conflicts.
+    let latest_sz = selected
+        .iter()
+        .filter(|record| record.source_id == "szse_short_name")
+        .map(|record| record.acquired_at.as_str())
+        .max();
+    let mut seen = BTreeSet::new();
+    let mut pages = Vec::new();
+    for record in selected {
+        if record.source_id == "szse_short_name" && Some(record.acquired_at.as_str()) != latest_sz {
+            continue;
+        }
+        if !seen.insert(record.sha256.as_str()) {
+            continue;
+        }
+        let bytes = store
+            .read_verified(&record.sha256)
+            .map_err(|error| error.to_string())?;
+        pages.push((record.source_id.as_str(), record.sha256.clone(), bytes));
+    }
+
+    let backend =
+        match database {
+            Some(path) => {
+                let tasks = crate::sqlite_tasks::SqliteTasks::new(path);
+                Some(MarketBackend::open(&tasks).map_err(|error| {
+                    format!("database_unavailable: {}: {error}", path.display())
+                })?)
+            }
+            None => None,
+        };
+
+    let mut coverage = Vec::new();
+    if let Some(backend) = &backend
+        && let Some((stored_coverage, _)) =
+            registered_coverage(backend).map_err(|e| e.to_string())?
+    {
+        coverage = stored_coverage;
+    }
+    let gaps: Vec<(NaiveDate, NaiveDate)> = coverage
+        .iter()
+        .filter(|window| !window.observed)
+        .map(|window| (window.from, window.to))
+        .collect();
+    let set = crate::official_security::risk_warnings::replay(&pages, &gaps, coverage)
+        .map_err(|error| format!("{}: {error}", error.code()))?;
+    let summary = crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&set.rows));
+    let mut outcome = ExchangeOutcome {
+        status: "ok",
+        rebuilt: COMPUTED_RISK_WARNINGS_NO_DB,
+        summary: summary.clone(),
+        database: None,
+        drift: Vec::new(),
+        snapshots: set.rows.len(),
+        problems: Vec::new(),
+        expected: "a parseable SZSE short-name and SSE bulletin page set".to_string(),
+    };
+    let Some(backend) = backend else {
+        return Ok(outcome);
+    };
+    if verify_only {
+        let stored = backend
+            .read(crate::sqlite_market::risk_warnings::read_risk_warnings)
+            .map_err(|error| error.to_string())?;
+        let stored_summary =
+            crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&stored));
+        if stored_summary == summary {
+            outcome.database = Some("match");
+            return Ok(outcome);
+        }
+        outcome.status = "drift";
+        outcome.database = Some("drift");
+        outcome.drift = row_drift(&set.rows, &stored);
+        return Ok(outcome);
+    }
+
+    let manifest_text = records
+        .iter()
+        .map(|record| {
+            format!(
+                "{}|{}|{}|{}",
+                record.source_id, record.sha256, record.acquired_at, record.origin
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let manifest_sha = sha256(manifest_text.as_bytes());
+    let member_sha = sha256(b"source_store_replay:member");
+    let event_sha = sha256(b"source_store_replay:event");
+    let generation_evidence = serde_json::json!({
+        "replay": true,
+        "scope": "risk_warnings",
+        "records": pages.len(),
+        "coverage_windows": set.coverage.len(),
+    });
+    let write = crate::sqlite_market::risk_warnings::RiskWarningWrite {
+        set: &set,
+        task_id: "source_store_replay",
+        item_id: "derived:risk_warnings",
+        generation_id: "source_store_replay",
+        generation_manifest_sha256: &manifest_sha,
+        member_sha256: &member_sha,
+        security_event_sha256: &event_sha,
+        generation_evidence: &generation_evidence,
+    };
+    backend
+        .commit_risk_warnings(&write)
+        .map_err(|error| error.to_string())?;
+    let stored = backend
+        .read(crate::sqlite_market::risk_warnings::read_risk_warnings)
+        .map_err(|error| error.to_string())?;
+    let stored_summary = crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&stored));
+    if stored_summary == summary {
+        outcome.rebuilt = REBUILT_RISK_WARNINGS;
+        outcome.database = Some("match");
+        return Ok(outcome);
+    }
+    outcome.status = "drift";
+    outcome.database = Some("drift");
+    outcome.drift = row_drift(&set.rows, &stored);
+    Ok(outcome)
+}
+
+/// The coverage windows the live writer recorded. Replay must cut intervals at
+/// the same `not_observed` gaps, otherwise a gap would become a warning that
+/// spans evidence the run did not observe.
+fn registered_coverage(
+    backend: &MarketBackend,
+) -> Result<Option<(Vec<CoverageWindow>, usize)>, String> {
+    let registration = backend
+        .read(|c| {
+            crate::sqlite_market::derived::read_version(
+                c,
+                risk_warnings::DATASET_KIND,
+                risk_warnings::DATASET_KEY,
+            )
+        })
+        .map_err(|error| error.to_string())?;
+    let Some(registration) = registration else {
+        return Ok(None);
+    };
+    let (kind, text) = backend
+        .read(|c| {
+            crate::sqlite_market::evidence_store::read_evidence(c, &registration.evidence_digest)
+        })
+        .map_err(|error| error.to_string())?;
+    if kind != crate::compact_market::EvidenceKind::Derived {
+        return Err("risk-warning registration evidence is not derived evidence".into());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("evidence_json: {error}"))?;
+    let Some(rows) = value.get("coverage").and_then(serde_json::Value::as_array) else {
+        return Ok(None);
+    };
+    let mut windows = Vec::new();
+    for row in rows {
+        let exchange = row
+            .get("exchange")
+            .and_then(serde_json::Value::as_str)
+            .and_then(Exchange::parse)
+            .ok_or_else(|| "risk-warning coverage has an unregistered exchange".to_string())?;
+        let from = parse_window_day(row, "from")?;
+        let to = parse_window_day(row, "to")?;
+        windows.push(CoverageWindow {
+            source_kind: row
+                .get("source_kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            exchange,
+            from,
+            to,
+            observed: row
+                .get("observed")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            rows: row
+                .get("rows")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(0),
+            reason: row
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        });
+    }
+    let not_observed = windows.iter().filter(|window| !window.observed).count();
+    Ok(Some((windows, not_observed)))
+}
+
+fn parse_window_day(row: &serde_json::Value, field: &str) -> Result<NaiveDate, String> {
+    let text = row
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| format!("risk-warning coverage has no {field}"))?;
+    NaiveDate::parse_from_str(text, "%Y-%m-%d")
+        .map_err(|_| format!("risk-warning coverage {field}={text:?} is not a day"))
+}
+
+fn row_drift(
+    left: &[crate::security_master::RiskWarningInterval],
+    right: &[crate::security_master::RiskWarningInterval],
+) -> Vec<String> {
+    let keys = |rows: &[crate::security_master::RiskWarningInterval]| {
+        rows.iter()
+            .map(|row| {
+                format!(
+                    "{}.{}@{}..{}:{}",
+                    row.exchange.as_str(),
+                    row.code,
+                    row.effective_from,
+                    row.effective_to
+                        .map_or_else(|| "open".to_string(), |day| day.to_string()),
+                    row.status.as_str()
+                )
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let left = keys(left);
+    let right = keys(right);
+    left.symmetric_difference(&right)
+        .take(20)
+        .cloned()
+        .collect()
 }
 
 /// The generation-facts scope's outcome, or the reason no table set was

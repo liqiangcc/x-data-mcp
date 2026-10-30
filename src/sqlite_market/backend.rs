@@ -150,6 +150,20 @@ impl MarketBackend {
         }
     }
 
+    /// Replace the derived risk-warning dataset (issue-308 / #446 PR-10).
+    /// The `derived:risk_warnings` item drives this.
+    pub(crate) fn commit_risk_warnings(
+        &self,
+        write: &super::risk_warnings::RiskWarningWrite<'_>,
+    ) -> Result<Option<super::derived::DerivedVersionRow>, Error> {
+        match self {
+            Self::Compact(m) => m.commit_risk_warnings(write),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "risk_warning_intervals requires the compact market schema".into(),
+            )),
+        }
+    }
+
     /// Replace the admitted rule book (issue-391 §8.1/§12.1). The
     /// `derived:trading_rules` item drives this; an unchanged book reports
     /// `no_change` instead of minting a new version.

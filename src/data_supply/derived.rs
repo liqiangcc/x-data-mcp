@@ -36,7 +36,8 @@ use crate::{
     security_master::assembly::{self, PendingSource},
     sqlite_market::{
         backend::MarketBackend, calendar::CalendarWrite, index::IndexWrite,
-        rules::TradingRulesWrite, security::SecurityMasterWrite, suspensions::SuspensionWrite,
+        risk_warnings::RiskWarningWrite, rules::TradingRulesWrite, security::SecurityMasterWrite,
+        suspensions::SuspensionWrite,
     },
     task_control::{self, Change, ItemOutcome, ItemSpec, Stage, Status, TaskItem},
     trading_calendar::TradingCalendar,
@@ -497,30 +498,49 @@ fn execute(
     }
     if item.item_id == task_control::derived::RISK_WARNINGS {
         let started = std::time::Instant::now();
-        let source = crate::security_master::risk_warnings::risk_warning_source(None);
-        let pending: Vec<PendingSource> = match &source {
-            crate::security_master::risk_warnings::RiskWarningSource::Pending(pending) => {
-                vec![*pending]
+        let source = dataset_source(session, source_cache)?;
+        match crate::official_security::risk_warnings::run_source(market).map_err(|error| {
+            Error::Invalid(format!(
+                "historical ST/risk-warning source: {}: {error}",
+                error.code()
+            ))
+        })? {
+            crate::official_security::risk_warnings::RunSource::Pending(pending) => {
+                let pending = vec![pending];
+                return Ok(json!({
+                    "dataset": item.item_id,
+                    "version_id": Value::Null,
+                    "row_count": 0,
+                    "pending_sources": pending_json(&pending),
+                    "elapsed_ms": elapsed_ms(started),
+                }));
             }
-            crate::security_master::risk_warnings::RiskWarningSource::Admitted(rows) => {
-                if rows.is_empty() {
-                    Vec::new()
-                } else {
-                    // No write path exists until #308 admits the source; an
-                    // admitted row set must not be silently dropped.
-                    return Err(Error::Integrity(
-                        "an admitted risk-warning set has no storage writer yet".into(),
-                    ));
-                }
+            crate::official_security::risk_warnings::RunSource::Admitted(admitted) => {
+                let evidence = admitted.evidence();
+                let generation_evidence = source.generation_evidence(generation_manifest_sha256);
+                let registration = market.commit_risk_warnings(&RiskWarningWrite {
+                    set: &admitted.set,
+                    task_id,
+                    item_id: &item.item_id,
+                    generation_id,
+                    generation_manifest_sha256,
+                    member_sha256: &source.base_member_sha256,
+                    security_event_sha256: &source.security_event_sha256,
+                    generation_evidence: &generation_evidence,
+                })?;
+                let pending = admitted.set.pending_sources.clone();
+                return Ok(json!({
+                    "dataset": item.item_id,
+                    "version_id": registration.map(|row| row.version_id),
+                    "row_count": admitted.set.rows.len(),
+                    "coverage_windows": admitted.set.coverage.len(),
+                    "not_observed_windows": admitted.set.not_observed_windows(),
+                    "source": evidence,
+                    "pending_sources": pending_json(&pending),
+                    "elapsed_ms": elapsed_ms(started),
+                }));
             }
-        };
-        return Ok(json!({
-            "dataset": item.item_id,
-            "version_id": Value::Null,
-            "row_count": 0,
-            "pending_sources": pending_json(&pending),
-            "elapsed_ms": elapsed_ms(started),
-        }));
+        }
     }
     if item.item_id == task_control::derived::SUSPENSIONS {
         let started = std::time::Instant::now();

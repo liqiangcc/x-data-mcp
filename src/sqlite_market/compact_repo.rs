@@ -166,6 +166,15 @@ impl SqliteCompactMarket {
         self.tx(|c| super::suspensions::commit_suspensions(c, write))
     }
 
+    /// Replace the derived risk-warning dataset and register its version in
+    /// one transaction (issue-308 / #446 PR-10).
+    pub(crate) fn commit_risk_warnings(
+        &self,
+        write: &super::risk_warnings::RiskWarningWrite<'_>,
+    ) -> Result<Option<super::derived::DerivedVersionRow>, Error> {
+        self.tx(|c| super::risk_warnings::commit_risk_warnings(c, write))
+    }
+
     /// Replace the admitted rule book and register its version in one
     /// transaction (issue-391 §8.1/§12.1). The daily `derived:trading_rules`
     /// item drives this; identical content is a `no_change` outcome.

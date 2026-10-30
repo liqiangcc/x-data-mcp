@@ -836,7 +836,8 @@ pub(crate) fn read_risk_warning_intervals(
     let mut statement = c
         .prepare(
             "SELECT exchange,code,effective_from,effective_to,raw_status_code,\
-             normalized_status,announced_at,known_at,source_kind FROM risk_warning_intervals \
+             normalized_status,announced_at,known_at,source_kind,source_record_id,\
+             source_document_sha256 FROM risk_warning_intervals \
              ORDER BY exchange,code,effective_from",
         )
         .map_err(storage)?;
@@ -852,6 +853,8 @@ pub(crate) fn read_risk_warning_intervals(
                 r.get::<_, Option<String>>(6)?,
                 r.get::<_, Option<String>>(7)?,
                 r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
             ))
         })
         .map_err(storage)?;
@@ -867,6 +870,8 @@ pub(crate) fn read_risk_warning_intervals(
             announced_at,
             known_at,
             source_kind,
+            source_record_id,
+            source_document_sha256,
         ) = row.map_err(storage)?;
         let exchange = Exchange::parse(&exchange)
             .ok_or_else(|| integrity("risk_warning_intervals exchange is unregistered"))?;
@@ -882,6 +887,8 @@ pub(crate) fn read_risk_warning_intervals(
             announced_at,
             known_at: read_text_day(known_at, "risk_warning_intervals.known_at")?,
             source_kind,
+            source_record_id,
+            source_document_sha256,
         });
     }
     Ok(intervals)

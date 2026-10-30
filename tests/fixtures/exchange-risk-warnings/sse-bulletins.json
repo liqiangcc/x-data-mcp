@@ -1,0 +1,54 @@
+{
+  "pageHelp": {
+    "beginPage": 1,
+    "pageCount": 1,
+    "total": 5,
+    "data": [
+      {
+        "SSEDATE": "2024-04-30",
+        "SECURITY_CODE": "600001",
+        "SECURITY_NAME": "示例一",
+        "TITLE": "示例一关于公司股票被实施其他风险警示的公告，自2024年5月6日起停牌",
+        "BULLETIN_TYPE_DESC": "风险警示",
+        "ORG_BULLETIN_ID": "risk-1",
+        "URL": "/disclosure/listedinfo/announcement/c/new/2024-04-30/600001_1.pdf"
+      },
+      {
+        "SSEDATE": "2024-05-06",
+        "SECURITY_CODE": "600002",
+        "SECURITY_NAME": "示例二",
+        "TITLE": "示例二关于公司股票撤销退市风险警示的公告",
+        "BULLETIN_TYPE_DESC": "风险警示",
+        "ORG_BULLETIN_ID": "risk-2",
+        "URL": "/disclosure/listedinfo/announcement/c/new/2024-05-06/600002_2.pdf"
+      },
+      {
+        "SSEDATE": "2024-06-01",
+        "SECURITY_CODE": "600003",
+        "SECURITY_NAME": "示例三",
+        "TITLE": "示例三关于公司股票被实施退市风险警示的公告",
+        "BULLETIN_TYPE_DESC": "风险警示",
+        "ORG_BULLETIN_ID": "risk-3",
+        "URL": "/disclosure/listedinfo/announcement/c/new/2024-06-01/600003_3.pdf"
+      },
+      {
+        "SSEDATE": "2024-06-02",
+        "SECURITY_CODE": "600004",
+        "SECURITY_NAME": "示例四",
+        "TITLE": "示例四关于申请撤销公司股票其他风险警示的公告",
+        "BULLETIN_TYPE_DESC": "风险警示",
+        "ORG_BULLETIN_ID": "risk-4",
+        "URL": "/disclosure/listedinfo/announcement/c/new/2024-06-02/600004_4.pdf"
+      },
+      {
+        "SSEDATE": "2024-06-03",
+        "SECURITY_CODE": "900001",
+        "SECURITY_NAME": "示例B",
+        "TITLE": "示例B关于公司股票被实施其他风险警示的公告",
+        "BULLETIN_TYPE_DESC": "风险警示",
+        "ORG_BULLETIN_ID": "risk-5",
+        "URL": "/disclosure/listedinfo/announcement/c/new/2024-06-03/900001_5.pdf"
+      }
+    ]
+  }
+}

@@ -444,6 +444,10 @@ pub struct RiskWarningInterval {
     pub announced_at: Option<String>,
     pub known_at: Option<NaiveDate>,
     pub source_kind: String,
+    /// Row-level source identity (announcement id or name-change row key).
+    pub source_record_id: Option<String>,
+    /// sha256 of the frozen response the row was parsed from.
+    pub source_document_sha256: Option<String>,
 }
 
 impl RiskWarningInterval {

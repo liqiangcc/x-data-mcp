@@ -994,7 +994,7 @@ v2 的文件集不变，新增：
 
 通用约束：本机不编译，Rust 正确性只由 PR 上的 CI 证明；每个 PR 跑 §15 的本机门禁。来源细节（ST/A-3/S-6 字段）不在本设计展开；它们共用 PR-2 的入口，各自一个写入器 PR。
 
-截至 2026-10-30：PR-1a…PR-9 已合并（标注在各行 PR 号），PR-10/11/12 未做，PR-13 的文档半边由 PR-13a 交付；私有栈验收与部署仍未执行（清单见 §14.3）。
+截至 2026-10-30：PR-1a…PR-10 已合并（标注在各行 PR 号），PR-11/12 未做，PR-13 的文档半边由 PR-13a 交付；私有栈验收与部署仍未执行（清单见 §14.3）。
 
 **顺序约束（§9.4）**：PR-1a（来源库 + 重放框架）必须先于 PR-1（schema 25）合并；PR-1 的迁移要加 `store_sha256`/`parser_version`/`evidence_sha256` 列，不能把持久化留到后续 PR，否则下一次 fresh-init 仍会清空 M3 表。
 
@@ -1010,7 +1010,7 @@ v2 的文件集不变，新增：
 | **PR-7** 行业读模型（已合并 #462） | `src/research/industry.rs`；`market.industry_assignments` 分支；`status=assigned/unknown`；`universe` 的 `canonical_entity/aliases` | AC-M3-3 | 10 个 `as_of` 夹具；`known_at` 排除 NULL 并计数；before_coverage/missing_in_snapshot；迁移前后只一个代码 | PR-6 |
 | **PR-8** 退役门禁（已合并 #460；已交付 2026-10-29，XDM-108） | `generation_facts` 登记（各派生 item 写，含 `evidence_sha256`）；`--scope generation_facts` 重放；`retire_bytes` 前置检查（先来源库按 sha 读回，再查索引）；`source_store_evidence_missing`/`derived_facts_missing`；豁免表与 maint 命令 | AC-M3-5 | 缺任一 kind → 拒绝并给清单；来源库有字节但索引缺行 → 拒绝 + 提示重放；blob 读不回 → 拒绝；有豁免 → 成功且留痕；active/pin 检查不回归；自动退役走同一门禁 | PR-1a；PR-1；PR-3/5/6 登记源 |
 | **PR-9** 导出 + v8（已合并 #464；已交付 2026-10-30，XDM-115） | `research-snapshot.v3`（`industry_assignments.parquet`、`code_migrations.parquet`、universe 新列）；`Dataset`/capabilities/`scope` 解码 | AC-M3-9（复现）；AC-M3-3（读面） | 清单确定性；旧 v2 快照可读；v1 拒新 dataset/scope；三入口同结果 | PR-7；**已交付 2026-10-30（XDM-115）** |
-| **PR-10** 历史 ST 写入器（#308） | 深 `SSGSGMXX/tab2` ST 区间 + 沪公告索引状态事件；GP29/行情锚定标 `OWNER_RISK_ACCEPTED`；沪 2000 前/北交所 `NOT_AVAILABLE` | 归 #308（M3 只接 AC-M3-9） | 夹具：ST 实施/撤销区间、同日冲突、未知生效日；不把 0 行当无事件 | PR-2；#308 门禁 |
+| **PR-10** 历史 ST 写入器（已合并 #467；未部署） | 深 `SSGSGMXX/tab2` ST 区间 + 沪公告索引状态事件；GP29/行情锚定标 `OWNER_RISK_ACCEPTED`；沪 2000 前/北交所 `NOT_AVAILABLE` | 归 #308（M3 只接 AC-M3-9） | 夹具：ST 实施/撤销区间、同日冲突、未知生效日；不把 0 行当无事件 | PR-2；#308 门禁 |
 | **PR-11** 停复牌写入器（A-3） | 沪 `GW_PL_JYTS_TFPXX` 2008 起 `confirmed`；深首期无 `confirmed`（保留 `unresolved_gap`） | 归 A-3 | 夹具：停牌起止与撤销；深市不写 `confirmed`；与 `unresolved_gap` 不双计 | PR-2 |
 | **PR-12** 简称写入器（S-6） | 深 `SSGSGMXX/tab2` 区间；沪/北 `unbounded`/`unknown` | 归 S-6 | 夹具：变更链、XD/XR 规范化、同日多变更、无 dated 源 | PR-2 |
 | **PR-13** 文档与验收 | `docs/data-catalog.md` §3.1/§3.2/§3.3、`docs/STATUS.md`、`docs/design.md`（§13.2）、验收报告；fresh-init 后重放前后摘要对账、退役门禁演练 | AC-M3-1…10 | 文档事实检查脚本；私有栈验收证据贴回 #446（含 `store_empty` → import → replay `match`） | PR-3…12 |
@@ -1040,6 +1040,24 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 
 §9.4 的来源库不是新增裁决项：它是 D-08（fresh-init 重建只能靠 active generation）+ Q7（内容寻址文件 + 表索引）的直接推论，本 PR 按默认设计给出。若 owner 要改为存整个 `base.zip` 容器、或要异地备份/删除策略，属新裁决，不影响 PR-1a 的布局。
 
+### 14.2.1 PR-10 历史 ST 写入器落地记录
+
+状态：**代码已合并（PR #467），未部署**。归属 #308，准入按 D-58 分档；本记录只写已交付代码与证据，不把合并写成已部署。
+
+| 工作项 | 计划 | 证据/落点 | 状态 |
+|---|---|---|---|
+| 深市区间 | 用冻结的 `SSGSGMXX`/`tab2` 简称变更链，按每只代码的变更日期构造 `ST`/`*ST` 区间；只用「变更后简称」开启区间，非警示简称关闭区间；同日多次变更或无法闭合的链 fail-closed | 新适配器解析器版本 + `RiskWarningInterval` | 代码已合并/未部署 |
+| 沪市事件级 | 用 2000-01 起公告索引的 `BULLETIN_TYPE_DESC`/标题、`SSEDATE`、代码与公告 URL 识别实施/撤销；生效日按公告日锚定并标 `OWNER_RISK_ACCEPTED`，不生成简称区间；同日冲突、缺生效日、孤立撤销 fail-closed | `source_kind=exchange_announcement`，证据记录事件计数与锚定方式 | 代码已合并/未部署 |
+| 未观察 | 0 行不是「无事件」：冻结分段的空结果记 `not_observed`，写入集合带覆盖窗口；沪市 2000 年前与北交所不请求、不推断，保持 `NOT_AVAILABLE` | 集合级 coverage/evidence，读取端不返回 `normal` | 代码已合并/未部署 |
+| 共享入口 | 两类来源都走 PR-2 的 `Entry`（fetch/freeze/validate/bind）与 source store；未配置 source store 时 item 记 `pending_source`，配置后抓取失败则 item 失败且保留上一版 | `src/official_security/risk_warnings.rs` | 代码已合并/未部署 |
+| 写入器 | 整表替换 `risk_warning_intervals` 并在调用方事务内登记 `derived_dataset_versions`；空集合删除行与登记；版本绑定与 `security_master` 同一 generation | `src/sqlite_market/risk_warnings.rs` + `MarketBackend` | 代码已合并/未部署 |
+| 日更接入 | `derived:risk_warnings` 调用适配器，成功时写库并返回行数/`not_observed`/绑定摘要；未准入时仍写 0 行且明确 `pending_source` | `src/data_supply/derived.rs` | 代码已合并/未部署 |
+| 重放 | `source_store replay` 增加 ST 消费者 scope：只读来源库已冻结字节，重建 `risk_warning_intervals` 与登记；与首次写入摘要逐项 `match`，全程离线 | `src/source_store/replay.rs`、`src/bin/source_store.rs` | 代码已合并/未部署 |
+| 夹具 | 深市实施/撤销区间、同日冲突、未知生效日、0 行 `not_observed`、沪事件级与深区间级共存；全部离线 | `tests/fixtures/exchange-risk-warnings/` + 单测 | 代码已合并/未部署 |
+| 文档 | 数据目录缺口行与本文 PR-10 行只在合并且部署条件满足后改写；状态词只用固定词表（`代码已合并`/`未部署`），不宣称已部署 | `docs/data-catalog.md`、§14 表 | 代码已合并/未部署 |
+
+验证：本机只跑 `cargo fmt` 与文档门禁；Rust 由 PR CI（fmt/clippy/nextest/export feature）证明。推送前逐字贴出 `python3 scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main` 的输出。
+
 ### 14.3 验收清单（私有栈，部署前）
 
 本节是 PR-13 的验收半边：PR-13a 只交付文档（本表与数据目录/设计同步），**下表没有执行过任何一项**，状态一律「未执行」。执行前提：包含 PR-1a…PR-9 的 release 部署到私有栈，配置 `X_DATA_MCP_SOURCE_STORE`（指向部署状态目录下的来源库）与 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（仅本地验收）；生产实例与 `/opt` 不动。证据（命令输出、JSON、行数、sha256）逐条贴回 #446，不写进本仓库。
@@ -1054,7 +1072,7 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 | AC-M3-6 | 连续两代 generation 各跑一次 `plan_market_update`/`run_market_update`，读两次 `derived:delisted_series_check` 的 item evidence | 两代 run/task id；登记的与核对的 `record_count`/`first_day`/`last_day`/`content_digest`；只允许尾追加；再造一次改写/消失 → 实体清单与 `partially_failed` | 未执行（依赖退市股首采） |
 | AC-M3-7 | 绑定交易所快照后重跑 `derived:security_master`，统计 `listing_date`/`delisting_date` 的 `unknown` 与 `listing_conflict`/`delisting_conflict` | 部署前后 `unknown` 计数（退市日 ≤2 且逐条解释）、冲突行两侧值、与 `SSDATE` 零冲突回归 | 未执行 |
 | AC-M3-8 | 不在本设计承诺（§14.1，建议另拆）；若 owner 另拆，按完整快照规格（文件集、字节布局、跨机重放命令）执行 | 另拆任务的规格与跨机重放结果 | 未执行（不在本轮承诺） |
-| AC-M3-9 | fresh init 空库 `source_store replay --store … --db … --scope all`（期望 `store_empty`）→ `source_store import …` → `source_store replay --scope all --db`（期望 `match`）→ `source_store verify`；全程断网 | 三次 JSON（`store_empty`、导入统计、`summary` 与 `rebuilt`）、`manifest.jsonl` 的 sha256、重建表行数 | 未执行（五个使用方全覆盖还依赖 PR-10/11/12；本批只能覆盖 A-1/A-2、行业与 `generation_facts`） |
+| AC-M3-9 | fresh init 空库 `source_store replay --store … --db … --scope all`（期望 `store_empty`）→ `source_store import …` → `source_store replay --scope all --db`（期望 `match`）→ `source_store verify`；全程断网 | 三次 JSON（`store_empty`、导入统计、`summary` 与 `rebuilt`）、`manifest.jsonl` 的 sha256、重建表行数 | 未执行（五个使用方全覆盖还依赖 PR-11/12；本批覆盖 A-1/A-2、行业、`generation_facts` 与风险警示） |
 | AC-M3-10 | 用交易所来源入口抓一个已知有数据的季度、一个 0 行窗口，并用一个 >1 季度窗口做对照；检查分段（≤1 季度）与分页计数 | 请求指纹、每个窗口的返回计数、`not_observed`/`unverified_zero`/失败分类；证明没有写出「无事件/无变更」 | 未执行 |
 
 ### 14.4 PR-11 落地记录（A-3 停复牌写入器）

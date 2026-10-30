@@ -264,7 +264,17 @@ fn parse_szse(value: &Value) -> Result<PageEnvelope, ValidateError> {
                 detail: "metadata.pagecount is missing".to_string(),
             })?;
     Ok(PageEnvelope {
-        page: clamp_u32(metadata.get("pageNo").and_then(number).unwrap_or(1)),
+        // The SZSE endpoint spells this `pageno`; older fixtures captured
+        // `pageNo`. Both are the same field and neither is guessed from the
+        // request page (a missing one would be reported as page 1 and rejected
+        // as a mismatch on page 2).
+        page: clamp_u32(
+            metadata
+                .get("pageNo")
+                .or_else(|| metadata.get("pageno"))
+                .and_then(number)
+                .unwrap_or(1),
+        ),
         page_count: clamp_u32(page_count),
         rows: rows.len(),
         total: metadata.get("recordcount").and_then(number),

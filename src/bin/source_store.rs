@@ -8,7 +8,7 @@
 //! allowlists and the documented per-entry tool counts unchanged.
 //!
 //! ```text
-//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|all]
+//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|all]
 //!                     [--db <market.sqlite>] [--verify-only]
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir>
@@ -38,9 +38,9 @@ use x_data_mcp::source_store::{SourceStore, import, replay};
 
 const USAGE: &str = "\
 usage:
-  source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] \
+  source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|all] \
 [--db <market.sqlite>] [--verify-only]
-  source_store verify --store <dir> [--scope industry|exchange|generation_facts|all] \
+  source_store verify --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|all] \
 [--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
@@ -137,7 +137,7 @@ fn run(args: &[String]) -> Result<i32, String> {
     let selected_scope = match scope.as_str() {
         "all" => None,
         other => Some(replay::Scope::parse(other).ok_or_else(|| {
-            format!("unknown scope {other} (industry|exchange|generation_facts|all)")
+            format!("unknown scope {other} (industry|exchange|generation_facts|risk_warnings|all)")
         })?),
     };
     let request = replay::ReplayRequest::new(selected_scope, verify_only, database.as_deref());
