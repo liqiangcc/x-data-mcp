@@ -3,13 +3,24 @@
 //! `tests/mcp/plan_run.rs` (worker + real source fixture).
 use super::*;
 
+fn resolution() -> crate::data_supply::delisted_series::Resolution {
+    crate::data_supply::delisted_series::Resolution {
+        baseline: crate::data_supply::delisted_series::Baseline {
+            as_of: chrono::NaiveDate::from_ymd_opt(2026, 10, 28).unwrap(),
+            registrations: Vec::new(),
+        },
+        skipped: Vec::new(),
+    }
+}
+
 #[test]
 fn item_specs_cover_nine_indices_then_the_calendar() {
     let generation = json!("generation-1");
-    let items = item_specs(&generation);
+    let resolution = resolution();
+    let items = item_specs(&generation, Some(&resolution));
     assert_eq!(
         items.len(),
-        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len() + 1
+        index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len() + 1 + 1
     );
     for (item, registration) in items.iter().zip(index_registry::INDEX_SERIES.iter()) {
         assert_eq!(
@@ -66,6 +77,35 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
         BTreeSet::from([task_control::derived::industry_scope()])
     );
     assert_eq!(industry.frozen_inputs[SOURCE_GENERATION_KEY], generation);
+    // The M3 delisted-series check runs after every writer: it must observe the
+    // state this run's entity items left behind (M3 PR-5, `#446` §4.5).
+    let check =
+        &items[index_registry::INDEX_SERIES.len() + 1 + task_control::derived::DATASETS.len() + 1];
+    assert_eq!(check.item_id, task_control::derived::DELISTED_SERIES_CHECK);
+    assert_eq!(check.target, task_control::derived::target(&check.item_id));
+    assert_eq!(check.progress_unit, PROGRESS_UNIT);
+    assert_eq!(
+        check.scope_keys,
+        BTreeSet::from([task_control::derived::delisted_scope()])
+    );
+    assert_eq!(check.frozen_inputs[SOURCE_GENERATION_KEY], generation);
+    assert!(
+        check
+            .frozen_inputs
+            .contains_key(crate::data_supply::delisted_series::BASELINE_KEY)
+    );
+}
+
+#[test]
+fn a_backend_without_m3_tables_has_no_delisting_check_item() {
+    // Legacy schema 18 keeps neither the main table nor series facts, so the
+    // item would be a permanent no-op; it is absent from the set instead.
+    let items = item_specs(&json!("generation-1"), None);
+    assert!(
+        !items
+            .iter()
+            .any(|item| item.item_id == task_control::derived::DELISTED_SERIES_CHECK)
+    );
 }
 
 #[test]
@@ -86,7 +126,8 @@ fn collapsed_base_duplicates_keep_their_audit_shape() {
 
 #[test]
 fn item_ids_are_unique_and_never_collide_with_security_items() {
-    let items = item_specs(&Value::Null);
+    let resolution = resolution();
+    let items = item_specs(&Value::Null, Some(&resolution));
     let ids: BTreeSet<&str> = items.iter().map(|i| i.item_id.as_str()).collect();
     assert_eq!(ids.len(), items.len());
     let security = crate::task_control::legacy::scope_id("sh.600006", "day");

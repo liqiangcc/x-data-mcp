@@ -40,6 +40,11 @@ pub const TRADING_RULES: &str = "derived:trading_rules";
 /// `DATASETS` entry: its write set is the M3 index tables, not a
 /// `derived_dataset_versions` registration (§5.1).
 pub const INDUSTRY_SNAPSHOT: &str = "derived:industry_snapshot";
+/// The M3 delisted-series check (M3 PR-5, `#446` §4.5/§10.1). It is not an M2
+/// `DATASETS` entry either, and unlike every other derived item it writes **no**
+/// business table: it compares terminal series against the registration frozen
+/// at run start and reports, so it owns a read-only scope.
+pub const DELISTED_SERIES_CHECK: &str = "derived:delisted_series_check";
 /// Every M2 dataset item, in execution order: the main table first (the
 /// suspension gaps are derived from it), then the datasets whose source is
 /// still pending, then the rules (admitted by D-44; the item writes the
@@ -86,6 +91,13 @@ pub fn dataset_scope(item_id: &str) -> String {
 /// so it declares its own scope; the key names the M3 table set it writes.
 pub fn industry_scope() -> String {
     json!(["m3", INDUSTRY_SNAPSHOT, "market"]).to_string()
+}
+
+/// Occupancy key of the M3 delisted-series check. The item writes nothing, so
+/// its scope declares no series; it is its own key so the occupancy gate sees
+/// the item as its own unit instead of borrowing an entity's series.
+pub fn delisted_scope() -> String {
+    json!(["m3", DELISTED_SERIES_CHECK, "market"]).to_string()
 }
 
 /// Occupancy key of one benchmark index item — the same key the index series
@@ -155,5 +167,20 @@ mod tests {
             .collect();
         assert_eq!(scopes.len(), DATASETS.len() + 1);
         assert_ne!(industry_scope(), calendar_scope());
+    }
+
+    #[test]
+    fn delisted_check_is_a_read_only_derived_item() {
+        assert!(is_derived(DELISTED_SERIES_CHECK));
+        // No `derived_dataset_versions` row is written by this item, so it must
+        // stay out of the M2 writer list.
+        assert!(!DATASETS.contains(&DELISTED_SERIES_CHECK));
+        assert_eq!(
+            target(DELISTED_SERIES_CHECK),
+            json!({"dataset": DELISTED_SERIES_CHECK})
+        );
+        assert_ne!(delisted_scope(), industry_scope());
+        assert_ne!(delisted_scope(), calendar_scope());
+        assert_ne!(delisted_scope(), index_scope("sh.000001"));
     }
 }

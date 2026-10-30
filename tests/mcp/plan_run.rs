@@ -201,6 +201,18 @@ fn snapshot_with(
     codes: &[(&str, &str, u32)],
     include_derived: bool,
 ) -> Snapshot {
+    snapshot_with_delisting(day_members, codes, include_derived, None)
+}
+
+/// `delisting` names one code and its TDX arrangement end (the M3 main table's
+/// delisting day when no exchange source wins, `#446` §4.3): the fixture the
+/// delisted-series check needs a terminal entity for.
+fn snapshot_with_delisting(
+    day_members: &[(&str, &[u8])],
+    codes: &[(&str, &str, u32)],
+    include_derived: bool,
+    delisting: Option<(&str, u32)>,
+) -> Snapshot {
     let dir = tempfile::tempdir().unwrap();
     // Category 1 is the price event (前复权); category 2 is a capital event
     // (shares), so the entity item must write both tables from this one member
@@ -215,15 +227,30 @@ fn snapshot_with(
         .map(|(market, code, _)| (if *market == "sh" { 1 } else { 0 }, *code, ssdate))
         .collect();
     let base = base_dbf(&rows);
+    // Absent start/end means "no delisting arrangement", so every code keeps
+    // its TDX listing date and the exchange branch stays pending. The
+    // delisting fixture adds one row per code and gives exactly one of them an
+    // end day (a code cannot have two arrangement rows).
+    let arrangements = match delisting {
+        None => "1|600006|0||\r\n".to_string(),
+        Some((delisted, end)) => codes
+            .iter()
+            .map(|(market, code, _)| {
+                let market = if *market == "sh" { 1 } else { 0 };
+                let end = if *code == delisted {
+                    end.to_string()
+                } else {
+                    String::new()
+                };
+                format!("{market}|{code}|0||{end}\r\n")
+            })
+            .collect(),
+    };
     write_zip(
         &dir.path().join("base.zip"),
         &[
             ("base.dbf", base.as_slice()),
-            // One arrangement row with both dates absent: the source format
-            // has no empty-file form (every row is CRLF-terminated), and an
-            // absent start/end means "no delisting arrangement", so every code
-            // keeps its TDX listing date and the exchange branch stays pending.
-            ("infoharbor_spec.cfg", b"1|600006|0||\r\n".as_slice()),
+            ("infoharbor_spec.cfg", arrangements.as_bytes()),
         ],
     );
     // issue-383 §9.2: the daily plan-run task also maintains the calendar and
@@ -414,6 +441,16 @@ fn rig(members: &[(&str, &str, u32)]) -> Rig {
 }
 
 fn rig_with(members: &[(&str, &str, u32)], include_derived: bool) -> Rig {
+    rig_full(members, include_derived, None)
+}
+
+/// `rig_with` plus a TDX arrangement end for one code: the terminal entity the
+/// M3 delisted-series check registers (`#446` §4.5).
+fn rig_full(
+    members: &[(&str, &str, u32)],
+    include_derived: bool,
+    delisting: Option<(&str, u32)>,
+) -> Rig {
     let day_members: Vec<(String, Vec<u8>)> = members
         .iter()
         .map(|(ex, code, last)| {
@@ -427,7 +464,7 @@ fn rig_with(members: &[(&str, &str, u32)], include_derived: bool) -> Rig {
         .iter()
         .map(|(n, b)| (n.as_str(), b.as_slice()))
         .collect();
-    let snap = snapshot_with(&refs, members, include_derived);
+    let snap = snapshot_with_delisting(&refs, members, include_derived, delisting);
     let source =
         x_data_mcp::official_market::TdxMarketSource::inspect(&snap.root, &snap.manifest, now())
             .unwrap();
@@ -556,14 +593,16 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
         .api
         .call("get_task_progress", json!({"task_id":task_id}))
         .unwrap();
-    // issue-383 §9.2 / issue-391 §12.1 / M3 PR-6: the run appended and
+    // issue-383 §9.2 / issue-391 §12.1 / M3 PR-5, PR-6: the run appended and
     // executed the server-internal derived items (9 indices + calendar + the 4
-    // M2 whole-market datasets + the M3 industry snapshot) after the two
-    // entity items. The acceptance still reports the plan's eligible count,
-    // not the live item count — the internal items are not plan items.
+    // M2 whole-market datasets + the M3 industry snapshot + the M3 delisted
+    // series check) after the two entity items. The acceptance still reports
+    // the plan's eligible count, not the live item count — the internal items
+    // are not plan items.
     let derived = x_data_mcp::index_registry::INDEX_SERIES.len()
         + 1
         + x_data_mcp::task_control::derived::DATASETS.len()
+        + 1
         + 1;
     assert_eq!(progress["finished"], 2 + derived);
     assert_eq!(progress["total"], 2 + derived);
@@ -876,6 +915,7 @@ fn internal_derived_item_failure_marks_the_run_partially_failed() {
         x_data_mcp::index_registry::INDEX_SERIES.len()
             + 1
             + x_data_mcp::task_control::derived::DATASETS.len()
+            + 1
             + 1
     );
     // The missing index members fail the nine index items and the calendar
@@ -3352,4 +3392,279 @@ fn plan_reports_where_the_target_day_came_from() {
         .unwrap();
     assert_eq!(again["plan_id"], defaulted["plan_id"]);
     assert_eq!(again["target_day_source"], "explicit");
+}
+
+/// Epoch day of a `YYYYMMDD` fixture day (`market_series` stores epoch days).
+fn epoch_of(day: u32) -> i64 {
+    let date = chrono::NaiveDate::parse_from_str(&day.to_string(), "%Y%m%d").unwrap();
+    date.signed_duration_since(chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+        .num_days()
+}
+
+/// The stored 不复权 daily registration of one entity:
+/// `(record_count, first_day, last_day, version_id)`.
+fn series_facts(tasks: &SqliteTasks, entity: &str) -> (i64, i64, i64, String) {
+    rusqlite::Connection::open(tasks.path())
+        .unwrap()
+        .query_row(
+            "SELECT record_count,first_day,last_day,version_id FROM market_series \
+             WHERE entity=?1 AND period=1 AND adjustment=0",
+            [entity],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap()
+}
+
+/// Seed a catalog version that no longer lists `code`, by writing the version
+/// rows directly.
+///
+/// The publisher refuses a disappeared member (`RejectReason::MemberDisappeared`,
+/// AC-08), so a verified delisting withdrawal cannot be produced through
+/// `publish_fixture`; this is the catalog state the M3 eligible-set union
+/// (`#446` §4.5) exists for. The version is read back through the same
+/// integrity check the resolver uses, so the fixture cannot silently corrupt
+/// the projection.
+fn withdraw_from_catalog(tasks: &SqliteTasks, code: &str) {
+    let catalog = SqliteCatalog::new(tasks.clone());
+    let base = catalog.fixed("catalog-1").unwrap();
+    let version = x_data_mcp::catalog::CatalogVersion {
+        version_id: "catalog-2".into(),
+        published_at: Utc::now(),
+        source: base.source.clone(),
+        acquired_at: base.acquired_at,
+        records: base
+            .records
+            .into_iter()
+            .filter(|record| record.symbol != code)
+            .collect(),
+    };
+    let mut projection: Vec<Vec<Option<String>>> = version
+        .records
+        .iter()
+        .map(|record| {
+            let exchange = match record.exchange {
+                Exchange::Shanghai => "sh",
+                Exchange::Shenzhen => "sz",
+                Exchange::Other(_) => "invalid",
+            };
+            let (status, industry_code, industry_name, reason) = match &record.industry {
+                IndustryInfo::Assigned { code, name, .. } => {
+                    ("assigned", Some(code.clone()), Some(name.clone()), None)
+                }
+                IndustryInfo::Missing { reason } => ("missing", None, None, Some(reason.clone())),
+                IndustryInfo::Conflicted { reason } => {
+                    ("conflicted", None, None, Some(reason.clone()))
+                }
+            };
+            vec![
+                Some(exchange.into()),
+                Some(record.symbol.clone()),
+                Some(record.name.clone()),
+                Some(record.source_security_id.clone()),
+                Some(status.into()),
+                industry_code,
+                industry_name,
+                reason,
+            ]
+        })
+        .collect();
+    projection.sort();
+    let body = serde_json::to_string(&version).unwrap();
+    let digest = sha(body.as_bytes());
+    let c = rusqlite::Connection::open(tasks.path()).unwrap();
+    c.execute(
+        "INSERT INTO catalog_versions VALUES(?1,?2,?3,?4,?5,?6)",
+        rusqlite::params![
+            "catalog-2",
+            version.published_at.to_rfc3339(),
+            version.source,
+            version.acquired_at.to_rfc3339(),
+            body,
+            digest
+        ],
+    )
+    .unwrap();
+    for row in &projection {
+        c.execute(
+            "INSERT INTO catalog_members VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            rusqlite::params![
+                "catalog-2",
+                row[0],
+                row[1],
+                row[2],
+                row[3],
+                row[4],
+                row[5],
+                row[6],
+                row[7]
+            ],
+        )
+        .unwrap();
+    }
+    c.execute(
+        "INSERT INTO catalog_head VALUES(1,'catalog-2') ON CONFLICT(singleton) DO UPDATE SET version_id=excluded.version_id",
+        [],
+    )
+    .unwrap();
+    assert_eq!(catalog.fixed("catalog-2").unwrap().version_id, "catalog-2");
+}
+
+fn item_outcome<'a>(
+    task: &'a x_data_mcp::task_control::TaskSnapshot,
+    item_id: &str,
+) -> &'a x_data_mcp::task_control::ItemOutcome {
+    task.items
+        .iter()
+        .find(|item| item.spec.item_id == item_id)
+        .and_then(|item| item.outcome.as_ref())
+        .unwrap_or_else(|| panic!("{item_id} item has an outcome"))
+}
+
+/// M3 PR-5 (`#446` §4.5, AC-M3-6): a code that leaves the catalog keeps its
+/// terminal series in the daily plan — the delisting day's last bars are not
+/// dropped — while an active member is planned exactly as before, and the
+/// internal delisted-series check re-verifies the registrations without
+/// writing anything.
+#[test]
+fn a_withdrawn_member_keeps_its_terminal_series_in_the_daily_plan() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 600007 is delisted on its last bar day: the main table takes that day
+    // from the TDX arrangement end, and the series carries its three terminal
+    // bars (the delisting day last).
+    let r = rig_full(
+        &[("sh", "600006", day_u32(1)), ("sh", "600007", day_u32(1))],
+        true,
+        Some(("600007", day_u32(1))),
+    );
+    // Run 0 writes the main table (the daily run's `derived:security_master`
+    // item); only a later run has a registration to check.
+    let p0 = plan(&r.api, "market.daily");
+    let t0 = run(&r.api, "market.daily", "run-0", &p0)["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    r.api.call("run_worker_once", json!({})).unwrap();
+    assert_eq!(
+        r.tasks.read_task(&t0).unwrap().unwrap().task.status,
+        x_data_mcp::task_control::Status::Succeeded
+    );
+    let before = series_facts(&r.tasks, "sh.600007");
+    assert_eq!(before.0, 3, "three terminal bars");
+    assert_eq!(
+        before.2,
+        epoch_of(day_u32(1)),
+        "last bar is the delisting day"
+    );
+
+    // The verified withdrawal: the current catalog no longer lists 600007, so
+    // only the previous version's members keep it in the eligible set.
+    withdraw_from_catalog(&r.tasks, "600007");
+    let p1 = plan(&r.api, "market.daily");
+    // Without the previous version's members the plan would hold only the
+    // active 600006, and 600007's missing delisting-day tail could never be
+    // collected.
+    assert_eq!(p1["counts"]["eligible"], 2, "{p1}");
+    assert_eq!(p1["counts"]["ineligible"], 0, "{p1}");
+    let t1 = run(&r.api, "market.daily", "run-1", &p1)["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    r.api.call("run_worker_once", json!({})).unwrap();
+    let task = r.tasks.read_task(&t1).unwrap().unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::Succeeded,
+        "{:?}",
+        task.task.result
+    );
+    // The active member is planned and committed exactly as before.
+    let active = item_outcome(
+        &task,
+        &x_data_mcp::task_control::legacy::scope_id("sh.600006", "day"),
+    );
+    assert!(active.success, "{active:?}");
+    // The withdrawn member's item ran (its tail is owed nothing here, so it is
+    // a `no_change`), and the check registered it from the main table.
+    let retired = item_outcome(
+        &task,
+        &x_data_mcp::task_control::legacy::scope_id("sh.600007", "day"),
+    );
+    assert!(retired.success, "{retired:?}");
+    let check = item_outcome(&task, "derived:delisted_series_check");
+    assert!(check.success, "{check:?}");
+    let evidence = check.evidence.as_ref().expect("check evidence");
+    assert_eq!(evidence["checked"], 1, "{evidence}");
+    assert_eq!(evidence["unchanged"], 1, "{evidence}");
+    assert_eq!(evidence["tail_extended"], json!([]), "{evidence}");
+    assert_eq!(evidence["failures"], json!([]), "{evidence}");
+    assert_eq!(evidence["skipped"], json!([]), "{evidence}");
+    // Nothing was rewritten: the same three terminal bars, delisting day last.
+    assert_eq!(series_facts(&r.tasks, "sh.600007"), before);
+}
+
+/// M3 PR-5 (`#446` §4.5): a terminal series that changed during the run in a
+/// way the append path never produces fails the check item, the run ends
+/// `partially_failed` and the entity is named — and the stored series is not
+/// rewritten (a finding never repairs history).
+///
+/// The fixture's TDX arrangement ends a day before the last stored bar: the
+/// source delivered one bar *after* the delisting day. The entity item commits
+/// what the source has (the commit path knows nothing about the main table),
+/// and the check reports `last_day_beyond_delisting` — a delisted code cannot
+/// trade again, so that bar is a source contract violation, not a tail.
+#[test]
+fn a_terminal_series_that_grows_past_the_delisting_day_fails_the_check_without_a_rewrite() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig_full(
+        &[("sh", "600006", day_u32(1)), ("sh", "600007", day_u32(1))],
+        true,
+        // 600007's last stored bar is day_u32(1); its delisting day is the day
+        // before it.
+        Some(("600007", day_u32(2))),
+    );
+    let p0 = plan(&r.api, "market.daily");
+    let t0 = run(&r.api, "market.daily", "run-0", &p0)["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    r.api.call("run_worker_once", json!({})).unwrap();
+    let task = r.tasks.read_task(&t0).unwrap().unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::PartiallyFailed,
+        "{:?}",
+        task.task.result
+    );
+    // The source's three bars were stored as delivered: the finding is about
+    // them, so the check cannot have silently dropped or rewritten one.
+    let before = series_facts(&r.tasks, "sh.600007");
+    assert_eq!(before.0, 3, "three stored bars");
+    assert_eq!(
+        before.2,
+        epoch_of(day_u32(1)),
+        "the last stored bar is after the delisting day"
+    );
+    let check = item_outcome(&task, "derived:delisted_series_check");
+    assert!(!check.success, "{check:?}");
+    let error = check.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("sh.600007(last_day_beyond_delisting)"),
+        "{error}"
+    );
+    let evidence = check.evidence.as_ref().expect("check evidence");
+    assert_eq!(evidence["checked"], 1, "{evidence}");
+    assert_eq!(evidence["unchanged"], 0, "{evidence}");
+    assert_eq!(evidence["tail_extended"], json!([]), "{evidence}");
+    assert_eq!(evidence["failures"][0]["entity"], "sh.600007", "{evidence}");
+    assert_eq!(
+        evidence["failures"][0]["reason"], "last_day_beyond_delisting",
+        "{evidence}"
+    );
+    assert_eq!(
+        evidence["failures"][0]["observed"]["last_day"],
+        epoch_of(day_u32(1)),
+        "{evidence}"
+    );
+    // The failed check left the series exactly as the run stored it.
+    assert_eq!(series_facts(&r.tasks, "sh.600007"), before);
 }

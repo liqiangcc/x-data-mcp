@@ -219,6 +219,62 @@ start_collection{dataset: market.daily, contract_version: v2,
 
 日更失败语义沿用 M1/M2：内部 item 失败 → `partially_failed`；不阻塞已提交的其它 item；退市股采集是显式任务，不计入日更 `plan`。
 
+#### 4.5.1 PR-5 实现落位（2026-10-30，XDM-113）
+
+- **eligible 集**：`resolve_default_daily` 的成员集改为「当前目录头 ∪ 上一版目录成员」
+  （`src/data_supply/default_selection.rs`；上一版 = `catalog_versions` 里 head 插入顺序的前一条，
+  成员读 `catalog_members` 投影表，仍然逐条校验 head 版本本身）。与「有首次采集
+  execution-start 标记」取交集不变：没采过的成员不会因为出现在上一版就变成日更目标。
+  选择证据新增 `previous_catalog_version_id` 与 `retained_members`（**只**由上一版保留的
+  实体，正常为空），两者都进 evidence digest，所以宽集/窄集的证据不会互相重放。真正决定
+  item 与否仍是 §4.5 的 `last_day < target_day`（`plan.rs` 的 `already_current` 判定），
+  活跃股的产出与改动前逐位相同。
+- **一个必须说清的边界**：目录发布仍受 AC-08 `MemberDisappeared` 约束——真实退市导致的
+  成员缺席会暂停发布、等核实放行。因此现实数据里「当前成员 ⊆ 上一版成员」，union 今天
+  不改变任何产出；它是"核实放行后成员真的消失"时的兜底。夹具因此直接写入一条少一个成员
+  的目录版本行（`publish_fixture` 无法产生该状态），读回走与解析器同一个完整性校验。
+- **不消失检查**：`derived:delisted_series_check`（`src/data_supply/delisted_series.rs`；
+  item 装配 `src/data_supply/derived.rs`，登记解析在 `src/data_supply/worker.rs` 的
+  plan-run 分支）。只读，不写业务表：
+  - worker 在**实体 item 之前**解析登记：主表里 `delisting_date <= today`、非
+    `issuer_resolution='ambiguous'`、且有**不复权**日线序列的实体，记
+    `record_count`/`first_day`/`last_day`/`content_digest`(`version_id`)/`last_event_seq`
+    /`delisting_day`，冻结进 item 的 `frozen_inputs`。同一任务恢复执行时读**存下来的**
+    baseline（不是重新解析），所以本次 run 早先提交的改动不会被当成"上一代"而漏检。
+  - item 最后执行（在所有写者之后），逐个比对当前事实：完全一致 → `unchanged`；
+    **唯一允许的变化**是尾巴补采——`first_day` 不变、`last_day` / `record_count` 增加、
+    `last_day ≤ delisting_day`，且登记以来的事件全是 `append`（append 路径已证明新 bar
+    是旧条目的前缀）→ `tail_extended`，item 成功。
+  - 其余一律失败并列出实体：`missing_series`、`first_day_changed`、`history_shrunk`、
+    `content_digest_changed`（同区间换内容）、`last_day_beyond_delisting`、
+    `transition_unrecorded`（事实变了但没有事件）、`history_rewritten`（事件不是 append）。
+    失败 → item `success=false` + evidence 里登记值/观测值，run `partially_failed`，
+    **不重建、不删除**；被源改写的历史走 `republish_data`。
+  - 不猜终态：退市日未知（`delisting_date=NULL`）或代码被两个发行主体复用的实体不登记，
+    理由写进 evidence 的 `skipped`（`no_series` / `issuer_ambiguous`）。§4.5 的
+    「`last_day` 早于窗口下限」不另设谓词：非退市但停更的实体由它自己的 item 与缺口
+    证据暴露，用"末根不动"反推退市正是 §4.5 禁止的「把活跃股错当退市股」。
+  - 首次登记发生在写主表那一代**之后**的一代（第一代 plan-run 自己写主表），与 AC-M3-6
+    「连续推进两代 generation」一致；legacy schema 18 无主表/序列事实，item 不加入集合。
+  - **升级注意**：`ensure_derived_items` 要求已存在的派生 item 集合与请求集合完全一致，
+    所以升级前受理、尚未跑完的 plan-run 任务在恢复时会以
+    `derived item set is partially present` 失败（fail-closed，不改写旧任务）。日更窗口
+    内升级宜先让在飞任务结束。
+- **代价（SLO）**：每代两次只读——登记时一次序列摘要全表 scan（`market_series` 按
+  `(entity, period, adjustment)` 索引，行数 = 实体数）+ 检查时逐实体按主键查一次；
+  上限是终态实体数（§8.4 估算 <50ms/代，与 `docs/SLO.md` 的 <600s 门禁无冲突）。
+  真实规模待首次生产验证：hsjday 的 335 个目录外代码里目前只有 152 个有退市日。
+- **夹具**：`tests/mcp/plan_run.rs::a_withdrawn_member_keeps_its_terminal_series_in_the_daily_plan`
+  （成员移出目录后仍在 eligible、活跃股不变、check 登记并 `unchanged`、末根=退市日的 3 根
+  终态 bar 不动）、`::a_terminal_series_that_grows_past_the_delisting_day_fails_the_check_without_a_rewrite`
+  （源在退市日之后又给了一根 bar → `last_day_beyond_delisting`、`partially_failed` +
+  实体清单，已落库的序列不被检查重写；其余失败原因在单代夹具里无法自然发生，改冻结
+  输入构造，由 `delisted_series/tests.rs` 的判定表覆盖）、
+  `src/data_supply/delisted_series/tests.rs`（判定表，含 `tail_extended` 的 append 允许
+  分支与各失败原因）、`src/data_supply/default_selection/tests.rs`（union、保留成员证据、
+  「没采过就不选」）。尾巴**补采**的端到端链路与其它跨代 envelope 路径一样，需要两代
+  source；本 PR 的夹具只覆盖同一代内的登记/比对/失败，跨代补采由 AC-M3-6 的两代演练验收。
+
 ### 4.6 对 `x` 下游与 v8 的影响
 
 - `x` 的 Security Master / `KlineReader` 目前按目录或自建名单枚举；M3 后**必须**从 `market.security_master` 的 `universe` 取成员（含 `has_series`），否则跨年回测仍缺退市股。这是下游改动，不在本仓库实现。
@@ -801,7 +857,7 @@ maint import_source_store --index <archive-index.json> --blobs <dir> --tiers A,B
 | `derived:suspensions`（现有） | `confirmed`（A-3）+ `unresolved_gap`（派生） | 冻结快照 + 日历 + 主表 | A-3 获取失败 → `partially_failed`，不写 `confirmed` |
 | `derived:risk_warnings`（现有） | ST 区间 | #308 冻结快照 + GP29/行情锚定 | 同上；沪 2000 前/北交所 `unknown` |
 | `derived:security_names`（新写入器） | 简称区间（仅深） | `SSGSGMXX/tab2` 冻结快照 | 沪/北 `unbounded`/`unknown` |
-| `derived:delisted_series_check`（新） | 不写业务表；写检查结果与失败实体 | 主表 + 序列 | 缺失/变更 → `partially_failed` + 实体清单；不自动重建 |
+| `derived:delisted_series_check`（新） | 不写业务表；写检查结果与失败实体 | 主表 + 不复权日线序列（登记在实体 item 之前冻结） | 缺失/变更 → `partially_failed` + 实体清单；不自动重建。实现（PR-5）见 §4.5.1：允许的唯一变化是 append 尾巴（`last_day ≤ delisting_day`），退市日未知或代码复用歧义的实体写进 evidence 的 `skipped` |
 
 - 退市股首次采集是**显式任务**（§4.4），不计入日更 plan；日更只做「新退市成员尾巴」与「不消失检查」。
 - 内部 item 之间无事务耦合：行业失败不阻塞日线；主表失败不阻塞已有行情（沿用 M2）。

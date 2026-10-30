@@ -225,15 +225,26 @@ Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目
 
 v7 起全市场日更改由 `plan_market_update`/`run_market_update` 完成（步骤与失败
 路由见 [generic-data-v8](contracts/generic-data-v8.md) §7）。同一次日线 run 里，
-worker 还会追加 **15** 个服务器内部派生 item（9 个指数基准 + 交易日历 + 4 个 M2
+worker 还会追加 **16** 个服务器内部派生 item（9 个指数基准 + 交易日历 + 4 个 M2
 全市场数据集：`derived:security_master`、`derived:risk_warnings`、
 `derived:suspensions`、`derived:trading_rules` + M3 的
-`derived:industry_snapshot`）；它们的 item 级结果只用于报告
+`derived:industry_snapshot`、`derived:delisted_series_check`）；它们的 item 级结果只用于报告
 （`entity`/`period` 为 null），不进入实体补漏清单。4 个 M2 item 在来源未准入时
 **成功且写 0 行**（evidence 里带 `pending_sources`），只有 `error` 才是失败；tool 面
 （`get_task_progress`/`get_task`）只暴露失败项，成功项的取值按 Skill §4 用
 `list_data_versions` 回读（M3 item 写的是索引表而不是版本行，取值看 evidence）。
-M3 的 `derived:industry_snapshot` 只维护行业快照与区间：来源不带
+M3 的 `derived:delisted_series_check` 是**只读**检查（不写业务表）：它在实体 item
+之前登记「主表已退市（`delisting_date ≤ today`、非代码复用歧义）且有**不复权**日线序列」
+的实体，把 `record_count`/`first_day`/`last_day`/`content_digest` 冻结进自己的 item，
+实体 item 跑完后逐个比对。唯一允许的变化是补采尾巴（`last_day` 前进到退市日以内、
+首日不变、条数增加，且登记以来的事件全是 append）；其余（序列消失、变短、同区间换内容、
+越过退市日、改写事件）→ item 失败并在 error/evidence 里列出实体，run 收尾
+`partially_failed`，**不重建、不删除**；被源改写的历史走 `republish_data`。
+退市日未知或代码被两个发行主体复用的实体不登记，只写进 evidence 的 `skipped`。
+首次登记发生在写主表那一代之后的一代，所以升级后的第一代日更 `checked` 可能为 0。
+同一代日更的 eligible 集是「当前目录 ∪ 上一版目录成员 ∩ 有首次采集标记」：目录成员
+消失（核实放行后）不会让退市日当天的最后几根 bar 掉出 plan。M3 的
+`derived:industry_snapshot` 只维护行业快照与区间：来源不带
 `tdxhy.cfg` 时成功且 `no_change`；文件存在但解析失败或缺字典 → item 失败，
 字节已先落来源库、上一版区间不丢。同一内容被再次观测（前一条登记内容相同且带发布方时间）只是
 延长未闭合区间、`no_change`；内容变回旧内容（A → B → A）是新的一次变更，会开新区间。

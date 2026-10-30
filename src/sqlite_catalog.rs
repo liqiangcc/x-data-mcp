@@ -2,6 +2,7 @@
 use crate::{catalog::*, hash::sha256, market_storage::Error, sqlite_tasks::SqliteTasks};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
+use std::collections::BTreeSet;
 #[derive(Clone)]
 pub struct SqliteCatalog {
     pub tasks: SqliteTasks,
@@ -18,7 +19,7 @@ fn raw(v: &CatalogVersion) -> Result<String, Error> {
 pub(crate) fn digest(v: &CatalogVersion) -> Result<String, Error> {
     Ok(sha256(raw(v)?.as_bytes()))
 }
-fn projection(v: &CatalogVersion) -> Vec<Vec<Option<String>>> {
+pub(crate) fn projection(v: &CatalogVersion) -> Vec<Vec<Option<String>>> {
     let mut rows: Vec<_> = v
         .records
         .iter()
@@ -115,18 +116,96 @@ pub struct ExecutionStartFact {
     pub command_key_json: String,
     pub retry_of: Option<String>,
 }
+/// The catalog version published immediately before the head, as member
+/// symbols only.
+///
+/// The daily eligible set is "current catalog ∪ the previous version's
+/// members" (M3 PR-5, `#446` §4.5): a member that leaves the catalog must keep
+/// its terminal series visible for the run that still has to collect the
+/// delisting day's tail. Membership is read from the `catalog_members`
+/// projection — the same table every other membership query uses — instead of
+/// re-reading and re-digesting a whole version body; the head itself stays
+/// fully verified by [`read`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviousCatalog {
+    pub version_id: String,
+    /// Sorted unique `sh.600006`-style symbols of that version.
+    pub members: Vec<String>,
+}
+
 /// Raw facts for the application-level default selector: current catalog head,
-/// its integrity-verified version, and every execution-start marker. All rows
-/// come from one read-transaction snapshot; nothing here decides membership.
+/// its integrity-verified version, the previous version's members, and every
+/// execution-start marker. All rows come from one read-transaction snapshot;
+/// nothing here decides membership.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectionFacts {
     pub catalog_head: Option<String>,
     pub catalog: Option<CatalogVersion>,
+    pub previous_catalog: Option<PreviousCatalog>,
     pub starts: Vec<ExecutionStartFact>,
 }
+
+/// Version id of the catalog published immediately before `head_id`, ordered
+/// by insertion (`catalog_versions` has no natural key order: fixture and
+/// official ids are both opaque strings). Publishing always moves the head to
+/// the newly inserted row, so the previous publication is the nearest older
+/// rowid.
+fn previous_version_id(c: &Connection, head_id: &str) -> Result<Option<String>, Error> {
+    c.query_row(
+        "SELECT version_id FROM catalog_versions WHERE rowid < (SELECT rowid FROM catalog_versions WHERE version_id=?1) ORDER BY rowid DESC LIMIT 1",
+        [head_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(storage)
+}
+
+/// Member symbols of one catalog version, from the projection table.
+fn previous_members(c: &Connection, version_id: &str) -> Result<Vec<String>, Error> {
+    let mut q = c
+        .prepare(
+            "SELECT exchange,code FROM catalog_members WHERE version_id=?1 ORDER BY exchange,code",
+        )
+        .map_err(storage)?;
+    let rows = q
+        .query_map([version_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })
+        .map_err(storage)?;
+    let mut members = BTreeSet::new();
+    for row in rows {
+        let (exchange, code) = row.map_err(storage)?;
+        // Same mapping rule as the resolver's `member_symbol`: only sh/sz
+        // members can become a market scope. The catalog rejects anything else
+        // at publish time, so an unexpected exchange here is data corruption.
+        match exchange.as_str() {
+            "sh" => members.insert(format!("sh.{code}")),
+            "sz" => members.insert(format!("sz.{code}")),
+            other => {
+                return Err(integrity(format!(
+                    "catalog member exchange {other:?} is outside the sh/sz projection"
+                )));
+            }
+        };
+    }
+    Ok(members.into_iter().collect())
+}
+
 pub(crate) fn selection_facts_on(c: &Connection) -> Result<SelectionFacts, Error> {
     let head_id = head(c)?;
     let catalog = head_id.as_deref().map(|id| read(c, id)).transpose()?;
+    let previous_catalog = match head_id.as_deref() {
+        Some(head_id) => previous_version_id(c, head_id)?
+            .map(|version_id| {
+                let members = previous_members(c, &version_id)?;
+                Ok(PreviousCatalog {
+                    version_id,
+                    members,
+                })
+            })
+            .transpose()?,
+        None => None,
+    };
     let mut q = c
         .prepare(
             "SELECT s.task_id,s.item_id,s.run_id,s.start_revision,s.started_at,t.command_key_json,t.retry_of \
@@ -152,6 +231,7 @@ pub(crate) fn selection_facts_on(c: &Connection) -> Result<SelectionFacts, Error
     Ok(SelectionFacts {
         catalog_head: head_id,
         catalog,
+        previous_catalog,
         starts,
     })
 }
