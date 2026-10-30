@@ -160,6 +160,7 @@ pub fn parse_page(format: PagingFormat, body: &[u8]) -> Result<PageEnvelope, Val
         PagingFormat::SsePageHelp => parse_sse(&value),
         PagingFormat::SseSoaPageNo => parse_sse_soa(&value),
         PagingFormat::SzseMetadata => parse_szse(&value),
+        PagingFormat::SzseMetadataV1 => parse_szse_first_block(&value),
     }
 }
 
@@ -242,13 +243,81 @@ fn parse_sse(value: &Value) -> Result<PageEnvelope, ValidateError> {
     })
 }
 
+/// Pick the SZSE block that carries this list.
+///
+/// The 2026-10-30 real responses always contain two blocks: `tab1` (暂停上市,
+/// zero rows, `pagecount=0`) followed by `tab2` (终止上市, the data). Taking
+/// `blocks.first()` therefore reads the empty block and fails later with
+/// `page_count is 0`. The rule is:
+///
+/// 1. `metadata.tabkey == "tab2"` — the terminated list;
+/// 2. otherwise the only block whose `data` array is non-empty;
+/// 3. otherwise the only block (the old single-block shape);
+/// 4. otherwise fail closed instead of silently picking the first block.
+///
+/// `a1a2::rows` calls this same function so the row array and the pagination
+/// metadata can never come from different blocks.
+pub(crate) fn szse_block(value: &Value) -> Result<&Value, ValidateError> {
+    let blocks = value.as_array().ok_or_else(|| ValidateError::Format {
+        detail: "top level is not an array of blocks".to_string(),
+    })?;
+    if blocks.is_empty() {
+        return Err(ValidateError::Format {
+            detail: "empty block array".to_string(),
+        });
+    }
+    if let Some(block) = blocks
+        .iter()
+        .find(|block| block_tabkey(block) == Some("tab2"))
+    {
+        return Ok(block);
+    }
+    let mut non_empty = blocks.iter().filter(|block| {
+        block
+            .get("data")
+            .and_then(Value::as_array)
+            .is_some_and(|data| !data.is_empty())
+    });
+    match (non_empty.next(), non_empty.next()) {
+        (Some(block), None) => Ok(block),
+        (None, _) if blocks.len() == 1 => Ok(&blocks[0]),
+        (None, _) => Err(ValidateError::Format {
+            detail: "no block has metadata.tabkey=\"tab2\" and no unique block has data; \
+                     refusing to pick the first block"
+                .to_string(),
+        }),
+        (Some(_), Some(_)) => Err(ValidateError::Format {
+            detail: "no block has metadata.tabkey=\"tab2\" and several blocks have data; \
+                     refusing to pick one"
+                .to_string(),
+        }),
+    }
+}
+
+fn block_tabkey(block: &Value) -> Option<&str> {
+    block
+        .get("metadata")
+        .and_then(|metadata| metadata.get("tabkey"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+}
+
 fn parse_szse(value: &Value) -> Result<PageEnvelope, ValidateError> {
+    parse_szse_block(szse_block(value)?)
+}
+
+/// v1 replay: the first block, exactly as the old parser read it.
+fn parse_szse_first_block(value: &Value) -> Result<PageEnvelope, ValidateError> {
     let blocks = value.as_array().ok_or_else(|| ValidateError::Format {
         detail: "top level is not an array of blocks".to_string(),
     })?;
     let block = blocks.first().ok_or_else(|| ValidateError::Format {
         detail: "empty block array".to_string(),
     })?;
+    parse_szse_block(block)
+}
+
+fn parse_szse_block(block: &Value) -> Result<PageEnvelope, ValidateError> {
     let metadata = block
         .get("metadata")
         .and_then(Value::as_object)
@@ -273,7 +342,7 @@ fn parse_szse(value: &Value) -> Result<PageEnvelope, ValidateError> {
         // The SZSE endpoint spells this `pageno`; older fixtures captured
         // `pageNo`. Both are the same field and neither is guessed from the
         // request page (a missing one would be reported as page 1 and rejected
-        // as a mismatch on page 2).
+        // as a mismatch on page 2). Both are read from the selected block.
         page: clamp_u32(
             metadata
                 .get("pageNo")

@@ -70,6 +70,7 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use serde_json::{Value, json};
 
+use crate::exchange_source::validate;
 use crate::exchange_source::{
     AcquisitionPlan, Client, Entry, PagingFormat, RunCache, SnapshotBinding, SourceId,
     TransportError,
@@ -89,7 +90,7 @@ use crate::sqlite_market::backend::MarketBackend;
 /// re-derivation must pin. It stays out of the generation binding evidence on
 /// purpose: that digest must be identical for every whole-market item of one
 /// generation (`derived:suspensions` fails closed otherwise).
-pub const PARSER_VERSION: &str = "exchange-a1a2-v2";
+pub const PARSER_VERSION: &str = "exchange-a1a2-v3";
 
 /// Environment variable naming the deployment's source store (§9.4.1). The
 /// deploy script uses `<deploy-state>/source-store`; without it the A-1/A-2
@@ -559,7 +560,9 @@ fn parse_page(kind: ListKind, bytes: &[u8]) -> Result<ParsedPage, A1A2Error> {
 }
 
 /// The `data` array of one envelope. The envelope itself was already validated
-/// by PR-2; this only re-reads the rows.
+/// by PR-2; this only re-reads the rows with the same SZSE block selection
+/// (`metadata.tabkey=tab2`) the envelope used, so the rows and the pagination
+/// counts can never come from different blocks.
 fn rows(kind: ListKind, bytes: &[u8]) -> Result<Vec<Value>, A1A2Error> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|error| A1A2Error::invalid(format!("{}: not JSON: {error}", kind.label())))?;
@@ -569,10 +572,9 @@ fn rows(kind: ListKind, bytes: &[u8]) -> Result<Vec<Value>, A1A2Error> {
             .and_then(|help| help.get("data"))
             .and_then(Value::as_array)
     } else {
-        value
-            .as_array()
-            .and_then(|blocks| blocks.first())
-            .and_then(|block| block.get("data"))
+        validate::szse_block(&value)
+            .map_err(|error| A1A2Error::invalid(format!("{}: {error}", kind.label())))?
+            .get("data")
             .and_then(Value::as_array)
     };
     let Some(data) = data else {
