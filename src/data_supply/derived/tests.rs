@@ -92,7 +92,8 @@ fn item_specs_cover_nine_indices_then_the_calendar() {
     assert!(
         check
             .frozen_inputs
-            .contains_key(crate::data_supply::delisted_series::BASELINE_KEY)
+            .get(crate::data_supply::delisted_series::BASELINE_KEY)
+            .is_some()
     );
 }
 

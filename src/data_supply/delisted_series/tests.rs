@@ -106,12 +106,12 @@ fn failures_name_the_entities_and_carry_both_states() {
     let registration = registration();
     let mut seen = observed(&registration);
     seen.content_digest = "b".repeat(64);
-    let failure = failure(&registration, CONTENT_DIGEST_CHANGED, Some(seen.clone()));
+    let changed = failure(&registration, CONTENT_DIGEST_CHANGED, Some(seen.clone()));
     let report = Report {
         registered: 2,
         unchanged: 1,
         tail_extended: Vec::new(),
-        failures: vec![failure],
+        failures: vec![changed],
     };
     assert!(report.failed());
     assert_eq!(

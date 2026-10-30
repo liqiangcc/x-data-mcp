@@ -196,7 +196,7 @@ pub(crate) fn selection_facts_on(c: &Connection) -> Result<SelectionFacts, Error
     let catalog = head_id.as_deref().map(|id| read(c, id)).transpose()?;
     let previous_catalog = match head_id.as_deref() {
         Some(head_id) => previous_version_id(c, head_id)?
-            .map(|version_id| {
+            .map(|version_id| -> Result<PreviousCatalog, Error> {
                 let members = previous_members(c, &version_id)?;
                 Ok(PreviousCatalog {
                     version_id,
