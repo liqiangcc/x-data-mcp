@@ -30,12 +30,16 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 
 - 指纹是请求本身的规范 JSON：`version` + `source_id` + URL + 排序后的参数（含分页与
   分段参数）。相同指纹 + 相同响应 sha256 只登记一次（§6.3）。
-- 分页方言按来源固定：上交所只用 `beginPage`/`endPage`（`beginPage == endPage`），
-  深交所用 `PAGENO`；`pageSize` 既不发送也不依赖（实测被忽略，§17 第 9/10 条）。
+- 分页方言按来源固定：`beginPage`/`endPage`（`beginPage == endPage`，公告索引与名单），
+  深交所用 `PAGENO`，`pageHelp.pageNo` 用于 `commonSoaQuery`（PR-11 实测该端点忽略
+  `beginPage`/`endPage`，只认 `pageHelp.pageNo`，`pageSize=25` 固定）；`pageSize`
+  对前两种既不发送也不依赖（实测被忽略，§17 第 9/10 条）。
 - 信封解析（`PagingFormat`）只读分页计数，不解释业务字段：
   - `exchange-sse-page-v1`：`pageHelp.pageCount` / `pageHelp.total` / `pageHelp.data`；
-  - `exchange-szse-page-v1`：`[0].metadata.pagecount` / `recordcount` / `[0].data`。
-  这两个版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数。
+  - `exchange-szse-page-v1`：`[0].metadata.pagecount` / `recordcount` / `[0].data`；
+  - `exchange-sse-soa-page-v1`：`pageHelp.pageNo` / `pageHelp.pageCount` /
+    `pageHelp.total` / `pageHelp.data`（`commonSoaQuery` 方言）。
+  这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数。
 - 分段：公告索引下界 `2000-01-01`，单请求区间 ≤93 天且按自然季度对齐
   （`quarter_segments`）。超过 93 天的区间在构造时即被拒（`segment_too_long`），
   不会发出请求。
@@ -133,6 +137,26 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
 - 失败码沿用本入口（`source_unavailable` / `source_invalid` /
   `source_not_admitted` / `partially_failed`）；`derived:security_master` 因此失败时，
   上一版主表保持可读，TDX 日更不受影响。
+
+### A-3 停复牌消费者（`derived:suspensions`）
+
+PR-11 起 `derived:suspensions` 的 `confirmed` 分支由 `src/official_security/a3.rs`
+消费本入口：
+
+- 一个 source_id `sse_suspension`：`commonSoaQuery.do?sqlId=GW_PL_JYTS_TFPXX`，
+  `isPagination=true`、`pageHelp.pageSize=25`、`pageHelp.pageNo=<n>`，
+  `startStopDate`/`endStopDate` 为 `YYYYMMDD`（带连字符会被静默读成 0 行）。
+- 分段：下界 `2008-01-01`，按自然季度到**昨天**（当天不完整，不查）。
+- 0 行窗口用 `AcquisitionPlan::zero_rows_not_observed()` 记成 `not_observed`
+  并进入 item 证据；默认 `ZeroPolicy::FailClosed` 不变，其它消费者照旧
+  `unverified_zero` 失败。业务字段 parser 版本 `exchange-a3-v1` 只进 item 证据。
+- 行语义（D-49/D-60）：只有 `LXTP`（与单日 `LSTP`+`stopTime=WH`）是整日停牌，
+  `stopTime=930/AM/PM` 的盘中停牌与多日 `LSTP` 不入行（计数）；`endStopDate` 原样
+  作为含端点的 `end_day`，空值 = 该段末日并计未闭合；只收 6 位 `6` 开头且在主表内
+  的实体，区间再按 §11.1 主表窗口裁剪（BR-M3-2）。
+- 未配置 `X_DATA_MCP_SOURCE_STORE` 时仍是 `pending_source`（只有 `unresolved_gap`）；
+  配置了但抓取失败 → 该 item 失败、不写 `confirmed`（§10.1）。深市没有该来源，
+  首期只有 `unresolved_gap`，可交易性 `unknown`。
 
 ## 7. 本 PR 不含
 
