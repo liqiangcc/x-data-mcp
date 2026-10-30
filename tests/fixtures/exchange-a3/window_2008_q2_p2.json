@@ -1,0 +1,101 @@
+{
+ "actionErrors": [],
+ "actionMessages": [],
+ "fieldErrors": {},
+ "isPagination": "true",
+ "jsonCallBack": null,
+ "locale": "en_CN",
+ "pageHelp": {
+  "beginPage": 0,
+  "cacheSize": 1,
+  "data": [
+   {
+    "startStopDate": "20080602",
+    "stopReason": "重要公告",
+    "productCode": "600018",
+    "endStopReason": "重要公告",
+    "controlType": "TR",
+    "endStopDate": "20080602",
+    "stopTime": "WH",
+    "type": "LSTP",
+    "productName": "上港集团"
+   },
+   {
+    "startStopDate": "20080506",
+    "stopReason": "重要公告",
+    "productCode": "600849",
+    "endStopReason": "重要公告",
+    "controlType": "TR",
+    "endStopDate": "20080508",
+    "stopTime": "WH",
+    "type": "LSTP",
+    "productName": "上海医药"
+   },
+   {
+    "startStopDate": "20080610",
+    "stopReason": "重要公告",
+    "productCode": "601607",
+    "endStopReason": "重要公告",
+    "controlType": "TR",
+    "endStopDate": "",
+    "stopTime": "",
+    "type": "LXTP",
+    "productName": "上海医药"
+   }
+  ],
+  "endDate": null,
+  "endPage": null,
+  "objectResult": null,
+  "pageCount": 2,
+  "pageNo": 2,
+  "pageSize": 25,
+  "pageSizeWithOutLimit": 25,
+  "searchDate": null,
+  "sort": null,
+  "startDate": null,
+  "total": 6
+ },
+ "pageNo": null,
+ "pageSize": null,
+ "queryDate": "",
+ "result": [
+  {
+   "startStopDate": "20080602",
+   "stopReason": "重要公告",
+   "productCode": "600018",
+   "endStopReason": "重要公告",
+   "controlType": "TR",
+   "endStopDate": "20080602",
+   "stopTime": "WH",
+   "type": "LSTP",
+   "productName": "上港集团"
+  },
+  {
+   "startStopDate": "20080506",
+   "stopReason": "重要公告",
+   "productCode": "600849",
+   "endStopReason": "重要公告",
+   "controlType": "TR",
+   "endStopDate": "20080508",
+   "stopTime": "WH",
+   "type": "LSTP",
+   "productName": "上海医药"
+  },
+  {
+   "startStopDate": "20080610",
+   "stopReason": "重要公告",
+   "productCode": "601607",
+   "endStopReason": "重要公告",
+   "controlType": "TR",
+   "endStopDate": "",
+   "stopTime": "",
+   "type": "LXTP",
+   "productName": "上海医药"
+  }
+ ],
+ "securityCode": "",
+ "sqlId": "GW_PL_JYTS_TFPXX",
+ "texts": null,
+ "type": "",
+ "validateCode": ""
+}

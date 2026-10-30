@@ -526,9 +526,38 @@ fn execute(
         let started = std::time::Instant::now();
         let source = dataset_source(session, source_cache)?;
         let inputs = market.suspension_inputs()?;
+        // A-3 (M3 PR-11, D-49/D-60): the SSE structured suspension event table
+        // is an admitted source; the SZSE side has no `confirmed` source, so an
+        // SZ gap stays `unresolved_gap` and SZ tradability stays `unknown`.
+        // Without the source store the branch stays `pending_source` (gap-only,
+        // the pre-PR-11 behaviour); a configured source that cannot be fetched
+        // fails this item so no `confirmed` row is written (§6.3/§10.1).
+        let (seam, exchange_evidence) = match crate::official_security::a3::run_source(
+            market,
+            &inputs.intervals,
+            Utc::now().date_naive(),
+        )
+        .map_err(|error| {
+            Error::Invalid(format!(
+                "suspension/resumption source: {}: {error}",
+                error.code()
+            ))
+        })? {
+            crate::official_security::a3::RunSource::Pending(pending) => {
+                (crate::security_master::suspensions::suspension_source(None), pending_json(&[pending]))
+            }
+            crate::official_security::a3::RunSource::Admitted(admitted) => {
+                let evidence = admitted.evidence();
+                (
+                    crate::security_master::suspensions::suspension_source(Some(
+                        admitted.snapshot.clone(),
+                    )),
+                    evidence,
+                )
+            }
+        };
         let set = crate::security_master::suspensions::assemble_suspensions(
-            // A-3 is not admitted: no confirmed row is claimed, only gaps.
-            &crate::security_master::suspensions::suspension_source(None),
+            &seam,
             &inputs.intervals,
             &inputs.calendar,
             &inputs.bar_days,
@@ -554,6 +583,7 @@ fn execute(
             "confirmed_rows": set.confirmed_rows,
             "missing_days": set.missing_days(),
             "pending_sources": pending_json(&set.pending_sources),
+            "exchange_source": exchange_evidence,
             "elapsed_ms": elapsed_ms(started),
         }));
     }

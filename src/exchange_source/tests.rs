@@ -12,7 +12,7 @@ use std::time::Duration;
 use chrono::NaiveDate;
 
 use super::index::{self, SnapshotRow};
-use super::request::SSE_PARSER_VERSION;
+use super::request::{SSE_PARSER_VERSION, SSE_SOA_PARSER_VERSION};
 use super::*;
 use crate::source_store::{
     ManifestRecord, Registration, SourceStore, StoreError, StoreKind, known_parser_version,
@@ -148,6 +148,75 @@ fn sse_and_szse_envelopes_are_parsed_without_business_fields() {
             .unwrap_err()
             .code(),
         "source_invalid"
+    );
+}
+
+#[test]
+fn the_soa_dialect_pages_by_page_help_page_no() {
+    // `commonSoaQuery` ignores `beginPage`/`endPage` and keeps
+    // `pageHelp.beginPage=1`; the page number is `pageHelp.pageNo` (PR-11
+    // evidence: `beginPage=2&endPage=2` answered page 1 again).
+    let body = br#"{"pageHelp":{"beginPage":1,"pageNo":2,"pageCount":2,"total":28,"data":[{"x":"1"},{"x":"2"}]}}"#;
+    let page = validate::parse_page(PagingFormat::SseSoaPageNo, body).unwrap();
+    assert_eq!(
+        (page.page, page.page_count, page.rows, page.total),
+        (2, 2, 2, Some(28))
+    );
+    assert_eq!(
+        PagingFormat::SseSoaPageNo.parser_version(),
+        SSE_SOA_PARSER_VERSION
+    );
+    assert!(known_parser_version(SSE_SOA_PARSER_VERSION));
+    assert_eq!(
+        PagingFormat::from_parser_version(SSE_SOA_PARSER_VERSION),
+        Some(PagingFormat::SseSoaPageNo)
+    );
+    let mut params = std::collections::BTreeMap::new();
+    PagingFormat::SseSoaPageNo.apply_page(&mut params, 2);
+    assert_eq!(
+        params.get("pageHelp.pageNo").map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        params.get("pageHelp.pageSize").map(String::as_str),
+        Some("25")
+    );
+    assert!(!params.contains_key("beginPage"));
+}
+
+#[test]
+fn a_quiet_soa_window_can_be_not_observed() {
+    // `commonSoaQuery` answers `pageCount=0` with `data: []` for a quiet
+    // window. A consumer that stores only positive facts may record it as an
+    // unobserved window; the default stays fail-closed.
+    let empty = PageEnvelope {
+        page: 1,
+        page_count: 0,
+        rows: 0,
+        total: Some(0),
+    };
+    let set = validate::validate_pages(
+        &[empty.clone()],
+        EmptyPolicy::Forbidden,
+        ZeroPolicy::NotObserved,
+    )
+    .unwrap();
+    assert_eq!((set.row_count, set.page_count), (0, 0));
+    assert_eq!(
+        validate::validate_pages(&[empty], EmptyPolicy::Forbidden, ZeroPolicy::FailClosed)
+            .unwrap_err()
+            .code(),
+        "source_invalid"
+    );
+    // A page that claims `pageCount=0` but carries rows is never accepted.
+    let liar = PageEnvelope {
+        page: 1,
+        page_count: 0,
+        rows: 2,
+        total: None,
+    };
+    assert!(
+        validate::validate_pages(&[liar], EmptyPolicy::Forbidden, ZeroPolicy::NotObserved).is_err()
     );
 }
 
