@@ -378,6 +378,53 @@ impl TdxMarketSource {
         Ok(index)
     }
 
+    /// Symbols carried by this snapshot's `.day` archive (`sh.600000` form),
+    /// read from the verified central directory only. Used by the M3
+    /// listed-ever scope: the member set is part of the member-scope
+    /// definition (`#446` §4.1), not a per-item discovery.
+    pub fn day_member_symbols(&self) -> Result<std::collections::BTreeSet<String>, SourceError> {
+        let index = self.archive_index(&self.day)?;
+        let index = index
+            .lock()
+            .map_err(|_| SourceError::Invocation("archive index cache poisoned".into()))?;
+        Ok(index
+            .members
+            .keys()
+            .filter_map(|name| MaterializeSession::day_member_symbol(name.as_str()))
+            .collect())
+    }
+
+    /// The uncompressed byte length of one symbol's `.day` member, from the
+    /// central directory. `None` means the member does not exist; both member
+    /// spellings present is ambiguous and fails closed like the per-item read.
+    pub fn day_member_size(&self, symbol: &str) -> Result<Option<u64>, SourceError> {
+        let (market, code) = MaterializeSession::split_symbol(symbol)?;
+        let candidates = MaterializeSession::day_names(market, code);
+        let index = self.archive_index(&self.day)?;
+        let mut index = index
+            .lock()
+            .map_err(|_| SourceError::Invocation("archive index cache poisoned".into()))?;
+        let mut found = Vec::new();
+        for name in &candidates {
+            if let Some(indices) = index.members.get(name) {
+                found.extend(indices.iter().copied());
+            }
+        }
+        match found.as_slice() {
+            [] => Ok(None),
+            [entry] => {
+                let entry = index
+                    .archive
+                    .by_index_raw(*entry)
+                    .map_err(|e| SourceError::Invocation(format!("member open failed: {e}")))?;
+                Ok(Some(entry.size()))
+            }
+            _ => Err(SourceError::Invocation(format!(
+                "member ambiguous: more than one of {candidates:?} is present"
+            ))),
+        }
+    }
+
     /// Materialize the snapshot's complete `.day` history for one security
     /// as forward-adjusted (QFQ) bars. Identical to running the materialize
     /// on a fresh `materialize_session()` — the single-symbol path simply
@@ -864,6 +911,25 @@ impl MaterializeSession<'_> {
             format!("{market}\\lday\\{market}{code}.day"),
             format!("{market}/lday/{market}{code}.day"),
         ]
+    }
+
+    /// `sh.600006` for one `<market>/lday/<market><code>.day` member name,
+    /// `None` for any other archive member.
+    fn day_member_symbol(name: &str) -> Option<String> {
+        let normalized = name.replace('\\', "/");
+        let parts: Vec<&str> = normalized.split('/').collect();
+        let [market, "lday", file] = parts.as_slice() else {
+            return None;
+        };
+        let (market, file) = (*market, *file);
+        if !matches!(market, "sh" | "sz") {
+            return None;
+        }
+        let code = file.strip_suffix(".day")?.strip_prefix(market)?;
+        if code.len() != 6 || !code.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Some(format!("{market}.{code}"))
     }
 
     /// This security's parsed factor set: the verified category-1 records as
@@ -2718,7 +2784,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
         };
         if binding.head.key.operation != "start_collection"
             || binding.head.key.dataset != "market.daily"
-            || binding.head.key.contract_version != "v1"
+            || !matches!(binding.head.key.contract_version.as_str(), "v1" | "v2")
         {
             return Err(Error::Invalid("unsupported collection contract".into()));
         }
@@ -2942,7 +3008,7 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             .ok_or_else(|| Error::Invalid("collection item absent from accepted task".into()))?;
         if binding.head.key.operation != "start_collection"
             || binding.head.key.dataset != "market.daily"
-            || binding.head.key.contract_version != "v1"
+            || !matches!(binding.head.key.contract_version.as_str(), "v1" | "v2")
         {
             return Err(Error::Invalid("unsupported collection contract".into()));
         }

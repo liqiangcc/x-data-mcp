@@ -106,11 +106,13 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // v8 §6.3 allocated 11_000 / 27_500 / 14_500 before M2. M2 PR-9 adds
     // six datasets to the shared `Dataset` input enum, so the measured
     // research/ops payloads grew to 11_511 / 28_220 B while maint (no
-    // dataset enum) stayed at 13_493 B. The budgets carry that documented
-    // surface growth; they are not relaxed for any other reason.
+    // dataset enum) stayed at 13_493 B. M3 PR-4 adds the v2
+    // `selection.kind=scope` branch and the v1/v2 contract_version enum to
+    // `start_collection` only (ops), so the ops budget carries that
+    // documented surface growth too; it is not relaxed for any other reason.
     let budgets = [
         (EntryKind::Research, 5usize, 11_700usize),
-        (EntryKind::Ops, 15usize, 28_400usize),
+        (EntryKind::Ops, 15usize, 28_700usize),
         (
             EntryKind::Maint,
             if cfg!(target_os = "linux") { 9 } else { 8 },

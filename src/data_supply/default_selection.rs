@@ -5,8 +5,9 @@
 //!
 //! Contract-family recognition (application layer, never SQL): a marker counts
 //! when its task's stored `command_key_json` is exactly the typed
-//! `start_collection`/`market.daily`/`v1` key or the legacy
-//! `start_collection`/`legacy_market_compound`/`task-acceptance-v1` key.
+//! `start_collection`/`market.daily` key (v1, or v2 for the M3 listed-ever
+//! scope) or the legacy `start_collection`/`legacy_market_compound`/
+//! `task-acceptance-v1` key.
 //! Retry tasks already store the original executable key in
 //! `tasks.command_key_json` (see `sqlite_tasks` accept), so
 //! retry-of-collection markers qualify naturally; `retry_of` is evidence only.
@@ -59,12 +60,15 @@ pub struct DefaultDailySelection {
     /// sha256 over the canonical serialization of the fields above.
     pub evidence_digest: String,
 }
+/// Marker map keyed by selected symbol; named so the literal below stays
+/// one field per line for the pre-push struct-literal check.
+type StartProofs = BTreeMap<String, Vec<StartIdentity>>;
 #[derive(Serialize)]
 struct DigestInput<'a> {
     catalog_version_id: &'a str,
     catalog_digest: &'a str,
     securities: &'a [String],
-    starts: &'a BTreeMap<String, Vec<StartIdentity>>,
+    starts: &'a StartProofs,
 }
 fn member_symbol(record: &crate::catalog::SecurityRecord) -> Option<String> {
     let exchange = match record.exchange {
@@ -90,7 +94,9 @@ fn family(key: &CommandKey) -> Option<Family> {
         return None;
     }
     match (key.dataset.as_str(), key.contract_version.as_str()) {
-        ("market.daily", "v1") => Some(Family::Typed),
+        // v2 only ever collects `market.daily` (M3 #446 §4.4), so a v2 marker
+        // is the same first-collection proof a v1 marker is.
+        ("market.daily", "v1" | "v2") => Some(Family::Typed),
         ("legacy_market_compound", "task-acceptance-v1") => Some(Family::Legacy),
         _ => None,
     }

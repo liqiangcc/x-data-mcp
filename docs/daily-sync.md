@@ -253,6 +253,23 @@ verified active generation
 → 可选派生 market.yearly
 ```
 
+### 退市股一次性首采（操作员发起，非日更步骤）
+
+退市股没有 daily head，日更 `plan`/`run` 不会把它们列为 eligible。M3 PR-4 提供显式
+一次性入口，只在操作员明确要求时执行（典型时机：部署/升级后一次），不进日更 plan，
+日更 AI 不得自行发起：
+
+```text
+start_collection{dataset:"market.daily", contract_version:"v2",
+  selection:{kind:"scope", scope:"sh_sz_a_listed_ever"}}
+```
+
+服务端解析 `security_master`（沪深、`instrument_class=0`、无 series）∩ 当前 generation
+的 `.day` 成员，预算 1..500；无 bar 成员跳过并记入证据，已有 head 的实体跳过
+（重复提交只采缺失项）。item 级发布/验证语义与 v1 首采相同。`securities.catalog`
+读写都拒绝该 scope。日更 Skill 的完整步骤见
+[.devin/skills/x-data-daily-sync/SKILL.md](../.devin/skills/x-data-daily-sync/SKILL.md) §3.9。
+
 ### 结果不明
 
 - Acquisition timeout：按原 acquisition request/task ref 查询，不更换 ID 盲目重发。

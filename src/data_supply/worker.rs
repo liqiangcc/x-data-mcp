@@ -100,7 +100,7 @@ pub fn run_once(
         // service without a configured snapshot keep the source refusal.
         if candidate.task.key.operation == "start_collection"
             && candidate.task.key.dataset == "market.daily"
-            && candidate.task.key.contract_version == "v1"
+            && matches!(candidate.task.key.contract_version.as_str(), "v1" | "v2")
             && let Some(source) = market_source
         {
             // One session per worker run: the gbbq member decode is shared

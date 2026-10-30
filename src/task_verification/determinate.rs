@@ -31,12 +31,7 @@ pub struct Determinate<R> {
 fn supported(s: &TaskSnapshot) -> bool {
     let key = &s.task.key;
     key == &LegacyCollection.key()
-        || (key.operation == "start_collection"
-            && key.contract_version == "v1"
-            && matches!(
-                key.dataset.as_str(),
-                "market.daily" | "market.yearly" | "securities.catalog"
-            ))
+        || crate::data_supply::collect::is_collection_key(key)
         || (matches!(key.operation.as_str(), "update_data" | "backfill_data")
             && ((key.dataset == "market.daily"
                 && key.contract_version == crate::market_update::tasks::CONTRACT_VERSION)

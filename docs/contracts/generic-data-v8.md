@@ -21,7 +21,7 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 | `capability_revision` | `generic-data-v7` | `generic-data-v8`（2026-10-27 部署日翻） | 客户端按 revision 握手，不匹配即停 |
 | data 工具数 | 23 | 代码 24（+ 只读 `list_catalog_facets`）；最小切换部署的 `ops` 入口 15 | 旧工具名全部保留，无重命名、无删除 |
 | 入口 | 1 个 data socket（23 工具） | **3 个入口**：research 5 / ops 15 / maint 9（`src/data_supply/registry.rs:43,51,70`） | `mcp.sock` 变成编排入口；旧单元不带 `--entry` 时默认 `ops`（`src/bin/data_service.rs:44`） |
-| `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支） | 缺省仍是 `v1`；v1 字节不变 |
+| `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支；写面只有 `market.daily` 的 `start_collection` v2 scope） | 缺省仍是 `v1`；v1 字节不变 |
 | `tools/list` | 含 `outputSchema` | **不含** `outputSchema`，描述 ≤240 B | 客户端失去内联校验；schema 从 capabilities 按需取 |
 | 入参 | 结构体实体、严格日期、必填契约版本 | 别名归一化 + 缺省值（§6） | 旧写法继续可用 |
 | 时点参数 | 无 | `as_of`/`known_at` 只在 `temporal` 声明为 `true` 的 dataset 上接受（M2 的 6 个数据集，见 §4.6 矩阵）；其他 dataset/工具仍以 `unsupported_for_dataset:` 拒绝 | 声明式放宽，未声明的面仍是新增错误而不是新语义 |
@@ -34,7 +34,9 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 - 精确小数仍是十进制字符串；空值仍不伪造；列式布局的每个单元格与 v1 行里的值逐位相同
   （`src/data_supply/columnar.rs:1-9`，`tests/mcp/v8_read_v2.rs:423`）。
 - 写受理契约（`start_collection`/`update_data`/`backfill_data`/`republish_data`/`retry_task`/
-  `cancel_task`）与核实工具仍是 `v1`、`WriteAcceptance` 形状不变（`src/data_supply/wire.rs:56-65`）。
+  `cancel_task`）与核实工具仍是 `v1`、`WriteAcceptance` 形状不变（`src/data_supply/wire.rs:56-65`）；
+  唯一例外是 M3 PR-4 的 `market.daily` `start_collection` v2 member scope（§5.1），
+  `WriteAcceptance` 形状仍不变。
 - 入口不是权限：研究入口没有写/核实/采集工具，边界靠 allowlist + 交集为空的测试守住
   （`tests/mcp/v8_tool_surface.rs:37-102`）。
 
@@ -81,7 +83,8 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
   （`src/data_supply/registry.rs:82-90`，`tests/mcp/v8_tool_surface.rs:254-263`）。
 
 `tools/list` 预算（CI 断言，`tests/mcp/v8_tool_surface.rs:104-142`）：研究 5 工具
-≤11,000 B、编排 15 ≤27,500 B、运维 9 ≤14,500 B；每条描述 ≤240 B；无 `outputSchema`；
+≤11,700 B、编排 15 ≤28,700 B、运维 9 ≤14,500 B（M2 数据集枚举与 M3 PR-4 的 v2 scope 分支
+带来的已记录增长）；每条描述 ≤240 B；无 `outputSchema`；
 `inputSchema.type` 为 `object`。
 
 ### 2.1 写边界（v8 P2 §2.2(c)，D-56）
@@ -130,7 +133,8 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
 `contract_version` 会因 `deny_unknown_fields` 报 `invalid_arguments`。
 
 - **紧凑目录**（不带 `operation`）：一行一个工具，字段为 `tool_name`、`contract_version`
-  （工具的默认 wire 版本，恒 `v1`）、`implemented`、`operator_only`、`entry`；不含
+  （工具的默认 wire 版本，恒 `v1`；`start_collection` 的详版 `input_schema` 另含
+  `market.daily` v2 scope 分支，见 §5.1）、`implemented`、`operator_only`、`entry`；不含
   `description`/`input_schema`/`output_schema`/`example`/`schema_digest`/`runtime_readiness`
   （`src/data_supply/registry.rs:215-247`，`src/data_supply/mcp.rs:368-380`）。
   研究入口的紧凑目录 ≤1,500 B（`tests/mcp/v8_tool_surface.rs:165-171`）。
@@ -337,6 +341,31 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 `wire_contract_version`（`src/data_supply/observe.rs:686-703`）。
 
 `get_request` 保持 v1（`WriteAcceptance`/`RequestView` 形状不变）。
+
+### 5.1 写面例外：`start_collection` v2 member scope（M3 PR-4，Refs #446）
+
+§5 其余 v2 分支都在任务读面；写入面只有下面这一处 v2。
+
+```json
+{"request_id":"listed-ever-1","dataset":"market.daily","contract_version":"v2",
+ "selection":{"kind":"scope","scope":"sh_sz_a_listed_ever"}}
+```
+
+- 只为退市股（及任何尚无 published daily series 的沪深 A 股）提供一次性首采入口：
+  解析集合 = `security_master` 中 `instrument_class=0`、`exchange ∈ {sh,sz}`、
+  `has_series=false` 的实体 ∩ active generation 的 `.day` 成员。没有 bar 的成员跳过并写入
+  任务证据 `skipped_no_bars`，不生成 item。
+- 预算是 **1..500**（v1 explicit 仍是 1..100）。空集合、501+ 或未配置已激活 generation
+  都 `invalid_arguments`，不截断。
+- 列表在受理时冻结；每个 item 的 `frozen_inputs` 记录解析时的
+  `security_master_version_id`、`security_master_content_digest`、`generation_id`、
+  `generation_manifest_sha256`（以及 `source_generation_id`）。已有 head 的实体在解析时跳过，
+  重复提交同一 scope 只采缺失项。
+- item 级发布/验证语义与 v1 `market.daily` 首采相同，worker 接受
+  `contract_version ∈ {"v1","v2"}`。不属于日更 plan：操作员在部署后显式发起一次，
+  日更 AI 不得自行调用。
+- `securities.catalog` 读写都**拒绝**该 scope（`invalid_arguments`，不降级为当前成员子集）；
+  v1 请求携带 `selection.kind=scope` 同样拒绝。
 
 ## 6. 入参归一化（解码层，不改语义）
 

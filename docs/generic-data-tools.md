@@ -104,7 +104,10 @@ raw daily / 公司行动未来如需成为对外数据产品，需单独定义 d
 
 - catalog 的 selection 为 scope=current_sh_sz_a；查询 filter 可含 industry_code。
 - daily 写选择 explicit securities 或 frozen catalog selector（二选一）；
-  查询选择单个 SecurityRef，filter 为闭日期区间。
+  另有 v2-only 的 `{"kind":"scope","scope":"sh_sz_a_listed_ever"}`：从证券主表 ∩ 当前
+  generation 的 `.day` 成员解析无 daily head 的沪深 A 股（预算 1..500，操作员一次性任务，
+  不进日更 plan；`securities.catalog` 读写都拒绝该 scope）。查询选择单个 SecurityRef，
+  filter 为闭日期区间。
 - yearly 写选择证券及明确 base_daily_versions，range 使用年份集合；
   查询按起止自然年取完整年度，不用月份裁剪 OHLC。
 - 未明确的动态默认值不能写入 schema 假装已经实现；有效目录选择器必须有

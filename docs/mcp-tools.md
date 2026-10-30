@@ -141,6 +141,13 @@ daily 仍不是公开 dataset；不能据此宣称 historical_accurate。
 
 ### start_collection
 
+> v8 当前形状是 `{request_id, dataset, contract_version, selection}`（见
+> [generic-data-v8](contracts/generic-data-v8.md) §5.1 与 `get_data_capabilities`）。
+> M3 PR-4 起 `market.daily` 另接受 v2
+> `{"kind":"scope","scope":"sh_sz_a_listed_ever"}`：服务端从证券主表 ∩ 当前 generation
+> 解析无 daily head 的沪深 A 股，预算 1..500，操作员一次性任务，不进日更 plan；
+> 下列 legacy symbols/periods 形状仅作历史记录。
+
 输入必填：request_id:string、symbols:string[]、periods:("day"|"year")[]。
 无日期参数，无 adjustment 参数；当前固定 QFQ。集合不能为空。
 目标证券格式使用 `sh.600000` / `sz.000001`，与查询显式身份一致；
