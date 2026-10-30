@@ -41,6 +41,8 @@ const SZSE_DELISTING_MAIN: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_main.json");
 const SZSE_DELISTING_NM: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_nm.json");
+const SSE_QUERY_PAGE_IGNORED: &[u8] =
+    include_bytes!("../../../tests/fixtures/exchange-a1a2/sse_query_page_ignored.json");
 
 fn day(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -359,7 +361,7 @@ fn b_shares_are_filtered_and_star_chinext_rows_are_kept() {
 
     // An unknown SSE `STOCK_TYPE` is a vocabulary change: refuse it instead of
     // treating the row as an A share.
-    let sse_unknown = br#"{"pageHelp":{"beginPage":1,"endPage":1,"pageCount":1,"total":1,"data":[{"SECURITY_CODE":"600001","LIST_DATE":"19980618","STOCK_TYPE":"9"}]}}"#;
+    let sse_unknown = br#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":1,"total":1,"data":[{"A_STOCK_CODE":"600001","COMPANY_CODE":"600001","LIST_DATE":"19980618","STOCK_TYPE":"9"}]}}"#;
     let error = parse_page(ListKind::SseListingMain, sse_unknown).unwrap_err();
     assert_eq!(error.code(), "source_invalid");
     assert!(error.to_string().contains("STOCK_TYPE"));
@@ -387,6 +389,50 @@ fn b_shares_are_filtered_and_star_chinext_rows_are_kept() {
     let error = parse_page(ListKind::SzseDelistingMain, none).unwrap_err();
     assert_eq!(error.code(), "source_invalid");
     assert!(error.to_string().contains("delisting date"));
+}
+
+#[test]
+fn the_sse_code_is_a_stock_code_with_a_company_code_fallback() {
+    let body = |row: &str| {
+        format!(
+            "{{\"pageHelp\":{{\"pageNo\":1,\"pageSize\":2000,\"pageCount\":1,\"total\":1,\"data\":[{row}]}}}}"
+        )
+        .into_bytes()
+    };
+    // `COMPANY_CODE` alone still yields the code (the real rows carry both).
+    let page = parse_page(
+        ListKind::SseListingMain,
+        &body(r#"{"COMPANY_CODE":"600018","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#),
+    )
+    .unwrap();
+    assert_eq!(page.listing[0].code, "600018");
+    // `A_STOCK_CODE` wins when both exist and agree.
+    let page = parse_page(
+        ListKind::SseListingMain,
+        &body(
+            r#"{"A_STOCK_CODE":"600018","COMPANY_CODE":"600018","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(page.listing[0].code, "600018");
+    // Both and disagreeing is a shape change: never guessed.
+    let error = parse_page(
+        ListKind::SseListingMain,
+        &body(
+            r#"{"A_STOCK_CODE":"600018","COMPANY_CODE":"600019","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#,
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("disagree"), "{error}");
+    // Neither field is a shape change too.
+    let error = parse_page(
+        ListKind::SseListingMain,
+        &body(r#"{"COMPANY_ABBR":"x","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("neither"), "{error}");
 }
 
 #[test]
@@ -496,6 +542,36 @@ fn acquire_merges_the_four_lists_and_the_five_key_codes() {
         4,
         "binding is per source_id, not per request"
     );
+}
+
+#[test]
+fn a_listing_page_that_ignores_the_page_size_fails_closed() {
+    // 2026-10-30 evidence: the endpoint ignored `beginPage`/`endPage` and
+    // answered page 1 again. The list plans are single-page, so a `pageCount=2`
+    // envelope means the request's `pageHelp.pageSize` was ignored too; taking
+    // page 1 as the list would silently drop rows.
+    let fixture = Fixture::new();
+    let lists = Lists::serving_fixtures();
+    lists
+        .answers
+        .lock()
+        .unwrap()
+        .push_back(SSE_QUERY_PAGE_IGNORED.to_vec());
+    let error = acquire(&fixture.store, &fixture.market, &client(&lists)).unwrap_err();
+    assert_eq!(error.code(), "page_size_ignored");
+    let detail = error.to_string();
+    assert!(
+        detail.contains("declared total 100 but collected 50 row(s)"),
+        "{detail}"
+    );
+    assert!(detail.contains("pageCount 2"), "{detail}");
+    assert_eq!(
+        lists.requests().len(),
+        1,
+        "the single-page plan must not send a second request"
+    );
+    // The frozen page is still indexed (a window verdict, not index state).
+    assert_eq!(fixture.market.read_exchange_snapshots().unwrap().len(), 1);
 }
 
 #[test]

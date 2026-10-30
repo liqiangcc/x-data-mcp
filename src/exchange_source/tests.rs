@@ -12,7 +12,7 @@ use std::time::Duration;
 use chrono::NaiveDate;
 
 use super::index::{self, SnapshotRow};
-use super::request::{SSE_PARSER_VERSION, SSE_SOA_PARSER_VERSION};
+use super::request::{SSE_PARSER_VERSION, SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION};
 use super::*;
 use crate::source_store::{
     ManifestRecord, Registration, SourceStore, StoreError, StoreKind, known_parser_version,
@@ -24,8 +24,10 @@ fn sse_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
         .collect();
     serde_json::json!({
         "pageHelp": {
-            "beginPage": page,
-            "endPage": page,
+            "beginPage": 1,
+            "endPage": null,
+            "pageNo": page,
+            "pageSize": 2000,
             "pageCount": page_count,
             "total": total,
             "data": data,
@@ -68,11 +70,20 @@ fn fingerprint_is_canonical_and_round_trips() {
     assert_eq!(parsed, first);
     let paged = first.clone().paged(PagingFormat::SsePageHelp, 2);
     assert_ne!(paged.fingerprint(), first.fingerprint());
-    assert_eq!(paged.params.get("beginPage").map(String::as_str), Some("2"));
-    assert_eq!(paged.params.get("endPage").map(String::as_str), Some("2"));
+    assert_eq!(
+        paged.params.get("pageHelp.pageNo").map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        paged.params.get("pageHelp.pageSize").map(String::as_str),
+        Some("2000"),
+        "the list services only honour pageHelp.pageSize (2026-10-30 evidence)"
+    );
+    assert!(!paged.params.contains_key("beginPage"));
+    assert!(!paged.params.contains_key("endPage"));
     let szse = first.paged(PagingFormat::SzseMetadata, 3);
     assert_eq!(szse.params.get("PAGENO").map(String::as_str), Some("3"));
-    assert!(!szse.params.contains_key("beginPage"));
+    assert!(!szse.params.contains_key("pageHelp.pageNo"));
 }
 
 #[test]
@@ -152,6 +163,44 @@ fn sse_and_szse_envelopes_are_parsed_without_business_fields() {
 }
 
 #[test]
+fn the_sse_dialect_pages_by_page_help_page_no() {
+    // The list services answer with `pageHelp.pageNo`; `beginPage` is stale
+    // (2026-10-30 evidence: both `beginPage` spellings answered page 1 again).
+    let body =
+        br#"{"pageHelp":{"beginPage":1,"pageNo":2,"pageCount":2,"total":28,"data":[{"x":"1"}]}}"#;
+    let page = envelope(body, PagingFormat::SsePageHelp);
+    assert_eq!((page.page, page.page_count), (2, 2));
+    // An older frozen page without `pageNo` still reads `beginPage`.
+    let legacy = br#"{"pageHelp":{"beginPage":2,"pageCount":2,"total":2,"data":[{"x":"1"}]}}"#;
+    let page = envelope(legacy, PagingFormat::SsePageHelp);
+    assert_eq!(page.page, 2);
+    let mut params = std::collections::BTreeMap::new();
+    PagingFormat::SsePageHelp.apply_page(&mut params, 2);
+    assert_eq!(params.get("pageHelp.pageNo").map(String::as_str), Some("2"));
+    assert_eq!(
+        params.get("pageHelp.pageSize").map(String::as_str),
+        Some("2000")
+    );
+    assert!(!params.contains_key("beginPage"));
+    assert_eq!(
+        PagingFormat::SsePageHelp.parser_version(),
+        SSE_PARSER_VERSION
+    );
+    assert!(known_parser_version(SSE_PARSER_VERSION));
+    assert_eq!(
+        PagingFormat::from_parser_version(SSE_PARSER_VERSION),
+        Some(PagingFormat::SsePageHelp)
+    );
+    // Snapshots frozen before the dialect change still replay: they have no
+    // `pageHelp.pageNo`, so `beginPage` is read exactly as before.
+    assert!(known_parser_version(SSE_PARSER_VERSION_V1));
+    assert_eq!(
+        PagingFormat::from_parser_version(SSE_PARSER_VERSION_V1),
+        Some(PagingFormat::SsePageHelp)
+    );
+}
+
+#[test]
 fn the_soa_dialect_pages_by_page_help_page_no() {
     // `commonSoaQuery` ignores `beginPage`/`endPage` and keeps
     // `pageHelp.beginPage=1`; the page number is `pageHelp.pageNo` (PR-11
@@ -219,10 +268,10 @@ fn a_quiet_soa_window_can_be_not_observed() {
 
 #[test]
 fn an_sse_total_of_zero_means_not_reported() {
-    // `COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L` reports `pageHelp.total = 0` on every
-    // page even when rows are returned (M2 A-1 evidence, #396), so 0 is "no
-    // total", not "no rows". Reading it as a declared count would reject every
-    // real listing page as `truncated`.
+    // Older `GPLB_GP_L` snapshots report `pageHelp.total = 0` even when rows
+    // are returned (M2 A-1 evidence, #396); the 2026-10-30 responses report a
+    // real total. A zero therefore stays "no total", not "no rows": reading
+    // it as a declared count would reject an old frozen listing page.
     let page = envelope(&sse_body(1, 1, 0, 4), PagingFormat::SsePageHelp);
     assert_eq!(page.rows, 4);
     assert_eq!(page.total, None);

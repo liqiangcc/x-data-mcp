@@ -30,16 +30,20 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 
 - 指纹是请求本身的规范 JSON：`version` + `source_id` + URL + 排序后的参数（含分页与
   分段参数）。相同指纹 + 相同响应 sha256 只登记一次（§6.3）。
-- 分页方言按来源固定：`beginPage`/`endPage`（`beginPage == endPage`，公告索引与名单），
-  深交所用 `PAGENO`，`pageHelp.pageNo` 用于 `commonSoaQuery`（PR-11 实测该端点忽略
-  `beginPage`/`endPage`，只认 `pageHelp.pageNo`，`pageSize=25` 固定）；`pageSize`
-  对前两种既不发送也不依赖（实测被忽略，§17 第 9/10 条）。
+- 分页方言按来源固定：沪名单与公告索引用 `pageHelp.pageNo`（名单同时发
+  `pageHelp.pageSize=2000`；公告索引的 `pageSize` 仍是它的自有参数），深交所用 `PAGENO`，
+  `commonSoaQuery` 用 `pageHelp.pageNo` + 固定 `pageSize=25`（PR-11 实测）。名单端点不再发
+  `beginPage`/`endPage`：2026-10-30 实测两种写法都只回第 1 页同一批 50 行（分页失效），
+  而 `pageHelp.pageNo=1&pageHelp.pageSize=2000` 一次返回全部 1,845 行（`pageCount=1`、
+  `total=1,845`，自洽）。
 - 信封解析（`PagingFormat`）只读分页计数，不解释业务字段：
-  - `exchange-sse-page-v1`：`pageHelp.pageCount` / `pageHelp.total` / `pageHelp.data`；
+  - `exchange-sse-page-v2`：`pageHelp.pageNo`（缺失回退 `beginPage`）/ `pageHelp.pageCount`
+    / `pageHelp.total` / `pageHelp.data`；
   - `exchange-szse-page-v1`：`[0].metadata.pagecount` / `recordcount` / `[0].data`；
   - `exchange-sse-soa-page-v1`：`pageHelp.pageNo` / `pageHelp.pageCount` /
     `pageHelp.total` / `pageHelp.data`（`commonSoaQuery` 方言）。
-  这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数。
+  这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数；名单方言换过一次
+  （`exchange-sse-page-v1` → `v2`），旧快照仍按登记的旧版本重放。
 - 分段：公告索引下界 `2000-01-01`，单请求区间 ≤93 天且按自然季度对齐
   （`quarter_segments`）。超过 93 天的区间在构造时即被拒（`segment_too_long`），
   不会发出请求。
@@ -75,10 +79,13 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
 - 0 行默认失败（`unverified_zero`）：只有「整段窗口晚于今天」这一种显式声明才允许 0 行
   （`EmptyPolicy`）。「0 行」不是「没有事件」的证据（§6.4、`work/evidence-notes.md` U-1）。
 - 计数不一致（`pageHelp.total`/`recordcount` 与收集行数不符、页数不符、重复页）一律
-  `truncated`，入口返回失败；已冻结的页仍按上面的规则入索引。例外：上交所
-  `GPLB_GP_L` 等 sqlId 的 `pageHelp.total` 恒为 `0`（M2 A-1 实测，A-1/A-2 适配器依赖
-  这一页），因此 `total=0` 按「未声明总数」处理而不是「总数为 0」；页数/重复页校验
-  照旧，0 行仍是 `unverified_zero`。
+  `truncated`，入口返回失败；已冻结的页仍按上面的规则入索引。上交所名单的
+  `pageHelp.total` 现为真实总数（2026-10-30 实测）；旧快照里的 `total=0` 仍按「未声明
+  总数」处理而不是「总数为 0」（M2 时期 `GPLB_GP_L` 恒为 0），页数/重复页校验照旧，
+  0 行仍是 `unverified_zero`。
+- 单页计划（A-1/A-2 的四个沪名单）遇到第 1 页 `pageCount>1` 直接失败（`page_size_ignored`，
+  detail 以 `declared total … but collected …` 开头）：请求里的 `pageHelp.pageSize` 被忽略、
+  只拿到首页，不得回退成多页循环或静默去重后放行。
 - 多段运行（如按季度循环）逐段隔离：成功的段照常写库；失败的段不出行，整体返回
   `partially_failed` 并列出失败窗口。已冻结快照保留。
 - `basis_status` 低于写入门槛时 `bind` 返回 `source_not_admitted`，`Entry` 在发请求前
@@ -129,13 +136,17 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
   `main`/`nm`）。七个请求共用一个 `RunCache`。
 - 来源库位置由 `X_DATA_MCP_SOURCE_STORE` 指定（部署为 `<deploy-state>/source-store`）。
   未设置时该 item 不失败：交易所分支写 `pending_source`，只落 TDX 事实。
-- 业务字段 parser 版本 `exchange-a1a2-v1` 与来源绑定登记在 item 的结果证据
+- 业务字段 parser 版本 `exchange-a1a2-v2`（v1 → v2：沪行改读 `A_STOCK_CODE`，缺失回退
+  `COMPANY_CODE`，两者都有且不等 → `source_invalid`）与来源绑定登记在 item 的结果证据
   `exchange_source` 里；清单的 `parser_version` 仍是信封版本，因为
   `--scope exchange` 重放只重建行数/页数索引。**不要**把该证据加进 generation
   evidence：同一代的 whole-market item 共用同一个 binding digest
   （`derived:suspensions` 会重算并拒绝跨代主表），追加字段会让其余 item 失败。
+- 沪名单计划是单页计划：`pageHelp.pageSize=2000` 一次取完（实测最大 1,845 行），
+  `pageCount>1` 失败（`page_size_ignored`），`pageCount=1` 时每个计划只发 1 次请求。
 - 失败码沿用本入口（`source_unavailable` / `source_invalid` /
-  `source_not_admitted` / `partially_failed`）；`derived:security_master` 因此失败时，
+  `source_not_admitted` / `partially_failed` / `page_size_ignored`）；
+  `derived:security_master` 因此失败时，
   上一版主表保持可读，TDX 日更不受影响。
 
 ### A-3 停复牌消费者（`derived:suspensions`）

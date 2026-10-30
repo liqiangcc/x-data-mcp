@@ -1,3 +1,1 @@
-{"pageHelp":{"beginPage":1,"endPage":1,"pageCount":1,"total":1,"data":[
-{"SECURITY_CODE":"688555","SECURITY_ABBR":"泽达易盛","LIST_DATE":"20200722","STOCK_TYPE":"8","COMPANY_STATUS":"3","DELIST_DATE":"20230705"}
-]}}
+{"pageHelp":{"beginPage":1,"endPage":null,"pageNo":1,"pageSize":2000,"pageCount":1,"total":1,"data":[{"COMPANY_ABBR":"泽达易盛","STOCK_TYPE":"8","LIST_BOARD":"2","A_STOCK_CODE":"688555","B_STOCK_CODE":"-","COMPANY_CODE":"688555","LIST_DATE":"20200722","DELIST_DATE":"20230705","STATE_CODE":"3","STATE_CODE_STOCK":"6","PRODUCT_STATUS":"-","NUM":"7","AREA_NAME":"310000"}]}}

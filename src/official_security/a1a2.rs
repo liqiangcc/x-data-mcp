@@ -55,7 +55,11 @@
 //!
 //! Acquisition failures come straight from PR-2's entry
 //! (`source_unavailable` / `source_invalid` / `source_not_admitted` /
-//! `partially_failed`); a source page that cannot be parsed is `source_invalid`.
+//! `partially_failed` / `page_size_ignored`); a source page that cannot be
+//! parsed is `source_invalid`. `page_size_ignored` is the single-page list
+//! dialect failing closed: the SSE list must arrive in one page (2026-10-30
+//! evidence), so a `pageCount>1` answer means the request's `pageHelp.pageSize`
+//! was ignored and the first page cannot stand for the whole list.
 //! The caller (the `derived:security_master` item) turns any of them into a
 //! failed item, so the previously committed main-table version stays readable
 //! and the TDX daily run is not blocked.
@@ -85,7 +89,7 @@ use crate::sqlite_market::backend::MarketBackend;
 /// re-derivation must pin. It stays out of the generation binding evidence on
 /// purpose: that digest must be identical for every whole-market item of one
 /// generation (`derived:suspensions` fails closed otherwise).
-pub const PARSER_VERSION: &str = "exchange-a1a2-v1";
+pub const PARSER_VERSION: &str = "exchange-a1a2-v2";
 
 /// Environment variable naming the deployment's source store (§9.4.1). The
 /// deploy script uses `<deploy-state>/source-store`; without it the A-1/A-2
@@ -170,7 +174,11 @@ pub fn plans() -> Vec<(ListKind, AcquisitionPlan)> {
             AcquisitionPlan::new(SourceId::SseListing, SSE_URL, PagingFormat::SsePageHelp)
                 .param("sqlId", SSE_LIST_SQL_ID)
                 .param("STOCK_TYPE", stock_type)
-                .param("isPagination", "true");
+                .param("isPagination", "true")
+                // The list is one page when the endpoint honours
+                // `pageHelp.pageSize` (`SSE_PAGE_SIZE`); a larger `pageCount`
+                // fails closed instead of paging (2026-10-30 evidence).
+                .single_page_only();
         if delisting {
             // Only `COMPANY_STATUS=3` means 终止上市; `=7` is a risk warning and
             // must never be read as a delisting (§7.2). `STATE_CODE` is
@@ -577,12 +585,37 @@ fn rows(kind: ListKind, bytes: &[u8]) -> Result<Vec<Value>, A1A2Error> {
 }
 
 fn code_of(kind: ListKind, row: &Value) -> Result<String, A1A2Error> {
-    let field = if kind.sse() { "SECURITY_CODE" } else { "zqdm" };
-    let Some(code) = row.get(field).and_then(Value::as_str) else {
-        return Err(A1A2Error::invalid(format!(
-            "{}: a row has no {field}",
-            kind.label()
-        )));
+    let code = if kind.sse() {
+        // The 2026-10-30 real list rows carry `A_STOCK_CODE` (the listed A
+        // share) and `COMPANY_CODE`; `SECURITY_CODE` no longer exists. A row
+        // where both exist and disagree is a shape change, not a guess.
+        let a_stock = row.get("A_STOCK_CODE").and_then(Value::as_str);
+        let company = row.get("COMPANY_CODE").and_then(Value::as_str);
+        match (a_stock, company) {
+            (Some(a_stock), Some(company)) if a_stock.trim() != company.trim() => {
+                return Err(A1A2Error::invalid(format!(
+                    "{}: A_STOCK_CODE {a_stock:?} and COMPANY_CODE {company:?} disagree",
+                    kind.label()
+                )));
+            }
+            (Some(a_stock), _) => a_stock,
+            (None, Some(company)) => company,
+            (None, None) => {
+                return Err(A1A2Error::invalid(format!(
+                    "{}: a row has neither A_STOCK_CODE nor COMPANY_CODE",
+                    kind.label()
+                )));
+            }
+        }
+    } else {
+        let field = "zqdm";
+        let Some(code) = row.get(field).and_then(Value::as_str) else {
+            return Err(A1A2Error::invalid(format!(
+                "{}: a row has no {field}",
+                kind.label()
+            )));
+        };
+        code
     };
     let code = code.trim();
     if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {

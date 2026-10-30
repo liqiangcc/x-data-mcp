@@ -214,7 +214,13 @@ fn parse_sse(value: &Value) -> Result<PageEnvelope, ValidateError> {
         .ok_or_else(|| ValidateError::Format {
             detail: "pageHelp.data is not an array".to_string(),
         })?;
-    let page = help.get("beginPage").and_then(number).unwrap_or(1);
+    // The list services answer with `pageHelp.pageNo` (2026-10-30 evidence);
+    // `beginPage` is only a fallback for older frozen snapshots.
+    let page = help
+        .get("pageNo")
+        .and_then(number)
+        .or_else(|| help.get("beginPage").and_then(number))
+        .unwrap_or(1);
     let page_count =
         help.get("pageCount")
             .and_then(number)
@@ -225,10 +231,10 @@ fn parse_sse(value: &Value) -> Result<PageEnvelope, ValidateError> {
         page: clamp_u32(page),
         page_count: clamp_u32(page_count),
         rows: rows.len(),
-        // `pageHelp.total` is `0` on several SSE sqlIds even when rows are
-        // returned (M2 A-1 evidence: `GPLB_GP_L` reports 0 for every page), so
-        // a zero means "not reported", not "no rows". Treating it as a count
-        // would reject every real listing page as `truncated`.
+        // `pageHelp.total` used to be `0` on several SSE sqlIds even when rows
+        // were returned (M2 A-1 evidence); the 2026-10-30 list responses report
+        // a real total. A zero therefore still means "not reported", not "no
+        // rows": treating it as a count would reject an old frozen page.
         total: help
             .get("total")
             .and_then(number)

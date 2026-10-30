@@ -112,6 +112,10 @@ pub struct AcquisitionPlan {
     /// `source_not_admitted` before any request is sent (§6.3).
     pub required_basis: BasisStatus,
     pub max_pages: u32,
+    /// This plan must be satisfied by one page: a first envelope reporting
+    /// more than one page means the source ignored the request's page size, and
+    /// the entry fails with `page_size_ignored` instead of paging (§2).
+    pub single_page_only: bool,
     /// What a 0-row window means to this consumer (BR-M3-10). Default
     /// [`ZeroPolicy::FailClosed`]; A-3 asks for [`ZeroPolicy::NotObserved`]
     /// because it only derives positive facts.
@@ -131,6 +135,7 @@ impl AcquisitionPlan {
             basis_status: source_id.default_basis(),
             required_basis: BasisStatus::ApprovedSource,
             max_pages: MAX_PAGES,
+            single_page_only: false,
             zero_policy: ZeroPolicy::FailClosed,
             date_format: DateFormat::Iso,
         }
@@ -153,6 +158,13 @@ impl AcquisitionPlan {
 
     pub fn max_pages(mut self, max_pages: u32) -> Self {
         self.max_pages = max_pages;
+        self
+    }
+
+    /// Require the whole window in one page (the SSE list dialect); more than
+    /// one page means the source ignored the request's page size.
+    pub fn single_page_only(mut self) -> Self {
+        self.single_page_only = true;
         self
     }
 
@@ -491,6 +503,33 @@ impl<'a> Entry<'a> {
                         "requested page {page} but the envelope reports page {}",
                         envelope.page
                     ),
+                });
+                break;
+            }
+            // A list service that stopped honouring `pageHelp.pageSize` would
+            // answer page 1 only; taking the first page as the whole window
+            // would silently truncate it, so such a plan fails closed instead
+            // of paging. The frozen page is still indexed (§3: envelope
+            // failures are window verdicts, not index state).
+            if plan.single_page_only && envelope.page_count > 1 {
+                let declared = match envelope.total {
+                    Some(total) => total.to_string(),
+                    None => "unknown".to_string(),
+                };
+                let detail = format!(
+                    "declared total {declared} but collected {} row(s): the source reports pageCount \
+                     {} for a request that sends pageHelp.pageSize; the single-page dialect no \
+                     longer returns the whole list",
+                    envelope.rows, envelope.page_count,
+                );
+                let mut frozen_page = page_state.frozen.clone();
+                if from_cache {
+                    frozen_page.appended_manifest_line = false;
+                }
+                pages.push((frozen_page, envelope));
+                failure = Some(AcquireError::Invalid {
+                    code: "page_size_ignored",
+                    detail,
                 });
                 break;
             }
