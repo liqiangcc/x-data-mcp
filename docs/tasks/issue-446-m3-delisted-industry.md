@@ -586,7 +586,7 @@ fetch（HTTP，bounded retries，Referer/UA）
 
 ### 7.5 PR-3 修复二落位：SZSE 名单按 `tabkey` 选块（2026-10-30，XDM-124）
 
-状态：**实现中（XDM-124）**。范围只含深市 A-1/A-2 名单；沪市分页与字段已在 §7.4 交付。
+状态：**代码已提交，待 PR/CI（XDM-124）；未部署**。范围只含深市 A-1/A-2 名单；沪市分页与字段已在 §7.4 交付。
 依据同一份 2026-10-30 真实响应取证（`reports/x-data-mcp/a1a2-forensics.md` §0 第 2/4 点、
 §(b) 第 3 点）：深市响应恒为两个 block——`tab1` 暂停上市 0 行 `pagecount=0`，`tab2`
 终止上市有数据——而 `parse_szse` 取 `blocks.first()`，于是 `page_count is 0`；
@@ -610,7 +610,13 @@ fetch（HTTP，bounded retries，Referer/UA）
   main/nm 首页无交集，因此删除「`000003` 同时在 main/nm」的去重断言，改在单测里用构造的
   「同一代码出现在两个模块」场景覆盖合并去重，并在夹具 README 注明该场景是构造的。
 - **测试**：信封（`tab2` 优先、唯一非空 block 回退、多义 block fail-closed、v1 旧语义）、
-  `a1a2::rows` 与信封选块一致、两页 main 采集（`PAGENO=1`/`PAGENO=2`）与重放快照数。
+  `a1a2::rows` 与信封选块一致、两页 main 采集（`PAGENO=1`/`PAGENO=2`）与重放快照数；
+  `tests/source_store/exchange.rs` 增加一条 `exchange-szse-page-v1` 冻结页的重放测试，证明
+  旧快照仍按第一个 block 重算。去重断言换成构造的单测：同一代码出现在 main/nm 两页时只留
+  一条事实（真实首页无交集，README 已注明构造）。
+- **既有夹具的一处对账**：`000003` 的 TDX `SSDATE` 夹具原为 `1991-07-03`，与真实深市 r3 的
+  `ssrq=1991-01-14` 不同；为保持「与 `SSDATE` 零冲突」基线仍成立，把该 TDX 夹具改为
+  `1991-01-14`（真实响应值），不是放宽冲突断言。
 - **文档**：`docs/exchange-source.md` §2/§6 的 SZSE 信封/选块口径；`docs/data-catalog.md`
   §3.2 第 7 行的深市终止上市请求与选块说明。不改 SLO 门禁、`docs/STATUS.md` 部署事实，
   不部署、不联网。

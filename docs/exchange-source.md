@@ -39,11 +39,15 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 - 信封解析（`PagingFormat`）只读分页计数，不解释业务字段：
   - `exchange-sse-page-v2`：`pageHelp.pageNo`（缺失回退 `beginPage`）/ `pageHelp.pageCount`
     / `pageHelp.total` / `pageHelp.data`；
-  - `exchange-szse-page-v1`：`[0].metadata.pagecount` / `recordcount` / `[0].data`；
+  - `exchange-szse-page-v2`：按 `metadata.tabkey="tab2"` 选中块的 `pageNo`/`pageno`、
+    `pagecount`、`recordcount`、`data`；没有 `tab2` 时只接受唯一有非空 `data` 的块，
+    多义时 fail-closed（不再取 `[0]`）。`exchange-szse-page-v1` 为旧快照保留：仍按
+    `[0]` 重算，不会用新选块规则改写旧索引；
   - `exchange-sse-soa-page-v1`：`pageHelp.pageNo` / `pageHelp.pageCount` /
     `pageHelp.total` / `pageHelp.data`（`commonSoaQuery` 方言）。
-  这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数；名单方言换过一次
-  （`exchange-sse-page-v1` → `v2`），旧快照仍按登记的旧版本重放。
+  这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数；名单信封换过两次
+  （`exchange-sse-page-v1` → `v2`、`exchange-szse-page-v1` → `v2`），旧快照仍按登记的
+  旧版本重放（SZSE v1 保持「第一个 block」的旧语义）。
 - 分段：公告索引下界 `2000-01-01`，单请求区间 ≤93 天且按自然季度对齐
   （`quarter_segments`）。超过 93 天的区间在构造时即被拒（`segment_too_long`），
   不会发出请求。
@@ -121,9 +125,9 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
 `exchange_source_snapshots.http_etag`（§9.4.2）。旧清单行没有该字段仍可读（可空、
 additive）。
 
-`parser_version` 现在记录信封解析器版本（`exchange-sse-page-v1` /
-`exchange-szse-page-v1`），重放据此重算行数与页数。具体来源 parser 从 PR-3 起
-登记自己的版本；未登记的版本按 §9.4.1 一律 fail-closed（`unknown_parser`，
+`parser_version` 现在记录信封解析器版本（`exchange-sse-page-v2` /
+`exchange-szse-page-v2`；旧快照的 `v1` 仍可重放），重放据此重算行数与页数。
+具体来源 parser 从 PR-3 起登记自己的版本；未登记的版本按 §9.4.1 一律 fail-closed（`unknown_parser`，
 scope 不重建），不会用「不认识就跳过」掩盖字节。
 
 ## 6. A-1/A-2 消费者（`derived:security_master`）
@@ -136,12 +140,17 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
   `main`/`nm`）。七个请求共用一个 `RunCache`。
 - 来源库位置由 `X_DATA_MCP_SOURCE_STORE` 指定（部署为 `<deploy-state>/source-store`）。
   未设置时该 item 不失败：交易所分支写 `pending_source`，只落 TDX 事实。
-- 业务字段 parser 版本 `exchange-a1a2-v2`（v1 → v2：沪行改读 `A_STOCK_CODE`，缺失回退
-  `COMPANY_CODE`，两者都有且不等 → `source_invalid`）与来源绑定登记在 item 的结果证据
+- 业务字段 parser 版本 `exchange-a1a2-v3`（v1 → v2：沪行改读 `A_STOCK_CODE`，缺失回退
+  `COMPANY_CODE`，两者都有且不等 → `source_invalid`；v2 → v3：深市名单按 `metadata.tabkey`
+  选块，行数组与分页计数取同一个块）与来源绑定登记在 item 的结果证据
   `exchange_source` 里；清单的 `parser_version` 仍是信封版本，因为
   `--scope exchange` 重放只重建行数/页数索引。**不要**把该证据加进 generation
   evidence：同一代的 whole-market item 共用同一个 binding digest
   （`derived:suspensions` 会重算并拒绝跨代主表），追加字段会让其余 item 失败。
+- 深市终止上市响应恒为两个 block：`tab1`（暂停上市）0 行、`pagecount=0`，`tab2`
+  （终止上市）有数据。信封与消费者都从 `tab2` 取页码/`pagecount`/`recordcount`/行数组；
+  因此 `page_count is 0` 是旧选块错误，不是零页窗口。没有 `tab2` 时只退「唯一有非空
+  `data` 的块」，多个候选则 `source_invalid`。
 - 沪名单计划是单页计划：`pageHelp.pageSize=2000` 一次取完（实测最大 1,845 行），
   `pageCount>1` 失败（`page_size_ignored`），`pageCount=1` 时每个计划只发 1 次请求。
 - 失败码沿用本入口（`source_unavailable` / `source_invalid` /
