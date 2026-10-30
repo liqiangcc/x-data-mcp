@@ -2278,6 +2278,26 @@ fn seed_security_master(f: &Fixture, rows: &[(&str, Option<NaiveDate>)]) {
         panic!("fixture must open the compact backend");
     };
     repo.write(|c| {
+        // `security_master` rows carry a foreign key to `source_bindings`, so
+        // the fixture has to bind one the same way a real run does (no FK
+        // shortcuts: the storage adapter still enforces the production shape).
+        let generation = crate::sqlite_market::evidence_store::put_evidence(
+            c,
+            crate::compact_market::EvidenceKind::Generation,
+            &json!({"generation": "gen-scope"}),
+        )
+        .unwrap();
+        let binding = crate::sqlite_market::evidence_store::put_source_binding(
+            c,
+            &crate::compact_market::SourceBinding {
+                generation_id: "gen-scope".into(),
+                generation_manifest_sha256: [0x0b; 32],
+                day_member_sha256: [0x0c; 32],
+                security_event_sha256: [0x0e; 32],
+                evidence_digest: generation,
+            },
+        )
+        .unwrap();
         crate::sqlite_market::security::replace_security_master(
             c,
             &Assembly {
@@ -2288,7 +2308,7 @@ fn seed_security_master(f: &Fixture, rows: &[(&str, Option<NaiveDate>)]) {
                 unresolved: Vec::new(),
                 exchange_as_of: Some(from),
             },
-            [0x0b; 32],
+            binding,
             "task-master",
             "derived:security_master",
         )
