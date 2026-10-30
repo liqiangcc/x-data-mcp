@@ -1,3 +1,26 @@
-[{"metadata":{"pageNo":1,"pagecount":1,"recordcount":1},"data":[
-{"zqdm":"000003","zqjc":"PT金田A","ssrq":"19910703","zzrq":"20020614"}
-]}]
+[
+  {
+    "metadata": {
+      "catalogid": "1793_ssgs",
+      "tabkey": "tab1",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 0,
+      "recordcount": 0
+    },
+    "data": []
+  },
+  {
+    "metadata": {
+      "catalogid": "1793_ssgs",
+      "tabkey": "tab2",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 1,
+      "recordcount": 1
+    },
+    "data": [
+      {"zqdm": "300023", "zqjc": "宝德退", "ssrq": "2009-10-30", "zzrq": "2022-06-29"}
+    ]
+  }
+]

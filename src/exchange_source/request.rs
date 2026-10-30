@@ -229,9 +229,13 @@ pub enum PagingFormat {
     /// `pageHelp.beginPage=1` (PR-11 evidence: a request with
     /// `beginPage=2&endPage=2` answered page 1).
     SseSoaPageNo,
-    /// SZSE JSON array of `{metadata:{pagecount,...},data:[...]}`, paged by
-    /// `PAGENO`.
+    /// SZSE JSON array of `{metadata:{tabkey,pagecount,...},data:[...]}`,
+    /// paged by `PAGENO`; the envelope is read from the `tabkey=tab2` block
+    /// (the terminated list), not from the first block.
     SzseMetadata,
+    /// SZSE `metadata` envelopes frozen before the block-selection change:
+    /// these always read the first block. Kept only for replay.
+    SzseMetadataV1,
 }
 
 /// Parser version recorded for SSE `pageHelp` envelopes.
@@ -242,8 +246,14 @@ pub const SSE_PARSER_VERSION: &str = "exchange-sse-page-v2";
 pub const SSE_PARSER_VERSION_V1: &str = "exchange-sse-page-v1";
 /// Parser version recorded for SSE `commonSoaQuery.do` envelopes.
 pub const SSE_SOA_PARSER_VERSION: &str = "exchange-sse-soa-page-v1";
-/// Parser version recorded for SZSE `metadata` envelopes.
-pub const SZSE_PARSER_VERSION: &str = "exchange-szse-page-v1";
+/// Parser version recorded for SZSE `metadata` envelopes. v2 selects the
+/// `tabkey=tab2` block (2026-10-30 evidence: the terminated list is tab2, tab1
+/// is the empty suspended list).
+pub const SZSE_PARSER_VERSION: &str = "exchange-szse-page-v2";
+/// The SZSE `metadata` version written before the block-selection fix. Old
+/// snapshots stay replayable with their old meaning: v1 always read the first
+/// block, so replay must not re-read them as tab2.
+pub const SZSE_PARSER_VERSION_V1: &str = "exchange-szse-page-v1";
 /// `pageHelp.pageSize` the SSE list services answer with; the largest list
 /// measured 1,845 rows, so one page covers the whole window.
 pub const SSE_PAGE_SIZE: u32 = 2000;
@@ -256,6 +266,7 @@ impl PagingFormat {
             Self::SsePageHelp => SSE_PARSER_VERSION,
             Self::SseSoaPageNo => SSE_SOA_PARSER_VERSION,
             Self::SzseMetadata => SZSE_PARSER_VERSION,
+            Self::SzseMetadataV1 => SZSE_PARSER_VERSION_V1,
         }
     }
 
@@ -264,6 +275,7 @@ impl PagingFormat {
             SSE_PARSER_VERSION | SSE_PARSER_VERSION_V1 => Some(Self::SsePageHelp),
             SSE_SOA_PARSER_VERSION => Some(Self::SseSoaPageNo),
             SZSE_PARSER_VERSION => Some(Self::SzseMetadata),
+            SZSE_PARSER_VERSION_V1 => Some(Self::SzseMetadataV1),
             _ => None,
         }
     }
@@ -286,7 +298,7 @@ impl PagingFormat {
                 );
                 params.insert("pageHelp.pageNo".to_string(), page);
             }
-            Self::SzseMetadata => {
+            Self::SzseMetadata | Self::SzseMetadataV1 => {
                 params.insert("PAGENO".to_string(), page);
             }
         }
