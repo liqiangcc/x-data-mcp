@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use chrono::NaiveDate;
-use x_data_mcp::exchange_source::request::SSE_PARSER_VERSION_V1;
+use x_data_mcp::exchange_source::request::{SSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V1};
 use x_data_mcp::exchange_source::transport::{HttpRequest, HttpResponse};
 use x_data_mcp::exchange_source::validate::parse_page;
 use x_data_mcp::exchange_source::{
@@ -80,6 +80,39 @@ fn szse_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
         },
         "data": data,
     }])
+    .to_string()
+    .into_bytes()
+}
+
+/// A two-block SZSE page in the shape frozen before the block-selection change
+/// (`exchange-szse-page-v1`): `tab1` is the empty suspended list, `tab2` the
+/// terminated list. v1 replay must keep reading the first block.
+fn szse_two_block_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
+    let data: Vec<serde_json::Value> = (0..rows)
+        .map(|index| serde_json::json!({"zqdm": format!("00000{index}")}))
+        .collect();
+    serde_json::json!([
+        {
+            "metadata": {
+                "tabkey": "tab1",
+                "pageno": page,
+                "pagecount": 0,
+                "recordcount": 0,
+                "pagesize": 20,
+            },
+            "data": [],
+        },
+        {
+            "metadata": {
+                "tabkey": "tab2",
+                "pageno": page,
+                "pagecount": page_count,
+                "recordcount": total,
+                "pagesize": 20,
+            },
+            "data": data,
+        }
+    ])
     .to_string()
     .into_bytes()
 }
@@ -276,6 +309,55 @@ fn a_two_page_listing_is_frozen_page_by_page() {
     assert_eq!(replay["scopes"][0]["rebuilt"], "rebuilt");
     assert_eq!(replay["scopes"][0]["database"], "match");
     assert_eq!(replay["scopes"][0]["snapshots"], 2);
+}
+
+/// The SZSE block-selection change reads `tab2` (v2), but pages frozen before
+/// it (`exchange-szse-page-v1`) must replay with their old meaning: the first
+/// block. `PagingFormat::from_parser_version` keeps that alias as a distinct
+/// format; without it the old rows would be re-derived with the new selection.
+#[test]
+fn legacy_szse_pages_keep_the_first_block_meaning_on_replay() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    {
+        let backend = open(&db);
+        for (page, rows) in [(1_u32, 2_usize), (2, 1)] {
+            let request =
+                ExchangeRequest::new(SourceId::SzseDelisting, "https://example.invalid/szse")
+                    .paged(PagingFormat::SzseMetadata, page);
+            let response = ok(
+                szse_two_block_body(page, 2, 3, rows),
+                &format!("szse-page-{page}"),
+            );
+            // v1 reads `[0]`: the empty tab1, count 0. This is the old meaning
+            // the replay must reproduce, not the new tab2 selection.
+            let envelope = parse_page(PagingFormat::SzseMetadataV1, &response.body).unwrap();
+            assert_eq!(
+                (envelope.page, envelope.page_count, envelope.rows),
+                (page, 0, 0)
+            );
+            freeze_page(
+                &store,
+                &backend,
+                &request,
+                &response,
+                &envelope,
+                SZSE_PARSER_VERSION_V1,
+                BasisStatus::ApprovedSource,
+                "2026-10-30T02:00:00Z",
+            )
+            .unwrap();
+        }
+    }
+    assert_eq!(store.records().unwrap().len(), 2);
+    assert_eq!(snapshot_count(&db, SourceId::SzseDelisting), 2);
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["status"], "ok");
+    assert_eq!(replay["scopes"][0]["rebuilt"], "rebuilt");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 2);
+    assert_eq!(snapshot_count(&db, SourceId::SzseDelisting), 2);
 }
 
 /// The 2026-10-30 dialect change writes `pageHelp.pageNo`/`pageSize`, but pages

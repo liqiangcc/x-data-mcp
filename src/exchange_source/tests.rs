@@ -12,7 +12,10 @@ use std::time::Duration;
 use chrono::NaiveDate;
 
 use super::index::{self, SnapshotRow};
-use super::request::{SSE_PARSER_VERSION, SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION};
+use super::request::{
+    SSE_PARSER_VERSION, SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION, SZSE_PARSER_VERSION,
+    SZSE_PARSER_VERSION_V1,
+};
 use super::*;
 use crate::source_store::{
     ManifestRecord, Registration, SourceStore, StoreError, StoreKind, known_parser_version,
@@ -160,6 +163,67 @@ fn sse_and_szse_envelopes_are_parsed_without_business_fields() {
             .code(),
         "source_invalid"
     );
+}
+
+#[test]
+fn the_szse_envelope_reads_the_tab2_block_not_the_first_block() {
+    // 2026-10-30 real shape: tab1 (暂停上市) is empty with pagecount=0, tab2
+    // (终止上市) carries the rows. Reading [0] later fails `page_count is 0`.
+    let body = br#"[
+      {"metadata":{"tabkey":"tab1","pageno":2,"pagesize":20,"pagecount":0,"recordcount":0},"data":[]},
+      {"metadata":{"tabkey":"tab2","pageno":2,"pagesize":20,"pagecount":4,"recordcount":61},
+       "data":[{"zqdm":"000418"},{"zqdm":"000502"}]}
+    ]"#;
+    let page = envelope(body, PagingFormat::SzseMetadata);
+    assert_eq!(
+        (page.page, page.page_count, page.rows, page.total),
+        (2, 4, 2, Some(61)),
+        "page number, page count, rows and total all come from tab2"
+    );
+
+    // No tab2: the only block with rows is still unambiguous.
+    let fallback = br#"[
+      {"metadata":{"pageno":1,"pagecount":0,"recordcount":0},"data":[]},
+      {"metadata":{"pageno":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000001"}]}
+    ]"#;
+    let page = envelope(fallback, PagingFormat::SzseMetadata);
+    assert_eq!((page.page, page.page_count, page.rows), (1, 1, 1));
+
+    // No tab2 and two blocks with rows: never guess the first one.
+    let ambiguous = br#"[
+      {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000001"}]},
+      {"metadata":{"tabkey":"tab3","pageno":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000003"}]}
+    ]"#;
+    assert_eq!(
+        validate::parse_page(PagingFormat::SzseMetadata, ambiguous)
+            .unwrap_err()
+            .code(),
+        "source_invalid"
+    );
+}
+
+#[test]
+fn the_szse_envelope_versions_keep_v1_replay_on_the_first_block() {
+    let two_blocks = br#"[
+      {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":0,"recordcount":0},"data":[]},
+      {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":2,"recordcount":3},"data":[{"zqdm":"000003"}]}
+    ]"#;
+    // New pages read tab2.
+    assert_eq!(
+        PagingFormat::SzseMetadata.parser_version(),
+        SZSE_PARSER_VERSION
+    );
+    assert!(known_parser_version(SZSE_PARSER_VERSION));
+    let page = envelope(two_blocks, PagingFormat::SzseMetadata);
+    assert_eq!((page.page_count, page.rows), (2, 1));
+    // Old frozen pages replay with the old meaning: `[0]`.
+    assert!(known_parser_version(SZSE_PARSER_VERSION_V1));
+    assert_eq!(
+        PagingFormat::from_parser_version(SZSE_PARSER_VERSION_V1),
+        Some(PagingFormat::SzseMetadataV1)
+    );
+    let legacy = envelope(two_blocks, PagingFormat::SzseMetadataV1);
+    assert_eq!((legacy.page_count, legacy.rows), (0, 0));
 }
 
 #[test]

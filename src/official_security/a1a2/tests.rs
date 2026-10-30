@@ -39,6 +39,8 @@ const SZSE_LISTING: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_listing.json");
 const SZSE_DELISTING_MAIN: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_main.json");
+const SZSE_DELISTING_MAIN_P2: &[u8] =
+    include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_main_p2.json");
 const SZSE_DELISTING_NM: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_nm.json");
 const SSE_QUERY_PAGE_IGNORED: &[u8] =
@@ -63,6 +65,8 @@ fn page_for(url: &str) -> Vec<u8> {
     } else if url.contains("CATALOGID=1793_ssgs") {
         if url.contains("selectModule=nm") {
             SZSE_DELISTING_NM.to_vec()
+        } else if url.contains("PAGENO=2") {
+            SZSE_DELISTING_MAIN_P2.to_vec()
         } else {
             SZSE_DELISTING_MAIN.to_vec()
         }
@@ -223,7 +227,7 @@ fn tdx_facts() -> Vec<SecurityLifecycleFact> {
         tdx("688981", Sh, day(2020, 7, 16)),
         tdx("000001", Sz, day(1991, 4, 3)),
         tdx("000002", Sz, day(1991, 1, 29)),
-        tdx("000003", Sz, day(1991, 7, 3)),
+        tdx("000003", Sz, day(1991, 1, 14)),
         tdx("000004", Sz, day(1991, 1, 14)),
         tdx("300114", Sz, day(2010, 8, 27)),
         tdx("301569", Sz, day(2026, 10, 15)),
@@ -392,6 +396,63 @@ fn b_shares_are_filtered_and_star_chinext_rows_are_kept() {
 }
 
 #[test]
+fn the_szse_terminated_list_is_read_from_the_tab2_block() {
+    // Both fixtures start with the empty `tab1` (暂停上市) block whose
+    // `pagecount=0`; reading `[0]` would fail as `page_count is 0` (main) or
+    // drop every row.
+    let first = parse_page(ListKind::SzseDelistingMain, SZSE_DELISTING_MAIN).unwrap();
+    assert_eq!(first.b_shares_skipped, 1);
+    assert_eq!(first.delisting.len(), 1);
+    assert_eq!(first.delisting[0].code, "000003");
+
+    let second = parse_page(ListKind::SzseDelistingMain, SZSE_DELISTING_MAIN_P2).unwrap();
+    assert_eq!(second.delisting.len(), 1);
+    assert_eq!(second.delisting[0].code, "000005");
+    assert_eq!(second.delisting[0].delisting_date, day(2024, 4, 26));
+
+    // A tab1 that carries rows must not win over tab2.
+    let two_blocks = br#"[
+      {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":1,"recordcount":1},
+       "data":[{"zqdm":"000001","ssrq":"1991-04-03","zzrq":"2020-01-01"}]},
+      {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":1,"recordcount":1},
+       "data":[{"zqdm":"000003","ssrq":"1991-01-14","zzrq":"2002-06-14"}]}
+    ]"#;
+    let page = parse_page(ListKind::SzseDelistingMain, two_blocks).unwrap();
+    assert_eq!(page.delisting.len(), 1);
+    assert_eq!(page.delisting[0].code, "000003");
+
+    // No tab2 and several blocks with rows: refuse instead of taking `[0]`.
+    let ambiguous = br#"[
+      {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":1,"recordcount":1},
+       "data":[{"zqdm":"000001","ssrq":"1991-04-03","zzrq":"2020-01-01"}]},
+      {"metadata":{"tabkey":"tab3","pageno":1,"pagecount":1,"recordcount":1},
+       "data":[{"zqdm":"000003","ssrq":"1991-01-14","zzrq":"2002-06-14"}]}
+    ]"#;
+    let error = parse_page(ListKind::SzseDelistingMain, ambiguous).unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("refusing"), "{error}");
+}
+
+#[test]
+fn a_synthetic_shared_code_is_merged_across_the_two_szse_modules() {
+    // Constructed: the 2026-10-30 main/nm first pages share no code, so the
+    // real fixtures no longer claim an overlap. This keeps the merge rule
+    // covered with a made-up duplicate (noted in the fixture README).
+    let page = |kind: ListKind, code: &str| {
+        let body = format!(
+            "[{{\"metadata\":{{\"tabkey\":\"tab2\",\"pageno\":1,\"pagecount\":1,\"recordcount\":1}},\
+               \"data\":[{{\"zqdm\":\"{code}\",\"ssrq\":\"1991-01-14\",\"zzrq\":\"2002-06-14\"}}]}}]"
+        );
+        parse_page(kind, body.as_bytes()).unwrap()
+    };
+    let mut facts = page(ListKind::SzseDelistingMain, "000003").delisting;
+    facts.extend(page(ListKind::SzseDelistingShortName, "000003").delisting);
+    let merged = merge_delisting(facts).unwrap();
+    assert_eq!(merged.len(), 1, "the same code and day is one fact");
+    assert_eq!(merged[0].code, "000003");
+}
+
+#[test]
 fn the_sse_code_is_a_stock_code_with_a_company_code_fallback() {
     let body = |row: &str| {
         format!(
@@ -440,7 +501,11 @@ fn acquire_merges_the_four_lists_and_the_five_key_codes() {
     let fixture = Fixture::new();
     let lists = Lists::serving_fixtures();
     let admitted = acquired(&fixture, &lists);
-    assert_eq!(lists.requests().len(), 7, "one request per plan, no retry");
+    assert_eq!(
+        lists.requests().len(),
+        8,
+        "seven plans; the SZSE main terminated list has two pages"
+    );
 
     let codes: Vec<String> = admitted
         .snapshot
@@ -488,8 +553,10 @@ fn acquire_merges_the_four_lists_and_the_five_key_codes() {
             ("sh.600680".to_string(), day(2010, 11, 5)),
             ("sh.688555".to_string(), day(2023, 7, 5)),
             ("sz.000003".to_string(), day(2002, 6, 14)),
+            ("sz.000005".to_string(), day(2024, 4, 26)),
+            ("sz.300023".to_string(), day(2022, 6, 29)),
         ],
-        "the two SZSE modules de-duplicate 000003; B rows are not facts"
+        "the SZSE main list spans PAGENO=1/2 and its two modules are merged; B rows are not facts"
     );
 
     // One confirmed migration (D-46) plus the candidate from A-2.
@@ -532,7 +599,7 @@ fn acquire_merges_the_four_lists_and_the_five_key_codes() {
         ]
     );
     let ids = evidence["snapshot_ids"].as_object().unwrap();
-    assert_eq!(ids.len(), 7);
+    assert_eq!(ids.len(), 8);
     assert!(
         ids.values()
             .all(|list| !list.as_array().unwrap().is_empty())
@@ -704,7 +771,7 @@ fn zero_listing_conflicts_against_ssdate_is_the_regression_baseline() {
     // `listing_date_tdx`, and no conflict is recorded (§7.2).
     let tdx = [
         tdx("600001", Exchange::Sh, day(1998, 6, 18)),
-        tdx("000003", Exchange::Sz, day(1991, 7, 3)),
+        tdx("000003", Exchange::Sz, day(1991, 1, 14)),
     ];
     let assembled = assembly::assemble_security_master(
         &tdx,
@@ -720,7 +787,7 @@ fn zero_listing_conflicts_against_ssdate_is_the_regression_baseline() {
     assert_eq!(sh.listing_date_tdx, Some(day(1998, 6, 18)));
     assert_eq!(sh.listing_source, ListingSource::ExchangeList);
     let sz = row(&assembled, Exchange::Sz, "000003");
-    assert_eq!(sz.listing_date, Some(day(1991, 7, 3)));
+    assert_eq!(sz.listing_date, Some(day(1991, 1, 14)));
     assert!(!sz.listing_conflict);
     assert!(!sz.delisting_conflict);
     assert_eq!(sz.delisting_source, DelistingSource::ExchangeList);
