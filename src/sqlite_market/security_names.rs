@@ -215,7 +215,9 @@ pub(crate) fn commit_security_names(
     replace_security_names(c, write.set, binding, write.task_id, write.item_id)
 }
 
-/// Every stored name row, decoded by the read model's decoder.
+/// Every stored name row, decoded by the read model's decoder (tests and the
+/// upcoming `security_names` replay scope).
+#[cfg(test)]
 pub(crate) fn read_names(
     c: &Connection,
 ) -> Result<Vec<crate::sqlite_market::security::SecurityNameRow>, Error> {
@@ -224,6 +226,7 @@ pub(crate) fn read_names(
 
 /// The dataset's registration row, `None` when it was never written or its
 /// last write was empty.
+#[cfg(test)]
 pub(crate) fn read_registration(c: &Connection) -> Result<Option<DerivedVersionRow>, Error> {
     derived::read_version(c, DATASET_KIND, DATASET_KEY)
 }

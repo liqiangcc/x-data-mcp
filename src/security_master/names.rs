@@ -260,7 +260,7 @@ pub fn assemble_sz(
             rows.push(interval);
         }
     }
-    coverage.sort_by(|left, right| (left.from, left.to).cmp(&(right.from, right.to)));
+    coverage.sort_by_key(|window| (window.from, window.to));
     Ok(NameSet {
         rows,
         coverage,
