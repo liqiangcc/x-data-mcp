@@ -158,6 +158,9 @@ fn many_failures_are_named_up_to_a_cap() {
         registration.entity = format!("sh.6000{code:02}");
         failures.push(failure(&registration, MISSING_SERIES, None));
     }
+    // `check` sorts by entity before reporting; the cap keeps the first 20 of
+    // that order and counts the rest.
+    failures.sort_by(|a, b| a.entity.cmp(&b.entity));
     let report = Report {
         registered: failures.len(),
         unchanged: 0,
@@ -167,7 +170,8 @@ fn many_failures_are_named_up_to_a_cap() {
     let message = report.failure_message();
     assert!(message.starts_with("delisted series check failed for 25 entities: "));
     assert!(message.ends_with(" (+5 more)"));
-    assert!(message.contains("sh.600024(missing_series)"));
+    assert!(message.contains("sh.600019(missing_series)"));
+    assert!(!message.contains("sh.600020"), "{message}");
 }
 
 #[test]
