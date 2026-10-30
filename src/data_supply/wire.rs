@@ -43,6 +43,10 @@ pub enum Dataset {
     Suspensions,
     #[serde(rename = "market.price_limit_rules")]
     PriceLimitRules,
+    // M3 PR-7 historical industry assignments (#446 §5.5): one interval per
+    // code, plus an explicit `unknown{reason}` row when no interval is usable.
+    #[serde(rename = "market.industry_assignments")]
+    IndustryAssignments,
 }
 impl Dataset {
     pub fn period(self) -> Option<Period> {
@@ -57,7 +61,8 @@ impl Dataset {
             | Self::CapitalEvents
             | Self::RiskWarnings
             | Self::Suspensions
-            | Self::PriceLimitRules => None,
+            | Self::PriceLimitRules
+            | Self::IndustryAssignments => None,
         }
     }
     /// Wire spelling; used by v2 error messages (v8 PR-3, #387 §5).
@@ -75,6 +80,7 @@ impl Dataset {
             Self::RiskWarnings => "market.risk_warnings",
             Self::Suspensions => "market.suspensions",
             Self::PriceLimitRules => "market.price_limit_rules",
+            Self::IndustryAssignments => "market.industry_assignments",
         }
     }
     /// The datasets added after v7 have no v1 row shape: their requests
@@ -91,6 +97,7 @@ impl Dataset {
                 | Self::RiskWarnings
                 | Self::Suspensions
                 | Self::PriceLimitRules
+                | Self::IndustryAssignments
         )
     }
     /// M2 facts served by the research read model (issue-391 §12.3). This is
@@ -118,7 +125,14 @@ impl Dataset {
                 | Self::CapitalEvents
                 | Self::RiskWarnings
                 | Self::Suspensions
+                | Self::IndustryAssignments
         )
+    }
+    /// Whether the dataset is served by a temporal read model that observes
+    /// `known_at`. The M2 parsed facts and the M3 industry intervals share
+    /// that shape without sharing their storage branch.
+    pub fn is_temporal_fact(self) -> bool {
+        self.is_m2() || self == Self::IndustryAssignments
     }
     /// Per-dataset `temporal` declaration published by
     /// `get_data_capabilities` (issue-391 §12.3). A dataset absent from this
@@ -132,6 +146,7 @@ impl Dataset {
             Self::CapitalEvents | Self::PriceLimitRules => {
                 TemporalSupport::as_of_only(TemporalCoverage::None)
             }
+            Self::IndustryAssignments => TemporalSupport::declared(TemporalCoverage::Partial),
             _ => TemporalSupport::NONE,
         }
     }
@@ -145,6 +160,7 @@ impl Dataset {
             Self::RiskWarnings => "risk_warnings",
             Self::Suspensions => "suspensions",
             Self::PriceLimitRules => "price_limit_rules",
+            Self::IndustryAssignments => "industry_assignments",
             _ => return None,
         })
     }

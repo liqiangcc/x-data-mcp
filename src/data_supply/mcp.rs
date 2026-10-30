@@ -1366,6 +1366,7 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
             | Dataset::RiskWarnings
             | Dataset::Suspensions
             | Dataset::PriceLimitRules
+            | Dataset::IndustryAssignments
     ) {
         v["contract_version"] = json!("v2");
         if v.get("selection").is_some() {
@@ -1379,7 +1380,8 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
                 Dataset::SecurityNames
                 | Dataset::CapitalEvents
                 | Dataset::RiskWarnings
-                | Dataset::Suspensions => {
+                | Dataset::Suspensions
+                | Dataset::IndustryAssignments => {
                     json!({"kind":"single","entity":{"exchange":"sh","code":"600006"}})
                 }
                 _ => unreachable!(),

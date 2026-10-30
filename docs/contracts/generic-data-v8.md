@@ -190,6 +190,7 @@ dataset 矩阵（实现已核）：
 | `market.risk_warnings` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 历史 ST/\*ST；#308 未准入不出行 |
 | `market.suspensions` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | `unresolved_gap` 区间；未登记版本 → `absent` |
 | `market.price_limit_rules` | `market`（无实体） | `daily`（区间） | `latest_per_entity` | `table` | `true` / `false` / `none` | 按生效日期管理的规则；未登记版本 → `absent` |
+| `market.industry_assignments` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | M3 PR-7；`status=assigned` 或 `unknown`（带 `reason`）；无快照/未登记版本 → `absent` |
 
 `market.index`/`market.adjustment_events`/`market.calendar` 以及上表 6 个 M2 数据集都是 v2-only：
 `contract_version:"v1"` 请求 → `invalid_arguments`（`<dataset> requires contract_version v2`，
@@ -266,6 +267,7 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 | `securities.catalog` | `name, industry_code, industry_name, industry_status, industry_reason` | 前三个 |
 | `market.adjustment_events` | `category, c1, c2, c3, c4` | 全部（`effective_day` 是行键，不重复） |
 | `market.calendar` | `trade_day` | 同 |
+| `market.industry_assignments` | `status, reason, scheme, level, industry_code, name, name_status, effective_from, effective_to, known_at, effective_from_basis, evidence_grade, source_snapshot_sha256` | `status, reason, scheme, level, industry_code, name, name_status, effective_from, effective_to, known_at` |
 | `get_data_availability` | 见 `src/data_supply/columnar.rs:55-74` | 全部 |
 
 数值：价格、量、额都是十进制字符串；`null` 表示源未提供，不用 0 代替。
@@ -384,10 +386,10 @@ M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含
 
 仍然拒绝（每条都有测试，`src/data_supply/wire/normalize/tests.rs`）：
 
-- M2 点时间参数 `filter.as_of` / `known_at` 只在目标 dataset 的 `temporal` 声明为 `true`
+- 点时间参数 `filter.as_of` / `known_at` 只在目标 dataset 的 `temporal` 声明为 `true`
   时接受（当前：`market.security_master`、`market.security_names`、`market.risk_warnings`、
-  `market.suspensions` 两者都接受；`market.capital_events`、`market.price_limit_rules` 只接受
-  `filter.as_of`）；未声明、`temporal=false` 或工具不消费该参数时 → `invalid_arguments`，
+  `market.suspensions`、`market.industry_assignments` 两者都接受；`market.capital_events`、
+  `market.price_limit_rules` 只接受 `filter.as_of`）；未声明、`temporal=false` 或工具不消费该参数时 → `invalid_arguments`，
   message 以 `unsupported_for_dataset:` 开头（`src/data_supply/wire/normalize.rs`）。
 - 非六位代码、未知 exchange、无法解析的日期 → `invalid_arguments`，消息给出可接受写法。
 - `selection.kind` 与 dataset 不匹配 → `invalid_arguments`，消息列出该 dataset 接受的 kind
