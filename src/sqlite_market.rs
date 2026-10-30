@@ -1124,6 +1124,8 @@ pub(crate) mod security;
 // The rule writer is consumed by the future derived-rules item (PR-7); until
 // then only its tests and the read model's reader drive this module.
 #[allow(dead_code)]
+pub(crate) mod risk_warnings;
+#[allow(dead_code)]
 pub(crate) mod rules;
 // The suspension writer is consumed by the future derived-suspensions item
 // (PR-8); until then only its tests and the read model's reader drive this

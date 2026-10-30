@@ -30,6 +30,7 @@ use crate::security_master::{
 };
 
 pub mod a1a2;
+pub mod risk_warnings;
 
 /// One anchored field: name, dBase type byte, length, decimals (#399 A-5).
 #[derive(Debug, Clone, Copy)]
