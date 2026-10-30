@@ -47,7 +47,7 @@ fn empty_store_reports_store_empty_and_exits_zero() {
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"], "store_empty");
     assert_eq!(report["scope"], "all");
-    assert_eq!(report["scopes"].as_array().unwrap().len(), 3);
+    assert_eq!(report["scopes"].as_array().unwrap().len(), 4);
     assert!(!store_path.exists(), "a read must not create the store");
 }
 

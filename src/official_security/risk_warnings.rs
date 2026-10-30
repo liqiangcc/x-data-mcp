@@ -654,24 +654,22 @@ fn parse_day(text: &str, field: &str) -> Result<NaiveDate, Error> {
 
 /// `--scope risk_warnings` replay support: parse frozen pages from the source
 /// store and rebuild the domain set without any HTTP request.
-pub struct ReplayInput<'a> {
-    pub store: &'a SourceStore,
-    /// `(source_id, snapshot_id, bytes)` in manifest order.
-    pub pages: Vec<(&'a str, String, Vec<u8>)>,
-    pub today: NaiveDate,
-}
-
-pub fn replay(input: ReplayInput<'_>) -> Result<RiskWarningSet, Error> {
+///
+/// `pages` are `(source_id, snapshot_id, bytes)` in manifest order. The
+/// caller chooses which SZ short-name table snapshot is current; all SSE
+/// bulletin pages are de-duplicated by their announcement id.
+pub fn replay(
+    pages: &[(&str, String, Vec<u8>)],
+    gaps: &[(NaiveDate, NaiveDate)],
+    coverage: Vec<CoverageWindow>,
+) -> Result<RiskWarningSet, Error> {
     let mut sz_changes = Vec::new();
     let mut sh_events = Vec::new();
     let mut seen_bulletins = BTreeSet::new();
-    let mut sz_days = Vec::new();
-    let mut quarters: BTreeSet<(NaiveDate, NaiveDate)> = BTreeSet::new();
-    for (source_id, snapshot_id, bytes) in &input.pages {
+    for (source_id, snapshot_id, bytes) in pages {
         match *source_id {
             "szse_short_name" => {
                 let (mut changes, _, _) = parse_sz_page(bytes, snapshot_id)?;
-                sz_days.extend(changes.iter().map(|change| change.day));
                 sz_changes.append(&mut changes);
             }
             "sse_bulletin" => {
@@ -685,45 +683,17 @@ pub fn replay(input: ReplayInput<'_>) -> Result<RiskWarningSet, Error> {
             _ => {}
         }
     }
-    let mut coverage = Vec::new();
-    if let (Some(from), Some(to)) = (sz_days.iter().min(), sz_days.iter().max()) {
-        coverage.push(CoverageWindow {
-            source_kind: "szse_name_history".into(),
-            exchange: Exchange::Sz,
-            from: *from,
-            to: *to,
-            observed: true,
-            rows: sz_changes.len(),
-            reason: "replayed from frozen SZSE pages".into(),
-        });
+    let mut sz_coverage = Vec::new();
+    let mut sh_coverage = Vec::new();
+    for window in coverage {
+        if window.exchange == Exchange::Sz {
+            sz_coverage.push(window);
+        } else {
+            sh_coverage.push(window);
+        }
     }
-    // Replay has no window verdicts; a page exists only when the acquisition
-    // observed its window. Missing quarters stay uncovered and therefore cut
-    // no interval unless the index says they were requested. The writer keeps
-    // the explicit coverage from the live run; replay's digest is over rows.
-    let archive_start = NaiveDate::from_ymd_opt(2000, 1, 1).expect("2000-01-01 is valid");
-    for window in quarter_segments(archive_start, input.today)? {
-        quarters.insert((window.start(), window.end()));
-    }
-    for key in quarters {
-        coverage.push(CoverageWindow {
-            source_kind: "exchange_announcement".into(),
-            exchange: Exchange::Sh,
-            from: key.0,
-            to: key.1,
-            observed: true,
-            rows: 0,
-            reason: "replay computes rows only; live coverage is kept in the existing registration"
-                .into(),
-        });
-    }
-    let sz_coverage = coverage.clone();
     let mut set = risk_warnings::assemble_sz(&sz_changes, sz_coverage)?;
-    let sh_coverage = coverage
-        .into_iter()
-        .filter(|window| window.exchange == Exchange::Sh)
-        .collect();
-    let sh = risk_warnings::assemble_sh(&sh_events, &[], sh_coverage)?;
+    let sh = risk_warnings::assemble_sh(&sh_events, gaps, sh_coverage)?;
     set.rows.extend(sh.rows);
     set.coverage.extend(sh.coverage);
     Ok(set)
