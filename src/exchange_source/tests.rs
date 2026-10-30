@@ -193,7 +193,7 @@ fn a_quiet_soa_window_can_be_not_observed() {
         total: Some(0),
     };
     let set = validate::validate_pages(
-        &[empty.clone()],
+        std::slice::from_ref(&empty),
         EmptyPolicy::Forbidden,
         ZeroPolicy::NotObserved,
     )

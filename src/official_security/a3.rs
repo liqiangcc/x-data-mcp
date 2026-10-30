@@ -218,9 +218,11 @@ struct ParsedEvent {
     snapshot_id: String,
 }
 
-/// Counters that explain every row the adapter did not turn into a fact.
+/// Counters that explain every row the adapter did not turn into a fact, plus
+/// the number of complete windows that were acquired.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct Counters {
+pub struct Counters {
+    windows: usize,
     rows_read: usize,
     non_a_share_skipped: usize,
     intraday_skipped: usize,
@@ -269,7 +271,6 @@ impl Admitted {
         events: Vec<ParsedEvent>,
         mut counters: Counters,
         not_observed_windows: Vec<String>,
-        windows: usize,
         bindings: Vec<SnapshotBinding>,
         snapshot_ids: Vec<String>,
     ) -> Self {
@@ -285,6 +286,7 @@ impl Admitted {
         counters.unknown_entity_samples = unknown_entity_samples;
         counters.clipped = clipped;
         counters.outside_window_dropped = outside_window_dropped;
+        let windows = counters.windows;
         Self {
             snapshot: ConfirmedSuspensionSnapshot {
                 as_of: today,
@@ -399,13 +401,13 @@ pub fn acquire(
             snapshot_ids.push(snapshot.snapshot_id().to_string());
         }
     }
+    counters.windows = outcome.results.len();
     Ok(Admitted::new(
         today,
         facts,
         events,
         counters,
         not_observed_windows,
-        outcome.results.len(),
         vec![outcome.binding],
         snapshot_ids,
     ))
@@ -499,13 +501,13 @@ pub fn reparse(
             snapshot_ids.push(row.snapshot_id.clone());
         }
     }
+    counters.windows = windows.len();
     Ok(Admitted::new(
         today,
         facts,
         events,
         counters,
         not_observed_windows,
-        windows.len(),
         Vec::new(),
         snapshot_ids,
     ))
