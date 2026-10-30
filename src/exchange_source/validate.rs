@@ -54,6 +54,27 @@ impl EmptyPolicy {
     }
 }
 
+/// What a 0-row window means to one consumer (BR-M3-10, §6.3).
+///
+/// A 0-row answer is never evidence of absence. The two honest reactions are:
+///
+/// - [`ZeroPolicy::FailClosed`] (the default): the window is a failure
+///   (`unverified_zero`), because a writer that concludes something from the
+///   window cannot tell a quiet window from a broken query.
+/// - [`ZeroPolicy::NotObserved`]: the consumer only derives *positive* facts
+///   from rows (A-3 suspension events, D-60), so the window stays an
+///   explicitly unobserved window: no row is produced, the window is named in
+///   the item's evidence, and no "no event" conclusion is stored. The source
+///   itself answers 0 rows for real windows (the SSE suspension table returns
+///   nothing for 2008 Q1 while 2008 Q2 answers 2,306 rows, PR-11 evidence), so
+///   failing the whole dataset for one quiet quarter would be a permanent
+///   failure rather than caution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZeroPolicy {
+    FailClosed,
+    NotObserved,
+}
+
 /// Failure class of the entry (§6.3 "失败分三类").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureClass {
@@ -137,8 +158,47 @@ pub fn parse_page(format: PagingFormat, body: &[u8]) -> Result<PageEnvelope, Val
     })?;
     match format {
         PagingFormat::SsePageHelp => parse_sse(&value),
+        PagingFormat::SseSoaPageNo => parse_sse_soa(&value),
         PagingFormat::SzseMetadata => parse_szse(&value),
     }
+}
+
+/// `commonSoaQuery.do` envelope (A-3): same `pageHelp` object, but the page
+/// number is `pageHelp.pageNo` (the endpoint ignores `beginPage`/`endPage`),
+/// the class keeps `pageHelp.total` (it is a real count here, unlike the
+/// `GPLB_GP_L` list), and a quiet window answers `pageCount=0` with
+/// `data: []`.
+fn parse_sse_soa(value: &Value) -> Result<PageEnvelope, ValidateError> {
+    let help = value
+        .get("pageHelp")
+        .and_then(Value::as_object)
+        .ok_or_else(|| ValidateError::Format {
+            detail: "missing pageHelp object".to_string(),
+        })?;
+    let rows = help
+        .get("data")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ValidateError::Format {
+            detail: "pageHelp.data is not an array".to_string(),
+        })?;
+    let page = help
+        .get("pageNo")
+        .and_then(number)
+        .ok_or_else(|| ValidateError::Format {
+            detail: "pageHelp.pageNo is missing".to_string(),
+        })?;
+    let page_count =
+        help.get("pageCount")
+            .and_then(number)
+            .ok_or_else(|| ValidateError::Format {
+                detail: "pageHelp.pageCount is missing".to_string(),
+            })?;
+    Ok(PageEnvelope {
+        page: clamp_u32(page),
+        page_count: clamp_u32(page_count),
+        rows: rows.len(),
+        total: help.get("total").and_then(number),
+    })
 }
 
 fn parse_sse(value: &Value) -> Result<PageEnvelope, ValidateError> {
@@ -241,12 +301,23 @@ fn clamp_u32(value: u64) -> u32 {
 pub fn validate_pages(
     pages: &[PageEnvelope],
     policy: EmptyPolicy,
+    zero: ZeroPolicy,
 ) -> Result<PageSet, ValidateError> {
     let first = pages.first().ok_or_else(|| ValidateError::Format {
         detail: "window produced no page".to_string(),
     })?;
     let page_count = first.page_count;
     if page_count == 0 {
+        // A quiet window of a `commonSoaQuery` source answers `pageCount=0`
+        // with no rows. Only a consumer that treats 0 rows as an unobserved
+        // window may accept it, and only when nothing was returned.
+        if zero == ZeroPolicy::NotObserved && pages.iter().all(|page| page.rows == 0) {
+            return Ok(PageSet {
+                pages: pages.to_vec(),
+                row_count: 0,
+                page_count: 0,
+            });
+        }
         return Err(ValidateError::Format {
             detail: "page_count is 0".to_string(),
         });
@@ -301,16 +372,18 @@ pub fn validate_pages(
         });
     }
     if row_count == 0 {
-        return match policy {
-            EmptyPolicy::Forbidden => Err(ValidateError::UnverifiedZero {
-                pages: pages.len(),
-                rows: row_count,
-            }),
-            EmptyPolicy::DeclaredEmptyWindow => Ok(PageSet {
+        return match (policy, zero) {
+            (EmptyPolicy::DeclaredEmptyWindow, _) | (_, ZeroPolicy::NotObserved) => Ok(PageSet {
                 pages: pages.to_vec(),
                 row_count,
                 page_count,
             }),
+            (EmptyPolicy::Forbidden, ZeroPolicy::FailClosed) => {
+                Err(ValidateError::UnverifiedZero {
+                    pages: pages.len(),
+                    rows: row_count,
+                })
+            }
         };
     }
     Ok(PageSet {

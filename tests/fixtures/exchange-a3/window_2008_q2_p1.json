@@ -1,0 +1,101 @@
+{
+ "actionErrors": [],
+ "actionMessages": [],
+ "fieldErrors": {},
+ "isPagination": "true",
+ "jsonCallBack": null,
+ "locale": "en_CN",
+ "pageHelp": {
+  "beginPage": 1,
+  "cacheSize": 1,
+  "data": [
+   {
+    "startStopDate": "20080505",
+    "stopReason": "重要公告",
+    "productCode": "600001",
+    "endStopReason": "重要公告",
+    "controlType": "TR",
+    "endStopDate": "20080507",
+    "stopTime": "",
+    "type": "LXTP",
+    "productName": "邯郸钢铁"
+   },
+   {
+    "startStopDate": "20080506",
+    "stopReason": "重要公告",
+    "productCode": "113046",
+    "endStopReason": "重要公告",
+    "controlType": "GP",
+    "endStopDate": "",
+    "stopTime": "",
+    "type": "LXTP",
+    "productName": "金田转债"
+   },
+   {
+    "startStopDate": "20080506",
+    "stopReason": "重要公告",
+    "productCode": "600680",
+    "endStopReason": "重要公告",
+    "controlType": "TR",
+    "endStopDate": "20080506",
+    "stopTime": "930",
+    "type": "LXTP",
+    "productName": "上海普天"
+   }
+  ],
+  "endDate": null,
+  "endPage": null,
+  "objectResult": null,
+  "pageCount": 2,
+  "pageNo": 1,
+  "pageSize": 25,
+  "pageSizeWithOutLimit": 25,
+  "searchDate": null,
+  "sort": null,
+  "startDate": null,
+  "total": 6
+ },
+ "pageNo": null,
+ "pageSize": null,
+ "queryDate": "",
+ "result": [
+  {
+   "startStopDate": "20080505",
+   "stopReason": "重要公告",
+   "productCode": "600001",
+   "endStopReason": "重要公告",
+   "controlType": "TR",
+   "endStopDate": "20080507",
+   "stopTime": "",
+   "type": "LXTP",
+   "productName": "邯郸钢铁"
+  },
+  {
+   "startStopDate": "20080506",
+   "stopReason": "重要公告",
+   "productCode": "113046",
+   "endStopReason": "重要公告",
+   "controlType": "GP",
+   "endStopDate": "",
+   "stopTime": "",
+   "type": "LXTP",
+   "productName": "金田转债"
+  },
+  {
+   "startStopDate": "20080506",
+   "stopReason": "重要公告",
+   "productCode": "600680",
+   "endStopReason": "重要公告",
+   "controlType": "TR",
+   "endStopDate": "20080506",
+   "stopTime": "930",
+   "type": "LXTP",
+   "productName": "上海普天"
+  }
+ ],
+ "securityCode": "",
+ "sqlId": "GW_PL_JYTS_TFPXX",
+ "texts": null,
+ "type": "",
+ "validateCode": ""
+}

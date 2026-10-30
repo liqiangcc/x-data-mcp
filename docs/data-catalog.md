@@ -441,7 +441,8 @@ A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、�
    `BULLETIN_TYPE` 过滤不可用），只到 `unresolved_gap`。→ **深市全域可交易性是 `unknown`
    （`data_gap`），不是 `suspended`；沪市 2008 年前同为 `unknown`。** 剩余偏差：
    `unresolved_gap` 只能说明「数据里没有 bar」，不能区分停牌、全天一字板未成交或数据缺失；
-   回测要按「未知」剔除或单独报告敏感性。写入器未实现期间两市都只有 `unresolved_gap`。
+   回测要按「未知」剔除或单独报告敏感性。PR-11 已实现沪市写入器（代码已合入、未部署）：
+   沪市 2008 年起可由事件表写 `confirmed`，深市仍只有 `unresolved_gap`。
 7. **涨跌停规则已入库，但 ST 状态仍缺**：A-7 已由 D-44 关闭（2026-10-28 复核确认，D-59）：
    规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED`（必须标「推断」）、
    R7 `NOT_AVAILABLE`。规则书（R1–R9 的生效段）已作为版本化数据入库，日更 run 的

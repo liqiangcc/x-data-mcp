@@ -11,8 +11,11 @@
 //!
 //! Paging quirks that the entry encodes instead of leaving to consumers:
 //!
-//! - SSE only honours `beginPage`/`endPage`; a request that sends `pageNo`
-//!   alone repeats page 1 (§6.3, evidence E-1/E-2).
+//! - SSE only honours `beginPage`/`endPage` on `sseQuery`; a request that sends
+//!   `pageNo` alone repeats page 1 (§6.3, evidence E-1/E-2). The older
+//!   `commonSoaQuery` services are the other way round: they page by
+//!   `pageHelp.pageNo`/`pageHelp.pageSize` and ignore `beginPage`/`endPage`
+//!   (PR-11 evidence), which is [`PagingFormat::SseSoaPageNo`].
 //! - SZSE pages by `PAGENO`; its `pageSize` is not adopted (design §17 item 10).
 //! - The SSE bulletin index archive starts 2000-01-01 and one request may span
 //!   at most one quarter, asserted as ≤ [`MAX_SEGMENT_DAYS`] days (§6.4).
@@ -120,10 +123,42 @@ impl Segment {
         self.start > today
     }
 
-    /// Put the window into the request parameters the source expects.
+    /// Put the window into the request parameters the source expects, as
+    /// `YYYY-MM-DD` (see [`DateFormat`] for the compact shape).
     pub fn apply(self, params: &mut BTreeMap<String, String>, from: &str, to: &str) {
-        params.insert(from.to_string(), self.start_text());
-        params.insert(to.to_string(), self.end_text());
+        self.apply_with(params, from, to, DateFormat::Iso);
+    }
+
+    /// Same, in the date shape the source documents.
+    pub fn apply_with(
+        self,
+        params: &mut BTreeMap<String, String>,
+        from: &str,
+        to: &str,
+        format: DateFormat,
+    ) {
+        params.insert(from.to_string(), format.text(self.start));
+        params.insert(to.to_string(), format.text(self.end));
+    }
+}
+
+/// How a window bound is written into a request parameter.
+///
+/// It is part of the canonical fingerprint, so the choice cannot be lost
+/// between acquisition and replay: `commonSoaQuery` silently answers 0 rows for
+/// dashed dates (PR-11 evidence), which would read as a quiet window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DateFormat {
+    Iso,
+    Compact,
+}
+
+impl DateFormat {
+    pub fn text(self, date: NaiveDate) -> String {
+        match self {
+            Self::Iso => date_text(date),
+            Self::Compact => date.format("%Y%m%d").to_string(),
+        }
     }
 }
 
@@ -181,8 +216,15 @@ fn quarter_end(date: NaiveDate) -> NaiveDate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PagingFormat {
-    /// SSE `pageHelp` envelope, paged by `beginPage`/`endPage`.
+    /// SSE list services (`sseQuery/commonQuery.do`), paged by
+    /// `beginPage`/`endPage`.
     SsePageHelp,
+    /// SSE `commonSoaQuery.do` services (A-3 suspension events), paged by
+    /// `pageHelp.pageNo` with a fixed page size of [`SSE_SOA_PAGE_SIZE`]; the
+    /// same endpoint ignores `beginPage`/`endPage` and always reports
+    /// `pageHelp.beginPage=1` (PR-11 evidence: a request with
+    /// `beginPage=2&endPage=2` answered page 1).
+    SseSoaPageNo,
     /// SZSE JSON array of `{metadata:{pagecount,...},data:[...]}`, paged by
     /// `PAGENO`.
     SzseMetadata,
@@ -190,13 +232,18 @@ pub enum PagingFormat {
 
 /// Parser version recorded for SSE `pageHelp` envelopes.
 pub const SSE_PARSER_VERSION: &str = "exchange-sse-page-v1";
+/// Parser version recorded for SSE `commonSoaQuery.do` envelopes.
+pub const SSE_SOA_PARSER_VERSION: &str = "exchange-sse-soa-page-v1";
 /// Parser version recorded for SZSE `metadata` envelopes.
 pub const SZSE_PARSER_VERSION: &str = "exchange-szse-page-v1";
+/// `pageHelp.pageSize` the SSE `commonSoaQuery.do` services answer with.
+pub const SSE_SOA_PAGE_SIZE: u32 = 25;
 
 impl PagingFormat {
     pub fn parser_version(self) -> &'static str {
         match self {
             Self::SsePageHelp => SSE_PARSER_VERSION,
+            Self::SseSoaPageNo => SSE_SOA_PARSER_VERSION,
             Self::SzseMetadata => SZSE_PARSER_VERSION,
         }
     }
@@ -204,19 +251,28 @@ impl PagingFormat {
     pub fn from_parser_version(value: &str) -> Option<Self> {
         match value {
             SSE_PARSER_VERSION => Some(Self::SsePageHelp),
+            SSE_SOA_PARSER_VERSION => Some(Self::SseSoaPageNo),
             SZSE_PARSER_VERSION => Some(Self::SzseMetadata),
             _ => None,
         }
     }
 
     /// Parameters that select one page. SSE keeps `beginPage == endPage` (the
-    /// only form it honours); SZSE uses `PAGENO`.
+    /// only form `sseQuery` honours); `commonSoaQuery` takes
+    /// `pageHelp.pageNo` and `pageHelp.pageSize`; SZSE uses `PAGENO`.
     pub fn apply_page(self, params: &mut BTreeMap<String, String>, page: u32) {
         let page = page.to_string();
         match self {
             Self::SsePageHelp => {
                 params.insert("beginPage".to_string(), page.clone());
                 params.insert("endPage".to_string(), page);
+            }
+            Self::SseSoaPageNo => {
+                params.insert(
+                    "pageHelp.pageSize".to_string(),
+                    SSE_SOA_PAGE_SIZE.to_string(),
+                );
+                params.insert("pageHelp.pageNo".to_string(), page);
             }
             Self::SzseMetadata => {
                 params.insert("PAGENO".to_string(), page);
