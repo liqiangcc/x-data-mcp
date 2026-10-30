@@ -1441,9 +1441,9 @@ fn security_name_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row>, E
                 date(row.effective_from),
                 opt_date(row.effective_to),
                 text(row.name),
-                text(row.certainty),
+                text(row.certainty.as_str()),
                 opt_date(row.known_at),
-                text(row.source_kind),
+                text(row.source_kind.as_str()),
             ]
         })
         .collect())

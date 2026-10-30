@@ -801,8 +801,9 @@ pub(crate) fn security_master_rows(
         .collect())
 }
 
-/// One `security_names` row (§12.4). The fields stay in the stored vocabulary
-/// (see the storage decoder); the writer is M3 PR-12 (`derived:security_names`).
+/// One `security_names` row (§12.4). `certainty`/`source_kind` are the domain
+/// enums the DDL CHECKs freeze; the storage decoder is shared with the writer
+/// (M3 PR-12, `derived:security_names`).
 pub fn security_name_rows(
     c: &Connection,
     request: &ExportRequest,

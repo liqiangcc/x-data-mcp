@@ -215,9 +215,11 @@ pub fn assemble_sz(
             .or_default()
             .push(change);
     }
+    // Only a window over the SZ source can cut a SZ interval: an unobserved
+    // SH/BJ window says nothing about when the SZ table was read.
     let gap_days: Vec<NaiveDate> = coverage
         .iter()
-        .filter(|window| !window.observed)
+        .filter(|window| !window.observed && window.exchange == Exchange::Sz)
         .map(|window| window.from)
         .collect::<BTreeSet<_>>()
         .into_iter()

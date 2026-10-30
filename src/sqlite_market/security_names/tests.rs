@@ -133,9 +133,9 @@ fn round_trip_keeps_provenance_and_registers_counts() {
     let stored = read_names(&f.c).unwrap();
     assert_eq!(stored.len(), 2);
     assert_eq!(stored[0].name, "深安达A");
-    assert_eq!(stored[0].certainty, "interval");
-    assert_eq!(stored[1].certainty, "unbounded");
-    assert_eq!(stored[0].source_kind, "szse_name_history");
+    assert_eq!(stored[0].certainty, NameCertainty::Interval);
+    assert_eq!(stored[1].certainty, NameCertainty::Unbounded);
+    assert_eq!(stored[0].source_kind, NameSourceKind::SzseNameHistory);
     // The SZSE table carries no publication time, so known_at stays NULL.
     assert!(stored.iter().all(|row| row.known_at.is_none()));
     let stored_registration = read_registration(&f.c)
