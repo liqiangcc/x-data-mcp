@@ -180,7 +180,7 @@ pub fn assemble_sz(
     }
     let mut intervals = Vec::new();
     for (code, mut changes) in by_code {
-        changes.sort_by(|left, right| left.day.cmp(&right.day));
+        changes.sort_by_key(|change| change.day);
         for pair in changes.windows(2) {
             if pair[0].day == pair[1].day {
                 return Err(Error::SameDayConflict);
@@ -194,13 +194,12 @@ pub fn assemble_sz(
             }
             let before = warning_status(&current_name);
             let after = warning_status(&change.after_name);
-            if before != after || after.is_none() {
-                if let Some(mut current) = open.take() {
-                    if change.day > current.effective_from {
-                        current.effective_to = Some(change.day);
-                        intervals.push(current);
-                    }
-                }
+            if (before != after || after.is_none())
+                && let Some(mut current) = open.take()
+                && change.day > current.effective_from
+            {
+                current.effective_to = Some(change.day);
+                intervals.push(current);
             }
             if let Some(status) = after {
                 if open.is_none() {
@@ -470,23 +469,31 @@ pub fn validate_set(rows: &[RiskWarningInterval]) -> Result<(), Error> {
 /// dataset identity; the caller sorts the rows first.
 pub fn dataset_digest(rows: &[RiskWarningInterval]) -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
-    let mut payload = Vec::with_capacity(64 + rows.len() * 96);
-    payload.extend_from_slice(b"risk-warnings-v1\0");
-    payload.extend_from_slice(&(rows.len() as u64).to_be_bytes());
-    for row in rows {
-        push_text(&mut payload, row.exchange.as_str());
-        push_text(&mut payload, &row.code);
-        push_day(&mut payload, row.effective_from);
-        push_opt_day(&mut payload, row.effective_to);
-        push_text(&mut payload, &row.raw_status_code);
-        push_text(&mut payload, row.status.as_str());
-        push_opt_text(&mut payload, row.announced_at.as_deref());
-        push_opt_day(&mut payload, row.known_at);
-        push_text(&mut payload, &row.source_kind);
-        push_opt_text(&mut payload, row.source_record_id.as_deref());
-        push_opt_text(&mut payload, row.source_document_sha256.as_deref());
+    let mut p = Vec::with_capacity(64 + rows.len() * 96);
+    p.extend_from_slice(b"risk-warnings-v1\0");
+    p.extend_from_slice(&(rows.len() as u64).to_be_bytes());
+    let mut sorted: Vec<&RiskWarningInterval> = rows.iter().collect();
+    sorted.sort_by(|left, right| {
+        (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+            right.exchange,
+            right.code.as_str(),
+            right.effective_from,
+        ))
+    });
+    for row in sorted {
+        push_text(&mut p, row.exchange.as_str());
+        push_text(&mut p, &row.code);
+        push_day(&mut p, row.effective_from);
+        push_opt_day(&mut p, row.effective_to);
+        push_text(&mut p, &row.raw_status_code);
+        push_text(&mut p, row.status.as_str());
+        push_opt_text(&mut p, row.announced_at.as_deref());
+        push_opt_day(&mut p, row.known_at);
+        push_text(&mut p, &row.source_kind);
+        push_opt_text(&mut p, row.source_record_id.as_deref());
+        push_opt_text(&mut p, row.source_document_sha256.as_deref());
     }
-    Sha256::digest(&payload).into()
+    Sha256::digest(&p).into()
 }
 
 fn push_text(out: &mut Vec<u8>, value: &str) {

@@ -567,9 +567,7 @@ fn classify_title(title: &str) -> Option<(RiskWarningAction, Option<RiskStatus>)
     }
     let status = if title.contains("退市风险警示") {
         Some(RiskStatus::DelistingRiskWarning)
-    } else if title.contains("其他风险警示") || title.contains("特别处理") {
-        Some(RiskStatus::OtherRiskWarning)
-    } else if title.contains("风险警示") {
+    } else if title.contains("特别处理") || title.contains("风险警示") {
         Some(RiskStatus::OtherRiskWarning)
     } else {
         None

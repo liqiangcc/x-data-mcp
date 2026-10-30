@@ -153,7 +153,15 @@ fn round_trip_keeps_provenance_and_registers_counts() {
     .expect("non-empty set registers");
     assert_eq!(registration.record_count, 2);
     let stored = read_risk_warnings(&f.c).unwrap();
-    assert_eq!(stored, expected.rows);
+    let mut expected_rows = expected.rows.clone();
+    expected_rows.sort_by(|left, right| {
+        (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+            right.exchange,
+            right.code.as_str(),
+            right.effective_from,
+        ))
+    });
+    assert_eq!(stored, expected_rows);
     let stored_registration = read_registration(&f.c)
         .unwrap()
         .expect("registration exists");
