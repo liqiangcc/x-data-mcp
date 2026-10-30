@@ -210,14 +210,14 @@ fn acquired(fixture: &Fixture, pages: &Arc<Pages>, members: &[SecurityLifecycleF
         &fixture.market,
         &client(pages),
         members,
-        day(2008, 7, 10),
+        day(2008, 7, 1),
     )
     .expect("the fixtures are admitted")
 }
 
 #[test]
 fn windows_cover_2008_to_yesterday_in_quarters() {
-    let quarters = windows(day(2008, 7, 10)).unwrap();
+    let quarters = windows(day(2008, 7, 1)).unwrap();
     assert_eq!(quarters.len(), 2);
     assert_eq!(quarters[0].start(), day(2008, 1, 1));
     assert_eq!(quarters[0].end(), day(2008, 3, 31));
@@ -280,7 +280,7 @@ fn acquire_keeps_only_full_day_sse_a_share_events() {
         admitted.not_observed_windows,
         vec!["2008-01-01..2008-03-31".to_string()]
     );
-    assert_eq!(admitted.snapshot.as_of, day(2008, 7, 10));
+    assert_eq!(admitted.snapshot.as_of, day(2008, 7, 1));
     assert_eq!(admitted.counters.rows_read, 6);
     assert_eq!(
         admitted.counters.non_a_share_skipped, 1,
@@ -355,13 +355,13 @@ fn acquire_keeps_only_full_day_sse_a_share_events() {
 fn a_quiet_window_writes_no_confirmed_row() {
     let fixture = Fixture::new();
     let pages = Pages::serving_fixtures();
-    // 2008-04-10: only the empty 2008 Q1 window is complete.
+    // 2008-04-01: only the empty 2008 Q1 window is complete.
     let admitted = acquire(
         &fixture.store,
         &fixture.market,
         &client(&pages),
         &sh_members(),
-        day(2008, 4, 10),
+        day(2008, 4, 1),
     )
     .unwrap();
     assert_eq!(admitted.windows, 1);
@@ -383,7 +383,7 @@ fn a_source_failure_is_not_a_zero_row_answer() {
         &fixture.market,
         &client(&pages),
         &sh_members(),
-        day(2008, 7, 10),
+        day(2008, 7, 1),
     )
     .expect_err("a 500 is a failure, not an empty window");
     assert_eq!(error.code(), "partially_failed");
@@ -544,7 +544,7 @@ fn reparse_from_the_source_store_reproduces_the_facts() {
             .all(|row| row.source_id == SourceId::SseSuspension.as_str()),
         "only this adapter's pages are in the fresh index"
     );
-    let replayed = reparse(&fixture.store, &index, &members, day(2008, 7, 10)).unwrap();
+    let replayed = reparse(&fixture.store, &index, &members, day(2008, 7, 1)).unwrap();
     assert_eq!(replayed.snapshot.facts, admitted.snapshot.facts);
     assert_eq!(replayed.not_observed_windows, admitted.not_observed_windows);
     assert_eq!(replayed.counters, admitted.counters);
