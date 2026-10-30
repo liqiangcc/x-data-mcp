@@ -539,6 +539,42 @@ fetch（HTTP，bounded retries，Referer/UA）
 
 数字以本任务 2026-10-15 快照为准；2026-10-26 的 335 个口径同样落在 336 覆盖率内。深市终止上市名单本次未取到，188 个沿用 M2 证据，列入未验证。
 
+### 7.4 PR-3 修复一落位：SSE 名单分页与字段（2026-10-30，XDM-123）
+
+范围：**只改 SSE**。深市 `parse_szse` 的 block 选择是同一取证报告的第二处修复，由后续任务做，
+本任务不碰深市解析（`rows`/`parse_szse` 的深市分支行为不变）。依据是 2026-10-30 的线上真实响应
+取证（`reports/x-data-mcp/a1a2-forensics.md`），不是旧实现反推。
+
+- **分页方言**：`PagingFormat::SsePageHelp` 改发 `pageHelp.pageNo=<n>&pageHelp.pageSize=2000`
+  （新常量 `SSE_PAGE_SIZE`），不再发 `beginPage`/`endPage`；`SSE_PARSER_VERSION` bump 到
+  `exchange-sse-page-v2`，`from_parser_version` 同步，旧快照按旧版本登记、不会被当新方言重放。
+  实测依据：两种分页参数都只回第 1 页同一批 50 行，而 `pageHelp.pageNo=1&pageHelp.pageSize=2000`
+  一次返回全部 1,845 行（`pageCount=1`、`total=1,845`，自洽）。`parse_sse` 的页码读
+  `pageHelp.pageNo`，缺失回退 `beginPage`。
+- **单页 fail-closed**：A-1/A-2 的四个 SSE 计划标记「一次取完」（`AcquisitionPlan::single_page_only`）。
+  第 1 页信封 `pageCount>1` 即失败，错误码 `page_size_ignored`，detail 以
+  `declared total … but collected …` 开头并写明 `pageCount` 与 `pageSize`。**不回退多页循环、
+  不静默去重通过**：分页失效时拿到的只是首页，凑不出窗口总数。`pageCount=1` 的计划只发 1 次
+  请求（既有循环在 `page >= page_count` 处结束）。
+- **字段**：`code_of` 读 `A_STOCK_CODE`，缺失回退 `COMPANY_CODE`；两者都存在且不等 →
+  `source_invalid`（不猜）。`PARSER_VERSION` bump `exchange-a1a2-v1` → `exchange-a1a2-v2`，
+  否则旧快照会按新规则重放。行内 `STOCK_TYPE`/`LIST_DATE`/`DELIST_DATE` 解析不变。
+- **夹具**（`tests/fixtures/exchange-a1a2/`）：四个 SSE 文件按真实字段名
+  （`A_STOCK_CODE`/`COMPANY_CODE`/`COMPANY_ABBR`/`STATE_CODE_STOCK`/`PRODUCT_STATUS`）与真实
+  `pageHelp`（`total` 非 0、`pageNo`/`pageSize=2000`/`pageCount=1`）改写，保留一行对抗性
+  `STOCK_TYPE=2`（B 股）与一行 `DELIST_DATE:"-"`；新增负例 `sse_query_page_ignored.json`
+  （`pageCount=2` 而两页返回完全相同的 50 行 → 断言 `declared total … but collected …`）。
+  README 的 sha 表同提交更新。
+- **文档**：`docs/exchange-source.md` §2/§6 的分页方言与失败码；`docs/data-catalog.md`
+  §3.2 第 6/7 行的 `parser_version` 与分页口径。状态词只用文件开头声明的固定取值
+  （「代码已合并，未部署」），不写部署事实，不改 SLO 门禁与 `docs/STATUS.md`。
+- **影响面（未验证项）**：`derived:risk_warnings`（PR-10）的沪市公告复用同一个
+  `PagingFormat::SsePageHelp`，因此也改发 `pageHelp.pageNo`/`pageSize=2000`。该公告端点
+  本次未重新取证，部署前需在私有栈验证翻页行为；本任务不改 PR-10 代码。
+- **验证**：本机不编译，Rust 正确性只由 PR 的 CI（fmt、clippy `-D warnings`、nextest、
+  export feature）证明；推送前跑 `scripts/check_current_facts.py` 与
+  `prepush_check.py`，输出摘要贴 PR 正文。
+
 ## 8. generation 保留与裁剪
 
 ### 8.1 现状
