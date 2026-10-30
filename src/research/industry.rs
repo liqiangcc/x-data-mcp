@@ -208,7 +208,7 @@ pub fn assignments(c: &Connection, request: &IndustryRequest) -> Result<Industry
         let mut admitted = Vec::with_capacity(candidates.len());
         for row in candidates {
             if report.observe(DATASET_INDUSTRY_ASSIGNMENTS, Some(row_known_at(row)?)) {
-                admitted.push(row);
+                admitted.push(*row);
             }
         }
         assignments.push(answer(
