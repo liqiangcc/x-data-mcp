@@ -512,16 +512,15 @@ impl<'a> Entry<'a> {
             // of paging. The frozen page is still indexed (§3: envelope
             // failures are window verdicts, not index state).
             if plan.single_page_only && envelope.page_count > 1 {
+                let declared = match envelope.total {
+                    Some(total) => total.to_string(),
+                    None => "unknown".to_string(),
+                };
                 let detail = format!(
-                    "declared total {} but collected {} row(s): the source reports pageCount {} \
-                     for a request that sends pageHelp.pageSize; the single-page dialect no \
+                    "declared total {declared} but collected {} row(s): the source reports pageCount \
+                     {} for a request that sends pageHelp.pageSize; the single-page dialect no \
                      longer returns the whole list",
-                    envelope
-                        .total
-                        .map(|total| total.to_string())
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    envelope.rows,
-                    envelope.page_count,
+                    envelope.rows, envelope.page_count,
                 );
                 let mut frozen_page = page_state.frozen.clone();
                 if from_cache {
