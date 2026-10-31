@@ -294,6 +294,70 @@ pub(crate) fn szse_block(value: &Value) -> Result<&Value, ValidateError> {
     }
 }
 
+/// Pick the SZSE block the request declared with `TABKEY`.
+///
+/// The short-name change table (`SSGSGMXX&TABKEY=tab2`) answers with the same
+/// two-block shape as the delisting lists: `tab1` is an empty tab and `tab2`
+/// carries the rows. A consumer that reads "the first block with a `data`
+/// array" therefore reads `tab1`'s zero rows and a whole-market table looks
+/// empty. The declared tab is the request's own selector, so the row array must
+/// come from that block and from nowhere else:
+///
+/// 1. `declared` present: exactly the block whose `metadata.tabkey` equals it; a
+///    response without that block is refused instead of reading another one;
+/// 2. no declaration: the only block with a non-empty `data` array, or the only
+///    block at all (the old single-block shape);
+/// 3. several non-empty blocks and no declaration: fail closed instead of
+///    picking the first.
+///
+/// `a1a2`'s delisting lists use [`szse_block`], whose `tab2` preference is part
+/// of that list's own contract; this function exists for consumers whose request
+/// names its tab, so the parser can never drift from the plan.
+pub(crate) fn szse_block_for<'a>(
+    value: &'a Value,
+    declared: Option<&str>,
+) -> Result<&'a Value, ValidateError> {
+    let blocks = value.as_array().ok_or_else(|| ValidateError::Format {
+        detail: "top level is not an array of blocks".to_string(),
+    })?;
+    if blocks.is_empty() {
+        return Err(ValidateError::Format {
+            detail: "empty block array".to_string(),
+        });
+    }
+    if let Some(declared) = declared.map(str::trim).filter(|tab| !tab.is_empty()) {
+        return blocks
+            .iter()
+            .find(|block| block_tabkey(block) == Some(declared))
+            .ok_or_else(|| ValidateError::Format {
+                detail: format!(
+                    "no block has metadata.tabkey={declared:?}; the request declared that tab, \
+                     refusing to read another block"
+                ),
+            });
+    }
+    let mut non_empty = blocks.iter().filter(|block| {
+        block
+            .get("data")
+            .and_then(Value::as_array)
+            .is_some_and(|data| !data.is_empty())
+    });
+    match (non_empty.next(), non_empty.next()) {
+        (Some(block), None) => Ok(block),
+        (None, _) if blocks.len() == 1 => Ok(&blocks[0]),
+        (None, _) => Err(ValidateError::Format {
+            detail: "no block has a non-empty data array and no tabkey was declared; \
+                     refusing to pick the first block"
+                .to_string(),
+        }),
+        (Some(_), Some(_)) => Err(ValidateError::Format {
+            detail: "several blocks have a non-empty data array and no tabkey was declared; \
+                     refusing to pick one"
+                .to_string(),
+        }),
+    }
+}
+
 fn block_tabkey(block: &Value) -> Option<&str> {
     block
         .get("metadata")

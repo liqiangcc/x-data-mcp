@@ -627,6 +627,37 @@ fetch（HTTP，bounded retries，Referer/UA）
   在同一个 `szse_delisting_main` 项里；断言期望被误写成 8。已改为 7，并保留「每个种类
   的 id 列表都非空」检查；请求数 8 与两页采集断言不变，没有放宽覆盖。
 
+### 7.6 简称/风险警示表按声明 `TABKEY` 选块（2026-10-31，XDM-142）
+
+状态：**代码待合并（Refs #446），未部署**。§7.5 只修了 A-1/A-2 终止上市名单的块选择；
+本次修 PR-10/PR-12 共用的深市简称变更表解析器。
+
+- **问题**：`official_security::risk_warnings::sz_rows` 仍取「第一个带 `data` 数组的块」。
+  真实 `SSGSGMXX`/`TABKEY=tab2` 响应是 `tab1`（暂停上市）`data: []` + `tab2`（简称变更）
+  有行，于是读到空 `tab1` → `changes` 为空 → `derived:security_names` 以 `empty_name_set`
+  失败、`derived:risk_warnings` 写 0 行/`pending_source`。
+- **选块**：新增 `validate::szse_block_for(value, declared)`（不改 §7.5 的
+  `validate::szse_block`/`a1a2` 逻辑）：有声明时必须是 `metadata.tabkey` 等于声明值的块，
+  响应缺该块 → `source_invalid`；无声明时只接受唯一的非空 `data` 块（单块旧形状仍可读），
+  多个非空块 fail-closed。`sz_rows` 不再用 `find_map(first data array)`。
+- **计划到解析器**：`plans()` 的 `TABKEY` 提为 `SZSE_SHORT_NAME_TABKEY`；
+  `acquire_sz_short_name_table` 从 `plan.params` 读声明值并传给 `parse_sz_page`；
+  `szse_declared_tabkey()` 把同一值给两个 replay 入口，`security_names::replay` 走同一
+  `parse_sz_page`，因此 live 与 replay 取同一块。SSE 公告页没有 tab 块，选块声明不适用。
+- **解析器版本**：`risk-warnings-v1` → `risk-warnings-v2`、`security-names-v1` →
+  `security-names-v2`；解析语义变了，证据需可区分。旧版本记录仍可读，本次不回放旧版本。
+- **夹具与测试**：新增两块形状夹具（`tab1` 空 + `tab2` 四行）
+  `exchange-risk-warnings/szse-name-changes-tab1-empty.json`、
+  `exchange-security-names/szse-chain-tab1-empty.json`；断言声明 `tab2` 读到行、两个非空块
+  且无声明时 fail-closed、声明 `tab2` 不存在时 fail-closed、两块全空仍是 `empty_name_set`，
+  并增加 `source_store replay --scope security_names` 读两块冻结页的重建测试。全部离线，
+  不联网。
+- **文档**：`docs/exchange-source.md` §6 新增 PR-10/PR-12 消费者选块说明，
+  `docs/data-catalog.md` 第 9 行补同口径。不部署、不联网、不动生产。
+- **验证**：本机不编译，Rust 正确性只由 PR 的 CI（fmt、clippy `-D warnings`、nextest、
+  export feature）证明；推送前跑 `scripts/check_current_facts.py` 与
+  `prepush_check.py --repo <worktree> --base origin/main`，输出摘要贴 PR 正文。
+
 ## 8. generation 保留与裁剪
 
 ### 8.1 现状

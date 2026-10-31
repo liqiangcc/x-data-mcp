@@ -161,6 +161,19 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
   `derived:security_master` 因此失败时，
   上一版主表保持可读，TDX 日更不受影响。
 
+### 历史 ST / 简称历史消费者（`derived:risk_warnings`、`derived:security_names`）
+
+PR-10/PR-12 的深市简称表（`SSGSGMXX`）计划同样声明 `TABKEY=tab2`，响应也是
+`tab1`（暂停上市）空 + `tab2`（简称变更）有数据的两块形状。两个数据集共用的行解析器
+（`official_security::risk_warnings::parse_sz_page`）不再取「第一个带 `data` 数组的块」：
+声明值从计划读出（`szse_declared_tabkey`）后交给 `validate::szse_block_for`，
+**声明的 `tab2` 必须存在**，否则 `source_invalid`；没有声明时只接受唯一的非空块，
+多个非空块 fail-closed。live 采集与 `source_store replay --scope
+risk_warnings|security_names` 读同一个声明值，所以同一份冻结字节在两条路径上取同一块
+（空 `tab1` 不再把整表读成 0 行）。业务字段 parser 版本 `risk-warnings-v1` →
+`risk-warnings-v2`、`security-names-v1` → `security-names-v2`：解析语义变了，旧证据
+仍可区分，不按新选块语义重放。
+
 ### A-3 停复牌消费者（`derived:suspensions`）
 
 PR-11 起 `derived:suspensions` 的 `confirmed` 分支由 `src/official_security/a3.rs`
