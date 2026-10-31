@@ -35,6 +35,7 @@ use crate::security_master::{
     SecurityLifecycleFact, SuspensionCertainty, SuspensionReason,
 };
 use crate::sqlite_market::calendar::{self, CalendarWrite};
+use crate::sqlite_market::evidence_store;
 use crate::sqlite_market::series::NewSeries;
 use crate::sqlite_market::{security, series};
 use crate::sqlite_tasks::SqliteTasks;
@@ -536,6 +537,111 @@ fn a_set_whose_counters_disagree_with_its_rows_is_refused() {
         "unexpected error: {error}"
     );
     // Nothing was written.
+    assert!(read_suspensions(&fixture.c).unwrap().is_empty());
+    assert!(read_registration(&fixture.c).unwrap().is_none());
+}
+
+/// XDM-134: the two skipped shapes write no row (the DDL forbids
+/// `missing_days = 0`) but must not vanish. The dataset evidence carries both
+/// counters and samples, and the skipped intervals neither split a gap nor add
+/// one.
+#[test]
+fn skipped_confirmed_intervals_are_counted_in_evidence_and_write_no_row() {
+    let fixture = Fixture::new();
+    let weekend = ConfirmedSuspensionFact {
+        exchange: Exchange::Sz,
+        code: "000631".into(),
+        start_day: day(2007, 1, 13),
+        end_day: day(2007, 1, 14),
+        reason: SuspensionReason::ExchangeAnnouncement,
+        known_at: None,
+        source_kind: "exchange_announcement".into(),
+        source_record_id: Some("ann-weekend".into()),
+    };
+    // The fixture calendar ends on 2009-06-05: 06-06..06-08 is not fully
+    // covered, so it defers whole instead of writing 06-06 as a partial count.
+    let past_the_end = ConfirmedSuspensionFact {
+        exchange: Exchange::Sz,
+        code: "000631".into(),
+        start_day: day(2009, 6, 6),
+        end_day: day(2009, 6, 8),
+        reason: SuspensionReason::ExchangeAnnouncement,
+        known_at: None,
+        source_kind: "exchange_announcement".into(),
+        source_record_id: Some("ann-past-end".into()),
+    };
+    let source = suspension_source(Some(ConfirmedSuspensionSnapshot {
+        as_of: day(2009, 6, 9),
+        facts: vec![weekend, past_the_end],
+    }));
+
+    let set = fixture.derive(&source);
+    assert_eq!(set.confirmed_rows, 0);
+    assert_eq!(set.skipped_no_trading_day, 1);
+    assert_eq!(set.deferred_beyond_calendar, 1);
+    assert_eq!(set.gap_rows, 1, "the skipped intervals split nothing");
+    assert_eq!(set.skipped_samples.len(), 1);
+    assert_eq!(set.deferred_samples.len(), 1);
+
+    let written = replace_suspensions(
+        &fixture.c,
+        &set,
+        fixture.binding,
+        "task-suspensions",
+        "derived:suspensions",
+    )
+    .unwrap()
+    .expect("the gap row still registers");
+    assert_eq!(written.record_count, 1);
+    assert_eq!(read_suspensions(&fixture.c).unwrap(), set.rows);
+
+    let (_kind, canonical) =
+        evidence_store::read_evidence(&fixture.c, &written.evidence_digest).unwrap();
+    let evidence: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+    assert_eq!(evidence["skipped_no_trading_day"], 1);
+    assert_eq!(evidence["deferred_beyond_calendar"], 1);
+    // The sample triple is what an operator needs to find the frozen page again.
+    assert_eq!(evidence["skipped_samples"][0]["entity"], "sz.000631");
+    assert_eq!(evidence["skipped_samples"][0]["start_day"], "2007-01-13");
+    assert_eq!(evidence["skipped_samples"][0]["end_day"], "2007-01-14");
+    assert_eq!(
+        evidence["skipped_samples"][0]["source_record_id"],
+        "ann-weekend"
+    );
+    assert_eq!(evidence["deferred_samples"][0]["entity"], "sz.000631");
+    assert_eq!(evidence["deferred_samples"][0]["start_day"], "2009-06-06");
+    assert_eq!(evidence["deferred_samples"][0]["end_day"], "2009-06-08");
+    assert_eq!(
+        evidence["deferred_samples"][0]["source_record_id"],
+        "ann-past-end"
+    );
+}
+
+/// The new skip counters get the same H3 treatment as the row counters: samples
+/// cannot outnumber what the evidence says was skipped.
+#[test]
+fn a_set_whose_skip_samples_outnumber_their_counters_is_refused() {
+    let fixture = Fixture::new();
+    let mut set = fixture.derive(&suspension_source(None));
+    set.deferred_samples
+        .push(crate::security_master::suspensions::SkippedInterval {
+            entity: "sz.000631".into(),
+            start_day: day(2009, 6, 6),
+            end_day: day(2009, 6, 7),
+            source_record_id: None,
+        });
+    let error = replace_suspensions(
+        &fixture.c,
+        &set,
+        fixture.binding,
+        "task-suspensions",
+        "derived:suspensions",
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("skip samples outnumber"),
+        "unexpected error: {error}"
+    );
     assert!(read_suspensions(&fixture.c).unwrap().is_empty());
     assert!(read_registration(&fixture.c).unwrap().is_none());
 }

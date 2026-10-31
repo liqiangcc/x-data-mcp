@@ -1406,8 +1406,9 @@ owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，�
 
 1. 日历为空，或区间未完全落在 `[first_day, last_day]` 内（`start_day < first_day` 或
    `end_day > last_day`）→ `deferred_beyond_calendar`：整行不写、计数、最多 10 条样例；
-   item 成功。**不 clamp `end_day`、不写部分 `missing_days`**；下一次运行日历前进后
-   同一 fact 自然纳入。
+   item 成功。**这条不看区间内有多少交易日**（部分越界的 `10-20..10-29` 即使覆盖内
+   有 7 个交易日也整行 deferred）；**不 clamp `end_day`、不写部分 `missing_days`**；
+   下一次运行日历前进后同一 fact 自然纳入。
 2. 区间完全落在 `[first_day, last_day]` 内且 `trading_days_within == 0` →
    `skipped_no_trading_day`：整行不写、计数、最多 10 条样例；item 成功。没有可交易日
    就没有可交易性影响，不能因为一个周末区间让全市场停牌数据失败。

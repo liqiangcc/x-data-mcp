@@ -25,7 +25,7 @@ use crate::compact_market::{self, Digest, EvidenceKind};
 use crate::market_storage::Error;
 use crate::security_master::suspensions::{
     self, ALGORITHM_VERSION, DATASET_KEY, DATASET_KIND, DIGEST_FORMAT, Error as SuspensionError,
-    SuspensionSet,
+    SkippedInterval, SuspensionSet,
 };
 use crate::security_master::{SuspensionCertainty, SuspensionInterval};
 
@@ -41,6 +41,23 @@ fn sort_rows(rows: &mut [SuspensionInterval]) {
             right.start_day,
         ))
     });
+}
+
+/// Confirmed intervals the domain skipped because the calendar cannot place
+/// them (XDM-134). The counters stay complete; the sample list is already
+/// truncated by the domain, so this only shapes the evidence.
+fn skipped_samples_json(samples: &[SkippedInterval]) -> Vec<serde_json::Value> {
+    samples
+        .iter()
+        .map(|sample| {
+            json!({
+                "entity": sample.entity,
+                "start_day": sample.start_day.format("%Y-%m-%d").to_string(),
+                "end_day": sample.end_day.format("%Y-%m-%d").to_string(),
+                "source_record_id": sample.source_record_id,
+            })
+        })
+        .collect()
 }
 
 /// Replace the whole suspension dataset and register its version, in the
@@ -96,6 +113,18 @@ pub(crate) fn replace_suspensions(
              evidence that does not describe the stored rows",
         ));
     }
+    // XDM-134: a skipped interval has no row, so the H3 reconciliation above
+    // cannot see it. The samples must still be a subset of what was counted,
+    // otherwise the stored evidence claims samples for intervals it did not
+    // skip.
+    if set.deferred_samples.len() > set.deferred_beyond_calendar
+        || set.skipped_samples.len() > set.skipped_no_trading_day
+    {
+        return Err(integrity(
+            "suspension skip samples outnumber their counters; refusing to register \
+             evidence that does not describe the skipped intervals",
+        ));
+    }
 
     c.execute("DELETE FROM suspension_intervals", [])
         .map_err(storage)?;
@@ -119,6 +148,13 @@ pub(crate) fn replace_suspensions(
         // §7.3: single-day holes and long outages stay countable apart.
         "single_day_gap_rows": single_day_gap_rows,
         "multi_day_gap_rows": multi_day_gap_rows,
+        // XDM-134: confirmed intervals that wrote no row because the calendar
+        // cannot place them. Counted and sampled so a deferred weekend or an
+        // interval past `last_day` is visible instead of silently absent.
+        "deferred_beyond_calendar": set.deferred_beyond_calendar,
+        "deferred_samples": skipped_samples_json(&set.deferred_samples),
+        "skipped_no_trading_day": set.skipped_no_trading_day,
+        "skipped_samples": skipped_samples_json(&set.skipped_samples),
         "gap_missing_days": rows
             .iter()
             .filter(|row| row.certainty == SuspensionCertainty::UnresolvedGap)
