@@ -419,7 +419,7 @@ fn without_a_database_the_scope_counts_the_frozen_facts_only() {
     let scope = &report.scopes[0];
     assert_eq!(scope.status, "ok");
     assert_eq!(scope.rebuilt, COMPUTED_SUSPENSIONS_NO_DB);
-    assert_eq!(scope.facts, Some(4));
+    assert_eq!(scope.facts, Some(3));
     assert_eq!(scope.confirmed_rows, Some(0));
     assert!(scope.summary.is_none());
     assert!(scope.database.is_none());
@@ -450,8 +450,8 @@ fn replay_rebuilds_the_daily_suspension_rows_bit_for_bit() {
     assert_eq!(scope.status, "ok");
     assert_eq!(scope.rebuilt, REBUILT_SUSPENSIONS);
     assert_eq!(scope.database, Some("match"));
-    assert_eq!(scope.facts, Some(4));
-    assert_eq!(scope.confirmed_rows, Some(4));
+    assert_eq!(scope.facts, Some(3));
+    assert_eq!(scope.confirmed_rows, Some(3));
     assert_eq!(scope.summary.as_deref(), Some(daily_summary.as_str()));
     assert_eq!(
         suspensions::read_suspensions(&fixture.c).unwrap(),

@@ -1628,7 +1628,7 @@ item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其�
   文档与 usage 都明确写「先主表/日历，再 replay suspensions，或直接跑日更」。
 
 **测试（CI，不联网）**：冻结页 → facts 计数；`--db` 装配的行与日更写入逐位一致；
-`--verify-only` `match` → 改库输入后 `drift`/`inputs_changed`；库缺日历 →
+`--verify-only` `match` → 改库输入后 `drift`/`inputs_changed`；库缺主表或日历 →
 `suspension_replay_not_ready` 且不写；未知 `parser_version` → fail-closed；空库 /
 无 `sse_suspension` 记录 → `store_empty`/`nothing_selected` 不碰库。
 
