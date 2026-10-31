@@ -22,6 +22,7 @@ pub fn run_once(
     market: &crate::sqlite_market::backend::MarketBackend,
     market_source: Option<&crate::official_market::TdxMarketSource>,
     generation_source: Option<&GenerationSource>,
+    policy: crate::source_store::Policy,
 ) -> Result<Option<TaskSnapshot>, Error> {
     let Some(candidate) = control
         .repository
@@ -295,12 +296,15 @@ pub fn run_once(
             .map(|session| session.source().manifest_sha256().to_string())
             .unwrap_or_default();
         crate::data_supply::derived::run(
-            market,
-            session.as_ref(),
-            &generation_id,
-            &manifest,
-            &candidate.task.task_id,
-            &control.run_id,
+            &crate::data_supply::derived::RunContext {
+                market,
+                session: session.as_ref(),
+                generation_id: &generation_id,
+                generation_manifest_sha256: &manifest,
+                task_id: &candidate.task.task_id,
+                run_id: &control.run_id,
+                policy,
+            },
             &derived,
         )?;
     }

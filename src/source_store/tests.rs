@@ -249,3 +249,96 @@ fn a_final_line_without_newline_is_torn_even_when_it_parses() {
     assert_eq!(error.code(), "manifest_torn_tail");
     assert!(error.to_string().contains("line 1"), "{error}");
 }
+
+// --- Policy resolution (`silent-path #446` §14.5) -------------------------
+//
+// The four same-source derived items all resolve `X_DATA_MCP_SOURCE_STORE`
+// through `configured`. These tests pin the two policies, the empty-store rule
+// and the explicit development exemption. `CONFIG_ENV` and
+// `ALLOW_UNCONFIGURED_ENV` are process-global, so every test that touches them
+// holds `TEST_ENV_LOCK`.
+
+#[test]
+fn optional_without_the_variable_keeps_the_pending_answer() {
+    let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = PolicyEnv::set(None, false);
+    assert!(
+        configured(Policy::Optional).unwrap().is_none(),
+        "stdio/tests/legacy keep `pending_source`"
+    );
+}
+
+#[test]
+fn required_without_the_variable_is_unconfigured() {
+    let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = PolicyEnv::set(None, false);
+    let error = configured(Policy::Required).unwrap_err();
+    assert_eq!(error.code(), "source_store_unconfigured");
+    assert_eq!(UNCONFIGURED_CODE, "source_store_unconfigured");
+    let text = error.to_string();
+    assert!(
+        text.starts_with("source_store_unconfigured: "),
+        "the stable code leads the text so v2 truncation keeps it: {text}"
+    );
+    assert!(text.contains(CONFIG_ENV), "{text}");
+}
+
+#[test]
+fn required_accepts_a_readable_empty_store() {
+    let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    // No `manifest.jsonl`, no blobs: a fresh deployment's first store. Strict
+    // checks readability, not entries (requiring entries would deadlock the
+    // first run).
+    let _env = PolicyEnv::set(Some(dir.path()), false);
+    let store = configured(Policy::Required)
+        .unwrap()
+        .expect("an existing empty store is configured");
+    assert_eq!(store.root(), dir.path());
+    assert!(!store.has_entries().unwrap());
+}
+
+#[test]
+fn required_rejects_a_path_that_is_not_a_store_directory() {
+    let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-such-store");
+    {
+        let _env = PolicyEnv::set(Some(&missing), false);
+        let error = configured(Policy::Required).unwrap_err();
+        assert_eq!(error.code(), "source_store_unconfigured");
+        assert!(error.to_string().contains("not a readable source store"));
+    }
+    let file = dir.path().join("a-file");
+    fs::write(&file, b"not a store").unwrap();
+    let _env = PolicyEnv::set(Some(&file), false);
+    let error = configured(Policy::Required).unwrap_err();
+    assert!(
+        error.detail().contains("not a directory"),
+        "{}",
+        error.detail()
+    );
+}
+
+#[test]
+fn the_dev_override_turns_required_back_into_pending() {
+    let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let unconfigured = PolicyEnv::set(None, true);
+    assert!(
+        configured(Policy::Required).unwrap().is_none(),
+        "the explicit dev exemption keeps the four items pending_source"
+    );
+    // The operator-visible notice is what makes the exemption non-silent.
+    assert!(OVERRIDE_NOTICE.contains("non-production override"));
+    assert!(OVERRIDE_NOTICE.contains(ALLOW_UNCONFIGURED_ENV));
+    // A configured-but-unreadable path is not covered by the exemption: the
+    // exemption is about a *missing* variable, not a broken deployment.
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-such-store");
+    drop(unconfigured);
+    let _env = PolicyEnv::set(Some(&missing), true);
+    assert_eq!(
+        configured(Policy::Required).unwrap_err().code(),
+        "source_store_unconfigured"
+    );
+}

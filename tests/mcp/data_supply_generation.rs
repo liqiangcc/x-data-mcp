@@ -183,6 +183,7 @@ fn acceptance_freezes_source_generation_id_and_worker_reads_it() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         None,
         Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -231,6 +232,7 @@ fn missing_and_null_bindings_refuse_the_source() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         None,
         Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -280,6 +282,7 @@ fn missing_and_null_bindings_refuse_the_source() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market2.clone()),
         None,
         Some(&empty_generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -425,6 +428,7 @@ fn yearly_derivation_runs_against_bound_generation() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         None,
         Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -459,6 +463,7 @@ fn yearly_derivation_runs_against_bound_generation() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         None,
         Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -519,6 +524,7 @@ fn yearly_derivation_without_binding_refuses() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         None,
         Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -548,6 +554,7 @@ fn yearly_derivation_without_binding_refuses() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         None,
         Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -684,10 +691,15 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
     control
         .accept("req-daily", control_key(&supply), daily_payload("600006"))
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &backend,
+        None,
+        Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     let scope = Scope {
         symbol: "sh.600006".into(),
@@ -757,10 +769,15 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
         bound.source.manifest_sha256()
     );
 
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &backend,
+        None,
+        Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
 
     // The new head is a fresh immutable version bound to generation B,
@@ -862,10 +879,15 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     )
     .unwrap();
     let run_task = |control: &TaskControl<SqliteTasks>| {
-        let done =
-            x_data_mcp::data_supply::worker::run_once(control, &backend, None, Some(&generation))
-                .unwrap()
-                .unwrap();
+        let done = x_data_mcp::data_supply::worker::run_once(
+            control,
+            &backend,
+            None,
+            Some(&generation),
+            x_data_mcp::source_store::Policy::Optional,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     };
     let scope = Scope {
@@ -1030,10 +1052,15 @@ fn explicit_daily_update_rewrites_history_on_compact() {
     control
         .accept("req-daily", control_key(&supply), daily_payload("600006"))
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &backend,
+        None,
+        Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     let scope = Scope {
         symbol: "sh.600006".into(),
@@ -1051,10 +1078,15 @@ fn explicit_daily_update_rewrites_history_on_compact() {
             json!({"items":[{"symbol":"sh.600006","base_version_id":base_id,"start_date":day,"end_date":day}]}),
         )
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &backend,
+        None,
+        Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
 
     // The rewrite advanced the head to a new immutable version whose
@@ -1172,10 +1204,15 @@ fn explicit_daily_update_rewrite_dropping_base_date_fails_closed() {
     control
         .accept("req-daily", control_key(&supply), daily_payload("600006"))
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &backend,
+        None,
+        Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
     let scope = Scope {
         symbol: "sh.600006".into(),
@@ -1193,10 +1230,15 @@ fn explicit_daily_update_rewrite_dropping_base_date_fails_closed() {
             json!({"items":[{"symbol":"sh.600006","base_version_id":base_id,"start_date":day,"end_date":day}]}),
         )
         .unwrap();
-    let done =
-        x_data_mcp::data_supply::worker::run_once(&control, &backend, None, Some(&generation))
-            .unwrap()
-            .unwrap();
+    let done = x_data_mcp::data_supply::worker::run_once(
+        &control,
+        &backend,
+        None,
+        Some(&generation),
+        x_data_mcp::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
         done.task.status,
         Status::Failed,

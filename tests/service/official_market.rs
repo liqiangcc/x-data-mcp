@@ -1060,6 +1060,7 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         Some(&src),
         None,
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
@@ -1173,6 +1174,7 @@ fn non_daily_collection_items_remain_blocked() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         Some(&src),
         None,
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap();
     let task = market.task(&cat_task.task.task_id).unwrap();
@@ -1202,6 +1204,7 @@ fn non_daily_collection_items_remain_blocked() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
         Some(&src),
         None,
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap();
     let task = market.task(&l_task.task.task_id).unwrap();

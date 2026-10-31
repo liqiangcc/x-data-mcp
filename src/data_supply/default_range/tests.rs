@@ -791,7 +791,8 @@ fn official_provider_keeps_default_execution_fail_closed() {
             &ctl,
             &crate::sqlite_market::backend::MarketBackend::Legacy(db.clone()),
             None,
-            None
+            None,
+            crate::source_store::Policy::Optional,
         ),
         Ok(None)
     ));

@@ -88,7 +88,7 @@ use crate::security_master::suspensions::{
     ConfirmedSuspensionFact, ConfirmedSuspensionSnapshot, DATASET_KIND,
 };
 use crate::security_master::{Exchange, SecurityLifecycleFact, SuspensionReason};
-use crate::source_store::{SourceStore, StoreError};
+use crate::source_store::{Policy, SourceStore, StoreError};
 
 /// Business-field parser version of this adapter. Like A-1/A-2 it is registered
 /// on the derived item's outcome evidence, not on the manifest (replay only
@@ -97,7 +97,7 @@ use crate::source_store::{SourceStore, StoreError};
 pub const PARSER_VERSION: &str = "exchange-a3-v1";
 
 /// Environment variable naming the deployment's source store (§9.4.1).
-pub const SOURCE_STORE_ENV: &str = "X_DATA_MCP_SOURCE_STORE";
+pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
 
 /// SSE `commonSoaQuery.do` endpoint (the structured tables, not the `sseQuery`
 /// list service A-1/A-2 use).
@@ -347,16 +347,24 @@ pub enum RunSource {
 
 /// Resolve the deployment's source store and fetch client, then acquire.
 ///
-/// Not configured is *not* a fetch failure: the item keeps the gap-only result
-/// and records `pending_source`, so a deployment without the M3 source store
-/// does not fail its daily run. A configured store whose fetch fails is a real
+/// Under [`Policy::Optional`] not configured is *not* a fetch failure: the item
+/// keeps the gap-only result and records `pending_source`. Under
+/// [`Policy::Required`] (ops entry on a compact backend) a missing or unreadable
+/// store fails the item with `source_store_unconfigured` instead of leaving a
+/// silent gap-only success. A configured store whose fetch fails is a real
 /// failure and reaches the item as such (§10.1).
 pub fn run_source(
     market: &crate::sqlite_market::backend::MarketBackend,
     facts: &[SecurityLifecycleFact],
     today: NaiveDate,
+    policy: Policy,
 ) -> Result<RunSource, A3Error> {
-    let Some(root) = std::env::var_os(SOURCE_STORE_ENV) else {
+    let Some(store) =
+        crate::source_store::configured(policy).map_err(|error| A3Error::Invalid {
+            code: error.code(),
+            detail: error.detail().to_string(),
+        })?
+    else {
         return Ok(RunSource::Pending(PendingSource {
             dataset: DATASET_KIND,
             source: "exchange_suspension_event",
@@ -365,7 +373,6 @@ pub fn run_source(
                      missing bar stays an unresolved_gap",
         }));
     };
-    let store = SourceStore::new(root);
     let client = Client::helper()?;
     Ok(RunSource::Admitted(acquire(
         &store, market, &client, facts, today,

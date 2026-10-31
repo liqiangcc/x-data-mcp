@@ -493,10 +493,15 @@ fn listed_ever_scope_resolves_master_intersection_and_skips_existing_heads() {
     }
 
     // The v2 task executes through the same runner as v1.
-    let done =
-        crate::data_supply::worker::run_once(&control, &f.backend, None, Some(&f.generation))
-            .unwrap()
-            .unwrap();
+    let done = crate::data_supply::worker::run_once(
+        &control,
+        &f.backend,
+        None,
+        Some(&f.generation),
+        crate::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
 
     // Every resolved entity now has a head, so the same scope is a no-op.

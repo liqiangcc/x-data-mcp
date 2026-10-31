@@ -10,6 +10,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Err("data_service requires Linux owner-only IPC".into())
 }
 #[cfg(target_os = "linux")]
+use x_data_mcp::{source_store::Policy, sqlite_market::backend::MarketBackend};
+
+#[cfg(target_os = "linux")]
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     use std::{
         path::PathBuf,
@@ -132,6 +135,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let backend =
         x_data_mcp::sqlite_market::backend::MarketBackend::open_shared(&tasks, lease.clone())?;
     backend.tasks().candidates(&run_id)?;
+    // Issue #446, silent-path (2a, owner 2026-10-31): the ops entry on a
+    // compact backend is the production form, so its four same-source derived
+    // items must fail (not silently write zero rows) when
+    // `X_DATA_MCP_SOURCE_STORE` is missing or unreadable. Every other
+    // constructor keeps `Optional`: stdio/tests and the legacy backend stay
+    // `pending_source`. This is not a startup gate; the first run reports it.
+    let source_store_policy = source_store_policy(has_ops, &backend);
     // Plan-run tasks left non-terminal by a previous process close as
     // `interrupted` here: their chunk-committed work is durable and the
     // unfinished set is re-planned. Explicit update_data and all other
@@ -203,7 +213,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Access::local(),
                 generation.clone(),
             )
-            .map(|api| api.with_entry(entry).with_worker_gate(gate.clone()))
+            .map(|api| {
+                api.with_entry(entry)
+                    .with_source_store_policy(source_store_policy)
+                    .with_worker_gate(gate.clone())
+            })
             .map_err(std::io::Error::other)
         }
     };
@@ -222,4 +236,40 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = monitor.join();
     result?;
     Ok(())
+}
+
+/// Strict trigger surface (owner decision 2a, `silent-path #446` §14.5): only
+/// the ops entry of the service on a compact backend is the production form.
+/// Stdio, tests, `research`/`maint` and the legacy backend keep `Optional`, so
+/// an unconfigured store stays `pending_source` there. Not a startup gate; the
+/// first run reports the missing store through the four item failures.
+#[cfg(target_os = "linux")]
+fn source_store_policy(has_ops: bool, backend: &MarketBackend) -> Policy {
+    match backend {
+        MarketBackend::Compact(_) if has_ops => Policy::Required,
+        _ => Policy::Optional,
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_ops_entry_on_a_compact_backend_is_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = x_data_mcp::sqlite_tasks::SqliteTasks::new(dir.path().join("m.sqlite"));
+        tasks.initialize_compact().unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let compact = MarketBackend::open(&tasks).unwrap();
+        assert!(matches!(compact, MarketBackend::Compact(_)));
+        assert_eq!(source_store_policy(true, &compact), Policy::Required);
+        assert_eq!(source_store_policy(false, &compact), Policy::Optional);
+        let legacy = MarketBackend::Legacy(x_data_mcp::sqlite_market::SqliteMarket::new(tasks));
+        assert_eq!(source_store_policy(true, &legacy), Policy::Optional);
+        assert_eq!(source_store_policy(false, &legacy), Policy::Optional);
+    }
 }

@@ -123,21 +123,38 @@ pub fn item_specs(
     items
 }
 
+/// Everything one internal-item run needs, frozen once per worker turn.
+///
+/// A struct rather than a long positional argument list (the PR-9
+/// `WholeMarket` shape): the source-store `policy` was the argument that made
+/// `run` exceed clippy's seven-argument limit, and a struct means the next
+/// run-wide fact cannot silently shift a positional argument. The item list
+/// stays separate because it is the loop's subject, not run-wide context.
+pub struct RunContext<'a, 's> {
+    pub market: &'a MarketBackend,
+    pub session: Option<&'a MaterializeSession<'s>>,
+    pub generation_id: &'a str,
+    pub generation_manifest_sha256: &'a str,
+    pub task_id: &'a str,
+    pub run_id: &'a str,
+    pub policy: crate::source_store::Policy,
+}
+
 /// Execute every pending internal item of `items`, then close the execution.
 ///
 /// The caller appended these items to the running task before the entity
 /// items started (see `worker::run_once`), so the task cannot reach a
 /// terminal status ahead of them. Items already finished (a resumed run) are
 /// skipped; a terminal or cancelled task stops the loop.
-pub fn run(
-    market: &MarketBackend,
-    session: Option<&MaterializeSession<'_>>,
-    generation_id: &str,
-    generation_manifest_sha256: &str,
-    task_id: &str,
-    run_id: &str,
-    items: &[ItemSpec],
-) -> Result<(), Error> {
+pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
+    // The remaining run-wide facts travel to `execute` through `ctx`.
+    let RunContext {
+        market,
+        session,
+        task_id,
+        run_id,
+        ..
+    } = *ctx;
     // `security_facts` reads and parses `base.dbf`; the main table and the
     // suspension binding both need the same member facts, so one worker turn
     // parses them at most once (issue-391 §12.1).
@@ -191,19 +208,8 @@ pub fn run(
             check_delisted_series(market, spec)
         } else {
             match session {
-                Some(session) => execute(
-                    market,
-                    session,
-                    generation_id,
-                    generation_manifest_sha256,
-                    task_id,
-                    run_id,
-                    item,
-                    revision,
-                    &source_cache,
-                    &run_cache,
-                )
-                .map_err(ItemFailure::Plain),
+                Some(_) => execute(ctx, item, revision, &source_cache, &run_cache)
+                    .map_err(ItemFailure::Plain),
                 None => Err(ItemFailure::Plain(Error::Invalid(format!(
                     "{} needs a verified official source; none is installed for this run",
                     item.item_id
@@ -347,19 +353,27 @@ fn check_delisted_series(market: &MarketBackend, item: &ItemSpec) -> Result<Valu
 
 /// One internal item's acquisition + commit, returning the evidence recorded
 /// on its outcome row.
-#[allow(clippy::too_many_arguments)]
 fn execute(
-    market: &MarketBackend,
-    session: &MaterializeSession<'_>,
-    generation_id: &str,
-    generation_manifest_sha256: &str,
-    task_id: &str,
-    run_id: &str,
+    ctx: &RunContext,
     item: &ItemSpec,
     expected_task_revision: u64,
     source_cache: &RefCell<Option<DatasetSource>>,
     run_cache_cell: &RefCell<Option<Arc<RunCache>>>,
 ) -> Result<Value, Error> {
+    let RunContext {
+        market,
+        session: Some(session),
+        generation_id,
+        generation_manifest_sha256,
+        task_id,
+        run_id,
+        policy,
+    } = *ctx
+    else {
+        return Err(Error::Integrity(
+            "a derived item needs the run's verified source session".into(),
+        ));
+    };
     if let Some(entity) = task_control::derived::index_entity(&item.item_id) {
         let index = session
             .index_batch(entity)
@@ -438,28 +452,32 @@ fn execute(
         let spans = market.raw_bar_spans()?;
         let mut candidates = assembly::detect_candidate_migrations(&spans);
         // A-1/A-2 (issue-446 §7, D-45/D-46): the exchange branch is an admitted
-        // snapshot when the process has a source store configured, otherwise
-        // it stays `pending_source` and the TDX facts are what gets written.
-        // A configured source that cannot be fetched fails this item; the
-        // previously committed master version stays readable (§6.3).
-        let (exchange, exchange_evidence) = match crate::official_security::a1a2::run_source(market)
-            .map_err(|error| {
+        // snapshot when the process has a source store configured. Without one,
+        // the item keeps `pending_source` under `Policy::Optional` (stdio,
+        // tests, non-ops) and fails with `source_store_unconfigured` under
+        // `Policy::Required` (the ops entry of `data_service` on compact), so
+        // the production form cannot silently write a zero-exchange master
+        // (`silent-path #446` §14.5). A configured source that cannot be
+        // fetched fails this item; the previously committed master version
+        // stays readable (§6.3) either way.
+        let (exchange, exchange_evidence) =
+            match crate::official_security::a1a2::run_source(market, policy).map_err(|error| {
                 Error::Invalid(format!(
                     "exchange listing/delisting source: {}: {error}",
                     error.code()
                 ))
             })? {
-            crate::official_security::a1a2::RunSource::Pending(pending) => {
-                (assembly::ExchangeSource::Pending(pending), Value::Null)
-            }
-            crate::official_security::a1a2::RunSource::Admitted(admitted) => {
-                let evidence = admitted.evidence();
-                // The candidate migration of D-46 is a recorded lead, never
-                // dedup truth (§7.1).
-                candidates.extend(crate::official_security::a1a2::candidate_migrations());
-                (assembly::exchange_source(Some(admitted.snapshot)), evidence)
-            }
-        };
+                crate::official_security::a1a2::RunSource::Pending(pending) => {
+                    (assembly::ExchangeSource::Pending(pending), Value::Null)
+                }
+                crate::official_security::a1a2::RunSource::Admitted(admitted) => {
+                    let evidence = admitted.evidence();
+                    // The candidate migration of D-46 is a recorded lead, never
+                    // dedup truth (§7.1).
+                    candidates.extend(crate::official_security::a1a2::candidate_migrations());
+                    (assembly::exchange_source(Some(admitted.snapshot)), evidence)
+                }
+            };
         let assembled = assembly::assemble_security_master(
             &snapshot.facts.lifecycle,
             &snapshot.facts.arrangements,
@@ -511,11 +529,14 @@ fn execute(
         // name source; SH/BJ are `NOT_AVAILABLE` and write no row. The adapter
         // shares PR-10's frozen entry and parse, so both items read one frozen
         // table per run. Without the source store the item stays
-        // `pending_source` (0 rows); a configured store that cannot be fetched
-        // fails this item and leaves the previous version readable.
+        // `pending_source` (0 rows) under `Optional` and fails with
+        // `source_store_unconfigured` under `Required`; a configured store that
+        // cannot be fetched fails this item either way and leaves the previous
+        // version readable.
         match crate::official_security::security_names::run_source(
             market,
             run_cache(run_cache_cell),
+            policy,
         )
         .map_err(|error| {
             Error::Invalid(format!(
@@ -563,13 +584,17 @@ fn execute(
     if item.item_id == task_control::derived::RISK_WARNINGS {
         let started = std::time::Instant::now();
         let source = dataset_source(session, source_cache)?;
-        match crate::official_security::risk_warnings::run_source(market, run_cache(run_cache_cell))
-            .map_err(|error| {
-                Error::Invalid(format!(
-                    "historical ST/risk-warning source: {}: {error}",
-                    error.code()
-                ))
-            })? {
+        match crate::official_security::risk_warnings::run_source(
+            market,
+            run_cache(run_cache_cell),
+            policy,
+        )
+        .map_err(|error| {
+            Error::Invalid(format!(
+                "historical ST/risk-warning source: {}: {error}",
+                error.code()
+            ))
+        })? {
             crate::official_security::risk_warnings::RunSource::Pending(pending) => {
                 let pending = vec![pending];
                 return Ok(json!({
@@ -615,12 +640,15 @@ fn execute(
         // is an admitted source; the SZSE side has no `confirmed` source, so an
         // SZ gap stays `unresolved_gap` and SZ tradability stays `unknown`.
         // Without the source store the branch stays `pending_source` (gap-only,
-        // the pre-PR-11 behaviour); a configured source that cannot be fetched
-        // fails this item so no `confirmed` row is written (§6.3/§10.1).
+        // the pre-PR-11 behaviour) under `Optional` and fails with
+        // `source_store_unconfigured` under `Required`; a configured source
+        // that cannot be fetched fails this item so no `confirmed` row is
+        // written (§6.3/§10.1).
         let (seam, exchange_evidence) = match crate::official_security::a3::run_source(
             market,
             &inputs.intervals,
             Utc::now().date_naive(),
+            policy,
         )
         .map_err(|error| {
             Error::Invalid(format!(

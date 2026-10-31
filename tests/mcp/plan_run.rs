@@ -351,6 +351,42 @@ impl Drop for PrepareWorkersEnv {
         }
     }
 }
+/// Unsets `X_DATA_MCP_SOURCE_STORE` for one test (the strict-policy case) and
+/// restores it afterwards. `ENV_LOCK` must be held: the initializer is
+/// process-global.
+struct SourceStoreEnv {
+    config: Option<std::ffi::OsString>,
+    allow: Option<std::ffi::OsString>,
+}
+impl SourceStoreEnv {
+    fn unset() -> Self {
+        let config_key = x_data_mcp::source_store::CONFIG_ENV;
+        let allow_key = x_data_mcp::source_store::ALLOW_UNCONFIGURED_ENV;
+        unsafe {
+            let config = std::env::var_os(config_key);
+            let allow = std::env::var_os(allow_key);
+            std::env::remove_var(config_key);
+            std::env::remove_var(allow_key);
+            Self { config, allow }
+        }
+    }
+}
+impl Drop for SourceStoreEnv {
+    fn drop(&mut self) {
+        let config_key = x_data_mcp::source_store::CONFIG_ENV;
+        let allow_key = x_data_mcp::source_store::ALLOW_UNCONFIGURED_ENV;
+        unsafe {
+            match &self.config {
+                Some(value) => std::env::set_var(config_key, value),
+                None => std::env::remove_var(config_key),
+            }
+            match &self.allow {
+                Some(value) => std::env::set_var(allow_key, value),
+                None => std::env::remove_var(allow_key),
+            }
+        }
+    }
+}
 /// Counts `UPDATE tasks` statements on the compact writer connection —
 /// the regression signature of PLANRUN-COMMIT-COST (the pre-fix path
 /// wrote the `frozen_work_json`-sized task row ~2× per item).
@@ -453,6 +489,23 @@ fn rig_full(
             )
         })
         .collect();
+    rig_from_members(members, day_members, include_derived, delisting)
+}
+
+/// The `.day` bytes of one generation: records only, like `day_member` (the
+/// member format carries no count header).
+fn day_member_bytes(records: &[[u8; 32]]) -> Vec<u8> {
+    records.concat()
+}
+
+/// `rig_full` with the entity `.day` members supplied by the caller, so a test
+/// can make generation N+1 contain generation N's bars byte-for-byte.
+fn rig_from_members(
+    members: &[(&str, &str, u32)],
+    day_members: Vec<(String, Vec<u8>)>,
+    include_derived: bool,
+    delisting: Option<(&str, u32)>,
+) -> Rig {
     let refs: Vec<(&str, &[u8])> = day_members
         .iter()
         .map(|(n, b)| (n.as_str(), b.as_slice()))
@@ -1004,6 +1057,211 @@ fn internal_derived_item_failure_marks_the_run_partially_failed() {
             item["item_id"]
                 .as_str()
                 .is_some_and(|id| id.starts_with("derived:")),
+            "{item}"
+        );
+    }
+}
+
+/// `silent-path #446` §14.5 (owner 2a): on the production form
+/// (`Policy::Required`, as `data_service --entry ops` sets for a compact
+/// backend) a missing source store fails the four same-source derived items and
+/// the run ends `partially_failed`; the entity daily items still commit and the
+/// previously committed main table stays the readable latest one.
+#[test]
+fn strict_without_a_source_store_fails_the_four_items_and_keeps_the_master() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = SourceStoreEnv::unset();
+    // One captured "today" feeds both the fixture dates and the expected
+    // `market_series.last_day`, so a Shanghai midnight between the two cannot
+    // shift one side by a day.
+    let today = x_data_mcp::calendar::shanghai_date(Utc::now());
+    let date = |days: i64| today - chrono::Duration::days(days);
+    let ymd = |d: chrono::NaiveDate| d.format("%Y%m%d").to_string().parse::<u32>().unwrap();
+    // `market_series.last_day` stores days since the Unix epoch, not `YYYYMMDD`.
+    let epoch = |d: chrono::NaiveDate| {
+        (d - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days()
+    };
+    // The rig's index members carry a three-day window (`date(3)..date(1)`);
+    // the entity members stay inside it, so the `derived:calendar` item of
+    // both generations sees every stored bar inside the calendar (a 27th bar
+    // from a three-day-first-generation would sit outside and fail for a
+    // fixture reason, not a policy reason).
+    let d3 = day_record(ymd(date(3)), [1128, 1130, 1125, 1129], 0.0, 100);
+    let d2 = day_record(ymd(date(2)), [1129, 1132, 1128, 1131], 0.0, 110);
+    let d1 = day_record(ymd(date(1)), [1131, 1135, 1130, 1134], 0.0, 120);
+    let member = |records: &[[u8; 32]]| day_member_bytes(records);
+    // Run 1 (default `Optional`): a normal daily run commits the main table.
+    let gen1 = [
+        ("sh".to_string(), "600006".to_string(), member(&[d3, d2])),
+        ("sz".to_string(), "000002".to_string(), member(&[d3, d2])),
+    ];
+    let day_members = gen1
+        .iter()
+        .map(|(ex, code, bytes)| (format!("{ex}\\lday\\{ex}{code}.day"), bytes.clone()))
+        .collect();
+    let r = rig_from_members(
+        &[
+            ("sh", "600006", ymd(date(2))),
+            ("sz", "000002", ymd(date(2))),
+        ],
+        day_members,
+        true,
+        None,
+    );
+    let p1 = plan(&r.api, "market.daily");
+    assert_eq!(p1["counts"]["eligible"], 2, "{p1}");
+    run(&r.api, "market.daily", "run-optional", &p1);
+    r.api.call("run_worker_once", json!({})).unwrap();
+
+    let c = rusqlite::Connection::open(r.tasks.path()).unwrap();
+    let master_version = |c: &rusqlite::Connection| -> (String, i64) {
+        c.query_row(
+            "SELECT (SELECT version_id FROM derived_dataset_versions \
+                     WHERE dataset_kind='security_master'), \
+                    (SELECT count(*) FROM security_master)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+    };
+    let head_day = |c: &rusqlite::Connection| -> i64 {
+        c.query_row(
+            "SELECT last_day FROM market_series \
+             WHERE entity='sh.600006' AND period=1 AND adjustment=1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let (before_version, before_rows) = master_version(&c);
+    assert_eq!(before_version.len(), 64, "run 1 registered the main table");
+    assert!(before_rows > 0);
+    assert_eq!(
+        head_day(&c),
+        epoch(date(2)),
+        "run 1's head is its fixture day"
+    );
+
+    // Run 2: the production policy, a newer generation, and no source store.
+    let members = [
+        ("sh", "600006", ymd(date(1))),
+        ("sz", "000002", ymd(date(1))),
+    ];
+    let day_members: Vec<(String, Vec<u8>)> = members
+        .iter()
+        .map(|(ex, code, _)| {
+            (
+                format!("{ex}\\lday\\{ex}{code}.day"),
+                day_member_bytes(&[d3, d2, d1]),
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, &[u8])> = day_members
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+        .collect();
+    let snap = snapshot_with_delisting(&refs, &members, true, None);
+    let source =
+        x_data_mcp::official_market::TdxMarketSource::inspect(&snap.root, &snap.manifest, now())
+            .unwrap();
+    let strict = DataApi::new_with_backend(
+        r.tasks.clone(),
+        r.backend.clone(),
+        "run".into(),
+        Access::local(),
+        None,
+    )
+    .unwrap()
+    .with_market_source(source)
+    .with_source_store_policy(x_data_mcp::source_store::Policy::Required);
+    let p2 = plan(&strict, "market.daily");
+    assert_eq!(p2["counts"]["eligible"], 2, "{p2}");
+    let accepted = run(&strict, "market.daily", "run-strict", &p2);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    strict.call("run_worker_once", json!({})).unwrap();
+
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::PartiallyFailed,
+        "{:?}",
+        task.task.result
+    );
+    // The four same-source items each fail with the stable code; no other
+    // derived item inherits the failure.
+    let four = [
+        x_data_mcp::task_control::derived::SECURITY_MASTER,
+        x_data_mcp::task_control::derived::SUSPENSIONS,
+        x_data_mcp::task_control::derived::SECURITY_NAMES,
+        x_data_mcp::task_control::derived::RISK_WARNINGS,
+    ];
+    let mut failed: Vec<(String, Option<String>)> = Vec::new();
+    for item in &task.items {
+        let Some(outcome) = item.outcome.as_ref() else {
+            continue;
+        };
+        if outcome.success {
+            continue;
+        }
+        failed.push((item.spec.item_id.clone(), outcome.error.clone()));
+    }
+    assert_eq!(
+        failed.len(),
+        four.len(),
+        "only the four same-source items fail: {failed:#?}"
+    );
+    for id in four {
+        let item = task
+            .items
+            .iter()
+            .find(|item| item.spec.item_id == id)
+            .unwrap_or_else(|| panic!("{id} item exists"));
+        let error = item
+            .outcome
+            .as_ref()
+            .and_then(|outcome| outcome.error.as_deref())
+            .unwrap_or_else(|| panic!("{id} carries its failure reason"));
+        assert!(
+            error.contains("source_store_unconfigured"),
+            "{id} error text carries the stable code: {error}"
+        );
+    }
+    // The daily entity items committed anyway (2a does not block the main data).
+    let entity: Vec<_> = task
+        .items
+        .iter()
+        .filter(|i| !x_data_mcp::task_control::derived::is_derived(&i.spec.item_id))
+        .collect();
+    assert_eq!(entity.len(), 2);
+    for item in entity {
+        assert!(
+            item.outcome.as_ref().is_some_and(|o| o.success),
+            "{} keeps its success",
+            item.spec.item_id
+        );
+    }
+    assert_eq!(
+        head_day(&c),
+        epoch(date(1)),
+        "the entity items advanced the bars"
+    );
+    // The earlier main table is still the latest readable version: same
+    // version id, same rows (the failure happened before its commit).
+    let (after_version, after_rows) = master_version(&c);
+    assert_eq!(after_version, before_version);
+    assert_eq!(after_rows, before_rows);
+    // Progress exposes the failures on the existing surface, with an error the
+    // Skill can aggregate by code.
+    let progress = strict
+        .call("get_task_progress", json!({"task_id":task_id}))
+        .unwrap();
+    assert_eq!(progress["failed"], json!(4), "{progress}");
+    for item in progress["unfinished"].as_array().unwrap() {
+        assert_eq!(item["success"], json!(false), "{item}");
+        assert!(
+            item["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("source_store_unconfigured")),
             "{item}"
         );
     }
