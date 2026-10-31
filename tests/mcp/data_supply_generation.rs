@@ -1291,16 +1291,18 @@ fn day_member_dates_are_calendar_dates_across_month_boundary() {
 
     // The real `.day` member encodes exactly those three dates ...
     let member = day_member(as_of);
-    let encoded: Vec<u32> = member
-        .chunks_exact(32)
+    let (records, remainder) = member.as_chunks::<32>();
+    assert!(remainder.is_empty(), "whole 32-byte .day records");
+    let encoded: Vec<u32> = records
+        .iter()
         .map(|record| u32::from_le_bytes(record[0..4].try_into().unwrap()))
         .collect();
     assert_eq!(encoded, expected);
     // ... and each of them is a legal calendar date.
-    for raw in &encoded {
+    for raw in encoded {
         let parsed = NaiveDate::parse_from_str(&raw.to_string(), "%Y%m%d")
             .unwrap_or_else(|e| panic!("illegal .day date {raw}: {e}"));
-        assert_eq!(day_u32(parsed), *raw);
+        assert_eq!(day_u32(parsed), raw);
     }
 
     // Year boundary: 2027-01-01 minus two days is 2026-12-30.
