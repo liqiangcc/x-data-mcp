@@ -215,8 +215,8 @@ pub(crate) fn commit_security_names(
     replace_security_names(c, write.set, binding, write.task_id, write.item_id)
 }
 
-/// Every stored name row, decoded by the read model's decoder (tests and the
-/// upcoming `security_names` replay scope).
+/// All stored name rows, decoded by the read model's decoder (writer tests;
+/// the `security_names` replay scope reads through the read model directly).
 #[cfg(test)]
 pub(crate) fn read_names(
     c: &Connection,

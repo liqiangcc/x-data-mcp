@@ -40,9 +40,20 @@
 //! ## 0 rows
 //!
 //! An empty table is a source defect, not "no name": the table is a
-//! whole-market snapshot, so the item fails closed and the previous version
-//! stays readable (PR-2 already reports a 0-row page set as `unverified_zero`).
-//! A `not_observed` coverage window is recorded as a window, never as a row.
+//! whole-market snapshot, so the item fails closed
+//! ([`EMPTY_TABLE_CODE`]) and the previous version stays readable (PR-2 already
+//! reports a 0-row page set as `unverified_zero`). A `not_observed` coverage
+//! window is recorded as a window, never as a row.
+//!
+//! ## Replay determinism (#446 §9.4.2)
+//!
+//! `source_store replay --scope security_names` rebuilds the set from the frozen
+//! `szse_short_name` pages alone. Coverage is part of the recorded evidence, so
+//! it must be a function of the bytes, not of the wall clock: one frozen table
+//! produced different SH/BJ window ends when the live writer stamped `today`.
+//! Both paths now call `assemble_table`, which bounds the `NOT_AVAILABLE`
+//! windows with the table's own last change day; the acquisition day remains a
+//! manifest fact (`acquired_at`) and is not re-derived on replay.
 //!
 //! ## Failure semantics
 //!
@@ -65,12 +76,16 @@ use crate::security_master::Exchange;
 use crate::security_master::assembly::PendingSource;
 use crate::security_master::coverage::CoverageWindow;
 use crate::security_master::names::{self, NameSet};
+use crate::security_master::risk_warnings::SzNameChange;
 use crate::source_store::{SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
 
 /// Business-field parser version of this adapter. It is registered on the
 /// derived item's outcome evidence, not in PR-2's envelope manifest.
 pub const PARSER_VERSION: &str = "security-names-v1";
+/// Reason code for a frozen table with no A-share change row: a whole-market
+/// snapshot with zero change rows is a source defect, never an empty history.
+pub const EMPTY_TABLE_CODE: &str = "empty_name_set";
 
 /// Documented start of the SZSE short-name table (#391 §4.4: 1994-01-03). The
 /// SH/BJ unobserved windows start here so their absence is bounded by the same
@@ -167,13 +182,6 @@ impl Error {
             Self::Invalid { code, .. } => code,
         }
     }
-
-    fn invalid(detail: impl Into<String>) -> Self {
-        Self::Invalid {
-            code: "source_invalid",
-            detail: detail.into(),
-        }
-    }
 }
 
 /// Resolve the source store and fetch client, then acquire.
@@ -222,33 +230,7 @@ fn acquire_today(
         .with_cache(cache)
         .with_today(today);
     let table = risk_warnings::acquire_sz_short_name_table(&entry, store)?;
-    if table.changes.is_empty() {
-        return Err(Error::invalid(
-            "the frozen SZSE short-name table has no A-share change row; refusing to \
-             replace the name history with zero rows",
-        ));
-    }
-    let mut coverage = vec![CoverageWindow {
-        source_kind: names::NameSourceKind::SzseNameHistory.as_str().into(),
-        exchange: Exchange::Sz,
-        from: table
-            .changes
-            .iter()
-            .map(|change| change.day)
-            .min()
-            .ok_or_else(|| Error::invalid("the SZSE table is empty after the check above"))?,
-        to: table
-            .changes
-            .iter()
-            .map(|change| change.day)
-            .max()
-            .ok_or_else(|| Error::invalid("the SZSE table is empty after the check above"))?,
-        observed: true,
-        rows: table.changes.len(),
-        reason: "the frozen short-name table is non-empty".into(),
-    }];
-    coverage.extend(unavailable_markets(today));
-    let set = names::assemble_sz(&table.changes, coverage)?;
+    let set = assemble_table(&table.changes)?;
     let mut snapshot_ids = BTreeMap::new();
     snapshot_ids.insert("szse_short_name", table.snapshot_ids);
     Ok(Admitted {
@@ -260,17 +242,62 @@ fn acquire_today(
     })
 }
 
+/// Assemble one frozen SZSE change chain into the admitted name set.
+///
+/// This is the **only** place the coverage windows are built, and it reads no
+/// clock: the live writer ([`run_source`]) and `source_store replay
+/// --scope security_names` call it with the same frozen table and therefore
+/// record bit-identical evidence on any day (`#446` §9.4.2 determinism).
+///
+/// - The SZ window spans the table's own change days.
+/// - The SH/BJ `NOT_AVAILABLE` windows end on the table's last change day, not
+///   on the acquisition day. A `not_observed` window records that no dated
+///   source exists at all; its end is not an observation, and a wall-clock
+///   bound made the same frozen bytes produce new evidence on every replay.
+///   The acquisition day stays a recorded fact of the store
+///   (`manifest.jsonl.acquired_at`), never of the dataset.
+///
+/// An empty chain is [`EMPTY_TABLE_CODE`], fail-closed: the caller must not
+/// replace the history with zero rows.
+fn assemble_table(changes: &[SzNameChange]) -> Result<NameSet, Error> {
+    let (Some(from), Some(to)) = (
+        changes.iter().map(|change| change.day).min(),
+        changes.iter().map(|change| change.day).max(),
+    ) else {
+        return Err(Error::Invalid {
+            code: EMPTY_TABLE_CODE,
+            detail: "the frozen SZSE short-name table has no A-share change row; \
+                     refusing to replace the name history with zero rows"
+                .into(),
+        });
+    };
+    let mut coverage = vec![CoverageWindow {
+        source_kind: names::NameSourceKind::SzseNameHistory.as_str().into(),
+        exchange: Exchange::Sz,
+        from,
+        to,
+        observed: true,
+        rows: changes.len(),
+        reason: "the frozen short-name table is non-empty".into(),
+    }];
+    coverage.extend(unavailable_markets(to));
+    Ok(names::assemble_sz(changes, coverage)?)
+}
+
 /// The windows of the markets with no dated name source (D-61). They carry no
 /// row: `source_kind='unknown'` and `observed=false` say "not available", not
 /// "no rename".
-fn unavailable_markets(today: NaiveDate) -> Vec<CoverageWindow> {
+///
+/// `last_change_day` bounds them: see `assemble_table` for why it is the
+/// admitted table's own end instead of the day the bytes were acquired.
+fn unavailable_markets(last_change_day: NaiveDate) -> Vec<CoverageWindow> {
     [Exchange::Sh, Exchange::Bj]
         .into_iter()
         .map(|exchange| CoverageWindow {
             source_kind: names::NameSourceKind::Unknown.as_str().into(),
             exchange,
             from: history_start(),
-            to: today,
+            to: last_change_day,
             observed: false,
             rows: 0,
             reason: "NOT_AVAILABLE (D-61): no dated name history for this market; \
@@ -281,16 +308,16 @@ fn unavailable_markets(today: NaiveDate) -> Vec<CoverageWindow> {
 }
 
 /// `--scope security_names` replay support: parse the frozen SZSE short-name
-/// pages and rebuild the domain set without any HTTP request.
+/// pages and rebuild the domain set without any HTTP request and without
+/// reading the clock.
 ///
 /// `pages` are `(source_id, snapshot_id, bytes)` in manifest order; only
 /// `szse_short_name` pages matter (the SSE bulletin pages belong to PR-10).
-/// `coverage` is the window set the live writer recorded, so a `not_observed`
-/// gap cuts the same open intervals the first write cut.
-pub fn replay(
-    pages: &[(&str, String, Vec<u8>)],
-    coverage: Vec<CoverageWindow>,
-) -> Result<NameSet, Error> {
+/// Coverage is derived from the bytes by `assemble_table`, the same function
+/// the live writer uses, so a fresh init replays the windows the first write
+/// recorded instead of re-stamping them with the current day. A table with no
+/// A-share change row fails with [`EMPTY_TABLE_CODE`].
+pub fn replay(pages: &[(&str, String, Vec<u8>)]) -> Result<NameSet, Error> {
     let mut changes = Vec::new();
     for (source_id, snapshot_id, bytes) in pages {
         if *source_id != "szse_short_name" {
@@ -299,7 +326,7 @@ pub fn replay(
         let (mut parsed, _, _) = risk_warnings::parse_sz_page(bytes, snapshot_id)?;
         changes.append(&mut parsed);
     }
-    Ok(names::assemble_sz(&changes, coverage)?)
+    assemble_table(&changes)
 }
 
 #[cfg(test)]
@@ -315,28 +342,13 @@ mod tests {
         vec![("szse_short_name", format!("{name}-sha"), fixture(name))]
     }
 
-    fn coverage(today: NaiveDate) -> Vec<CoverageWindow> {
-        let mut windows = vec![CoverageWindow {
-            source_kind: names::NameSourceKind::SzseNameHistory.as_str().into(),
-            exchange: Exchange::Sz,
-            from: NaiveDate::from_ymd_opt(1998, 4, 28).unwrap(),
-            to: NaiveDate::from_ymd_opt(2001, 3, 7).unwrap(),
-            observed: true,
-            rows: 3,
-            reason: "fixture".into(),
-        }];
-        windows.extend(unavailable_markets(today));
-        windows
-    }
-
     fn day(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
     }
 
     #[test]
     fn a_chain_fixture_replays_into_intervals() {
-        let set =
-            replay(&page("szse-chain.json"), coverage(day(2026, 10, 30))).expect("chain replays");
+        let set = replay(&page("szse-chain.json")).expect("chain replays");
         // Three dated changes for one code: two closed intervals and one open.
         assert_eq!(set.rows.len(), 3);
         assert_eq!(set.rows[0].name, "ST深安达");
@@ -353,8 +365,7 @@ mod tests {
 
     #[test]
     fn xd_xr_marker_rows_do_not_become_intervals() {
-        let set = replay(&page("szse-xd-xr.json"), coverage(day(2026, 10, 30)))
-            .expect("marker fixture replays");
+        let set = replay(&page("szse-xd-xr.json")).expect("marker fixture replays");
         assert_eq!(set.rows.len(), 1);
         assert_eq!(set.rows[0].name, "万科企业");
         assert!(set.rows.iter().all(|row| !row.name.contains("XD")));
@@ -363,39 +374,64 @@ mod tests {
 
     #[test]
     fn same_day_changes_fail_closed() {
-        let error = replay(&page("szse-same-day.json"), coverage(day(2026, 10, 30)))
-            .expect_err("same-day changes are refused");
+        let error = replay(&page("szse-same-day.json")).expect_err("same-day changes are refused");
         assert_eq!(error.code(), "source_invalid");
     }
 
     #[test]
     fn a_zero_row_table_is_not_an_empty_history() {
-        // The page has no A-share change row. The adapter reports the coverage
-        // it has (all not observed) and zero rows; the live item refuses to
-        // write that as the name history.
-        let set = replay(
-            &page("szse-empty.json"),
-            unavailable_markets(day(2026, 10, 30)),
-        )
-        .expect("an empty page assembles to zero rows");
-        assert!(set.rows.is_empty());
-        assert_eq!(set.observed_windows(), 0);
-        assert_eq!(set.not_observed_windows(), 2);
-        assert!(set.coverage.iter().all(|window| !window.observed));
+        // The page has no A-share change row. Assembling it would be zero rows
+        // and only `not_observed` windows, so the adapter refuses it: the live
+        // item must not write that as the name history, and the replay must
+        // not write it as "the empty table was rebuilt".
+        let error = replay(&page("szse-empty.json")).expect_err("an empty table is refused");
+        assert_eq!(error.code(), EMPTY_TABLE_CODE);
     }
 
     #[test]
     fn unavailable_markets_use_the_unknown_vocabulary() {
-        let windows = unavailable_markets(day(2026, 10, 30));
+        let windows = unavailable_markets(day(2001, 3, 7));
         assert_eq!(windows.len(), 2);
         for window in &windows {
             assert_eq!(window.source_kind, "unknown");
             assert!(!window.observed);
             assert_eq!(window.rows, 0);
             assert_eq!(window.from, history_start());
+            // Bounded by the admitted table, not by a clock reading.
+            assert_eq!(window.to, day(2001, 3, 7));
         }
         let exchanges: Vec<Exchange> = windows.iter().map(|window| window.exchange).collect();
         assert_eq!(exchanges, vec![Exchange::Sh, Exchange::Bj]);
+    }
+
+    /// The writer's assembly and the replay entry are the same function: the
+    /// same frozen bytes produce the same rows **and** the same coverage
+    /// windows, on any day (no `Utc::now()` anywhere on this path).
+    #[test]
+    fn the_live_writer_and_the_replay_record_the_same_coverage() {
+        let pages = page("szse-chain.json");
+        let replayed = replay(&pages).expect("chain replays");
+        let (changes, _, _) =
+            risk_warnings::parse_sz_page(&pages[0].2, &pages[0].1).expect("the fixture parses");
+        let written = assemble_table(&changes).expect("the live writer assembles the same chain");
+        assert_eq!(replayed, written);
+
+        // The as-of bound the writer now records is the table's own last
+        // change day; the acquisition day is not part of the dataset evidence.
+        let sz = replayed
+            .coverage
+            .iter()
+            .find(|window| window.exchange == Exchange::Sz)
+            .expect("the SZ window exists");
+        assert_eq!((sz.from, sz.to), (day(1998, 4, 28), day(2001, 3, 7)));
+        assert!(sz.observed);
+        for window in replayed
+            .coverage
+            .iter()
+            .filter(|window| window.exchange != Exchange::Sz)
+        {
+            assert_eq!(window.to, day(2001, 3, 7));
+        }
     }
 
     #[test]

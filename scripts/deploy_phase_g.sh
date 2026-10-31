@@ -386,7 +386,8 @@ fresh_schema=$(python3 -c "import sqlite3; print(sqlite3.connect('file:$DB?mode=
 # The fresh database has empty M3 index tables; the source store under the
 # deployment state directory is the only durable copy of facts a fresh init
 # cannot regenerate. Since M3 PR-6 (`replay --scope industry`) this step
-# *writes* the fresh database, so it runs after `init21` and before the
+# *writes* the fresh database (PR-12 adds `security_name_history`), so it runs
+# after `init21` and before the
 # services start: the replay takes the database service lease, and a live
 # writer would make it fail instead of rebuilding. `store_empty` (before the
 # first import) is a recorded deployment fact, not a failure; a corrupt store

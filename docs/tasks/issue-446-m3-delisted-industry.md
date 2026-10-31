@@ -918,7 +918,7 @@ CREATE TABLE retire_exemptions(
 一个 maint 入口，按域重放，幂等：
 
 ```text
-maint replay_source_store --scope industry|exchange|generation_facts|all [--verify-only]
+maint replay_source_store --scope industry|exchange|generation_facts|risk_warnings|security_names|all [--verify-only]
 ```
 
 | scope | 从来源库重建什么 | 解析/校验 |
@@ -926,6 +926,8 @@ maint replay_source_store --scope industry|exchange|generation_facts|all [--veri
 | `industry` | `industry_snapshots`（按 `store_sha256` 读回）、`industry_dictionary`、`industry_assignments`（按 §5.1/§5.2 的确定性规则重算区间） | 清单登记的 `parser_version` 解析；sha 读回不符 → `source_store_corrupt` |
 | `exchange` | `exchange_source_snapshots` 索引行（清单 → 行，不重发 HTTP）；再按 `parser_version` 重建各使用方的派生表（主表/ST/停牌/简称区间） | 字节 sha 读回校验；解析失败保留索引、标记 `derived_unavailable`，不静默跳行 |
 | `generation_facts` | `generation_facts`（按 `origin` 里的 generation sha + `role` + 派生表摘要重算 `fact_digest`/`evidence_sha256`） | 与 §8.3 门禁同源的校验函数 |
+| `risk_warnings` | `risk_warning_intervals` + `derived_dataset_versions` 登记（冻结的深交所简称表 + 沪交所公告页，不重发 HTTP） | 字节 sha 读回校验；未知 `parser_version` fail-closed；空结果不写 0 行 |
+| `security_names` | `security_name_history` + 其 `derived_dataset_versions` 登记（冻结的深交所 `SSGSGMXX`/`tab2` 表，不重发 HTTP，不读时钟） | 字节 sha 读回校验；未知 `parser_version` fail-closed；0 行变更表 → `empty_name_set`，不写库 |
 
 - **确定性**：区间重算的排序键固定为 `(effective_from, ingested_at, sha256)`，同日多变更按 §5.2 处理；同一来源库 + 同一 `parser_version` 重放两次必须产出逐位相同的表内容（AC-M3-9 的仓内定义）。
 - **摘要对账**：每个 scope 输出规范化摘要（按主键排序的固定字段 JSON 的 sha256）。`--verify-only` 只重算并与 DB 比较，返回 `match` 或 `drift` + 差异主键（前 20 条）与计数；不写 DB。
@@ -949,6 +951,17 @@ maint replay_source_store --scope industry|exchange|generation_facts|all [--veri
   报告字段与 `store_empty` 语义不变。
 - **区间重建与日更同源**：两条路径都调 `crate::industry::rebuild`/`apply_on`，
   测试断言「逐条追加 == 全量重建」，这是 AC-M3-9 的仓内可执行定义。
+
+**PR-12 重放（2026-10-31）**：`security_names` scope 接入（`src/source_store/replay.rs`、`src/bin/source_store.rs`）。只选 `store_kind=http_fetch` 且 `source_id=szse_short_name` 的记录，并且只重放最近一次采集的页集（整市场快照，重放旧页集会把同一变更链重复一遍）；`--db` 时走 `derived:security_names` 的同一写入器，在一个事务里整表替换 `security_name_history`、登记 `derived_dataset_versions` 并绑定 generation；`--verify-only` 重算行 **与 coverage 窗口** 并与库内登记比较。
+
+**as-of 的可重放选择**：写入端原先用 `Utc::now().date_naive()` 作为沪/北 `NOT_AVAILABLE` 窗口的 `to`，同一份冻结字节每重放一次就得到新证据。两种改法对比后选「`to` 固定为表内最后一个变更日」（即任务里提的更小改法）：
+
+- 读清单 `acquired_at` 日期重放并不成立：去重键是 `(sha256, source_id, origin)`（§9.4.1），内容未变的后续采集**不追加清单行**，清单里的 `acquired_at` 永远是最早一次采集；日更写入端在无变更日仍会把 `to` 写成当天，重放却只能读到旧日期，反而制造 drift。新增可选字段也只在写入端能拿到当天的前提下有用，且必须穿过 PR-2 的 freeze 参数，改动面更大。
+- 固定为表内最后变更日后，写入端与重放端共用同一个组装函数，coverage 完全由字节决定；采集日仍是清单事实，不属于数据集证据。报告的 `as_of` 就是这一天。
+
+**两类「没有数据」**：清单里没有 `szse_short_name` 记录 → scope 状态 `store_empty`、`rebuilt=nothing_selected`，不碰数据库；有记录但冻结表没有任何 A 股变更行 → `security_names_rebuild_failed` + reason `empty_name_set`，不写库，上一版仍可读。
+
+验证：`tests/source_store/security_names.rs` 六条端到端（清库重放证据摘要逐位相同、`--verify-only` `match`、篡改 blob → `source_store_corrupt`、未知 `parser_version` fail-closed、空库/无该来源记录、0 行变更表）；适配器单测钉住「写入端与重放端产出同一 coverage」。本机只跑 `cargo fmt`，Rust 由 PR CI 证明。
 
 **PR-1a 落地（2026-10-28）**：入口选定为 CLI `source_store {replay,verify,import}`（release 包内二进制），不注册 maint MCP 工具：maint 入口是只读运维/取证面，来源库写入属于离线运维动作，且不改变三个静态 allowlist、capability revision 与工具数事实；部署钩子直接调用 release 二进制。PR-1a 只注册 `industry`/`exchange`/`generation_facts` 三个 scope 与按 sha 读回的校验路径（报告 `rebuilt=skeleton_no_op`），索引表与域写入器分别由 PR-1、PR-2/PR-6/PR-8 补齐。库格式、清单字段与导入索引格式见 [来源库说明](../source-store.md)。
 
@@ -1195,6 +1208,21 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 
 验证：本机只跑 `cargo fmt` 与文档门禁；Rust 由 PR CI（fmt/clippy/nextest/export feature）证明。推送前逐字贴出 `python3 scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main` 的输出。
 
+### 14.2.2 PR-12 简称重放 scope 落地记录
+
+状态：**代码待合并（任务 XDM-133，Refs #446），未部署**。归属 S-6；本记录只写本次交付的代码与证据，不把合并写成已部署。
+
+| 工作项 | 计划 | 证据/落点 | 状态 |
+|---|---|---|---|
+| scope 接入 | 新增 `Scope::SecurityNames`（`security_names`）并接入 `Scope::ALL`、selects（只选 `source_id=szse_short_name` 的 `http_fetch` 记录）、`replay --scope all` dispatch、CLI usage/解析、报告常量 | `src/source_store/replay.rs`、`src/bin/source_store.rs` | 代码待合并/未部署 |
+| 确定性 as-of | coverage 的沪/北 `NOT_AVAILABLE` 窗口结束日固定为冻结表最后一个变更日（不再用 `Utc::now()`）；写入端与重放端共用同一组装函数，报告的 `as_of` 与登记证据可重放 | `src/official_security/security_names.rs`（`assemble_table`） | 代码待合并/未部署 |
+| 重建 | `--db` 走 `derived:security_names` 同一写入器（整表替换 + `derived_dataset_versions` 登记），写后回读比较；`--verify-only` 重算行与 coverage 并比较；无 `--db` 只算摘要与 `as_of` | `src/source_store/replay.rs` | 代码待合并/未部署 |
+| 空数据语义 | 无 `szse_short_name` 记录 → `store_empty`/`rebuilt=nothing_selected`（不碰库）；0 行变更表 → `security_names_rebuild_failed` + `empty_name_set`（不写库） | 同上 + `EMPTY_TABLE_CODE` | 代码待合并/未部署 |
+| 测试 | 清库重放摘要与登记 `evidence_digest` 逐位相同；`--verify-only` `match`；篡改 blob → `source_store_corrupt`；未知 `parser_version` fail-closed；空 store/无该来源；0 行表；覆盖窗口被重新盖章 → `drift`（单测） | `tests/source_store/security_names.rs`、`src/source_store/replay.rs` 单测 | CI（PR） |
+| 文档 | 来源库说明、§9.4.2、本文与 `src/sqlite_market/security_names.rs` 的 `upcoming` 注释修正 | `docs/source-store.md`、本文、代码注释 | 代码待合并 |
+
+验证：本机只跑 `cargo fmt`、`git diff --check` 与 `prepush_check.py`；Rust 由 PR CI（fmt/clippy/nextest）证明。
+
 ### 14.3 验收清单（私有栈，部署前）
 
 本节是 PR-13 的验收半边：PR-13a 只交付文档（本表与数据目录/设计同步），**下表没有执行过任何一项**，状态一律「未执行」。执行前提：包含 PR-1a…PR-9 的 release 部署到私有栈，配置 `X_DATA_MCP_SOURCE_STORE`（指向部署状态目录下的来源库）与 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（仅本地验收）；生产实例与 `/opt` 不动。证据（命令输出、JSON、行数、sha256）逐条贴回 #446，不写进本仓库。
@@ -1209,7 +1237,7 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 | AC-M3-6 | 连续两代 generation 各跑一次 `plan_market_update`/`run_market_update`，读两次 `derived:delisted_series_check` 的 item evidence | 两代 run/task id；登记的与核对的 `record_count`/`first_day`/`last_day`/`content_digest`；只允许尾追加；再造一次改写/消失 → 实体清单与 `partially_failed` | 未执行（依赖退市股首采） |
 | AC-M3-7 | 绑定交易所快照后重跑 `derived:security_master`，统计 `listing_date`/`delisting_date` 的 `unknown` 与 `listing_conflict`/`delisting_conflict` | 部署前后 `unknown` 计数（退市日 ≤2 且逐条解释）、冲突行两侧值、与 `SSDATE` 零冲突回归 | 未执行 |
 | AC-M3-8 | 不在本设计承诺（§14.1，建议另拆）；若 owner 另拆，按完整快照规格（文件集、字节布局、跨机重放命令）执行 | 另拆任务的规格与跨机重放结果 | 未执行（不在本轮承诺） |
-| AC-M3-9 | fresh init 空库 `source_store replay --store … --db … --scope all`（期望 `store_empty`）→ `source_store import …` → `source_store replay --scope all --db`（期望 `match`）→ `source_store verify`；全程断网 | 三次 JSON（`store_empty`、导入统计、`summary` 与 `rebuilt`）、`manifest.jsonl` 的 sha256、重建表行数 | 未执行（五个使用方全覆盖还依赖 PR-11/12；本批覆盖 A-1/A-2、行业、`generation_facts` 与风险警示） |
+| AC-M3-9 | fresh init 空库 `source_store replay --store … --db … --scope all`（期望 `store_empty`）→ `source_store import …` → `source_store replay --scope all --db`（期望 `match`）→ `source_store verify`；全程断网 | 三次 JSON（`store_empty`、导入统计、`summary` 与 `rebuilt`）、`manifest.jsonl` 的 sha256、重建表行数 | 未执行（本批覆盖 A-1/A-2、行业、`generation_facts`、风险警示与简称；停复牌的 `replay` scope 仍未接入，另开任务） |
 | AC-M3-10 | 用交易所来源入口抓一个已知有数据的季度、一个 0 行窗口，并用一个 >1 季度窗口做对照；检查分段（≤1 季度）与分页计数 | 请求指纹、每个窗口的返回计数、`not_observed`/`unverified_zero`/失败分类；证明没有写出「无事件/无变更」 | 未执行 |
 
 ### 14.4 PR-11 落地记录（A-3 停复牌写入器）
