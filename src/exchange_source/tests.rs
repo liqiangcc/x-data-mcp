@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 
@@ -16,6 +16,7 @@ use super::request::{
     SSE_PARSER_VERSION, SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION, SZSE_PARSER_VERSION,
     SZSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V2,
 };
+use super::transport::{DEFAULT_MIN_REQUEST_INTERVAL, Pacer, min_request_interval};
 use super::*;
 use crate::source_store::{
     ManifestRecord, Registration, SourceStore, StoreError, StoreKind, known_parser_version,
@@ -567,6 +568,220 @@ impl Transport for Flaky {
     fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
         self.0.get(request)
     }
+}
+
+/// Fake clock for the request-interval tests: `sleep` advances it and records
+/// the wait, so a test sees the exact timestamps production would experience
+/// without ever waiting. Shared through `Arc`s, so the transport and the pacer
+/// read one clock.
+#[derive(Clone)]
+struct FakePacer {
+    now: std::sync::Arc<Mutex<Instant>>,
+    sleeps: std::sync::Arc<Mutex<Vec<Duration>>>,
+}
+
+impl FakePacer {
+    fn new() -> Self {
+        Self {
+            now: std::sync::Arc::new(Mutex::new(Instant::now())),
+            sleeps: std::sync::Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn sleeps(&self) -> Vec<Duration> {
+        self.sleeps.lock().unwrap().clone()
+    }
+}
+
+impl Pacer for FakePacer {
+    fn now(&self) -> Instant {
+        *self.now.lock().unwrap()
+    }
+
+    fn sleep(&self, duration: Duration) {
+        let mut now = self.now.lock().unwrap();
+        self.sleeps.lock().unwrap().push(duration);
+        *now += duration;
+    }
+}
+
+/// One scripted response queue for a [`TimedTransport`].
+type Responses = VecDeque<Result<HttpResponse, TransportError>>;
+/// Fake-clock instants at which attempts started.
+type StartLog = std::sync::Arc<Mutex<Vec<Instant>>>;
+/// A client plus the fake clock and the start log the test asserts on.
+type TimedClient = (Client, FakePacer, StartLog);
+
+/// Records the fake-clock instant at which each attempt starts.
+struct TimedTransport {
+    clock: std::sync::Arc<Mutex<Instant>>,
+    starts: StartLog,
+    responses: Mutex<Responses>,
+}
+
+impl Transport for TimedTransport {
+    fn get(&self, _request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+        self.starts
+            .lock()
+            .unwrap()
+            .push(*self.clock.lock().unwrap());
+        self.responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("timed response queue is exhausted")
+    }
+}
+
+fn timed_client(interval: Duration, responses: Responses) -> TimedClient {
+    timed_client_with(FakePacer::new(), interval, responses)
+}
+
+fn timed_client_with(pacer: FakePacer, interval: Duration, responses: Responses) -> TimedClient {
+    let starts = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let transport = TimedTransport {
+        clock: pacer.now.clone(),
+        starts: starts.clone(),
+        responses: Mutex::new(responses.into()),
+    };
+    let client = Client::with_transport(transport)
+        .with_min_interval(interval)
+        .with_pacer(pacer.clone());
+    (client, pacer, starts)
+}
+
+fn list_request() -> HttpRequest {
+    HttpRequest {
+        url: "https://example.invalid/list".to_string(),
+        headers: std::collections::BTreeMap::new(),
+    }
+}
+
+#[test]
+fn adjacent_request_starts_are_at_least_one_second_apart() {
+    let (client, pacer, starts) = timed_client(
+        DEFAULT_MIN_REQUEST_INTERVAL,
+        vec![response(200), response(200), response(200)],
+    );
+    assert_eq!(client.min_interval(), Duration::from_secs(1));
+    for _ in 0..3 {
+        assert_eq!(client.get(&list_request()).unwrap().status, 200);
+    }
+    let starts = starts.lock().unwrap().clone();
+    assert_eq!(starts.len(), 3);
+    for pair in starts.windows(2) {
+        assert!(
+            pair[1].duration_since(pair[0]) >= Duration::from_secs(1),
+            "adjacent request starts must be at least 1 s apart: {pair:?}"
+        );
+    }
+    // The fake clock only advances by the sleeps the client asks for, so the
+    // gaps are exactly one interval rather than merely >= 1 s.
+    assert_eq!(starts[1].duration_since(starts[0]), Duration::from_secs(1));
+    assert_eq!(starts[2].duration_since(starts[1]), Duration::from_secs(1));
+    assert_eq!(
+        pacer.sleeps(),
+        vec![Duration::from_secs(1), Duration::from_secs(1)]
+    );
+}
+
+#[test]
+fn a_zero_interval_never_waits() {
+    let (client, pacer, starts) = timed_client(
+        Duration::ZERO,
+        vec![response(200), response(200), response(200)],
+    );
+    for _ in 0..3 {
+        assert_eq!(client.get(&list_request()).unwrap().status, 200);
+    }
+    let starts = starts.lock().unwrap().clone();
+    assert_eq!(starts.len(), 3);
+    assert_eq!(starts[0], starts[1]);
+    assert_eq!(starts[1], starts[2]);
+    assert!(pacer.sleeps().is_empty());
+}
+
+#[test]
+fn retry_backoff_and_the_request_interval_do_not_double_sleep() {
+    // Two 500ms backoffs and a 1 s minimum interval: the backoff runs first and
+    // the interval check then measures real elapsed time, so the starts are
+    // 1 s apart and the waits sum to 2 s instead of interleaving into 2.5 s.
+    let (client, pacer, starts) = timed_client(
+        DEFAULT_MIN_REQUEST_INTERVAL,
+        vec![response(500), response(500), response(200)],
+    );
+    let client = client.with_policy(RetryPolicy::bounded(3, Duration::from_millis(500)));
+    assert_eq!(client.get(&list_request()).unwrap().status, 200);
+    let starts = starts.lock().unwrap().clone();
+    assert_eq!(starts.len(), 3);
+    for pair in starts.windows(2) {
+        assert!(
+            pair[1].duration_since(pair[0]) >= Duration::from_secs(1),
+            "a retry must also respect the interval: {pair:?}"
+        );
+    }
+    assert_eq!(starts[1].duration_since(starts[0]), Duration::from_secs(1));
+    assert_eq!(starts[2].duration_since(starts[1]), Duration::from_secs(1));
+    assert_eq!(
+        pacer.sleeps(),
+        vec![
+            Duration::from_millis(500),
+            Duration::from_millis(500),
+            Duration::from_millis(1000),
+        ]
+    );
+}
+
+#[test]
+fn the_interval_state_belongs_to_one_client() {
+    // Two clients share a fake clock but not their pacing state: each client's
+    // first request is immediate, so one consumer (or test) is never delayed by
+    // another client's last request.
+    let pacer = FakePacer::new();
+    let (first, _, first_starts) = timed_client_with(
+        pacer.clone(),
+        DEFAULT_MIN_REQUEST_INTERVAL,
+        vec![response(200)],
+    );
+    let (second, _, second_starts) = timed_client_with(
+        pacer.clone(),
+        DEFAULT_MIN_REQUEST_INTERVAL,
+        vec![response(200)],
+    );
+    first.get(&list_request()).unwrap();
+    second.get(&list_request()).unwrap();
+    assert_eq!(
+        *first_starts.lock().unwrap(),
+        *second_starts.lock().unwrap()
+    );
+    assert!(pacer.sleeps().is_empty());
+}
+
+#[test]
+fn min_request_interval_defaults_to_one_second_and_rejects_invalid_values() {
+    assert_eq!(DEFAULT_MIN_REQUEST_INTERVAL, Duration::from_millis(1000));
+    assert_eq!(min_request_interval(None), Ok(Duration::from_millis(1000)));
+    assert_eq!(min_request_interval(Some("0")), Ok(Duration::ZERO));
+    assert_eq!(
+        min_request_interval(Some("2500")),
+        Ok(Duration::from_millis(2500))
+    );
+    for invalid in ["", " ", "1s", "-1", "1.5", "1000ms"] {
+        assert!(
+            min_request_interval(Some(invalid)).is_err(),
+            "{invalid:?} must be rejected"
+        );
+    }
+    // The unset default is what the production client uses.
+    assert_eq!(
+        Client::with_transport(TimedTransport {
+            clock: std::sync::Arc::new(Mutex::new(Instant::now())),
+            starts: std::sync::Arc::new(Mutex::new(Vec::new())),
+            responses: Mutex::new(VecDeque::new()),
+        })
+        .min_interval(),
+        Duration::from_secs(1)
+    );
 }
 
 fn store_with_pages() -> (tempfile::TempDir, SourceStore) {

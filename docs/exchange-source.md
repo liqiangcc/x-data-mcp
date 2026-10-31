@@ -58,6 +58,34 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
   （`quarter_segments`）。超过 93 天的区间在构造时即被拒（`segment_too_long`），
   不会发出请求。
 
+### 出站请求最小间隔（XDM-143，Refs #446）
+
+相邻两次出站请求的**开始时间**至少相隔 1,000 ms；重试的每次尝试同样是新的一次请求。参考点是
+上一次尝试的**开始**时间（调用 helper 之前记录），不是完成时间：串行请求因此保证「开始差
+≥1 s」，与响应快慢无关；若按完成时间算，慢响应后的下一次请求会立即发出，反而不满足限速。
+A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都经 `Client::get`，
+没有旁路。
+
+- 状态每个 `Client` 一份（`Mutex<Option<Instant>>`），不是全局静态锁：测试与不同使用方互不
+  影响，每个 client 的第一次请求不等待。今天每个派生 item 在 `run_source` 里各建一个
+  `Client::helper()`，所以 item 内部的连续请求受控；item 之间本来就串行，跨 item 的第一次
+  请求不受上一个 client 约束。
+- 默认值 1,000 ms；环境变量 `X_DATA_MCP_MIN_REQUEST_INTERVAL_MS`（整毫秒）。`0` 关闭间隔，
+  **仅限测试/离线**，部署单元不得设置。非法值 fail-closed：`data_service` 启动即拒绝，库内
+  `Client::helper()` 以 `source_transport_unavailable` 失败该 item；两种路径都不会静默换成
+  别的限速。
+- 生效值在启动日志打印一次：
+  `exchange source outbound request interval: 1000 ms (per client; adjacent request starts are spaced by this interval)`。
+  部署不设变量即取默认 1,000 ms。
+- 与重试退避的关系：退避先睡，随后间隔检查按**真实已过时间**补足到 1 s，即总等待为
+  `max(backoff, interval - elapsed)`，不是「退避 + 完整间隔」的 double-sleep。CI 用假 clock
+  （`src/exchange_source/tests.rs`）断言：连续 3 次请求开始差 ≥1 s、`0` 时不做额外等待、
+  两次 500 ms 退避 + 1 s 间隔时总等待 2 s（而非 2.5 s）、两个 client 互不拖慢。
+- 依据与代价：XDM-135 实测 A-3 停复牌回填 1,296 个请求 / ~1,755 s，其中 795 个请求间隔
+  <1 s，不满足「≥1 s/请求」；owner 2026-10-31 选 (a) 强制 ≥1 s，合规优先。因此 A-3 一次
+  全量回填的最短时间下界约为请求数 × 1 s（1,296 s 量级），这是预期成本，不是回归；
+  本 PR 不改 A-3 的请求数/分页，也不改抓取窗口。
+
 ### 运行内缓存
 
 同一次运行里多个 item 需要同一请求时，用 `RunCache`（设计 §10.1）：键是规范化请求

@@ -1593,6 +1593,28 @@ item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其�
   `a_set_whose_skip_samples_outnumber_their_counters_is_refused`。
 - 文档：`docs/data-catalog.md` 第 11 行（停牌）补零交易日口径，状态列不变。
 
+### 14.9 出站请求最小间隔 1 s（2026-10-31，XDM-143）
+
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+背景：XDM-135 实测 A-3 停复牌回填 1,296 个请求 / ~1,755 s，其中 795 个请求间隔 <1 s，
+不满足交易所「≥1 s/请求」的限速要求。owner 2026-10-31 选方案 (a)：强制 ≥1 s，合规优先。
+部署后的首次 `derived:suspensions` 就会触发，所以在部署前修好。
+
+- 落点：`src/exchange_source/transport.rs` 的 `Client`。每次尝试（首次与重试）在调用
+  transport 前等待到「距上一次尝试**开始** ≥ `min_interval`」，状态按 client 持有
+  （`Mutex<Option<Instant>>`），无全局静态锁；`Client::helper()` 从环境变量读取生效值。
+- 默认与配置：`DEFAULT_MIN_REQUEST_INTERVAL = 1,000 ms`；
+  `X_DATA_MCP_MIN_REQUEST_INTERVAL_MS`（整毫秒）可覆盖，`0` 关闭（仅测试/离线）；
+  非法值 fail-closed：`data_service` 启动拒绝，`Client::helper()` 返回
+  `source_transport_unavailable`。启动日志打印生效值。
+- 可测试性：`Pacer`（`now`/`sleep`）可注入，CI 用假 clock；`without_sleep()` 在测试里同时
+  关掉退避与间隔等待。测试断言连续 3 次请求开始差 ≥1 s、`0` 不等待、退避与间隔叠加不
+  double-sleep（两次 500 ms 退避 + 1 s 间隔 → 总等待 2 s）、两个 client 状态独立。
+- 范围：只加出站间隔；不改 A-3 请求数/分页，不改抓取窗口，不联网，不部署，不动生产。
+- 文档：`docs/exchange-source.md` §2 补「出站请求最小间隔」小节（默认值、环境变量、
+  启动日志、与重试的关系、A-3 的时间下界）。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
