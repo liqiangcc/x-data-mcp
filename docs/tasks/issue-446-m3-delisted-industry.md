@@ -1288,6 +1288,50 @@ owner 决策（2026-10-30/31，设计报告 `silent-path-design.md` 方案 2a）
 `scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main` 的输出。
 不做启动告警（下一任务），不动 SLO 门禁与 `docs/STATUS.md` 部署事实。
 
+### 14.6 静默路径显式化（二）：启动告警与文档/Skill 同步
+
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+实现状态：本 PR 已实现启动检查、三种情形测试与文档/Skill 同步；未部署。
+
+依据同一设计报告（`silent-path-design.md`）§3.3–3.4 与 §5.1 的 PR-2/PR-3；owner
+2026-10-31 已决 3a：启动只告警、不拒绝服务。方案 2a（四个 item fail-closed）已由
+§14.5 / PR #471 合并，本节只补「最早可见」信号与使用说明。
+
+owner 决策/口径：
+
+1. `data_service` 在 ops 入口 + compact 后端启动时检查 `X_DATA_MCP_SOURCE_STORE`：
+   未配置且未开 dev 豁免 → stderr/journal 写一条以稳定码 `source_store_unconfigured`
+   开头的告警，**继续 bind socket 并服务**（research/maint 读面不受影响）。
+2. 已配置时启动日志记录来源库根路径（只记路径，不含任何密钥/凭证）；路径不可读也
+   只告警，不拒绝启动（不新增 3b）。
+3. dev 豁免 `X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE=1` 只限非生产；启动时打印
+   `non-production override`，四个 item 回到 `pending_source`。部署单元不得设置它。
+4. 空 store 合法；首次部署只要求变量指向的目录存在，不要求已有条目。
+5. 部署时必须在 `x-data-mcp-data` 单元里设置 `X_DATA_MCP_SOURCE_STORE`；路径约定与
+   PR-6 相同：默认 `<market db parent>/source-store`（部署状态目录下的
+   `source-store/`）。首次部署 store 为空是合法状态。
+6. 文档/Skill 只说明观测与上报：四个同源 item 报同一个稳定码时按一个部署配置问题
+   报告 owner/operator；不 `retry_task`、不 `update_data` 补漏、不自行设置或绕过变量。
+   日线实体 item 照常提交，run 收尾 `partially_failed`，上一版主表仍是 latest。
+7. `docs/data-catalog.md` 缺口表只改原因说明，状态列仍只用固定取值（`已提供` /
+   `部分提供` / `缺失·计划中` / `缺失·阻塞` / `待取证` / `不在范围`，以及「代码已合并，
+   未部署」后缀），不引入新状态词。
+
+| 工作项 | 计划 | 证据/落点 | 状态 |
+|---|---|---|---|
+| 启动检查 | ops+compact 调用 `source_store::configured(Required)`；未配置/不可读打印稳定码告警并继续；已配置打印路径；dev 豁免打印 override | `src/bin/data_service.rs` | 未部署 |
+| 启动测试 | 三种情形：无变量 → 告警且服务 ready；有变量（空目录）→ 记录路径且无告警；dev 豁免 → override 且无告警 | `tests/service/local_runtime.rs` | 未部署 |
+| 日更文档 | `docs/daily-sync.md` 补启动告警、四 item 失败/`partially_failed`/日线照常、稳定码聚合、dev 开关仅本地 | `docs/daily-sync.md` | 未部署 |
+| Skill | 生产 strict 下四个 item 的失败路由；不设/不绕 `X_DATA_MCP_SOURCE_STORE`；回读接受「本次没有新 master 版本」 | `.devin/skills/x-data-daily-sync/SKILL.md` | 未部署 |
+| 缺口表 | 6/7/9/11 行的「未配置仍 `pending_source`」改成区分默认与 ops+compact strict；状态列固定取值不变 | `docs/data-catalog.md` | 未部署 |
+| 部署记录 | `x-data-mcp-data` 单元必须设置变量，路径默认 `<db parent>/source-store`，首次空 store 合法 | 本节 | 未部署 |
+
+验证：本机只跑 `cargo fmt`、`git diff --check` 与文档检查脚本；Rust 由 PR CI
+（fmt/clippy `-D warnings`/nextest/export feature）证明。推送前逐字贴出
+`scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main`
+的输出。不改 SLO 门禁、不部署、不动 `docs/STATUS.md` 的部署事实。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。

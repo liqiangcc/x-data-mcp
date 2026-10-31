@@ -140,8 +140,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // items must fail (not silently write zero rows) when
     // `X_DATA_MCP_SOURCE_STORE` is missing or unreadable. Every other
     // constructor keeps `Optional`: stdio/tests and the legacy backend stay
-    // `pending_source`. This is not a startup gate; the first run reports it.
+    // `pending_source`. This is not a startup gate; `report_source_store_startup`
+    // warns once and the first run still reports it per item.
     let source_store_policy = source_store_policy(has_ops, &backend);
+    report_source_store_startup(source_store_policy);
     // Plan-run tasks left non-terminal by a previous process close as
     // `interrupted` here: their chunk-committed work is durable and the
     // unfinished set is re-planned. Explicit update_data and all other
@@ -241,13 +243,45 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// Strict trigger surface (owner decision 2a, `silent-path #446` §14.5): only
 /// the ops entry of the service on a compact backend is the production form.
 /// Stdio, tests, `research`/`maint` and the legacy backend keep `Optional`, so
-/// an unconfigured store stays `pending_source` there. Not a startup gate; the
-/// first run reports the missing store through the four item failures.
+/// an unconfigured store stays `pending_source` there.
 #[cfg(target_os = "linux")]
 fn source_store_policy(has_ops: bool, backend: &MarketBackend) -> Policy {
     match backend {
         MarketBackend::Compact(_) if has_ops => Policy::Required,
         _ => Policy::Optional,
+    }
+}
+
+/// Startup visibility (owner decision 3a, `silent-path #446` §14.6): the ops
+/// entry on a compact backend warns when the source store is missing or
+/// unreadable, but keeps starting: only the four same-source derived items
+/// fail, and research/maint reads stay available. A configured store logs its
+/// root path (never credentials); the dev exemption prints its
+/// `non-production override` notice from [`configured`]. This is not a gate.
+#[cfg(target_os = "linux")]
+fn report_source_store_startup(policy: Policy) {
+    use x_data_mcp::source_store::{CONFIG_ENV, configured};
+
+    if policy != Policy::Required {
+        return;
+    }
+    match configured(policy) {
+        Ok(Some(store)) => eprintln!("source store: {}", store.root().display()),
+        // `configured(Required)` only returns `None` under the dev exemption,
+        // which has already printed `OVERRIDE_NOTICE`.
+        Ok(None) => {}
+        Err(error) => {
+            if let Some(root) = std::env::var_os(CONFIG_ENV) {
+                eprintln!(
+                    "source store: {} (configured but not readable)",
+                    std::path::PathBuf::from(root).display()
+                );
+            }
+            eprintln!(
+                "{error}; starting anyway: startup only warns, and the ops run \
+                 reports the same code per item"
+            );
+        }
     }
 }
 

@@ -20,11 +20,13 @@
 M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 `market.security_master`、`market.risk_warnings`、`market.suspensions`、
 `market.price_limit_rules` 由**同一次日更 run 的 4 个内部派生 item** 维护
-（见下文「内部派生 item」）；交易所上市/退市名单、历史 ST（#308）、停复牌公告
-读同一个 `X_DATA_MCP_SOURCE_STORE`，未配置时按部署形态区分：默认（stdio、测试、
+（见下文「内部派生 item」）；交易所上市/退市名单、历史 ST（#308）、停复牌公告与
+简称历史（D-61）读同一个 `X_DATA_MCP_SOURCE_STORE`，未配置时按部署形态区分：默认（stdio、测试、
 非 ops 入口、legacy 后端）记 `pending_source`、`risk_warnings` 写 0 行且读取仍为
 `absent`；生产形态（`data_service` 的 ops 入口 + compact 后端）是 item 失败（稳定码
-`source_store_unconfigured`），不静默写 0 行（见下文「内部派生 item」）。
+`source_store_unconfigured`），不静默写 0 行（见下文「内部派生 item」）。生产形态启动时
+还会在 journal 留一条同码告警并继续服务（不拒绝启动）；已配置时只记录来源库路径
+（不含密钥），dev 豁免开启时打印 `non-production override`。
 涨跌停规则原文未接入时仍按 `pending_source` 记录、`trading_rules` 写 0 行。因此日更成功后，M2 数据集的新鲜度与日线同步，
 不需要单独跑任务（详见 [STATUS](STATUS.md)「数据」段的 M2 数据集行）。
 
@@ -228,12 +230,14 @@ Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目
 
 v7 起全市场日更改由 `plan_market_update`/`run_market_update` 完成（步骤与失败
 路由见 [generic-data-v8](contracts/generic-data-v8.md) §7）。同一次日线 run 里，
-worker 还会追加 **16** 个服务器内部派生 item（9 个指数基准 + 交易日历 + 4 个 M2
-全市场数据集：`derived:security_master`、`derived:risk_warnings`、
-`derived:suspensions`、`derived:trading_rules` + M3 的
+worker 还会追加 **17** 个服务器内部派生 item（9 个指数基准 + 交易日历 + 5 个
+全市场数据集：`derived:security_master`、`derived:security_names`、
+`derived:risk_warnings`、`derived:suspensions`、`derived:trading_rules` + M3 的
 `derived:industry_snapshot`、`derived:delisted_series_check`）；它们的 item 级结果只用于报告
-（`entity`/`period` 为 null），不进入实体补漏清单。4 个 M2 item 共用
-`X_DATA_MCP_SOURCE_STORE`，缺来源库时按部署形态区分：
+（`entity`/`period` 为 null），不进入实体补漏清单。四个同源 item
+（`derived:security_master`、`derived:security_names`、`derived:risk_warnings`、
+`derived:suspensions`）共用 `X_DATA_MCP_SOURCE_STORE`；`derived:trading_rules` 仍按
+`pending_source`。缺来源库时按部署形态区分：
 - 默认策略（stdio、测试、`research`/`maint` 入口、legacy 后端）下**成功且写 0 行**
   （evidence 里带 `pending_sources`），只有 `error` 才是失败；
 - 生产策略（`data_service` 的 ops 入口 + compact 后端，代码显式下传 Required）下
@@ -241,8 +245,19 @@ worker 还会追加 **16** 个服务器内部派生 item（9 个指数基准 + �
   `source_store_unconfigured` 开头，run 收尾 `partially_failed`；日线实体 item 已先行
   提交，上一版主表仍是 latest。空 store（首次部署）合法，只校验变量已配置且路径可读。
   四个失败是同一个配置问题，按错误码聚合，不要当成四个独立故障。
+- 启动可见性（3a）：ops + compact 启动时检查同一变量；缺失且未开 dev 豁免 →
+  journal 一条以 `source_store_unconfigured` 开头的告警，**仍继续 bind socket 并服务**
+  （research/maint 读面不受影响）。已配置时记录来源库根路径（不含密钥）；变量存在但
+  路径不可读也只告警。Skill 看不到 journal，所以部署与巡检清单要把「启动日志无该码」
+  当作配置完成条件。
+- 怎么看：运行终态后按 `get_task_progress`/`get_task` 的失败项读 `error`；四个同码
+  失败按**一个部署配置问题**报告 owner/operator（不要只报一个、不要 `retry_task`、
+  不要用 `update_data` 补漏），配置变量后重新 plan/run。日线实体 item 已先行提交，
+  上一版主表仍是 latest，所以本次没有新 master 版本是预期结果。
 - 显式开发豁免 `X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE=1` 时回到
-  `pending_source`，并在首次使用时打印 non-production override；部署单元不设置它。
+  `pending_source`，并在启动时（ops+compact）或首次 Required 使用时打印
+  non-production override；它只限本地验收，部署单元不设置，Skill 不设置或绕过
+  `X_DATA_MCP_SOURCE_STORE`。
 
 tool 面
 （`get_task_progress`/`get_task`）只暴露失败项，成功项的取值按 Skill §4 用

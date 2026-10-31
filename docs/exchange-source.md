@@ -138,8 +138,11 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
   沪 `sse_delisting`（同上两种 + `COMPANY_STATUS=3`）、深 `szse_listing`
   （`CATALOGID=1110`）、深 `szse_delisting`（`CATALOGID=1793_ssgs` + `selectModule`
   `main`/`nm`）。七个请求共用一个 `RunCache`。
-- 来源库位置由 `X_DATA_MCP_SOURCE_STORE` 指定（部署为 `<deploy-state>/source-store`）。
-  未设置时该 item 不失败：交易所分支写 `pending_source`，只落 TDX 事实。
+- 来源库位置由 `X_DATA_MCP_SOURCE_STORE` 指定（部署为 `<deploy-state>/source-store`，
+  默认 `<market db parent>/source-store`）。默认/非 ops 形态未设置时该 item 不失败：
+  交易所分支写 `pending_source`，只落 TDX 事实；生产形态（`data_service` 的 ops 入口 +
+  compact 后端）未配置或不可读时，`derived:security_master` 以稳定码
+  `source_store_unconfigured` 失败，日线实体 item 照常、上一版主表仍是 latest。
 - 业务字段 parser 版本 `exchange-a1a2-v3`（v1 → v2：沪行改读 `A_STOCK_CODE`，缺失回退
   `COMPANY_CODE`，两者都有且不等 → `source_invalid`；v2 → v3：深市名单按 `metadata.tabkey`
   选块，行数组与分页计数取同一个块）与来源绑定登记在 item 的结果证据
@@ -174,9 +177,11 @@ PR-11 起 `derived:suspensions` 的 `confirmed` 分支由 `src/official_security
   `stopTime=930/AM/PM` 的盘中停牌与多日 `LSTP` 不入行（计数）；`endStopDate` 原样
   作为含端点的 `end_day`，空值 = 该段末日并计未闭合；只收 6 位 `6` 开头且在主表内
   的实体，区间再按 §11.1 主表窗口裁剪（BR-M3-2）。
-- 未配置 `X_DATA_MCP_SOURCE_STORE` 时仍是 `pending_source`（只有 `unresolved_gap`）；
-  配置了但抓取失败 → 该 item 失败、不写 `confirmed`（§10.1）。深市没有该来源，
-  首期只有 `unresolved_gap`，可交易性 `unknown`。
+- 默认/非 ops 形态未配置 `X_DATA_MCP_SOURCE_STORE` 时仍是 `pending_source`
+  （只有 `unresolved_gap`）；生产形态（ops + compact）未配置或不可读时
+  `derived:suspensions` 以稳定码 `source_store_unconfigured` 失败。配置了但抓取失败 →
+  该 item 失败、不写 `confirmed`（§10.1）。深市没有该来源，首期只有 `unresolved_gap`，
+  可交易性 `unknown`。
 
 ## 7. 本 PR 不含
 

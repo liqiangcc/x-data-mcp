@@ -174,34 +174,49 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 `status`/计数/`next_cursor`，**不期待逐 item 结果数组**。终态为
 `succeeded`/`partially_failed`/`failed`；全市场日更 `partially_failed` 是正常收尾。
 
-本任务除 plan 的实体 item 外，worker 还会追加 **15** 个**服务器内部派生 item**
-（`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历 + 4 个 M2
-全市场数据集：`derived:security_master`、`derived:risk_warnings`、
-`derived:suspensions`、`derived:trading_rules` + M3 的
-`derived:industry_snapshot`（历史行业快照与区间）；定义见
-`src/task_control/derived.rs`，任务面说明见 `docs/daily-sync.md` §3）。受理响应与
+本任务除 plan 的实体 item 外，worker 还会追加 **17** 个**服务器内部派生 item**
+（`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历 + 5 个
+全市场数据集：`derived:security_master`、`derived:security_names`、
+`derived:risk_warnings`、`derived:suspensions`、`derived:trading_rules` + M3 的
+`derived:industry_snapshot`（历史行业快照与区间）、`derived:delisted_series_check`
+（退市序列只读检查）；定义见 `src/task_control/derived.rs`，任务面说明见
+`docs/daily-sync.md` §3）。受理响应与
 `plan_counts` 的 `item_count` 仍是 plan 的 `eligible`；`get_task_progress` 的 `total`
-会比它多 **15**。
+会比它多 **17**。
 内部 item 在 `unfinished` 里 `entity`/`period` 为 `null`、`item_id` 以 `derived:`
 开头，失败只记 item 级结果并使 run 收尾 `partially_failed`——**不属于 catalog
 实体，不进入 §3.3 的补漏清单**，按 `error` 原样报告即可（不 `retry_task`、不用
 `update_data` 补）。
 
-四个 M2 item 的判定与指数/日历略有不同，别把「未接入来源」当失败。先注意
+四个同源 item 的判定与指数/日历略有不同，别把「未接入来源」一律当失败。先注意
 `get_task_progress` v1/v2 只列 `unfinished`：成功项没有 per-item evidence（v2 的
 `publication_versions`/`range_results` 在 plan/run 任务上也是空的），`get_task` v2 也只
 给失败样本；所以 M2 的取值一律按 §4 用 `list_data_versions` 回读，不要从进度面读
 `row_count`/`version_id`/`pending_sources`。失败判定仍看进度面的 `error`/`status`：
 
-- **只有 item 的 `error` 非空（或 `status=failed`）才算失败**；来源未接入的 item 按成功
-  收尾，只写 0 行并在服务端 item 结果里记 `pending_sources`。
-  `derived:risk_warnings`（#308 未准入）与 `derived:trading_rules`（A-7 未准入）正常就是
-  这种 0 行成功；`derived:security_master` 会写主表并把交易所名单/简称历史列为 pending；
-  `derived:suspensions` 只出 `unresolved_gap`（`confirmed` 需公告准入）。对应写路径见
+- **只有 item 的 `error` 非空（或 `status=failed`）才算失败**。默认/非 strict 形态
+  （stdio、测试、`research`/`maint` 入口、legacy 后端）下，来源未接入的 item 仍按成功
+  收尾，只写 0 行并在服务端 item 结果里记 `pending_sources`；这不适用于生产形态。
+- **生产形态（`data_service` 的 ops 入口 + compact 后端）缺 store 就是失败**：
+  `X_DATA_MCP_SOURCE_STORE` 未配置或路径不可读时，四个同源 item
+  （`derived:security_master`、`derived:risk_warnings`、`derived:suspensions`、
+  `derived:security_names`）各自 `success=false`，`error` 以稳定码
+  `source_store_unconfigured` 开头，run 收尾 `partially_failed`。日线实体 item 已先行
+  提交，上一版主表仍是 latest，所以本次没有新 master 版本是预期结果。四个同码失败是
+  **一个部署配置问题**：按一条报告 owner/operator，配置变量后重新 plan/run；不要
+  `retry_task`、不要用 `update_data` 补漏、不要把它当数据缺口，也不要自行设置、覆盖或
+  绕过 `X_DATA_MCP_SOURCE_STORE` / `X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE`。
+  启动日志若出现同码，同样报告；`ALLOW...=1` 只是非生产本地豁免（启动时打印
+  `non-production override`），Skill 不设置它。
+- `derived:trading_rules`（A-7 已准入）仍按 `pending_source`：来源未准入时只返回
+  `pending_sources`、不写 `market.price_limit_rules`，不因缺来源库而失败。
+  `derived:risk_warnings` 已接入深市区间与沪市 2000 起事件级；默认形态下未观测部分写
+  0 行并带 `pending_sources`，生产 strict 下缺 store 时按上一条失败。
+  `derived:security_master` 会写主表并把交易所名单/简称历史列为 pending；
+  `derived:suspensions` 在默认形态下只出 `unresolved_gap`。对应写路径见
   `src/data_supply/derived.rs:284`（security_master）、`:345`（risk_warnings）、
-  `:372`（suspensions）、`:407`（trading_rules；来源未准入时只返回 `pending_sources`、
-  不写 `market.price_limit_rules`）。`security_master` 失败时，`derived:suspensions`
-  可能因缺主表或主表绑定属于另一代而 fail-closed
+  `:372`（suspensions）、`:407`（trading_rules）。`security_master` 失败时，
+  `derived:suspensions` 可能因缺主表或主表绑定属于另一代而 fail-closed
   （也可能用本代已有的主表继续成功）；两个 item 都按各自 `error` 原样报告，
   不要只报一个，也不要重试。
 - `derived:industry_snapshot`（M3）与上面四个不同：它写的是 M3 索引表
@@ -404,7 +419,9 @@ start_collection{dataset:"market.daily", contract_version:"v2",
   任务上也是空的），`get_task` v2 也只给失败样本；所以 run 终态后对各目标 dataset 用
   `list_data_versions` 只读回读，报告最新 `version_id` 与 `published_at`
   （`published_at` 落在本次 run 的 `get_task.created_at` ~ 终态 `last_progress_at` 窗口内
-  即算本次产出）：
+  即算本次产出）。若 run 因 `source_store_unconfigured` 失败，本次不会产生新的
+  `market.security_master` 版本，最新版本仍是上一版；按该版本报告并注明 `published_at`
+  不在本次 run 窗口内，不要把旧版本当成本次产出：
   `market.security_master`/`market.risk_warnings`/`market.suspensions` 用
   `{"contract_version":"v2","selection":{"kind":"universe"}}`；
   `market.price_limit_rules` 用 `{"contract_version":"v2","selection":{"kind":"market"}}`。
