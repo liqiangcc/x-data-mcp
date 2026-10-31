@@ -1091,7 +1091,7 @@ fn strict_without_a_source_store_fails_the_four_items_and_keeps_the_master() {
     let d1 = day_record(ymd(date(1)), [1131, 1135, 1130, 1134], 0.0, 120);
     let member = |records: &[[u8; 32]]| day_member_bytes(records);
     // Run 1 (default `Optional`): a normal daily run commits the main table.
-    let gen1 = vec![
+    let gen1 = [
         ("sh".to_string(), "600006".to_string(), member(&[d3, d2])),
         ("sz".to_string(), "000002".to_string(), member(&[d3, d2])),
     ];
