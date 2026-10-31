@@ -8,7 +8,7 @@
 //! allowlists and the documented per-entry tool counts unchanged.
 //!
 //! ```text
-//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|all]
+//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|all]
 //!                     [--db <market.sqlite>] [--verify-only]
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir>
@@ -20,12 +20,15 @@
 //!
 //! `--db` is what turns a replay into a rebuild: M3 PR-2's `exchange` scope
 //! replaces `exchange_source_snapshots`, M3 PR-6's `industry` scope replaces
-//! `industry_snapshots`/`industry_assignments` and M3 PR-8's
-//! `generation_facts` scope replaces the retirement gate's fact index, each in
-//! one transaction; `--verify-only` compares the recomputed summary with the stored
-//! rows instead of writing. Without `--db` a scope only computes and reports its
-//! summary, so a read never touches a database or creates the store. `verify`
-//! always compares, even if `--verify-only` is also given.
+//! `industry_snapshots`/`industry_assignments`, M3 PR-8's `generation_facts`
+//! scope replaces the retirement gate's fact index, M3 PR-10's `risk_warnings`
+//! scope replaces `risk_warning_intervals` and M3 PR-12's `security_names`
+//! scope replaces `security_name_history` (with its `derived_dataset_versions`
+//! registration), each in one transaction; `--verify-only` compares the
+//! recomputed summary with the stored rows instead of writing. Without `--db` a
+//! scope only computes and reports its summary, so a read never touches a
+//! database or creates the store. `verify` always compares, even if
+//! `--verify-only` is also given.
 //!
 //! Every command prints one JSON object on stdout. Exit 0 means `ok` or
 //! `store_empty`; a corrupt store, an unknown parser version, a drift verdict or
@@ -38,9 +41,11 @@ use x_data_mcp::source_store::{SourceStore, import, replay};
 
 const USAGE: &str = "\
 usage:
-  source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|all] \
+  source_store replay --store <dir> \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
 [--db <market.sqlite>] [--verify-only]
-  source_store verify --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|all] \
+  source_store verify --store <dir> \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
 [--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
@@ -137,7 +142,10 @@ fn run(args: &[String]) -> Result<i32, String> {
     let selected_scope = match scope.as_str() {
         "all" => None,
         other => Some(replay::Scope::parse(other).ok_or_else(|| {
-            format!("unknown scope {other} (industry|exchange|generation_facts|risk_warnings|all)")
+            format!(
+                "unknown scope {other} \
+                 (industry|exchange|generation_facts|risk_warnings|security_names|all)"
+            )
         })?),
     };
     let request = replay::ReplayRequest::new(selected_scope, verify_only, database.as_deref());
