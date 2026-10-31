@@ -244,7 +244,7 @@ CI 覆盖写序故障注入（fsync/rename 各失败点无悬空清单行）、�
 `source_store_corrupt`、重复导入不增 blob/行、重放两次摘要相同、空库
 `store_empty`、含 manifest 不符条目的夹具进 `skipped_unverified`。
 `suspensions` scope 另有端到端/单元测试：冻结页 → facts 计数、`--db` 装配与日更
-写入逐位一致、`--verify-only` `match`/`drift`（含 `inputs_changed`）、缺日历 →
+写入逐位一致、`--verify-only` `match`/`drift`（含 `inputs_changed`）、缺主表/日历 →
 `suspension_replay_not_ready`、未知 `parser_version` fail-closed、空库 →
 `store_empty`/`nothing_selected`。`security_names` scope 另有 6 条端到端测试
 （`tests/source_store/security_names.rs`）：
