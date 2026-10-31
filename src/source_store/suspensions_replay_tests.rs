@@ -200,7 +200,7 @@ impl Fixture {
         security::replace_security_master(
             &c,
             &Assembly {
-                rows: members.iter().map(|code| lifecycle(code)).collect(),
+                rows: members.iter().map(|code| lifecycle(*code)).collect(),
                 migrations: Vec::new(),
                 conflicts: Vec::new(),
                 pending_sources: Vec::new(),
@@ -260,7 +260,8 @@ impl Fixture {
             ),
             ("601607", weekdays(day(2008, 6, 10), day(2008, 6, 30))),
         ]);
-        for code in members {
+        for (index, code) in members.iter().enumerate() {
+            let code = *code;
             let days: Vec<NaiveDate> = calendar_days
                 .iter()
                 .copied()
@@ -515,6 +516,30 @@ fn a_database_without_a_calendar_is_suspension_replay_not_ready() {
     );
     let problem = &report.problems[0];
     assert_eq!(problem.reason, SUSPENSION_REPLAY_NOT_READY);
+}
+
+#[test]
+fn a_database_without_a_master_is_suspension_replay_not_ready() {
+    let fixture = Fixture::new();
+    fixture
+        .c
+        .execute(
+            "DELETE FROM derived_dataset_versions WHERE dataset_kind=?1 AND dataset_key=?2",
+            rusqlite::params![
+                crate::security_master::assembly::DATASET_KIND,
+                crate::security_master::assembly::DATASET_KEY
+            ],
+        )
+        .unwrap();
+
+    let report = report_for(&fixture, false);
+    let scope = &report.scopes[0];
+    assert_eq!(scope.status, SUSPENSION_REPLAY_NOT_READY);
+    assert!(
+        suspensions::read_suspensions(&fixture.c)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
