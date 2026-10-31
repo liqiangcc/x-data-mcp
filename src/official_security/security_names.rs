@@ -76,6 +76,7 @@ use crate::security_master::Exchange;
 use crate::security_master::assembly::PendingSource;
 use crate::security_master::coverage::CoverageWindow;
 use crate::security_master::names::{self, NameSet};
+use crate::security_master::risk_warnings::SzNameChange;
 use crate::source_store::{SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
 
