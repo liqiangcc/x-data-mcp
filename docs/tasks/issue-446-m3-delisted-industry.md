@@ -1252,6 +1252,41 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 `docs/data-catalog.md` §3.3 偏差 6 与 `docs/daily-sync.md` 的 `derived:suspensions`
 口径同步（沪市 2008 起 `confirmed`、深市只有 `unresolved_gap`）。
 
+### 14.5 静默路径显式化（一）：strict 策略与四个 item fail-closed
+
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+owner 决策（2026-10-30/31，设计报告 `silent-path-design.md` 方案 2a）：
+
+1. 强制点=item 级：缺来源库时四个同源 item 各自 `success=false`，run
+   `partially_failed`；日线实体 item 照常提交，上一版主表仍是 latest。
+2. 范围=`derived:security_master`、`derived:suspensions`（A-3）、
+   `derived:security_names`、`derived:risk_warnings`，它们读同一个
+   `X_DATA_MCP_SOURCE_STORE`。
+3. 开发豁免：`X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE=1` 时 Required 策略仍走
+   `pending_source`，并在首次使用时打印 non-production override 提示。
+4. 严格触发面=`data_service` 且存在 ops 入口：只有该构造点下传 `Policy::Required`；
+   默认 `Policy::Optional`，stdio/测试与非 ops 入口不变。
+5. 空 store 合法：strict 只检查「变量已配置且路径可读」，不要求 store 已有条目。
+6. 不扩 `task_v2::REASON_CODES`：只保证 error 文本以稳定码
+   `source_store_unconfigured` 开头。
+7. legacy schema 18 不再作为「必须允许 Pending」的约束（其 plan-run 另有 compact-only
+   问题，保持 Optional，不用本错误码掩盖）。
+
+| 工作项 | 计划 | 证据/落点 | 状态 |
+|---|---|---|---|
+| 共享策略入口 | `source_store` 新增 `CONFIG_ENV`、`ALLOW_UNCONFIGURED_ENV`、`Policy`、`configured(policy)`、`Unconfigured`（稳定码 `source_store_unconfigured`）；Required 校验变量存在 + 目录/清单可读，空 store 合法 | `src/source_store/mod.rs` + `src/source_store/tests.rs` | 未部署 |
+| 四个适配器 | `a1a2`/`a3`/`security_names`/`risk_warnings` 的 `run_source` 收 `Policy`；Required + 未配置 → `Invalid { code: source_store_unconfigured }`（不再是 Pending），Optional 保持原行为 | 四个 adapter 及其 tests（每个一例 Required，a1a2 另钉「上一版主表仍可读」） | 未部署 |
+| 下传 | `derived::run`/`execute`、`worker::run_once` 收 `Policy`；`DataApi` 新增字段与 `with_source_store_policy`，默认 Optional；`Handler::Worker` 透传 | `src/data_supply/{derived,worker,mcp}.rs` | 未部署 |
+| 服务入口 | `data_service` 在 backend 打开后判定 `has_ops && Compact` → Required；legacy 保持 Optional | `src/bin/data_service.rs` | 未部署 |
+| 端到端钉法 | compact fixture 两代快照：先 Optional 日更提交主表，再 Required + 无 store 日更 → 四项失败各含稳定码、run `partially_failed`、实体日线已前进、主表版本/行不变 | `tests/mcp/plan_run.rs` | 未部署 |
+| 文档 | 本节 + `docs/daily-sync.md` 的四项 pending 说明改为「Optional/测试仍 pending，生产 ops strict 下是配置失败」 | 两个文件 | 未部署 |
+
+验证：本机只跑 `cargo fmt`、`git diff --check` 与 `scripts/check_current_facts.py`；Rust 由 PR CI
+（fmt/clippy `-D warnings`/nextest/export feature）证明。推送前逐字贴出
+`scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main` 的输出。
+不做启动告警（下一任务），不动 SLO 门禁与 `docs/STATUS.md` 部署事实。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
