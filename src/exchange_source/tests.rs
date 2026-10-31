@@ -216,8 +216,8 @@ fn the_outbound_encoding_does_not_change_the_fingerprint() {
         SourceId::SseBulletin,
         "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do",
     )
-    .param("pageHelp.pageSize", "100")
     .paged(PagingFormat::SsePageHelp, 1)
+    .param("pageHelp.pageSize", "100")
     .param("TITLE", "风险警示")
     .param("isPagination", "true");
     assert_eq!(reordered.fingerprint(), fingerprint);
