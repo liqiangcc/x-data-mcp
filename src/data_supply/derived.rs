@@ -713,8 +713,10 @@ fn execute(
             "confirmed_rows": set.confirmed_rows,
             "missing_days": set.missing_days(),
             // XDM-134: confirmed intervals that wrote no row stay countable and
-            // sampled; neither shape is an item failure and neither joins
-            // `explained`, so it produces no gap row.
+            // sampled; neither shape is an item failure and neither produces a
+            // suspension row. A deferred interval still explains the covered
+            // part to the gap derivation (its known suspension days are not
+            // re-derived as gaps).
             "deferred_beyond_calendar": set.deferred_beyond_calendar,
             "deferred_samples": skipped_samples_json(&set.deferred_samples),
             "skipped_no_trading_day": set.skipped_no_trading_day,

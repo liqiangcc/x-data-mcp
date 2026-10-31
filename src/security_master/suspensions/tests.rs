@@ -608,6 +608,65 @@ fn a_skipped_interval_neither_splits_a_gap_nor_adds_a_row() {
     assert_eq!(gap.missing_days, 8);
 }
 
+/// A deferred interval still explains its covered sub-segment: the days inside
+/// `[first_day, last_day]` are a known confirmed suspension, so a missing bar
+/// there must not be re-derived as `unresolved_gap` ("missing bar, no event").
+/// Once the calendar covers the whole interval the same fact writes its row.
+#[test]
+fn a_deferred_interval_explains_its_covered_days_and_writes_no_gap() {
+    let calendar = weekdays(day(2026, 10, 1), day(2026, 10, 28));
+    let facts = vec![fact(
+        Exchange::Sh,
+        "600000",
+        day(2026, 9, 1),
+        None,
+        Some(day(2026, 9, 1)),
+        None,
+    )];
+    let mut bars = BTreeMap::new();
+    bars.insert(
+        "sh.600000".to_string(),
+        vec![day(2026, 10, 1), day(2026, 10, 28)],
+    );
+    let partial = admitted(vec![confirmed(
+        Exchange::Sh,
+        "600000",
+        day(2026, 10, 20),
+        day(2026, 10, 29),
+        None,
+    )]);
+
+    let set = assemble_suspensions(&partial, &facts, &calendar, &bars).unwrap();
+    assert_eq!(set.deferred_beyond_calendar, 1);
+    assert_eq!(set.confirmed_rows, 0);
+    assert_eq!(set.gap_rows, 1, "only the unexplained days are a gap");
+    let gap = &set.rows[0];
+    // 10-20..10-28 is the covered sub-segment and is explained; the gap stops
+    // before it instead of swallowing the known suspension.
+    assert_eq!(
+        (gap.start_day, gap.end_day),
+        (day(2026, 10, 2), day(2026, 10, 19))
+    );
+    assert_eq!(gap.missing_days, 12);
+
+    // The calendar advances past the interval: the same fact is now fully
+    // covered and writes the normal confirmed row with the full count.
+    let advanced = weekdays(day(2026, 10, 1), day(2026, 10, 30));
+    let set = assemble_suspensions(&partial, &facts, &advanced, &bars).unwrap();
+    assert_eq!(set.deferred_beyond_calendar, 0);
+    assert_eq!(set.confirmed_rows, 1);
+    let confirmed = set
+        .rows
+        .iter()
+        .find(|row| row.certainty == SuspensionCertainty::Confirmed)
+        .expect("the advanced calendar places the interval");
+    assert_eq!(
+        (confirmed.start_day, confirmed.end_day),
+        (day(2026, 10, 20), day(2026, 10, 29))
+    );
+    assert_eq!(confirmed.missing_days, 8);
+}
+
 /// The dataset identity is the stored rows only: a skipped fact leaves the
 /// digest equal to the same derivation without it.
 #[test]

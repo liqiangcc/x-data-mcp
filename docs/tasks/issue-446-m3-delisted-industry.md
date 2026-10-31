@@ -1408,7 +1408,11 @@ owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，�
    `end_day > last_day`）→ `deferred_beyond_calendar`：整行不写、计数、最多 10 条样例；
    item 成功。**这条不看区间内有多少交易日**（部分越界的 `10-20..10-29` 即使覆盖内
    有 7 个交易日也整行 deferred）；**不 clamp `end_day`、不写部分 `missing_days`**；
-   下一次运行日历前进后同一 fact 自然纳入。
+   下一次运行日历前进后同一 fact 自然纳入。covered 子段
+   `[max(start_day, first_day), min(end_day, last_day)]`（非空时）加入 `explained`，
+   只用于向 gap 派生解释「这些天是已知 confirmed 停牌」，避免把缺 bar 误报成
+   `unresolved_gap`；不写 suspension 行、不改 deferred 计数。整段在 `last_day` 之后
+   或完全在 `first_day` 之前时无子段可加。
 2. 区间完全落在 `[first_day, last_day]` 内且 `trading_days_within == 0` →
    `skipped_no_trading_day`：整行不写、计数、最多 10 条样例；item 成功。没有可交易日
    就没有可交易性影响，不能因为一个周末区间让全市场停牌数据失败。
@@ -1427,8 +1431,9 @@ owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，�
   跳过形态不产生行，因此不写 0。
 - `Error::TradingDayRange` 保留，但不再用于上述两种形态；`UnknownEntity` / `Overlap` /
   `Duplicate` / `Range` / `MissingDays` / `Reason` / `SourceKind` 等仍 fail-closed。
-- 与 `unresolved_gap` 不双计：被跳过的区间不进 `explained`，不产生 gap 行
-  （这些天本来没有 bar）。
+- 与 `unresolved_gap` 不双计：`deferred_beyond_calendar` 的 covered 子段进
+  `explained`（只解释缺 bar，不写行）；`skipped_no_trading_day` 不进 `explained`
+  （区间内没有交易日），两种情况都不产生 gap 行。
 - digest 只覆盖已写行：跳过不改变 `suspensions-v1` 的输入，也不改 `algorithm_version`。
 
 **测试清单（CI，不联网）**
@@ -1440,7 +1445,8 @@ owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，�
 | 部分越界（`10-20..10-29`，日历到 `10-28`） | `deferred_beyond_calendar == 1`、无行、`missing_days` 不出现部分计数 |
 | 跨交易日区间（覆盖完整） | 正常行、`missing_days` = 区间内交易日数 |
 | 既有 fail-closed | `UnknownEntity`/`Overlap`/`Duplicate`/`Range` 回归不变 |
-| digest / gap | 跳过不改变 digest；被跳过区间不产生 explained/gap 行 |
+| deferred 的 covered 子段 | 覆盖段内缺 bar → 不产生 gap 行；日历前进后同一区间写出正常 confirmed 行且 `missing_days` 完整 |
+| digest / gap | 跳过不改变 digest；skipped 区间不产生 explained/gap 行 |
 | 写入器 | evidence 落库含 4 个字段，计数与样例一致，行数不变 |
 
 **落点**：`src/security_master/suspensions.rs`（计数与样例、覆盖边界、分支）、
@@ -1456,6 +1462,8 @@ owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，�
   `skipped_no_trading_day` / `skipped_samples`；`assemble_suspensions` 先判覆盖
   （`calendar_covers`，空日历返回 false）再数交易日；样例上限 `SKIP_SAMPLE_LIMIT = 10`。
   `Error::TradingDayRange` 保留但不再由本函数返回。
+- gap 交互：`deferred_beyond_calendar` 区间的 covered 子段进 `explained`
+  （不写行、不改计数），覆盖段内的缺 bar 不再产生 `unresolved_gap`；`skipped` 区间不进。
 - 证据：item `outcome_json` 与 `derived_dataset_versions` evidence 各 4 个字段（样例
   `entity`/`start_day`/`end_day`/`source_record_id`）；写入器新增 H3 同形校验，拒绝
   「样例数 > 计数」的集合（行计数器校验不变）。
@@ -1466,6 +1474,7 @@ owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，�
   `an_interval_past_the_calendar_last_day_is_deferred_whole`（含部分越界 `10-20..10-29`）、
   `a_covered_interval_keeps_its_trading_day_count`、
   `a_skipped_interval_neither_splits_a_gap_nor_adds_a_row`、
+  `a_deferred_interval_explains_its_covered_days_and_writes_no_gap`、
   `a_skipped_interval_does_not_enter_the_digest`、
   `skip_counts_stay_complete_when_samples_are_truncated`、
   `a_confirmed_fact_for_an_unknown_entity_is_refused`（回归）；

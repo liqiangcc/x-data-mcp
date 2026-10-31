@@ -304,7 +304,8 @@ pub struct SuspensionSet {
     /// range `[first_day, last_day]` (or the calendar is empty). No row is
     /// written and the fact is re-evaluated once the calendar advances; a
     /// partially covered interval is never written with a partial
-    /// `missing_days`.
+    /// `missing_days`. The covered sub-segment still explains its trading days
+    /// to the gap derivation, so a known suspension is not reported as a gap.
     pub deferred_beyond_calendar: usize,
     /// Up to [`SKIP_SAMPLE_LIMIT`] of the deferred intervals, in fact order.
     pub deferred_samples: Vec<SkippedInterval>,
@@ -345,11 +346,12 @@ impl SuspensionSet {
 /// A confirmed interval the calendar cannot place writes no row: one that is
 /// not fully inside the calendar's covered range `[first_day, last_day]` is
 /// counted as [`SuspensionSet::deferred_beyond_calendar`] (writing only its
-/// covered trading days would understate `missing_days`), one that is inside it
-/// but covers only non-trading days as
-/// [`SuspensionSet::skipped_no_trading_day`]. Both are sampled and returned in
-/// the set; neither is an error, and neither joins `explained`, so a skipped
-/// interval never produces a gap row either.
+/// covered trading days would understate `missing_days`), while the sub-segment
+/// the calendar does cover still joins `explained`, so a known suspension is
+/// not re-derived as an `unresolved_gap`; one that is inside the range but
+/// covers only non-trading days is counted as
+/// [`SuspensionSet::skipped_no_trading_day`] and explains nothing (there is no
+/// trading day to explain). Neither is an error and neither produces a row.
 pub fn assemble_suspensions(
     source: &SuspensionSource,
     facts: &[SecurityLifecycleFact],
@@ -381,6 +383,15 @@ pub fn assemble_suspensions(
         // `missing_days`; clamping `end_day` is not an option either, so the
         // fact defers whole and is re-evaluated once the calendar advances.
         if !calendar_covers(calendar, fact.start_day, fact.end_day) {
+            // The covered part is a known confirmed suspension: explain its
+            // trading days so a missing bar there is not re-derived as an
+            // `unresolved_gap` ("missing bar, no event") when the event does
+            // exist. This writes no suspension row and does not change the
+            // deferred count; an interval wholly after `last_day` (or wholly
+            // before `first_day`) has no covered segment and explains nothing.
+            if let Some(range) = covered_segment(calendar, fact.start_day, fact.end_day) {
+                explained.entry(fact.entity()).or_default().push(range);
+            }
             set.deferred_beyond_calendar += 1;
             push_skip_sample(&mut set.deferred_samples, fact);
             continue;
@@ -446,6 +457,22 @@ fn calendar_covers(calendar: &[NaiveDate], start: NaiveDate, end: NaiveDate) -> 
         (Some(first), Some(last)) => *first <= start && end <= *last,
         _ => false,
     }
+}
+
+/// The part of an interval the calendar actually covers, clamped to
+/// `[first_day, last_day]`; `None` when the calendar is empty or the interval
+/// lies wholly outside the covered range. XDM-134 uses it only to explain a
+/// deferred interval's known-suspension days to the gap derivation.
+fn covered_segment(
+    calendar: &[NaiveDate],
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Option<(NaiveDate, NaiveDate)> {
+    let first = *calendar.first()?;
+    let last = *calendar.last()?;
+    let from = start.max(first);
+    let to = end.min(last);
+    (from <= to).then_some((from, to))
 }
 
 /// Record one skipped confirmed interval: the count is always complete, the
