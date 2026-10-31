@@ -6,7 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-EXPECTED_PACKAGE_VERSION = "0.2.0-preview.38"
+EXPECTED_PACKAGE_VERSION = "0.2.0-preview.39"
 EXPECTED_LEGACY_SCHEMA = 18
 # Fresh `init` output schema (code constant). The DEPLOYED schema is a
 # deployment fact and is read from docs/STATUS.md (see DEPLOYED_SCHEMA_ROW):
