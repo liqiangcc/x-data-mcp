@@ -694,6 +694,13 @@ fn execute(
         )
         .map_err(|e| Error::Invalid(e.to_string()))?;
         let generation_evidence = source.generation_evidence(generation_manifest_sha256);
+        // Registered as evidence so a later replay can tell a changed
+        // master/calendar/bar-day state from changed stored rows (XDM-138).
+        let inputs_digest = crate::security_master::suspensions::inputs_digest(
+            &inputs.master.version_id,
+            &inputs.calendar,
+            &inputs.bar_days,
+        );
         let registration = market.commit_suspensions(&SuspensionWrite {
             set: &set,
             master: &inputs.master,
@@ -704,6 +711,7 @@ fn execute(
             member_sha256: &source.base_member_sha256,
             security_event_sha256: &source.security_event_sha256,
             generation_evidence: &generation_evidence,
+            replay_inputs_digest: Some(inputs_digest.as_str()),
         })?;
         return Ok(json!({
             "dataset": item.item_id,

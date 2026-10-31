@@ -75,6 +75,22 @@ pub(crate) fn replace_suspensions(
     task_id: &str,
     item_id: &str,
 ) -> Result<Option<DerivedVersionRow>, Error> {
+    replace_suspensions_with_evidence(c, set, source_binding_digest, task_id, item_id, None)
+}
+
+/// The same writer with an optional replay-input digest. `source_store replay
+/// --scope suspensions` passes it so a later `--verify-only` can tell a changed
+/// master/calendar (the digest names the inputs) from changed stored rows. The
+/// daily item leaves it `None`; the rows and registration are otherwise
+/// identical.
+pub(crate) fn replace_suspensions_with_evidence(
+    c: &Connection,
+    set: &SuspensionSet,
+    source_binding_digest: Digest,
+    task_id: &str,
+    item_id: &str,
+    replay_inputs_digest: Option<&str>,
+) -> Result<Option<DerivedVersionRow>, Error> {
     suspensions::validate_set(&set.rows).map_err(suspension_error)?;
 
     let mut rows = set.rows.clone();
@@ -136,7 +152,7 @@ pub(crate) fn replace_suspensions(
         .map_err(storage)?;
         return Ok(None);
     }
-    let evidence = json!({
+    let mut evidence = json!({
         "dataset": DATASET_KIND,
         "dataset_key": DATASET_KEY,
         "digest_format": DIGEST_FORMAT,
@@ -172,6 +188,9 @@ pub(crate) fn replace_suspensions(
             point-in-time query with known_at excludes them (fail-closed). \
             confirmed rows carry the announcement day when the source has one",
     });
+    if let (Some(digest), Some(object)) = (replay_inputs_digest, evidence.as_object_mut()) {
+        object.insert("replay_inputs_digest".to_string(), json!(digest));
+    }
     let evidence_digest = evidence_store::put_evidence(c, EvidenceKind::Derived, &evidence)?;
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -262,6 +281,10 @@ pub(crate) struct SuspensionWrite<'a> {
     pub member_sha256: &'a str,
     pub security_event_sha256: &'a str,
     pub generation_evidence: &'a serde_json::Value,
+    /// `Some` only for `source_store replay --scope suspensions`: the digest of
+    /// the database inputs (master/calendar/bar days) the rows were assembled
+    /// from, registered as evidence for a later `--verify-only`.
+    pub replay_inputs_digest: Option<&'a str>,
 }
 
 /// Write the binding, verify the master came from the same inputs, then
@@ -283,7 +306,14 @@ pub(crate) fn commit_suspensions(
             "suspensions derive from a security_master assembled from another generation",
         ));
     }
-    replace_suspensions(c, write.set, binding, write.task_id, write.item_id)
+    replace_suspensions_with_evidence(
+        c,
+        write.set,
+        binding,
+        write.task_id,
+        write.item_id,
+        write.replay_inputs_digest,
+    )
 }
 
 /// The four inputs `derived:suspensions` derives from, read in one snapshot
@@ -297,37 +327,66 @@ pub(crate) struct SuspensionInputs {
     /// binding must match the generation this item commits.
     pub master: DerivedVersionRow,
     pub calendar: Vec<chrono::NaiveDate>,
-    pub bar_days: std::collections::BTreeMap<String, Vec<chrono::NaiveDate>>,
+    pub bar_days: BarDays,
 }
 
-/// Read [`SuspensionInputs`], failing closed when an input is absent: a
-/// missing master or an empty calendar would otherwise be read as "no gaps".
-pub(crate) fn read_inputs(c: &Connection) -> Result<SuspensionInputs, Error> {
+/// Entity → raw bar days. A named alias keeps the nested generic out of the
+/// struct field (the pre-push shape checker splits it as a field named `Vec`).
+pub(crate) type BarDays = std::collections::BTreeMap<String, Vec<chrono::NaiveDate>>;
+
+/// Why [`read_inputs_if_ready`] could not read the four inputs. The replay
+/// maps both to the stable `suspension_replay_not_ready` code; the daily item
+/// keeps its existing fail-closed messages.
+pub(crate) enum SuspensionInputsReadiness {
+    Ready(Box<SuspensionInputs>),
+    MissingMaster,
+    EmptyCalendar,
+}
+
+/// Read [`SuspensionInputs`], reporting which prerequisite is absent instead
+/// of collapsing both into one error. A missing master or an empty calendar
+/// would otherwise be read as "no gaps", so neither is ever treated as an
+/// empty dataset.
+pub(crate) fn read_inputs_if_ready(c: &Connection) -> Result<SuspensionInputsReadiness, Error> {
     let intervals = super::security::read_security_master(c)?;
-    let master = derived::read_version(
+    let Some(master) = derived::read_version(
         c,
         crate::security_master::assembly::DATASET_KIND,
         crate::security_master::assembly::DATASET_KEY,
     )?
-    .ok_or_else(|| {
-        integrity("suspensions need a stored security_master; none exists for this run")
-    })?;
+    else {
+        return Ok(SuspensionInputsReadiness::MissingMaster);
+    };
     let calendar: Vec<chrono::NaiveDate> = super::calendar::read_days(c)?
         .into_iter()
         .map(|day| day.day)
         .collect();
     if calendar.is_empty() {
-        return Err(integrity(
-            "suspensions need the derived trading calendar; it is empty",
-        ));
+        return Ok(SuspensionInputsReadiness::EmptyCalendar);
     }
     let bar_days = super::series::read_raw_bar_days(c)?;
-    Ok(SuspensionInputs {
-        intervals,
-        master,
-        calendar,
-        bar_days,
-    })
+    Ok(SuspensionInputsReadiness::Ready(Box::new(
+        SuspensionInputs {
+            intervals,
+            master,
+            calendar,
+            bar_days,
+        },
+    )))
+}
+
+/// Read [`SuspensionInputs`], failing closed when an input is absent: a
+/// missing master or an empty calendar would otherwise be read as "no gaps".
+pub(crate) fn read_inputs(c: &Connection) -> Result<SuspensionInputs, Error> {
+    match read_inputs_if_ready(c)? {
+        SuspensionInputsReadiness::Ready(inputs) => Ok(*inputs),
+        SuspensionInputsReadiness::MissingMaster => Err(integrity(
+            "suspensions need a stored security_master; none exists for this run",
+        )),
+        SuspensionInputsReadiness::EmptyCalendar => Err(integrity(
+            "suspensions need the derived trading calendar; it is empty",
+        )),
+    }
 }
 
 /// Every stored suspension row in row-identity order. The decoder is PR-4's,

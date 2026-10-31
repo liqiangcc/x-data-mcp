@@ -438,6 +438,44 @@ pub fn reparse(
     facts: &[SecurityLifecycleFact],
     today: NaiveDate,
 ) -> Result<Admitted, A3Error> {
+    let pages = reparse_pages(store, index)?;
+    Ok(Admitted::new(
+        today,
+        facts,
+        pages.events,
+        pages.counters,
+        pages.not_observed_windows,
+        Vec::new(),
+        pages.snapshot_ids,
+    ))
+}
+
+/// Parse the frozen pages without a member table (`source_store replay
+/// --scope suspensions` without `--db`): the number of confirmed intervals the
+/// bytes carry. Without `security_master` an interval cannot be placed in a
+/// member window or clipped, so this is a count only — it never becomes a
+/// fact and no row is written. The daily/`--db` path uses [`reparse`], so both
+/// share the same page parser and merge rules.
+pub fn reparse_interval_count(
+    store: &SourceStore,
+    index: &[SnapshotRow],
+) -> Result<usize, A3Error> {
+    let pages = reparse_pages(store, index)?;
+    let mut counters = pages.counters;
+    let (events, _) = merge_overlaps(pages.events, &mut counters);
+    Ok(events.len())
+}
+
+/// The parsed pages before the member window and window grouping are applied.
+struct ReparsedPages {
+    events: Vec<ParsedEvent>,
+    counters: Counters,
+    not_observed_windows: Vec<String>,
+    snapshot_ids: Vec<String>,
+}
+
+/// Shared page parser of [`reparse`] and [`reparse_interval_count`].
+fn reparse_pages(store: &SourceStore, index: &[SnapshotRow]) -> Result<ReparsedPages, A3Error> {
     let source_id = SourceId::SseSuspension.as_str();
     let mut latest: BTreeMap<String, &SnapshotRow> = BTreeMap::new();
     for row in index.iter().filter(|row| row.source_id == source_id) {
@@ -524,15 +562,12 @@ pub fn reparse(
         }
     }
     counters.windows = windows.len();
-    Ok(Admitted::new(
-        today,
-        facts,
+    Ok(ReparsedPages {
         events,
         counters,
         not_observed_windows,
-        Vec::new(),
         snapshot_ids,
-    ))
+    })
 }
 
 fn window_label(window: Segment) -> String {

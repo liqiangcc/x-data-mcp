@@ -31,11 +31,30 @@
 //!   first write recorded instead of re-stamping it. A frozen table with no
 //!   A-share change row is `empty_name_set`: nothing is written, and "no data"
 //!   is never reported as "the empty table was rebuilt".
+//! - `suspensions` (XDM-138): the frozen A-3 suspension/resumption pages are
+//!   re-parsed into the admitted facts, then the whole dataset is assembled by
+//!   the **same** function the daily `derived:suspensions` item calls
+//!   (`security_master::suspensions::assemble_suspensions`) from three
+//!   database inputs: the `security_master` intervals, the derived trading
+//!   calendar and the raw bar days. Those inputs are market data, not source
+//!   store bytes, so this scope is only *conditionally* replayable: without a
+//!   database it counts the facts the frozen pages carry and writes nothing;
+//!   with a database that has no master/calendar it fails closed with
+//!   `suspension_replay_not_ready` instead of writing an empty table. Rebuild
+//!   the master and calendar first (or simply run the daily item), then run
+//!   this scope. It is deliberately not part of `Scope::ALL`: a fresh-init
+//!   `--scope all` runs before the services exist and therefore cannot have
+//!   those inputs.
 //!
 //! Determinism: two replays of one store with one parser version produce the
 //! same summary digest — the summary is sha256 over the canonical row lines
 //! (`security_names` adds its coverage windows to the row digest), so "clear
-//! the DB and replay" is checkable instead of asserted.
+//! the DB and replay" is checkable instead of asserted. `suspensions` is
+//! deterministic over **both** inputs: the same store plus the same database
+//! state gives the same digest, while a changed master/calendar legitimately
+//! changes it. The replay records that state's digest (`inputs_digest`) in the
+//! registration evidence, so `--verify-only` labels a database advance
+//! `inputs_changed` (not `rows_changed`) and never calls it store corruption.
 //!
 //! Without a database the scopes only compute and report their summary, so a
 //! read never touches a database and never creates the store.
@@ -80,16 +99,31 @@ pub const COMPUTED_RISK_WARNINGS_NO_DB: &str = "computed_no_db";
 pub const REBUILT_SECURITY_NAMES: &str = "rebuilt";
 /// The name-history table set was recomputed but no `--db` was given.
 pub const COMPUTED_SECURITY_NAMES_NO_DB: &str = "computed_no_db";
+/// The `suspensions` scope had no writable dataset to produce (missing input
+/// in the database), so nothing was rebuilt and nothing was written.
+pub const REBUILT_NOT_READY: &str = "not_rebuilt";
+/// The suspension dataset was recomputed from the frozen A-3 pages and written.
+pub const REBUILT_SUSPENSIONS: &str = "rebuilt";
+/// The frozen A-3 pages were parsed but no `--db` was given, so no dataset
+/// could be assembled (the three other inputs live in the market database).
+pub const COMPUTED_SUSPENSIONS_NO_DB: &str = "computed_no_db";
+/// Stable code of a `--db` replay whose database has no `security_master` or
+/// no trading calendar. It fails closed without writing an empty dataset.
+pub const SUSPENSION_REPLAY_NOT_READY: &str = "suspension_replay_not_ready";
 /// The scope had no matching manifest records: nothing was computed or written.
 /// It is never reported as `rebuilt` — "no data" is not "an empty table".
 pub const NOTHING_SELECTED: &str = "nothing_selected";
 
 /// Source id of the frozen SZSE `SSGSGMXX`/`tab2` short-name table (PR-2).
 const SZSE_SHORT_NAME_SOURCE_ID: &str = "szse_short_name";
+/// Source id of the frozen SSE suspension/resumption event pages (A-3).
+const SSE_SUSPENSION_SOURCE_ID: &str = "sse_suspension";
 
 pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6), `generation_facts` \
 (M3 PR-8), `risk_warnings` (M3 PR-10) and `security_names` (M3 PR-12) rebuild their \
-tables from the store.";
+tables from the store; `suspensions` (XDM-138) additionally needs the database's \
+security_master, trading calendar and bar days, so it is run explicitly after those \
+are rebuilt (`--scope all` leaves it out).";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -99,9 +133,15 @@ pub enum Scope {
     GenerationFacts,
     RiskWarnings,
     SecurityNames,
+    Suspensions,
 }
 
 impl Scope {
+    /// The scopes `--scope all` replays. `suspensions` is deliberately not in
+    /// this list: it derives from the database's `security_master`, calendar
+    /// and bar days, which a fresh-init `--scope all` (run before the services
+    /// start) does not have. Including it would make every fresh-init deployment
+    /// fail with `suspension_replay_not_ready` before those inputs can exist.
     pub const ALL: [Scope; 5] = [
         Scope::Industry,
         Scope::Exchange,
@@ -117,6 +157,7 @@ impl Scope {
             "generation_facts" => Some(Self::GenerationFacts),
             "risk_warnings" => Some(Self::RiskWarnings),
             "security_names" => Some(Self::SecurityNames),
+            "suspensions" => Some(Self::Suspensions),
             _ => None,
         }
     }
@@ -128,6 +169,7 @@ impl Scope {
             Self::GenerationFacts => "generation_facts",
             Self::RiskWarnings => "risk_warnings",
             Self::SecurityNames => "security_names",
+            Self::Suspensions => "suspensions",
         }
     }
 
@@ -161,6 +203,10 @@ impl Scope {
             Self::SecurityNames => {
                 record.store_kind == super::StoreKind::HttpFetch
                     && record.source_id == SZSE_SHORT_NAME_SOURCE_ID
+            }
+            Self::Suspensions => {
+                record.store_kind == super::StoreKind::HttpFetch
+                    && record.source_id == SSE_SUSPENSION_SOURCE_ID
             }
         }
     }
@@ -204,6 +250,23 @@ pub struct ScopeReport {
     /// Primary keys the database should change, capped at 20.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub drift: Vec<String>,
+    /// Why `--verify-only` did not match (`suspensions`): `inputs_changed`
+    /// when the stored registration names a different master/calendar/bar-day
+    /// state than the current database, otherwise `rows_changed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drift_cause: Option<&'static str>,
+    /// Digest of the database inputs a conditional scope derived from
+    /// (`suspensions`). The same store with a different master/calendar has a
+    /// different digest by design; it is not a store corruption.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs_digest: Option<String>,
+    /// Whether the current `inputs_digest` equals the one recorded when the
+    /// stored dataset was written (`suspensions`). `None` when the stored
+    /// registration carries no such evidence (a dataset written before this
+    /// scope existed). `false` with the rows still matching simply means the
+    /// database advanced without changing the suspension rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inputs_match: Option<bool>,
     /// Rows of the rebuilt table set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshots: Option<usize>,
@@ -216,9 +279,23 @@ pub struct ScopeReport {
     /// Same-day collisions that dropped a zero-length segment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded: Option<usize>,
-    /// Registered generation facts (`generation_facts`).
+    /// Registered generation facts (`generation_facts`) or confirmed facts
+    /// parsed from the frozen pages (`suspensions`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts: Option<usize>,
+    /// Rows of the assembled suspension dataset (`suspensions` with `--db`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmed_rows: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gap_rows: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub missing_days: Option<i64>,
+    /// Confirmed intervals the calendar cannot place (XDM-134).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deferred_beyond_calendar: Option<usize>,
+    /// Confirmed intervals inside the calendar that cover no trading day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped_no_trading_day: Option<usize>,
     /// The replayable as-of bound (`security_names`): the last change day the
     /// frozen table proves. The SH/BJ `NOT_AVAILABLE` coverage windows end
     /// here. It is derived from the bytes, never from the clock, so the same
@@ -338,19 +415,25 @@ fn run(
         } else {
             "ok"
         };
-        let mut rebuilt = if *scope == Scope::SecurityNames && selected.is_empty() {
-            // "No matching record" is not "rebuilt": the fresh-init table is
-            // left untouched and the status stays `store_empty`.
-            NOTHING_SELECTED
-        } else {
-            SKELETON_REBUILT
-        };
+        let mut rebuilt =
+            if matches!(*scope, Scope::SecurityNames | Scope::Suspensions) && selected.is_empty() {
+                // "No matching record" is not "rebuilt": the fresh-init table is
+                // left untouched and the status stays `store_empty`.
+                NOTHING_SELECTED
+            } else {
+                SKELETON_REBUILT
+            };
         let mut summary = None;
         let mut database_verdict = None;
         let mut drift_keys = Vec::new();
+        let mut drift_cause = None;
+        let mut inputs_digest = None;
+        let mut inputs_match = None;
         let mut snapshot_count = None;
+        let mut fact_count = None;
         let mut as_of = None;
         let mut counts = (None, None, None);
+        let mut suspension_counts = (None, None, None, None, None);
         if *scope == Scope::Industry && status == "ok" {
             match rebuild_industry(store, request) {
                 Ok(outcome) => {
@@ -445,6 +528,7 @@ fn run(
                     database_verdict = outcome.database;
                     drift_keys = outcome.drift;
                     snapshot_count = Some(outcome.facts);
+                    fact_count = Some(outcome.facts);
                     if outcome.status != "ok" {
                         status = outcome.status;
                     }
@@ -489,6 +573,45 @@ fn run(
                 }
             }
         }
+        if *scope == Scope::Suspensions && status == "ok" {
+            match rebuild_suspensions(store, &selected, request.verify_only, request.database) {
+                Ok(outcome) => {
+                    rebuilt = outcome.rebuilt;
+                    summary = outcome.summary;
+                    database_verdict = outcome.database;
+                    drift_keys = outcome.drift;
+                    drift_cause = outcome.drift_cause;
+                    inputs_digest = outcome.inputs_digest;
+                    inputs_match = outcome.inputs_match;
+                    snapshot_count = outcome.rows;
+                    fact_count = Some(outcome.facts);
+                    suspension_counts = (
+                        Some(outcome.confirmed_rows),
+                        Some(outcome.gap_rows),
+                        Some(outcome.missing_days),
+                        Some(outcome.deferred_beyond_calendar),
+                        Some(outcome.skipped_no_trading_day),
+                    );
+                    for issue in outcome.problems {
+                        problems.push(issue);
+                    }
+                    if outcome.status != "ok" {
+                        status = outcome.status;
+                    }
+                }
+                Err(error) => {
+                    status = "suspensions_rebuild_failed";
+                    problems.push(BlobProblem {
+                        sha256: String::new(),
+                        source_id: SSE_SUSPENSION_SOURCE_ID.to_string(),
+                        reason: "suspensions_rebuild_failed",
+                        expected: "a parseable A-3 page set and a readable market database"
+                            .to_string(),
+                        actual: error,
+                    });
+                }
+            }
+        }
         scope_reports.push(ScopeReport {
             scope: scope.name(),
             status,
@@ -499,13 +622,19 @@ fn run(
             summary,
             database: database_verdict,
             drift: drift_keys,
+            drift_cause,
+            inputs_digest,
+            inputs_match,
             snapshots: snapshot_count,
             assignments: counts.0,
             boundaries: counts.1,
             superseded: counts.2,
-            facts: (*scope == Scope::GenerationFacts)
-                .then_some(snapshot_count)
-                .flatten(),
+            facts: fact_count,
+            confirmed_rows: suspension_counts.0,
+            gap_rows: suspension_counts.1,
+            missing_days: suspension_counts.2,
+            deferred_beyond_calendar: suspension_counts.3,
+            skipped_no_trading_day: suspension_counts.4,
             as_of,
         });
     }
@@ -1172,6 +1301,367 @@ fn names_drift(
         .take(20)
         .cloned()
         .collect()
+}
+
+/// The `suspensions` scope's outcome, or the reason no dataset was produced.
+struct SuspensionsOutcome {
+    status: &'static str,
+    rebuilt: &'static str,
+    summary: Option<String>,
+    database: Option<&'static str>,
+    drift: Vec<String>,
+    drift_cause: Option<&'static str>,
+    inputs_digest: Option<String>,
+    inputs_match: Option<bool>,
+    /// Rows of the rebuilt dataset; `None` without a database (no assembly).
+    rows: Option<usize>,
+    /// Confirmed facts parsed from the frozen pages (placed when `--db`).
+    facts: usize,
+    confirmed_rows: usize,
+    gap_rows: usize,
+    missing_days: i64,
+    deferred_beyond_calendar: usize,
+    skipped_no_trading_day: usize,
+    problems: Vec<BlobProblem>,
+}
+
+impl SuspensionsOutcome {
+    fn computed(facts: usize) -> Self {
+        Self {
+            status: "ok",
+            rebuilt: COMPUTED_SUSPENSIONS_NO_DB,
+            summary: None,
+            database: None,
+            drift: Vec::new(),
+            drift_cause: None,
+            inputs_digest: None,
+            inputs_match: None,
+            rows: None,
+            facts,
+            confirmed_rows: 0,
+            gap_rows: 0,
+            missing_days: 0,
+            deferred_beyond_calendar: 0,
+            skipped_no_trading_day: 0,
+            problems: Vec::new(),
+        }
+    }
+
+    fn not_ready(detail: String) -> Self {
+        Self {
+            status: SUSPENSION_REPLAY_NOT_READY,
+            rebuilt: REBUILT_NOT_READY,
+            problems: vec![BlobProblem {
+                sha256: String::new(),
+                source_id: SSE_SUSPENSION_SOURCE_ID.to_string(),
+                reason: SUSPENSION_REPLAY_NOT_READY,
+                expected: "a database with a stored security_master and a non-empty \
+                           trading calendar"
+                    .to_string(),
+                actual: detail,
+            }],
+            ..Self::computed(0)
+        }
+    }
+
+    fn from_set(set: &crate::security_master::suspensions::SuspensionSet) -> Self {
+        let mut outcome = Self::computed(0);
+        outcome.rows = Some(set.rows.len());
+        outcome.summary = Some(suspension_summary(&set.rows));
+        outcome.confirmed_rows = set.confirmed_rows;
+        outcome.gap_rows = set.gap_rows;
+        outcome.missing_days = set.missing_days();
+        outcome.deferred_beyond_calendar = set.deferred_beyond_calendar;
+        outcome.skipped_no_trading_day = set.skipped_no_trading_day;
+        outcome
+    }
+}
+
+pub(crate) fn suspension_summary(rows: &[crate::security_master::SuspensionInterval]) -> String {
+    // The writer sorts before it digests (`sort_rows` in
+    // `sqlite_market::suspensions`); the summary must use the same order or a
+    // set that would be written identically could compare as drift.
+    let mut rows = rows.to_vec();
+    rows.sort_by(|left, right| {
+        (left.exchange, left.code.as_str(), left.start_day).cmp(&(
+            right.exchange,
+            right.code.as_str(),
+            right.start_day,
+        ))
+    });
+    crate::compact_market::digest_hex(&crate::security_master::suspensions::dataset_digest(&rows))
+}
+
+fn suspension_row_key(row: &crate::security_master::SuspensionInterval) -> String {
+    format!(
+        "{}.{}@{}..{}|{}|{}|{}|{}|{}|{}",
+        row.exchange.as_str(),
+        row.code,
+        row.start_day,
+        row.end_day,
+        row.certainty.as_str(),
+        row.reason.as_str(),
+        row.missing_days,
+        row.known_at.map(|day| day.to_string()).unwrap_or_default(),
+        row.source_kind,
+        row.source_record_id.as_deref().unwrap_or_default()
+    )
+}
+
+fn suspension_drift(
+    recomputed: &[crate::security_master::SuspensionInterval],
+    stored: &[crate::security_master::SuspensionInterval],
+) -> Vec<String> {
+    let keys = |rows: &[crate::security_master::SuspensionInterval]| {
+        rows.iter().map(suspension_row_key).collect::<BTreeSet<_>>()
+    };
+    keys(recomputed)
+        .symmetric_difference(&keys(stored))
+        .take(20)
+        .cloned()
+        .collect()
+}
+
+/// The derived dataset's registration evidence, `None` when it was never
+/// written. The suspension replay reads its own `replay_inputs_digest` from
+/// here to distinguish an input advance from changed rows.
+fn derived_evidence(
+    backend: &MarketBackend,
+    dataset_kind: &str,
+    dataset_key: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    let registration = backend
+        .read(|c| crate::sqlite_market::derived::read_version(c, dataset_kind, dataset_key))
+        .map_err(|error| error.to_string())?;
+    let Some(registration) = registration else {
+        return Ok(None);
+    };
+    let (kind, text) = backend
+        .read(|c| {
+            crate::sqlite_market::evidence_store::read_evidence(c, &registration.evidence_digest)
+        })
+        .map_err(|error| error.to_string())?;
+    if kind != crate::compact_market::EvidenceKind::Derived {
+        return Err(format!(
+            "{dataset_kind} registration evidence is not derived evidence"
+        ));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("evidence_json: {error}"))?;
+    Ok(Some(value))
+}
+
+fn stored_suspension_inputs_digest(backend: &MarketBackend) -> Result<Option<String>, String> {
+    let evidence = derived_evidence(
+        backend,
+        crate::security_master::suspensions::DATASET_KIND,
+        crate::security_master::suspensions::DATASET_KEY,
+    )?;
+    Ok(evidence
+        .as_ref()
+        .and_then(|value| value.get("replay_inputs_digest"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
+}
+
+/// Reconstruct the generation binding row the `security_master` was written
+/// under, so `commit_suspensions` can prove (again) that the rows are bound to
+/// the same generation as the master they derive from. A fresh-init replay has
+/// no other way to name that binding: the master registration carries its
+/// digest, and the binding row carries the generation evidence verbatim.
+struct ReplayBinding {
+    generation_id: String,
+    manifest_sha: String,
+    member_sha: String,
+    event_sha: String,
+    evidence: serde_json::Value,
+}
+
+fn replay_generation_binding(
+    backend: &MarketBackend,
+    master: &crate::sqlite_market::derived::DerivedVersionRow,
+) -> Result<ReplayBinding, String> {
+    let binding = backend
+        .read(|c| {
+            crate::sqlite_market::evidence_store::read_source_binding(
+                c,
+                &master.source_binding_digest,
+            )
+        })
+        .map_err(|error| format!("security_master source binding: {error}"))?;
+    let (kind, text) = backend
+        .read(|c| crate::sqlite_market::evidence_store::read_evidence(c, &binding.evidence_digest))
+        .map_err(|error| format!("security_master binding evidence: {error}"))?;
+    if kind != crate::compact_market::EvidenceKind::Generation {
+        return Err("security_master source binding evidence is not generation".to_string());
+    }
+    let evidence: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("binding evidence_json: {error}"))?;
+    Ok(ReplayBinding {
+        generation_id: binding.generation_id,
+        manifest_sha: crate::compact_market::digest_hex(&binding.generation_manifest_sha256),
+        member_sha: crate::compact_market::digest_hex(&binding.day_member_sha256),
+        event_sha: crate::compact_market::digest_hex(&binding.security_event_sha256),
+        evidence,
+    })
+}
+
+/// Rebuild `suspension_intervals` from the frozen A-3 pages plus the database's
+/// own inputs (XDM-138).
+///
+/// The three non-store inputs are read from the supplied database in one
+/// snapshot (`sqlite_market::suspensions::read_inputs_if_ready`), the pages are re-parsed with
+/// the same A-3 parser the daily item uses, and the dataset is assembled by
+/// the daily item's own `assemble_suspensions` and written by its own
+/// `commit_suspensions` (bound to the same generation as the master). There is
+/// no second derivation and no second writer.
+///
+/// Without a database only the frozen pages are parsed and counted: without a
+/// `security_master` an interval cannot be placed in a member window, so the
+/// scope reports `computed_no_db` and writes nothing. With a database that has
+/// no master/calendar it reports `suspension_replay_not_ready` and leaves the
+/// table untouched: an empty table must never stand in for "not assembled".
+fn rebuild_suspensions(
+    store: &SourceStore,
+    records: &[&ManifestRecord],
+    verify_only: bool,
+    database: Option<&Path>,
+) -> Result<SuspensionsOutcome, String> {
+    let index =
+        crate::exchange_source::rebuild(store, records).map_err(|error| error.to_string())?;
+    if !index.problems.is_empty() {
+        let mut outcome = SuspensionsOutcome::computed(0);
+        outcome.status = "suspensions_rebuild_failed";
+        outcome.problems = index
+            .problems
+            .into_iter()
+            .map(|issue| BlobProblem {
+                sha256: issue.snapshot_id,
+                source_id: issue.source_id,
+                reason: issue.reason,
+                expected: "a registered A-3 page envelope".to_string(),
+                actual: issue.detail,
+            })
+            .collect();
+        return Ok(outcome);
+    }
+    let Some(database) = database else {
+        let facts = crate::official_security::a3::reparse_interval_count(store, &index.rows)
+            .map_err(|error| format!("{}: {error}", error.code()))?;
+        return Ok(SuspensionsOutcome::computed(facts));
+    };
+    let backend = open_database(database)?;
+    let readiness = backend
+        .read(crate::sqlite_market::suspensions::read_inputs_if_ready)
+        .map_err(|error| format!("database_inputs: {error}"))?;
+    let inputs = match readiness {
+        crate::sqlite_market::suspensions::SuspensionInputsReadiness::Ready(inputs) => *inputs,
+        crate::sqlite_market::suspensions::SuspensionInputsReadiness::MissingMaster => {
+            return Ok(SuspensionsOutcome::not_ready(
+                "no stored security_master; rebuild it (or run the daily item) before \
+                 replaying suspensions"
+                    .to_string(),
+            ));
+        }
+        crate::sqlite_market::suspensions::SuspensionInputsReadiness::EmptyCalendar => {
+            return Ok(SuspensionsOutcome::not_ready(
+                "the derived trading calendar is empty; rebuild it (or run the daily \
+                 item) before replaying suspensions"
+                    .to_string(),
+            ));
+        }
+    };
+    // `reparse` only uses the day for the admitted snapshot's `as_of`
+    // evidence; facts come from the pages and their fingerprints. Use the
+    // newest observed acquisition day so the replay never reads the clock.
+    let as_of = index
+        .rows
+        .iter()
+        .filter_map(|row| NaiveDate::parse_from_str(&row.as_of, "%Y-%m-%d").ok())
+        .max()
+        .ok_or_else(|| "the frozen A-3 pages carry no observation date".to_string())?;
+    let admitted =
+        crate::official_security::a3::reparse(store, &index.rows, &inputs.intervals, as_of)
+            .map_err(|error| format!("{}: {error}", error.code()))?;
+    let facts = admitted.snapshot.facts.len();
+    let seam = crate::security_master::suspensions::suspension_source(Some(admitted.snapshot));
+    let set = crate::security_master::suspensions::assemble_suspensions(
+        &seam,
+        &inputs.intervals,
+        &inputs.calendar,
+        &inputs.bar_days,
+    )
+    .map_err(|error| error.to_string())?;
+    let mut outcome = SuspensionsOutcome::from_set(&set);
+    outcome.facts = facts;
+    let inputs_digest = crate::security_master::suspensions::inputs_digest(
+        &inputs.master.version_id,
+        &inputs.calendar,
+        &inputs.bar_days,
+    );
+    outcome.inputs_digest = Some(inputs_digest.clone());
+
+    let stored = backend
+        .read(crate::sqlite_market::suspensions::read_suspensions)
+        .map_err(|error| format!("stored suspensions: {error}"))?;
+    if verify_only {
+        let stored_inputs = stored_suspension_inputs_digest(&backend)?;
+        outcome.inputs_match = stored_inputs
+            .as_deref()
+            .map(|stored| stored == inputs_digest.as_str());
+        let stored_summary = suspension_summary(&stored);
+        if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
+            outcome.database = Some("match");
+            return Ok(outcome);
+        }
+        outcome.status = "drift";
+        outcome.database = Some("drift");
+        outcome.drift = suspension_drift(&set.rows, &stored);
+        outcome.drift_cause = Some(match stored_inputs {
+            Some(stored) if stored != inputs_digest => "inputs_changed",
+            _ => "rows_changed",
+        });
+        return Ok(outcome);
+    }
+
+    let binding = replay_generation_binding(&backend, &inputs.master)?;
+    backend
+        .commit_suspensions(&crate::sqlite_market::suspensions::SuspensionWrite {
+            set: &set,
+            master: &inputs.master,
+            task_id: "source_store_replay",
+            item_id: "derived:suspensions",
+            generation_id: &binding.generation_id,
+            generation_manifest_sha256: &binding.manifest_sha,
+            member_sha256: &binding.member_sha,
+            security_event_sha256: &binding.event_sha,
+            generation_evidence: &binding.evidence,
+            replay_inputs_digest: Some(inputs_digest.as_str()),
+        })
+        .map_err(|error| error.to_string())?;
+    let stored = backend
+        .read(crate::sqlite_market::suspensions::read_suspensions)
+        .map_err(|error| format!("stored suspensions: {error}"))?;
+    let stored_inputs = stored_suspension_inputs_digest(&backend)?;
+    outcome.inputs_match = Some(
+        stored_inputs
+            .as_deref()
+            .is_some_and(|stored| stored == inputs_digest.as_str()),
+    );
+    let stored_summary = suspension_summary(&stored);
+    if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
+        outcome.rebuilt = REBUILT_SUSPENSIONS;
+        outcome.database = Some("match");
+        return Ok(outcome);
+    }
+    outcome.status = "drift";
+    outcome.database = Some("drift");
+    outcome.drift = suspension_drift(&set.rows, &stored);
+    outcome.drift_cause = Some(match stored_inputs {
+        Some(stored) if stored != inputs_digest => "inputs_changed",
+        _ => "rows_changed",
+    });
+    Ok(outcome)
 }
 
 /// The generation-facts scope's outcome, or the reason no table set was

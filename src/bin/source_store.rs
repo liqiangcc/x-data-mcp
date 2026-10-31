@@ -8,7 +8,7 @@
 //! allowlists and the documented per-entry tool counts unchanged.
 //!
 //! ```text
-//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|all]
+//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all]
 //!                     [--db <market.sqlite>] [--verify-only]
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir>
@@ -25,7 +25,12 @@
 //! scope replaces `risk_warning_intervals` and M3 PR-12's `security_names`
 //! scope replaces `security_name_history` (with its `derived_dataset_versions`
 //! registration), each in one transaction; `--verify-only` compares the
-//! recomputed summary with the stored rows instead of writing. Without `--db` a
+//! recomputed summary with the stored rows instead of writing. XDM-138's
+//! `suspensions` scope additionally reads the database's `security_master`,
+//! trading calendar and bar days, assembles the dataset with the daily item's
+//! own function and fails closed with `suspension_replay_not_ready` when those
+//! inputs are absent; it is run explicitly after they exist (not by
+//! `--scope all`). Without `--db` a
 //! scope only computes and reports its summary, so a read never touches a
 //! database or creates the store. `verify` always compares, even if
 //! `--verify-only` is also given.
@@ -42,10 +47,10 @@ use x_data_mcp::source_store::{SourceStore, import, replay};
 const USAGE: &str = "\
 usage:
   source_store replay --store <dir> \
-[--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
 [--db <market.sqlite>] [--verify-only]
   source_store verify --store <dir> \
-[--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
 [--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
@@ -144,7 +149,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         other => Some(replay::Scope::parse(other).ok_or_else(|| {
             format!(
                 "unknown scope {other} \
-                 (industry|exchange|generation_facts|risk_warnings|security_names|all)"
+                 (industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all)"
             )
         })?),
     };
