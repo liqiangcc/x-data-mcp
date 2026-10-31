@@ -1636,7 +1636,7 @@ fn rebuild_suspensions(
             member_sha256: &binding.member_sha,
             security_event_sha256: &binding.event_sha,
             generation_evidence: &binding.evidence,
-            replay_inputs_digest: Some(&inputs_digest),
+            replay_inputs_digest: Some(inputs_digest.as_str()),
         })
         .map_err(|error| error.to_string())?;
     let stored = backend

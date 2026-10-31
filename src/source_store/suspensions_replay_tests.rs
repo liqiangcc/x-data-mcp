@@ -24,8 +24,7 @@ use crate::market_data::{
 };
 use crate::security_master::assembly::Assembly;
 use crate::security_master::suspensions::{
-    SuspensionInputs, SuspensionSet, SuspensionWrite, assemble_suspensions, inputs_digest,
-    suspension_source,
+    SuspensionSet, assemble_suspensions, inputs_digest, suspension_source,
 };
 use crate::security_master::{
     DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
@@ -34,6 +33,7 @@ use crate::security_master::{
 use crate::source_store::{Registration, SourceStore, StoreKind};
 use crate::sqlite_market::calendar::{self, CalendarWrite};
 use crate::sqlite_market::series::{self, NewSeries};
+use crate::sqlite_market::suspensions::{SuspensionInputs, SuspensionWrite};
 use crate::sqlite_market::{evidence_store, security, suspensions};
 use crate::sqlite_tasks::SqliteTasks;
 use crate::trading_calendar::TradingCalendar;
@@ -381,7 +381,7 @@ impl Fixture {
                 member_sha256: &"0c".repeat(32),
                 security_event_sha256: &"0e".repeat(32),
                 generation_evidence: &json!({"generation_id": GEN, "manifest_sha256": MANIFEST_SHA}),
-                replay_inputs_digest: Some(&digest),
+                replay_inputs_digest: Some(digest.as_str()),
             },
         )
         .unwrap();

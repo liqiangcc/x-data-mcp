@@ -711,7 +711,7 @@ fn execute(
             member_sha256: &source.base_member_sha256,
             security_event_sha256: &source.security_event_sha256,
             generation_evidence: &generation_evidence,
-            replay_inputs_digest: Some(&inputs_digest),
+            replay_inputs_digest: Some(inputs_digest.as_str()),
         })?;
         return Ok(json!({
             "dataset": item.item_id,
