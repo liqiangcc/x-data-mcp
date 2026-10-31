@@ -1279,6 +1279,7 @@ owner 决策（2026-10-30/31，设计报告 `silent-path-design.md` 方案 2a）
 | 四个适配器 | `a1a2`/`a3`/`security_names`/`risk_warnings` 的 `run_source` 收 `Policy`；Required + 未配置 → `Invalid { code: source_store_unconfigured }`（不再是 Pending），Optional 保持原行为 | 四个 adapter 及其 tests（每个一例 Required，a1a2 另钉「上一版主表仍可读」） | 未部署 |
 | 下传 | `derived::run`/`execute`、`worker::run_once` 收 `Policy`；`DataApi` 新增字段与 `with_source_store_policy`，默认 Optional；`Handler::Worker` 透传 | `src/data_supply/{derived,worker,mcp}.rs` | 未部署 |
 | 服务入口 | `data_service` 在 backend 打开后判定 `has_ops && Compact` → Required；legacy 保持 Optional | `src/bin/data_service.rs` | 未部署 |
+| 触发面钉法 | 纯函数 `source_store_policy(has_ops, backend)` 单测：只有 ops + compact 才是 Required，其余四种组合都是 Optional | `src/bin/data_service.rs` 测试模块 | 未部署 |
 | 端到端钉法 | compact fixture 两代快照：先 Optional 日更提交主表，再 Required + 无 store 日更 → 四项失败各含稳定码、run `partially_failed`、实体日线已前进、主表版本/行不变 | `tests/mcp/plan_run.rs` | 未部署 |
 | 文档 | 本节 + `docs/daily-sync.md` 的四项 pending 说明改为「Optional/测试仍 pending，生产 ops strict 下是配置失败」 | 两个文件 | 未部署 |
 
