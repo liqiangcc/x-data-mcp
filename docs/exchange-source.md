@@ -29,7 +29,8 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 ## 2. 请求指纹与分页
 
 - 指纹是请求本身的规范 JSON：`version` + `source_id` + URL + 排序后的参数（含分页与
-  分段参数）。相同指纹 + 相同响应 sha256 只登记一次（§6.3）。
+  分段参数，值为**原始文本**，不含出站百分号编码，见下）。相同指纹 + 相同响应 sha256
+  只登记一次（§6.3）。
 - 分页方言按来源固定：沪名单与公告索引用 `pageHelp.pageNo`（名单同时发
   `pageHelp.pageSize=2000`；公告索引的 `pageSize` 仍是它的自有参数），深交所用 `PAGENO`，
   `commonSoaQuery` 用 `pageHelp.pageNo` + 固定 `pageSize=25`（PR-11 实测）。名单端点不再发
@@ -57,6 +58,32 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 - 分段：公告索引下界 `2000-01-01`，单请求区间 ≤93 天且按自然季度对齐
   （`quarter_segments`）。超过 93 天的区间在构造时即被拒（`segment_too_long`），
   不会发出请求。
+
+### 出站 URL 编码与请求指纹（XDM-144，Refs #446）
+
+**指纹不参与编码，出站 URL 一定编码。** 两者是同一请求的两个视图：
+
+- `ExchangeRequest::fingerprint()` 只用规范化 JSON（`version` + `source_id` + `url` +
+  排序后的 `params`），原样保存参数的**原始文本**，不含任何 `%XX`。指纹是身份、缓存键、
+  清单 `origin` 与重放输入，所以不受出站编码影响；同一 `params` 编码前后指纹逐字节相同。
+- `ExchangeRequest::display_url()` 是**可直接出站的 URL**：`fetch` 交给
+  `scripts/exchange_fetch.py` 的就是它，`freeze` 写清单/索引的 `url` 列、`index` 的
+  `--scope exchange` 重放读回 `url` 也用它（`request_url`）。三处都调用同一个函数，
+  没有第二份 `name=value` 拼接。
+- 编码规则（RFC 3986）：只编码 query 的 **name 和 value**，按 UTF-8 字节逐字节处理；
+  unreserved `A-Z a-z 0-9 - . _ ~` 原样保留，其余一律 `%XX`（大写十六进制）；空格是
+  `%20`，不用 `+`；`?`、`&`、`=` 分隔符不编码。
+- **参数值是原始文本**：调用方传 `风险警示` 这样的原文，不传预编码串。编码只做一遍，
+  值里本来就有的 `%` 是普通字符，编码为 `%25`（即原文 `%20` 出站为 `%2520`）；实现不会
+  把已有 `%XX` 当作已编码而跳过，也不会对自己的输出再编码一次。
+- 背景：preview.39 首次重建（2026-10-31，task `task-4411ad3`）中 `derived:risk_warnings`
+  的 `TITLE=风险警示` 以原始 UTF-8 进 URL，Python `urllib` 只接受 ASCII，报
+  `UnicodeEncodeError`，整个 SSE 公告抓取退化为 `source_unavailable`。Rust 侧保证出站
+  字符集为 ASCII，helper 的 Python 逻辑未改。
+- 测试（CI，不联网）：`TITLE=风险警示` 编码为
+  `TITLE=%E9%A3%8E%E9%99%A9%E8%AD%A6%E7%A4%BA` 且 URL 全为 ASCII；ASCII 参数
+  （`SHOWTYPE=JSON`、`pageHelp.pageSize=100`）编码前后一致；值内 `%` 只编码一次；
+  编码前后 `fingerprint()` 相同、从指纹读回重建同一出站 URL；`display_url()` 有 golden 断言。
 
 ### 出站请求最小间隔（XDM-143，Refs #446）
 

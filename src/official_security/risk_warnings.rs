@@ -823,6 +823,38 @@ mod tests {
         );
     }
 
+    /// XDM-144 (Refs #446): the SSE title filters are the only non-ASCII
+    /// parameters in these plans, and the helper only accepts ASCII URLs, so
+    /// every plan's outbound request must already be percent-encoded.
+    #[test]
+    fn every_plan_has_an_ascii_outbound_url() {
+        let mut seen_titles = Vec::new();
+        for (kind, plan) in plans() {
+            let url = plan
+                .request(plan.format.first_page(), None, "START_DATE", "END_DATE")
+                .display_url();
+            assert!(
+                url.is_ascii(),
+                "{}: the outbound URL must be ASCII: {url}",
+                kind.label()
+            );
+            if kind.sse() {
+                seen_titles.push(url.clone());
+            }
+        }
+        assert_eq!(seen_titles.len(), 2);
+        assert!(
+            seen_titles[0].contains("TITLE=%E9%A3%8E%E9%99%A9%E8%AD%A6%E7%A4%BA"),
+            "风险警示 is UTF-8 percent-encoded: {}",
+            seen_titles[0]
+        );
+        assert!(
+            seen_titles[1].contains("TITLE=%E7%89%B9%E5%88%AB%E5%A4%84%E7%90%86"),
+            "特别处理 is UTF-8 percent-encoded: {}",
+            seen_titles[1]
+        );
+    }
+
     /// 2026-10-30 real shape: `tab1` (暂停上市) is empty with `pagecount=0` and
     /// `tab2` carries the change rows. The old `find_map(first data array)` read
     /// the empty `tab1` and made the whole-market table look empty.

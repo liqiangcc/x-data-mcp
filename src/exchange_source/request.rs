@@ -9,6 +9,12 @@
 //! fingerprint is also what replay reads back, so no separate side table is
 //! needed to rebuild `url`/page bounds.
 //!
+//! Identity and wire form are separate: [`ExchangeRequest::fingerprint`] is
+//! computed from `params` only, while [`ExchangeRequest::display_url`] is the
+//! ready-to-send URL with RFC 3986-encoded query components (XDM-144). Every
+//! outbound caller uses that one function, so no request path can send raw
+//! non-ASCII text to the stdlib helper.
+//!
 //! Paging quirks that the entry encodes instead of leaving to consumers:
 //!
 //! - SSE list services (`commonQuery.do`) ignore `beginPage`/`endPage` — both
@@ -384,8 +390,20 @@ impl ExchangeRequest {
         Ok(request)
     }
 
-    /// Deterministic `url?a=1&b=2` form for logs and reports (no credentials
-    /// exist in these sources; the fingerprint itself stays the identity).
+    /// The outbound URL: this exact `url?name=value&...` string is what
+    /// `fetch` hands to the helper and what `freeze`/`replay` record in the
+    /// `url` column. Query names and values are RFC 3986 percent-encoded
+    /// (UTF-8 bytes; unreserved `A-Z a-z 0-9 - . _ ~` kept, everything else
+    /// `%XX`, space is `%20`), because the HTTP helper only accepts ASCII
+    /// (XDM-144, Refs #446). The separators `?`, `&` and `=` stay literal, and
+    /// the encoding runs once over the raw parameter text, so a `%` that is
+    /// part of a value becomes `%25` (callers pass raw values, never
+    /// pre-encoded ones).
+    ///
+    /// The fingerprint is *not* encoded: it is the canonical JSON of
+    /// [`ExchangeRequest`], so [`ExchangeRequest::fingerprint`] is byte-stable
+    /// and unchanged by this output form. There are no credentials in these
+    /// sources; the fingerprint itself stays the identity.
     pub fn display_url(&self) -> String {
         if self.params.is_empty() {
             return self.url.clone();
@@ -393,9 +411,43 @@ impl ExchangeRequest {
         let query = self
             .params
             .iter()
-            .map(|(name, value)| format!("{name}={value}"))
+            .map(|(name, value)| {
+                format!(
+                    "{}={}",
+                    encode_query_component(name),
+                    encode_query_component(value)
+                )
+            })
             .collect::<Vec<_>>()
             .join("&");
         format!("{}?{query}", self.url)
     }
+}
+
+/// RFC 3986 percent-encoding of one query component (name or value).
+///
+/// The input is raw text: every byte outside the unreserved set
+/// `A-Z a-z 0-9 - . _ ~` is written as `%XX` (uppercase hex), so UTF-8
+/// multi-byte characters become one `%XX` per byte and a space is `%20`, never
+/// `+`. A literal `%` in the input is not a pre-existing escape: it is encoded
+/// to `%25` like any other reserved byte, and this function is never applied
+/// twice to the same text.
+///
+/// The query delimiters `?`, `&` and `=` are added by
+/// [`ExchangeRequest::display_url`], never encoded here.
+pub(crate) fn encode_query_component(raw: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(char::from(byte));
+            }
+            _ => {
+                write!(out, "%{byte:02X}").expect("writing to a String cannot fail");
+            }
+        }
+    }
+    out
 }
