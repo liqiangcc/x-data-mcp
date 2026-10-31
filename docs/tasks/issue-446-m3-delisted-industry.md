@@ -1392,8 +1392,8 @@ owner 决策/口径：
 状态：**最小设计（先于代码）；实现未部署**（Refs #446；证据来源 XDM-131
 `calendar-suspensions-attribution.md` §B）。
 
-owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，计数与样例进证据；
-不写 `missing_days=0`，不放宽其它 fail-closed。
+2026-10-31 协调者按推荐语义授权执行，owner 可在部署前否决：两种零交易日形态都不写行、
+item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其它 fail-closed。
 
 **问题**：`assemble_suspensions` 对每条 confirmed fact 用闭区间数已提交日历的交易日，
 `== 0` 即 `Error::TradingDayRange`，整个 `derived:suspensions` 失败、一行不写。A-3 的
