@@ -843,7 +843,8 @@ fn frozen_szse_bytes_replay_to_the_same_row_level_facts() {
             rows: 3,
             listing: 2,
             delisting: 2,
-            b_shares: 2,
+            // Only page 1 carries a B row (`200003`); page 2 is `000005`.
+            b_shares: 1,
         },
         Expected {
             label: "szse_delisting_nm",
