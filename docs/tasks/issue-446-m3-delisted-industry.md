@@ -1661,6 +1661,48 @@ item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其�
 `src/data_supply/derived.rs`（日更也登记 `inputs_digest`）、`docs/source-store.md`。
 不改表结构、不改读面、不改部署脚本与 `docs/STATUS.md` 部署事实。
 
+### 14.11 SSE 公告 URL 百分号编码（2026-10-31，XDM-144）
+
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+背景：preview.39 首次重建（2026-10-31，`task-4411ad3`）中 `derived:risk_warnings` 以
+`source_unavailable` 失败，helper 报
+`UnicodeEncodeError: 'ascii' codec can't encode characters in position 95-98`。根因：
+`SSE_TITLE_FILTERS` 的 `TITLE=风险警示`/`TITLE=特别处理` 是非 ASCII，
+`ExchangeRequest::display_url()` 直接把 `name=value` 拼进 URL；`fetch.rs` 与 `freeze.rs`
+把这个字符串当真实 URL 交给 `scripts/exchange_fetch.py`，Python `urllib` 只接受 ASCII，
+于是整条 SSE 公告抓取失败。XDM-142 只修了解析块选择，没有覆盖真实 URL 编码。
+
+- **编码落点**：`src/exchange_source/request.rs` 新增 `encode_query_component`，
+  `display_url()` 用它编码 query 的 name 与 value。RFC 3986：按 UTF-8 字节逐字节处理，
+  unreserved `A-Z a-z 0-9 - . _ ~` 原样保留，其余一律 `%XX`（大写）；空格 `%20`（不用
+  `+`）；`?`、`&`、`=` 分隔符由 `display_url` 添加，不编码。
+- **原文语义**：`params` 保存原始文本，调用方不预编码；编码只做一遍，值内 `%` 是普通
+  字符编码为 `%25`（原文 `%20` 出站为 `%2520`）。实现不跳过已有 `%XX`，也不对自己的
+  输出再编码，因此不存在双重编码。`URL` 本身（路径/既有 query）不在本范围，仍由来源
+  常量提供且为 ASCII。
+- **指纹与出站分离**：`fingerprint()` 仍只用 `version`/`source_id`/`url`/`params` 的
+  规范 JSON 计算，不含 `%XX`，同一 `params` 编码前后逐字节相同。三个调用方
+  （`fetch.rs` 出站、`freeze.rs` 写 `url` 列、`index.rs` 的 `request_url` 重放）都调用
+  同一个 `display_url()`，没有第二处拼接；从指纹读回重建的 URL 与首次冻结时一致。
+- **测试（CI，不联网）**：`src/exchange_source/tests.rs` 新增
+  `a_non_ascii_title_is_percent_encoded_in_the_outbound_url`（URL 含
+  `TITLE=%E9%A3%8E%E9%99%A9%E8%AD%A6%E7%A4%BA`、全 ASCII、无原文残留）、
+  `a_space_is_percent_20_and_never_a_plus`、
+  `ascii_query_components_are_unchanged_by_the_encoder`
+  （`SHOWTYPE=JSON`/`pageHelp.pageSize=100` 不变，保留 `-._~`，编码 `!*'()`）、
+  `a_percent_in_a_raw_value_is_encoded_once`（`100%` → `100%25`、`a%20b` → `a%2520b`）、
+  `the_outbound_encoding_does_not_change_the_fingerprint`（指纹无 `%`、含原文；从指纹
+  读回相等且重建同一 URL；参数顺序无关）、
+  `the_sse_risk_warning_outbound_url_is_a_golden_ascii_string`（golden URL，另覆盖非
+  ASCII 参数名与无参数 URL）。
+  `src/official_security/risk_warnings.rs` 新增 `every_plan_has_an_ascii_outbound_url`：
+  `plans()` 的全部出站 URL 为 ASCII，两个 SSE 计划分别带 `风险警示`/`特别处理` 的编码值。
+- **范围**：不改 `exchange_fetch.py` 的 Python 逻辑（Rust 侧保证 ASCII）；不改 XDM-142 的
+  块选择；不改抓取窗口/分页；不部署、不联网。
+- **文档**：`docs/exchange-source.md` §2 新增「出站 URL 编码与请求指纹」，并在指纹条目
+  注明参数值是原始文本。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。

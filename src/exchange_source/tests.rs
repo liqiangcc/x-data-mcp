@@ -90,6 +90,165 @@ fn fingerprint_is_canonical_and_round_trips() {
     assert!(!szse.params.contains_key("pageHelp.pageNo"));
 }
 
+fn risk_warning_request() -> ExchangeRequest {
+    ExchangeRequest::new(
+        SourceId::SseBulletin,
+        "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do",
+    )
+    .param("isPagination", "true")
+    .param("TITLE", "风险警示")
+    .paged(PagingFormat::SsePageHelp, 1)
+    .param("pageHelp.pageSize", "100")
+}
+
+/// XDM-144 (Refs #446): preview.39 failed `derived:risk_warnings` with
+/// `UnicodeEncodeError` because the raw `TITLE=风险警示` reached Python's
+/// `urllib`. The outbound URL carries the UTF-8 bytes percent-encoded instead.
+#[test]
+fn a_non_ascii_title_is_percent_encoded_in_the_outbound_url() {
+    let url = risk_warning_request().display_url();
+    assert!(
+        url.contains("TITLE=%E9%A3%8E%E9%99%A9%E8%AD%A6%E7%A4%BA"),
+        "the title is UTF-8 percent-encoded: {url}"
+    );
+    assert!(
+        url.is_ascii(),
+        "the helper only accepts ASCII, so nothing outside it may remain: {url}"
+    );
+    assert!(
+        !url.contains("风险警示"),
+        "no raw title bytes remain: {url}"
+    );
+}
+
+#[test]
+fn a_space_is_percent_20_and_never_a_plus() {
+    let url = ExchangeRequest::new(SourceId::SseBulletin, "https://example.invalid/list")
+        .param("TITLE", "风险 警示")
+        .display_url();
+    assert!(
+        url.ends_with("TITLE=%E9%A3%8E%E9%99%A9%20%E8%AD%A6%E7%A4%BA"),
+        "a space is %20 in a query value: {url}"
+    );
+    assert!(!url.contains('+'), "form encoding's `+` is not used: {url}");
+}
+
+/// ASCII parameters keep both their spelling and the literal separators: the
+/// encoder only touches the unreserved set's complement, never `?`, `&`, `=`.
+#[test]
+fn ascii_query_components_are_unchanged_by_the_encoder() {
+    let request = ExchangeRequest::new(SourceId::SzseShortName, "https://example.invalid/list")
+        .param("SHOWTYPE", "JSON")
+        .param("CATALOGID", "1793_ssgs")
+        .param("TABKEY", "tab2")
+        .param("pageHelp.pageSize", "100");
+    assert_eq!(
+        request.display_url(),
+        "https://example.invalid/list?CATALOGID=1793_ssgs&SHOWTYPE=JSON&TABKEY=tab2&pageHelp.pageSize=100"
+    );
+    for (name, value) in &request.params {
+        assert_eq!(super::request::encode_query_component(name), *name);
+        assert_eq!(super::request::encode_query_component(value), *value);
+    }
+    assert_eq!(
+        super::request::encode_query_component("AZaz09-._~"),
+        "AZaz09-._~"
+    );
+    assert_eq!(
+        super::request::encode_query_component("!*'()"),
+        "%21%2A%27%28%29",
+        "reserved sub-delimiters are encoded too, not passed through"
+    );
+}
+
+/// `params` hold raw text, so a `%` is a literal percent sign and is encoded
+/// exactly once (`%20` in a value means three characters, not a space). This
+/// also covers the encoder never re-encoding its own output.
+#[test]
+fn a_percent_in_a_raw_value_is_encoded_once() {
+    let request = ExchangeRequest::new(SourceId::SseBulletin, "https://example.invalid/list")
+        .param("TITLE", "100%")
+        .param("filter", "a%20b");
+    let url = request.display_url();
+    assert_eq!(
+        url,
+        "https://example.invalid/list?TITLE=100%25&filter=a%2520b"
+    );
+    assert!(
+        !url.contains("filter=a%20b"),
+        "not decoded as a space: {url}"
+    );
+    // A second pass over the encoded text would differ, which is exactly what
+    // `display_url` does not do: `params` are encoded once, from raw text.
+    assert_eq!(super::request::encode_query_component("100%25"), "100%2525");
+    assert!(
+        url.contains("filter=a%2520b") && !url.contains("a%252520b"),
+        "the encoder never re-encodes its own output: {url}"
+    );
+}
+
+/// The fingerprint is the identity and is built from `params`; the encoded
+/// wire form is a derived view and must not feed back into it.
+#[test]
+fn the_outbound_encoding_does_not_change_the_fingerprint() {
+    let first = risk_warning_request();
+    let fingerprint = first.fingerprint();
+    let encoded = first.display_url();
+    assert!(encoded.is_ascii());
+    assert!(
+        !fingerprint.contains('%'),
+        "the canonical request JSON has no escape sequences: {fingerprint}"
+    );
+    assert!(
+        fingerprint.contains("风险警示"),
+        "the fingerprint keeps the raw parameter value: {fingerprint}"
+    );
+    let reparsed = ExchangeRequest::from_fingerprint(&fingerprint).unwrap();
+    assert_eq!(reparsed, first);
+    assert_eq!(reparsed.fingerprint(), fingerprint);
+    assert_eq!(
+        reparsed.display_url(),
+        encoded,
+        "replay rebuilds the same outbound URL from the fingerprint"
+    );
+    // Re-ordering the same parameters changes neither fingerprint nor URL.
+    let reordered = ExchangeRequest::new(
+        SourceId::SseBulletin,
+        "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do",
+    )
+    .paged(PagingFormat::SsePageHelp, 1)
+    .param("pageHelp.pageSize", "100")
+    .param("TITLE", "风险警示")
+    .param("isPagination", "true");
+    assert_eq!(reordered.fingerprint(), fingerprint);
+    assert_eq!(reordered.display_url(), encoded);
+}
+
+/// Golden string for the real SSE bulletin plan shape (`TITLE=风险警示`).
+#[test]
+fn the_sse_risk_warning_outbound_url_is_a_golden_ascii_string() {
+    assert_eq!(
+        risk_warning_request().display_url(),
+        concat!(
+            "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do?",
+            "TITLE=%E9%A3%8E%E9%99%A9%E8%AD%A6%E7%A4%BA&isPagination=true&",
+            "pageHelp.pageNo=1&pageHelp.pageSize=100"
+        )
+    );
+    // A parameter name is encoded by the same rule as its value.
+    assert_eq!(
+        ExchangeRequest::new(SourceId::SseBulletin, "https://example.invalid/list")
+            .param("日期", "2026-10-31")
+            .display_url(),
+        "https://example.invalid/list?%E6%97%A5%E6%9C%9F=2026-10-31"
+    );
+    // A URL without parameters is returned untouched.
+    assert_eq!(
+        ExchangeRequest::new(SourceId::SseBulletin, "https://example.invalid/list").display_url(),
+        "https://example.invalid/list"
+    );
+}
+
 #[test]
 fn request_headers_carry_referer_and_user_agent() {
     let headers = default_headers(SourceId::SseBulletin);
