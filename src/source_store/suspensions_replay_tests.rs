@@ -14,6 +14,10 @@ use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
 use serde_json::json;
 
+use super::replay::{
+    COMPUTED_SUSPENSIONS_NO_DB, NOTHING_SELECTED, REBUILT_SUSPENSIONS, ReplayReport, ReplayRequest,
+    SUSPENSION_REPLAY_NOT_READY, Scope, replay, suspension_summary,
+};
 use super::*;
 use crate::compact_market::{CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence};
 use crate::exchange_source::request::{ExchangeRequest, PagingFormat, SSE_SOA_PARSER_VERSION};
@@ -436,7 +440,7 @@ fn replay_rebuilds_the_daily_suspension_rows_bit_for_bit() {
     let daily_set = fixture.write_daily_set();
     let daily_rows = suspensions::read_suspensions(&fixture.c).unwrap();
     assert_eq!(daily_rows.len(), daily_set.rows.len());
-    let daily_summary = super::suspension_summary(&daily_rows);
+    let daily_summary = suspension_summary(&daily_rows);
 
     fixture.wipe_suspensions();
     assert!(

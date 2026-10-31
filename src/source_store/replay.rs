@@ -1377,7 +1377,7 @@ impl SuspensionsOutcome {
     }
 }
 
-fn suspension_summary(rows: &[crate::security_master::SuspensionInterval]) -> String {
+pub(crate) fn suspension_summary(rows: &[crate::security_master::SuspensionInterval]) -> String {
     // The writer sorts before it digests (`sort_rows` in
     // `sqlite_market::suspensions`); the summary must use the same order or a
     // set that would be written identically could compare as drift.
