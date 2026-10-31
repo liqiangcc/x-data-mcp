@@ -235,20 +235,6 @@ impl Fixture {
             security_event_sha256: crate::hash::sha256(&0u64.to_le_bytes()),
         };
         let calendar = TradingCalendar::union(&batch).unwrap();
-        let coverage = calendar::measure_coverage(&c, &calendar).unwrap();
-        calendar::commit_calendar(
-            &c,
-            &CalendarWrite {
-                batch: &batch,
-                coverage: &coverage,
-                task_id: "task-calendar",
-                item_id: "derived:calendar",
-                generation_id: GEN,
-                generation_manifest_sha256: MANIFEST_SHA,
-                generation_evidence: &json!({"generation_id": GEN}),
-            },
-        )
-        .unwrap();
 
         let suspended: BTreeMap<&str, Vec<NaiveDate>> = BTreeMap::from([
             (
@@ -297,6 +283,23 @@ impl Fixture {
             .unwrap();
             series::insert_bars(&c, key, &bars).unwrap();
         }
+
+        // Coverage needs at least one raw bar inside the calendar span, so the
+        // fixture writes the bars before it commits the calendar.
+        let coverage = calendar::measure_coverage(&c, &calendar).unwrap();
+        calendar::commit_calendar(
+            &c,
+            &CalendarWrite {
+                batch: &batch,
+                coverage: &coverage,
+                task_id: "task-calendar",
+                item_id: "derived:calendar",
+                generation_id: GEN,
+                generation_manifest_sha256: MANIFEST_SHA,
+                generation_evidence: &json!({"generation_id": GEN}),
+            },
+        )
+        .unwrap();
 
         let store = SourceStore::new(dir.path().join("store"));
         register_page(
