@@ -53,26 +53,36 @@ fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
     }
     w.finish().unwrap();
 }
-fn today_u32() -> u32 {
-    x_data_mcp::calendar::shanghai_date(chrono::Utc::now())
-        .format("%Y%m%d")
-        .to_string()
-        .parse()
-        .unwrap()
+/// Shanghai "today" as a real calendar date.
+fn today() -> chrono::NaiveDate {
+    x_data_mcp::calendar::shanghai_today()
 }
-/// Three-bar .day member for sh.600006 ending today, with real prices.
-fn day_member() -> Vec<u8> {
-    let today = today_u32();
+/// `YYYYMMDD` for a real calendar date.
+fn day_u32(date: chrono::NaiveDate) -> u32 {
+    date.format("%Y%m%d").to_string().parse().unwrap()
+}
+/// `date` shifted `days_ago` calendar days back. `.day` dates are
+/// `YYYYMMDD` integers, so integer subtraction is wrong across month and
+/// year boundaries (20261101 - 1 is 20261100, not 20261031).
+fn days_before(date: chrono::NaiveDate, days_ago: u64) -> chrono::NaiveDate {
+    date.checked_sub_days(chrono::Days::new(days_ago)).unwrap()
+}
+/// `YYYYMMDD` for `days_ago` calendar days before `date`.
+fn day_ago(date: chrono::NaiveDate, days_ago: u64) -> u32 {
+    day_u32(days_before(date, days_ago))
+}
+/// Three-bar .day member for sh.600006 through `as_of`, with real prices.
+fn day_member(as_of: chrono::NaiveDate) -> Vec<u8> {
     [
-        day_record(today - 2, [1128, 1130, 1125, 1129], 0.0, 100),
-        day_record(today - 1, [1129, 1132, 1128, 1131], 0.0, 110),
-        day_record(today, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(day_ago(as_of, 2), [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(day_ago(as_of, 1), [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(day_u32(as_of), [1131, 1135, 1130, 1134], 0.0, 120),
     ]
     .concat()
     .to_vec()
 }
 fn write_mirror(dir: &Path, code: u32) {
-    write_mirror_day(dir, code, &day_member())
+    write_mirror_day(dir, code, &day_member(today()))
 }
 fn write_mirror_day(dir: &Path, code: u32, day: &[u8]) {
     std::fs::create_dir_all(dir).unwrap();
@@ -631,17 +641,22 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
     use x_data_mcp::market_update::tasks::{Operation, RangeContract};
     use x_data_mcp::sqlite_market::backend::MarketBackend;
 
-    let today = today_u32();
+    let today = today();
     // Gen A covers bars through yesterday; gen B is the exact same prefix
     // plus one newer record — a real append a continuity probe can prove.
     let member_a = [
-        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
-        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
-        day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(day_ago(today, 3), [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(day_ago(today, 2), [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(day_ago(today, 1), [1131, 1135, 1130, 1134], 0.0, 120),
     ]
     .concat();
     let mut member_b = member_a.clone();
-    member_b.extend_from_slice(&day_record(today, [1134, 1138, 1133, 1137], 0.0, 130));
+    member_b.extend_from_slice(&day_record(
+        day_u32(today),
+        [1134, 1138, 1133, 1137],
+        0.0,
+        130,
+    ));
 
     let mirror = tempfile::tempdir().unwrap();
     write_mirror_day(mirror.path(), 600006, &member_a);
@@ -813,17 +828,27 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     use x_data_mcp::sqlite_market::backend::MarketBackend;
     use x_data_mcp::yearly_publication::tasks::YearlyContract;
 
-    let today = today_u32();
+    let today = today();
     // Three generations, each extending the member by one day bar.
     let member_a = [
-        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
-        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(day_ago(today, 3), [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(day_ago(today, 2), [1129, 1132, 1128, 1131], 0.0, 110),
     ]
     .concat();
     let mut member_b = member_a.clone();
-    member_b.extend_from_slice(&day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120));
+    member_b.extend_from_slice(&day_record(
+        day_ago(today, 1),
+        [1131, 1135, 1130, 1134],
+        0.0,
+        120,
+    ));
     let mut member_c = member_b.clone();
-    member_c.extend_from_slice(&day_record(today, [1134, 1138, 1133, 1137], 0.0, 130));
+    member_c.extend_from_slice(&day_record(
+        day_u32(today),
+        [1134, 1138, 1133, 1137],
+        0.0,
+        130,
+    ));
 
     let mirror = tempfile::tempdir().unwrap();
     write_mirror_day(mirror.path(), 600006, &member_a);
@@ -911,7 +936,7 @@ fn staged_records_empty_after_full_cycle_on_compact() {
         .accept(
             "req-update-b",
             range_key.clone(),
-            json!({"items":[{"symbol":"sh.600006","base_version_id":head_a,"start_date":day - chrono::Duration::days(1),"end_date":day - chrono::Duration::days(1)}]}),
+            json!({"items":[{"symbol":"sh.600006","base_version_id":head_a,"start_date":days_before(day, 1),"end_date":days_before(day, 1)}]}),
         )
         .unwrap();
     run_task(&control);
@@ -988,21 +1013,21 @@ fn explicit_daily_update_rewrites_history_on_compact() {
     use x_data_mcp::market_update::tasks::{Operation, RangeContract};
     use x_data_mcp::sqlite_market::backend::MarketBackend;
 
-    let today = today_u32();
+    let today = today();
     let member_a = [
-        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
-        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
-        day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(day_ago(today, 3), [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(day_ago(today, 2), [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(day_ago(today, 1), [1131, 1135, 1130, 1134], 0.0, 120),
     ]
     .concat();
     // Gen B: same dates but every historical price repriced (a dividend
     // adjustment would do exactly this) plus one appended record — the
     // member is NOT a byte-prefix extension of member_a.
     let member_b = [
-        day_record(today - 3, [1028, 1030, 1025, 1029], 0.0, 100),
-        day_record(today - 2, [1029, 1032, 1028, 1031], 0.0, 110),
-        day_record(today - 1, [1031, 1035, 1030, 1034], 0.0, 120),
-        day_record(today, [1034, 1038, 1033, 1037], 0.0, 130),
+        day_record(day_ago(today, 3), [1028, 1030, 1025, 1029], 0.0, 100),
+        day_record(day_ago(today, 2), [1029, 1032, 1028, 1031], 0.0, 110),
+        day_record(day_ago(today, 1), [1031, 1035, 1030, 1034], 0.0, 120),
+        day_record(day_u32(today), [1034, 1038, 1033, 1037], 0.0, 130),
     ]
     .concat();
 
@@ -1143,18 +1168,18 @@ fn explicit_daily_update_rewrite_dropping_base_date_fails_closed() {
     use x_data_mcp::market_update::tasks::{Operation, RangeContract};
     use x_data_mcp::sqlite_market::backend::MarketBackend;
 
-    let today = today_u32();
+    let today = today();
     let member_a = [
-        day_record(today - 3, [1128, 1130, 1125, 1129], 0.0, 100),
-        day_record(today - 2, [1129, 1132, 1128, 1131], 0.0, 110),
-        day_record(today - 1, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(day_ago(today, 3), [1128, 1130, 1125, 1129], 0.0, 100),
+        day_record(day_ago(today, 2), [1129, 1132, 1128, 1131], 0.0, 110),
+        day_record(day_ago(today, 1), [1131, 1135, 1130, 1134], 0.0, 120),
     ]
     .concat();
     // Gen B truncates the first base date (source dropped history).
     let member_b = [
-        day_record(today - 2, [1029, 1032, 1028, 1031], 0.0, 110),
-        day_record(today - 1, [1031, 1035, 1030, 1034], 0.0, 120),
-        day_record(today, [1034, 1038, 1033, 1037], 0.0, 130),
+        day_record(day_ago(today, 2), [1029, 1032, 1028, 1031], 0.0, 110),
+        day_record(day_ago(today, 1), [1031, 1035, 1030, 1034], 0.0, 120),
+        day_record(day_u32(today), [1034, 1038, 1033, 1037], 0.0, 130),
     ]
     .concat();
 
@@ -1246,4 +1271,41 @@ fn explicit_daily_update_rewrite_dropping_base_date_fails_closed() {
     );
     // Head must not move.
     assert_eq!(backend.effective_head(&scope).unwrap().unwrap(), base_id);
+}
+
+/// #446 regression: `.day` dates come from calendar arithmetic, never from
+/// subtracting the `YYYYMMDD` integer. 2026-11-01 minus one day is
+/// 2026-10-31, not the illegal 20261100; every emitted date must parse back
+/// as a real date, including across the month and year boundary.
+#[test]
+fn day_member_dates_are_calendar_dates_across_month_boundary() {
+    use chrono::NaiveDate;
+
+    let date = |y: i32, m: u32, d: u32| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+    let as_of = date(2026, 11, 1);
+    let expected = [20261030, 20261031, 20261101];
+    assert_eq!(
+        [day_ago(as_of, 2), day_ago(as_of, 1), day_u32(as_of)],
+        expected
+    );
+
+    // The real `.day` member encodes exactly those three dates ...
+    let member = day_member(as_of);
+    let encoded: Vec<u32> = member
+        .chunks_exact(32)
+        .map(|record| u32::from_le_bytes(record[0..4].try_into().unwrap()))
+        .collect();
+    assert_eq!(encoded, expected);
+    // ... and each of them is a legal calendar date.
+    for raw in &encoded {
+        let parsed = NaiveDate::parse_from_str(&raw.to_string(), "%Y%m%d")
+            .unwrap_or_else(|e| panic!("illegal .day date {raw}: {e}"));
+        assert_eq!(day_u32(parsed), *raw);
+    }
+
+    // Year boundary: 2027-01-01 minus two days is 2026-12-30.
+    let new_year = date(2027, 1, 1);
+    assert_eq!(day_ago(new_year, 2), 20261230);
+    assert_eq!(day_ago(new_year, 1), 20261231);
+    assert_eq!(day_u32(new_year), 20270101);
 }
