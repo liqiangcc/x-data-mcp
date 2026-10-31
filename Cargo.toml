@@ -1,6 +1,6 @@
 [package]
 name = "x-data-mcp"
-version = "0.2.0-preview.38"
+version = "0.2.0-preview.39"
 edition = "2024"
 
 # M1 PR-8 (issue-383 §7.6): the research snapshot exporter is an optional
