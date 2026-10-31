@@ -712,6 +712,15 @@ fn execute(
             "gap_rows": set.gap_rows,
             "confirmed_rows": set.confirmed_rows,
             "missing_days": set.missing_days(),
+            // XDM-134: confirmed intervals that wrote no row stay countable and
+            // sampled; neither shape is an item failure and neither produces a
+            // suspension row. A deferred interval still explains the covered
+            // part to the gap derivation (its known suspension days are not
+            // re-derived as gaps).
+            "deferred_beyond_calendar": set.deferred_beyond_calendar,
+            "deferred_samples": skipped_samples_json(&set.deferred_samples),
+            "skipped_no_trading_day": set.skipped_no_trading_day,
+            "skipped_samples": skipped_samples_json(&set.skipped_samples),
             "pending_sources": pending_json(&set.pending_sources),
             "exchange_source": exchange_evidence,
             "elapsed_ms": elapsed_ms(started),
@@ -1022,6 +1031,26 @@ fn pending_json(pending: &[PendingSource]) -> Vec<Value> {
                 "dataset": source.dataset,
                 "source": source.source,
                 "reason": source.reason,
+            })
+        })
+        .collect()
+}
+
+/// Confirmed intervals that wrote no row because the calendar cannot place them
+/// (XDM-134), as the item evidence reports them (`entity`, `start_day`,
+/// `end_day`, `source_record_id`). The counters stay complete next to the
+/// truncated sample list.
+fn skipped_samples_json(
+    samples: &[crate::security_master::suspensions::SkippedInterval],
+) -> Vec<Value> {
+    samples
+        .iter()
+        .map(|sample| {
+            json!({
+                "entity": sample.entity,
+                "start_day": sample.start_day.format("%Y-%m-%d").to_string(),
+                "end_day": sample.end_day.format("%Y-%m-%d").to_string(),
+                "source_record_id": sample.source_record_id,
             })
         })
         .collect()

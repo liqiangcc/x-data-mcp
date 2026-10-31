@@ -602,6 +602,10 @@ impl Fixture {
             gap_rows: 1,
             single_day_gap_rows: 1,
             multi_day_gap_rows: 0,
+            deferred_beyond_calendar: 0,
+            deferred_samples: Vec::new(),
+            skipped_no_trading_day: 0,
+            skipped_samples: Vec::new(),
             pending_sources: Vec::new(),
         };
         crate::sqlite_market::suspensions::replace_suspensions(

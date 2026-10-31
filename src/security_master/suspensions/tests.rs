@@ -388,7 +388,7 @@ fn row_validation_enforces_the_certainty_reason_and_known_at_invariants() {
 }
 
 #[test]
-fn a_confirmed_fact_outside_the_main_table_or_the_calendar_is_refused() {
+fn a_confirmed_fact_for_an_unknown_entity_is_refused() {
     let calendar = weekdays(day(2024, 1, 8), day(2024, 1, 12));
     let facts = vec![fact(
         Exchange::Sh,
@@ -412,8 +412,23 @@ fn a_confirmed_fact_outside_the_main_table_or_the_calendar_is_refused() {
         assemble_suspensions(&unknown_entity, &facts, &calendar, &bars),
         Err(Error::UnknownEntity)
     );
+}
 
-    // An interval that covers no trading day cannot carry `missing_days > 0`.
+/// XDM-134: a weekend-only interval has no trading day to explain, so it writes
+/// no row (the DDL forbids `missing_days = 0`) and is counted and sampled
+/// instead — one weekend cannot fail the whole market's suspension dataset.
+#[test]
+fn a_weekend_only_interval_is_skipped_with_a_sample() {
+    let calendar = weekdays(day(2024, 1, 8), day(2024, 1, 19));
+    let facts = vec![fact(
+        Exchange::Sh,
+        "600000",
+        day(2024, 1, 8),
+        None,
+        Some(day(2024, 1, 8)),
+        None,
+    )];
+    let bars = BTreeMap::new();
     let weekend = admitted(vec![confirmed(
         Exchange::Sh,
         "600000",
@@ -421,10 +436,303 @@ fn a_confirmed_fact_outside_the_main_table_or_the_calendar_is_refused() {
         day(2024, 1, 14),
         None,
     )]);
-    assert_eq!(
-        assemble_suspensions(&weekend, &facts, &calendar, &bars),
-        Err(Error::TradingDayRange)
+
+    let set = assemble_suspensions(&weekend, &facts, &calendar, &bars).unwrap();
+    assert_eq!(set.confirmed_rows, 0);
+    assert!(
+        set.rows.is_empty(),
+        "no row can carry a positive missing_days"
     );
+    assert_eq!(set.skipped_no_trading_day, 1);
+    assert_eq!(set.deferred_beyond_calendar, 0);
+    assert_eq!(set.skipped_samples.len(), 1);
+    let sample = &set.skipped_samples[0];
+    assert_eq!(sample.entity, "sh.600000");
+    assert_eq!(
+        (sample.start_day, sample.end_day),
+        (day(2024, 1, 13), day(2024, 1, 14))
+    );
+    assert_eq!(sample.source_record_id.as_deref(), Some("fixture-1"));
+}
+
+/// XDM-134: an interval the calendar does not fully cover defers whole. Writing
+/// it with only the covered trading days would understate `missing_days`, so a
+/// partially covered interval is deferred too, never clamped.
+#[test]
+fn an_interval_past_the_calendar_last_day_is_deferred_whole() {
+    let calendar = weekdays(day(2026, 10, 1), day(2026, 10, 28));
+    let facts = vec![fact(
+        Exchange::Sh,
+        "600000",
+        day(2026, 9, 1),
+        None,
+        Some(day(2026, 9, 1)),
+        None,
+    )];
+    let bars = BTreeMap::new();
+
+    // The whole interval is after `last_day` (10-28): a suspension starting on
+    // 10-29 cannot be placed yet.
+    let after = admitted(vec![confirmed(
+        Exchange::Sh,
+        "600000",
+        day(2026, 10, 29),
+        day(2026, 10, 29),
+        None,
+    )]);
+    let set = assemble_suspensions(&after, &facts, &calendar, &bars).unwrap();
+    assert_eq!(set.confirmed_rows, 0);
+    assert!(set.rows.is_empty());
+    assert_eq!(set.deferred_beyond_calendar, 1);
+    assert_eq!(set.skipped_no_trading_day, 0);
+    assert_eq!(set.deferred_samples.len(), 1);
+    assert_eq!(set.deferred_samples[0].entity, "sh.600000");
+    assert_eq!(set.deferred_samples[0].start_day, day(2026, 10, 29));
+
+    // A partially covered interval (10-20..10-29, calendar to 10-28) is
+    // deferred as a whole: no partial `missing_days` row is written. The
+    // covered part alone holds seven trading days, so before this rule the row
+    // would have been written with `missing_days = 7` and understated.
+    assert_eq!(
+        trading_days_within(&calendar, day(2026, 10, 20), day(2026, 10, 28)),
+        7
+    );
+    let partial = admitted(vec![confirmed(
+        Exchange::Sh,
+        "600000",
+        day(2026, 10, 20),
+        day(2026, 10, 29),
+        None,
+    )]);
+    let set = assemble_suspensions(&partial, &facts, &calendar, &bars).unwrap();
+    assert!(
+        set.rows.is_empty(),
+        "a partial count is understated, not written"
+    );
+    assert_eq!(set.deferred_beyond_calendar, 1);
+    assert_eq!(set.skipped_no_trading_day, 0);
+}
+
+/// A fully covered interval keeps the existing rule: `missing_days` is the
+/// number of calendar trading days in it, and the skipped shapes on other
+/// entities do not disturb that row.
+#[test]
+fn a_covered_interval_keeps_its_trading_day_count() {
+    let calendar = weekdays(day(2024, 1, 8), day(2024, 1, 19));
+    let facts = vec![
+        fact(
+            Exchange::Sh,
+            "600000",
+            day(2024, 1, 8),
+            None,
+            Some(day(2024, 1, 8)),
+            None,
+        ),
+        fact(
+            Exchange::Sz,
+            "000001",
+            day(2024, 1, 8),
+            None,
+            Some(day(2024, 1, 8)),
+            None,
+        ),
+    ];
+    let bars = BTreeMap::new();
+    let source = admitted(vec![
+        // Friday..Monday covers two trading days (01-12 and 01-15).
+        confirmed(
+            Exchange::Sh,
+            "600000",
+            day(2024, 1, 12),
+            day(2024, 1, 15),
+            None,
+        ),
+        // A weekend block on another entity is skipped, not written.
+        confirmed(
+            Exchange::Sz,
+            "000001",
+            day(2024, 1, 13),
+            day(2024, 1, 14),
+            None,
+        ),
+    ]);
+
+    let set = assemble_suspensions(&source, &facts, &calendar, &bars).unwrap();
+    assert_eq!(set.confirmed_rows, 1);
+    assert_eq!(set.skipped_no_trading_day, 1);
+    assert_eq!(set.deferred_beyond_calendar, 0);
+    let row = &set.rows[0];
+    assert_eq!(row.entity(), "sh.600000");
+    assert_eq!(row.missing_days, 2);
+    assert_eq!(
+        (row.start_day, row.end_day),
+        (day(2024, 1, 12), day(2024, 1, 15))
+    );
+}
+
+/// A skipped interval is not `explained`: it does not split a gap run and adds
+/// no row, because the days it covers were never trading days.
+#[test]
+fn a_skipped_interval_neither_splits_a_gap_nor_adds_a_row() {
+    let calendar = weekdays(day(2024, 1, 8), day(2024, 1, 19));
+    let facts = vec![fact(
+        Exchange::Sh,
+        "600000",
+        day(2024, 1, 8),
+        None,
+        Some(day(2024, 1, 8)),
+        None,
+    )];
+    let mut bars = BTreeMap::new();
+    bars.insert(
+        "sh.600000".to_string(),
+        vec![day(2024, 1, 8), day(2024, 1, 19)],
+    );
+    let source = admitted(vec![confirmed(
+        Exchange::Sh,
+        "600000",
+        day(2024, 1, 13),
+        day(2024, 1, 14),
+        None,
+    )]);
+
+    let set = assemble_suspensions(&source, &facts, &calendar, &bars).unwrap();
+    assert_eq!(set.confirmed_rows, 0);
+    assert_eq!(set.skipped_no_trading_day, 1);
+    assert_eq!(set.gap_rows, 1, "the weekend block splits nothing");
+    let gap = &set.rows[0];
+    assert_eq!(
+        (gap.start_day, gap.end_day),
+        (day(2024, 1, 9), day(2024, 1, 18))
+    );
+    assert_eq!(gap.missing_days, 8);
+}
+
+/// A deferred interval still explains its covered sub-segment: the days inside
+/// `[first_day, last_day]` are a known confirmed suspension, so a missing bar
+/// there must not be re-derived as `unresolved_gap` ("missing bar, no event").
+/// Once the calendar covers the whole interval the same fact writes its row.
+#[test]
+fn a_deferred_interval_explains_its_covered_days_and_writes_no_gap() {
+    let calendar = weekdays(day(2026, 10, 1), day(2026, 10, 28));
+    let facts = vec![fact(
+        Exchange::Sh,
+        "600000",
+        day(2026, 9, 1),
+        None,
+        Some(day(2026, 9, 1)),
+        None,
+    )];
+    let mut bars = BTreeMap::new();
+    bars.insert(
+        "sh.600000".to_string(),
+        vec![day(2026, 10, 1), day(2026, 10, 28)],
+    );
+    let partial = admitted(vec![confirmed(
+        Exchange::Sh,
+        "600000",
+        day(2026, 10, 20),
+        day(2026, 10, 29),
+        None,
+    )]);
+
+    let set = assemble_suspensions(&partial, &facts, &calendar, &bars).unwrap();
+    assert_eq!(set.deferred_beyond_calendar, 1);
+    assert_eq!(set.confirmed_rows, 0);
+    assert_eq!(set.gap_rows, 1, "only the unexplained days are a gap");
+    let gap = &set.rows[0];
+    // 10-20..10-28 is the covered sub-segment and is explained; the gap stops
+    // before it instead of swallowing the known suspension.
+    assert_eq!(
+        (gap.start_day, gap.end_day),
+        (day(2026, 10, 2), day(2026, 10, 19))
+    );
+    assert_eq!(gap.missing_days, 12);
+
+    // The calendar advances past the interval: the same fact is now fully
+    // covered and writes the normal confirmed row with the full count.
+    let advanced = weekdays(day(2026, 10, 1), day(2026, 10, 30));
+    let set = assemble_suspensions(&partial, &facts, &advanced, &bars).unwrap();
+    assert_eq!(set.deferred_beyond_calendar, 0);
+    assert_eq!(set.confirmed_rows, 1);
+    let confirmed = set
+        .rows
+        .iter()
+        .find(|row| row.certainty == SuspensionCertainty::Confirmed)
+        .expect("the advanced calendar places the interval");
+    assert_eq!(
+        (confirmed.start_day, confirmed.end_day),
+        (day(2026, 10, 20), day(2026, 10, 29))
+    );
+    assert_eq!(confirmed.missing_days, 8);
+}
+
+/// The dataset identity is the stored rows only: a skipped fact leaves the
+/// digest equal to the same derivation without it.
+#[test]
+fn a_skipped_interval_does_not_enter_the_digest() {
+    let calendar = weekdays(day(2024, 1, 8), day(2024, 1, 19));
+    let facts = vec![fact(
+        Exchange::Sh,
+        "600000",
+        day(2024, 1, 8),
+        None,
+        Some(day(2024, 1, 8)),
+        None,
+    )];
+    let bars = BTreeMap::new();
+    let with_weekend = assemble_suspensions(
+        &admitted(vec![confirmed(
+            Exchange::Sh,
+            "600000",
+            day(2024, 1, 13),
+            day(2024, 1, 14),
+            None,
+        )]),
+        &facts,
+        &calendar,
+        &bars,
+    )
+    .unwrap();
+    let without = assemble_suspensions(&admitted(Vec::new()), &facts, &calendar, &bars).unwrap();
+
+    assert!(with_weekend.rows.is_empty());
+    assert_eq!(
+        dataset_digest(&with_weekend.rows),
+        dataset_digest(&without.rows)
+    );
+}
+
+/// The counters stay complete when the sample list is truncated at
+/// [`SKIP_SAMPLE_LIMIT`]: a truncated list must not look like fewer skips.
+#[test]
+fn skip_counts_stay_complete_when_samples_are_truncated() {
+    let calendar = weekdays(day(2024, 1, 1), day(2024, 6, 30));
+    let facts = vec![fact(
+        Exchange::Sh,
+        "600000",
+        day(2024, 1, 1),
+        None,
+        Some(day(2024, 1, 1)),
+        None,
+    )];
+    let bars = BTreeMap::new();
+    let mut weekend_facts = Vec::new();
+    for week in 0..(SKIP_SAMPLE_LIMIT + 2) {
+        let saturday = day(2024, 1, 6) + chrono::Duration::weeks(i64::try_from(week).unwrap());
+        weekend_facts.push(confirmed(
+            Exchange::Sh,
+            "600000",
+            saturday,
+            saturday.succ_opt().unwrap(),
+            None,
+        ));
+    }
+
+    let set = assemble_suspensions(&admitted(weekend_facts), &facts, &calendar, &bars).unwrap();
+    assert_eq!(set.skipped_no_trading_day, SKIP_SAMPLE_LIMIT + 2);
+    assert_eq!(set.skipped_samples.len(), SKIP_SAMPLE_LIMIT);
+    assert!(set.rows.is_empty());
 }
 
 /// §3.10: the digest covers the rows, not the order they were derived in, and
