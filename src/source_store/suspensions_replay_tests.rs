@@ -18,7 +18,6 @@ use super::replay::{
     COMPUTED_SUSPENSIONS_NO_DB, NOTHING_SELECTED, REBUILT_SUSPENSIONS, ReplayReport, ReplayRequest,
     SUSPENSION_REPLAY_NOT_READY, Scope, replay, suspension_summary,
 };
-use super::*;
 use crate::compact_market::{CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence};
 use crate::exchange_source::request::{ExchangeRequest, PagingFormat, SSE_SOA_PARSER_VERSION};
 use crate::exchange_source::{SourceId, index};
@@ -204,7 +203,7 @@ impl Fixture {
         security::replace_security_master(
             &c,
             &Assembly {
-                rows: members.iter().map(|code| lifecycle(*code)).collect(),
+                rows: members.iter().map(|code| lifecycle(code)).collect(),
                 migrations: Vec::new(),
                 conflicts: Vec::new(),
                 pending_sources: Vec::new(),
