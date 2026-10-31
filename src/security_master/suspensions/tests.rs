@@ -659,8 +659,8 @@ fn skip_counts_stay_complete_when_samples_are_truncated() {
     )];
     let bars = BTreeMap::new();
     let mut weekend_facts = Vec::new();
-    let mut saturday = day(2024, 1, 6);
-    while weekend_facts.len() < SKIP_SAMPLE_LIMIT + 2 {
+    for week in 0..(SKIP_SAMPLE_LIMIT + 2) {
+        let saturday = day(2024, 1, 6) + chrono::Duration::weeks(i64::try_from(week).unwrap());
         weekend_facts.push(confirmed(
             Exchange::Sh,
             "600000",
@@ -668,7 +668,6 @@ fn skip_counts_stay_complete_when_samples_are_truncated() {
             saturday.succ_opt().unwrap(),
             None,
         ));
-        saturday = saturday + chrono::Duration::weeks(1);
     }
 
     let set = assemble_suspensions(&admitted(weekend_facts), &facts, &calendar, &bars).unwrap();

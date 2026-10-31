@@ -1447,6 +1447,33 @@ owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，�
 `src/data_supply/derived.rs`（item outcome）、`src/sqlite_market/suspensions.rs`
 （evidence）、两处测试文件。不改表结构、不改读面、不改 `docs/STATUS.md` 部署事实。
 
+**落地记录（未部署）**
+
+实现状态：代码与测试已提交；本机禁止 Rust 编译（只跑 `cargo fmt` 与文档门禁），Rust 正确性
+由 PR CI（`cargo clippy --all-targets --all-features -- -D warnings`、`cargo nextest run`）证明。
+
+- 域层：`SuspensionSet` 新增 `deferred_beyond_calendar` / `deferred_samples` /
+  `skipped_no_trading_day` / `skipped_samples`；`assemble_suspensions` 先判覆盖
+  （`calendar_covers`，空日历返回 false）再数交易日；样例上限 `SKIP_SAMPLE_LIMIT = 10`。
+  `Error::TradingDayRange` 保留但不再由本函数返回。
+- 证据：item `outcome_json` 与 `derived_dataset_versions` evidence 各 4 个字段（样例
+  `entity`/`start_day`/`end_day`/`source_record_id`）；写入器新增 H3 同形校验，拒绝
+  「样例数 > 计数」的集合（行计数器校验不变）。
+- 边界：数据集最终无任何行（无 gap、全部 deferred/skipped）时仍按既有规则不登记
+  `derived_dataset_versions`（空集不造空登记），跳过计数只出现在 item outcome。
+- 测试：`src/security_master/suspensions/tests.rs`
+  `a_weekend_only_interval_is_skipped_with_a_sample`、
+  `an_interval_past_the_calendar_last_day_is_deferred_whole`（含部分越界 `10-20..10-29`）、
+  `a_covered_interval_keeps_its_trading_day_count`、
+  `a_skipped_interval_neither_splits_a_gap_nor_adds_a_row`、
+  `a_skipped_interval_does_not_enter_the_digest`、
+  `skip_counts_stay_complete_when_samples_are_truncated`、
+  `a_confirmed_fact_for_an_unknown_entity_is_refused`（回归）；
+  `src/sqlite_market/suspensions/tests.rs`
+  `skipped_confirmed_intervals_are_counted_in_evidence_and_write_no_row`、
+  `a_set_whose_skip_samples_outnumber_their_counters_is_refused`。
+- 文档：`docs/data-catalog.md` 第 11 行（停牌）补零交易日口径，状态列不变。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
