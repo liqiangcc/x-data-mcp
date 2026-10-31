@@ -475,7 +475,11 @@ impl<'a> Entry<'a> {
                         plan.basis_status,
                         &fetched_at,
                     )?;
-                    let envelope = match validate::parse_page(plan.format, &response.body) {
+                    let envelope = match validate::parse_page(
+                        plan.format,
+                        validate::declared_tabkey(&plan.params),
+                        &response.body,
+                    ) {
                         Ok(envelope) => envelope,
                         Err(error) => {
                             failure = Some(AcquireError::Invalid {

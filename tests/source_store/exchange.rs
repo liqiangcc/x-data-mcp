@@ -12,7 +12,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use chrono::NaiveDate;
-use x_data_mcp::exchange_source::request::{SSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V1};
+use x_data_mcp::exchange_source::request::{
+    SSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V2,
+};
 use x_data_mcp::exchange_source::transport::{HttpRequest, HttpResponse};
 use x_data_mcp::exchange_source::validate::parse_page;
 use x_data_mcp::exchange_source::{
@@ -332,7 +334,7 @@ fn legacy_szse_pages_keep_the_first_block_meaning_on_replay() {
             );
             // v1 reads `[0]`: the empty tab1, count 0. This is the old meaning
             // the replay must reproduce, not the new tab2 selection.
-            let envelope = parse_page(PagingFormat::SzseMetadataV1, &response.body).unwrap();
+            let envelope = parse_page(PagingFormat::SzseMetadataV1, None, &response.body).unwrap();
             assert_eq!(
                 (envelope.page, envelope.page_count, envelope.rows),
                 (page, 0, 0)
@@ -360,6 +362,43 @@ fn legacy_szse_pages_keep_the_first_block_meaning_on_replay() {
     assert_eq!(snapshot_count(&db, SourceId::SzseDelisting), 2);
 }
 
+/// `exchange-szse-page-v2` chose `tab2` first. Pages frozen under it must keep
+/// that meaning after the v3 rule (declared tabkey / unique non-empty block,
+/// #446 D1), otherwise a replay would silently rewrite their row counts.
+#[test]
+fn szse_v2_pages_keep_the_tab2_meaning_on_replay() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    {
+        let backend = open(&db);
+        let request = ExchangeRequest::new(SourceId::SzseDelisting, "https://example.invalid/szse")
+            .paged(PagingFormat::SzseMetadata, 1);
+        let response = ok(szse_two_block_body(1, 1, 2, 2), "szse-v2-page-1");
+        // v2 reads tab2 even though the request carries no TABKEY.
+        let envelope = parse_page(PagingFormat::SzseMetadataV2, None, &response.body).unwrap();
+        assert_eq!((envelope.page_count, envelope.rows), (1, 2));
+        freeze_page(
+            &store,
+            &backend,
+            &request,
+            &response,
+            &envelope,
+            SZSE_PARSER_VERSION_V2,
+            BasisStatus::ApprovedSource,
+            "2026-10-31T02:00:00Z",
+        )
+        .unwrap();
+    }
+    assert_eq!(store.records().unwrap().len(), 1);
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["status"], "ok");
+    assert_eq!(replay["scopes"][0]["rebuilt"], "rebuilt");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 1);
+    assert_eq!(snapshot_count(&db, SourceId::SzseDelisting), 1);
+}
+
 /// The 2026-10-30 dialect change writes `pageHelp.pageNo`/`pageSize`, but pages
 /// frozen before it (`exchange-sse-page-v1`) must still replay from the store
 /// alone. `PagingFormat::from_parser_version` keeps that alias; without it the
@@ -377,7 +416,7 @@ fn legacy_sse_pages_still_replay_after_the_dialect_change() {
                 ExchangeRequest::new(SourceId::SseListing, "https://example.invalid/list")
                     .paged(PagingFormat::SsePageHelp, page);
             let response = ok(sse_v1_body(page, 2, 3, rows), &format!("page-{page}"));
-            let envelope = parse_page(PagingFormat::SsePageHelp, &response.body).unwrap();
+            let envelope = parse_page(PagingFormat::SsePageHelp, None, &response.body).unwrap();
             freeze_page(
                 &store,
                 &backend,

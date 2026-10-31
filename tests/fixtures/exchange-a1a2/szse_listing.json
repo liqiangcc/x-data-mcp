@@ -1,8 +1,53 @@
-[{"metadata":{"pageNo":1,"pagecount":1,"recordcount":6},"data":[
-{"zqdm":"000001","zqjc":"平安银行","agssrq":"19910403"},
-{"zqdm":"000002","zqjc":"万科A","agssrq":"19910129"},
-{"zqdm":"000004","zqjc":"国华网安","agssrq":"19910114"},
-{"zqdm":"200002","zqjc":"万科B","agssrq":""},
-{"zqdm":"301569","zqjc":"上新股","agssrq":"20261015"},
-{"zqdm":"302132","zqjc":"中航电测","agssrq":"20100827"}
-]}]
+[
+  {
+    "metadata": {
+      "catalogid": "1110",
+      "tabkey": "tab1",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 1,
+      "recordcount": 6
+    },
+    "data": [
+      {"agdm": "000001", "agjc": "平安银行", "agssrq": "19910403"},
+      {"agdm": "000002", "agjc": "万科A", "agssrq": "19910129"},
+      {"agdm": "000004", "agjc": "国华网安", "agssrq": "19910114"},
+      {"agdm": "200002", "agjc": "万科B", "agssrq": ""},
+      {"agdm": "301569", "agjc": "上新股", "agssrq": "20261015"},
+      {"agdm": "302132", "agjc": "中航电测", "agssrq": "20100827"}
+    ]
+  },
+  {
+    "metadata": {
+      "catalogid": "1110",
+      "tabkey": "tab2",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 0,
+      "recordcount": 0
+    },
+    "data": []
+  },
+  {
+    "metadata": {
+      "catalogid": "1110",
+      "tabkey": "tab3",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 0,
+      "recordcount": 0
+    },
+    "data": []
+  },
+  {
+    "metadata": {
+      "catalogid": "1110",
+      "tabkey": "tab4",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 0,
+      "recordcount": 0
+    },
+    "data": []
+  }
+]

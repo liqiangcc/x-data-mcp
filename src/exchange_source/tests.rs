@@ -14,7 +14,7 @@ use chrono::NaiveDate;
 use super::index::{self, SnapshotRow};
 use super::request::{
     SSE_PARSER_VERSION, SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION, SZSE_PARSER_VERSION,
-    SZSE_PARSER_VERSION_V1,
+    SZSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V2,
 };
 use super::*;
 use crate::source_store::{
@@ -57,7 +57,7 @@ fn szse_body(page: u32, page_count: u32, total: u64, rows: usize) -> Vec<u8> {
 }
 
 fn envelope(body: &[u8], format: PagingFormat) -> PageEnvelope {
-    validate::parse_page(format, body).expect("fixture envelope")
+    validate::parse_page(format, None, body).expect("fixture envelope")
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn sse_and_szse_envelopes_are_parsed_without_business_fields() {
         (2, 4, 3, Some(9))
     );
     assert_eq!(
-        validate::parse_page(PagingFormat::SsePageHelp, b"{}")
+        validate::parse_page(PagingFormat::SsePageHelp, None, b"{}")
             .unwrap_err()
             .code(),
         "source_invalid"
@@ -166,49 +166,83 @@ fn sse_and_szse_envelopes_are_parsed_without_business_fields() {
 }
 
 #[test]
-fn the_szse_envelope_reads_the_tab2_block_not_the_first_block() {
-    // 2026-10-30 real shape: tab1 (暂停上市) is empty with pagecount=0, tab2
-    // (终止上市) carries the rows. Reading [0] later fails `page_count is 0`.
-    let body = br#"[
+fn the_szse_envelope_reads_the_declared_or_only_non_empty_block() {
+    // 2026-10-30 real shape of `1793_ssgs`: tab1 (暂停上市) is empty with
+    // `pagecount=0`, tab2 (终止上市) carries the rows, and the request declares
+    // `TABKEY=tab2`.
+    let terminated = br#"[
       {"metadata":{"tabkey":"tab1","pageno":2,"pagesize":20,"pagecount":0,"recordcount":0},"data":[]},
       {"metadata":{"tabkey":"tab2","pageno":2,"pagesize":20,"pagecount":4,"recordcount":61},
        "data":[{"zqdm":"000418"},{"zqdm":"000502"}]}
     ]"#;
-    let page = envelope(body, PagingFormat::SzseMetadata);
+    let page = validate::parse_page(PagingFormat::SzseMetadata, Some("tab2"), terminated).unwrap();
     assert_eq!(
         (page.page, page.page_count, page.rows, page.total),
         (2, 4, 2, Some(61)),
-        "page number, page count, rows and total all come from tab2"
+        "page number, page count, rows and total all come from the declared tab2"
     );
 
-    // No tab2: the only block with rows is still unambiguous.
-    let fallback = br#"[
-      {"metadata":{"pageno":1,"pagecount":0,"recordcount":0},"data":[]},
-      {"metadata":{"pageno":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000001"}]}
+    // 2026-10-31 real shape of `CATALOGID=1110`: four blocks, only tab1
+    // carries the current list; the request declares no tabkey, so the only
+    // non-empty block decides (#446 D1). "tab2 first" would read an empty
+    // block and later fail `page_count is 0`.
+    let current = br#"[
+      {"metadata":{"tabkey":"tab1","pageno":1,"pagesize":20,"pagecount":146,"recordcount":2905},
+       "data":[{"agdm":"000001"},{"agdm":"000002"}]},
+      {"metadata":{"tabkey":"tab2","pageno":1,"pagesize":20,"pagecount":0,"recordcount":0},"data":[]},
+      {"metadata":{"tabkey":"tab3","pageno":1,"pagesize":20,"pagecount":0,"recordcount":0},"data":[]},
+      {"metadata":{"tabkey":"tab4","pageno":1,"pagesize":20,"pagecount":0,"recordcount":0},"data":[]}
     ]"#;
-    let page = envelope(fallback, PagingFormat::SzseMetadata);
-    assert_eq!((page.page, page.page_count, page.rows), (1, 1, 1));
+    let page = validate::parse_page(PagingFormat::SzseMetadata, None, current).unwrap();
+    assert_eq!(
+        (page.page, page.page_count, page.rows, page.total),
+        (1, 146, 2, Some(2905)),
+        "the count and rows come from tab1, the only block with data"
+    );
 
-    // No tab2 and two blocks with rows: never guess the first one.
+    // A declaration wins over another block with rows: the request, not the
+    // response, says which list is meant.
+    let two_lists = br#"[
+      {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000001"}]},
+      {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":2,"recordcount":3},"data":[{"zqdm":"000002"}]}
+    ]"#;
+    let page = validate::parse_page(PagingFormat::SzseMetadata, Some("tab1"), two_lists).unwrap();
+    assert_eq!((page.page_count, page.rows), (1, 1));
+
+    // No declaration and no block with rows: still unambiguous when the
+    // response has one block only (the old single-block shape).
+    let single = br#"[{"metadata":{"pageno":1,"pagecount":1,"recordcount":0},"data":[]}]"#;
+    let page = validate::parse_page(PagingFormat::SzseMetadata, None, single).unwrap();
+    assert_eq!((page.page_count, page.rows), (1, 0));
+
+    // No declaration and several blocks with rows: never guess the first one.
     let ambiguous = br#"[
       {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000001"}]},
       {"metadata":{"tabkey":"tab3","pageno":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000003"}]}
     ]"#;
-    assert_eq!(
-        validate::parse_page(PagingFormat::SzseMetadata, ambiguous)
-            .unwrap_err()
-            .code(),
-        "source_invalid"
-    );
+    let error = validate::parse_page(PagingFormat::SzseMetadata, None, ambiguous).unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("several blocks"), "{error}");
+    // The message names every block's counts, so the operator can see which
+    // block changed.
+    assert!(error.to_string().contains("tab1: 1 row(s)"), "{error}");
+    assert!(error.to_string().contains("tab3: 1 row(s)"), "{error}");
+
+    // A declared tabkey that no block carries fails closed.
+    let error =
+        validate::parse_page(PagingFormat::SzseMetadata, Some("tab2"), ambiguous).unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("declared tabkey"), "{error}");
 }
 
 #[test]
-fn the_szse_envelope_versions_keep_v1_replay_on_the_first_block() {
+fn the_szse_envelope_versions_keep_their_old_selection_on_replay() {
     let two_blocks = br#"[
       {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":0,"recordcount":0},"data":[]},
       {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":2,"recordcount":3},"data":[{"zqdm":"000003"}]}
     ]"#;
-    // New pages read tab2.
+    // v3 reads tab2 here because it is the only non-empty block (the request
+    // declares no tabkey).
     assert_eq!(
         PagingFormat::SzseMetadata.parser_version(),
         SZSE_PARSER_VERSION
@@ -216,6 +250,14 @@ fn the_szse_envelope_versions_keep_v1_replay_on_the_first_block() {
     assert!(known_parser_version(SZSE_PARSER_VERSION));
     let page = envelope(two_blocks, PagingFormat::SzseMetadata);
     assert_eq!((page.page_count, page.rows), (2, 1));
+    // v2 frozen pages keep their "tab2 first" meaning on replay.
+    assert!(known_parser_version(SZSE_PARSER_VERSION_V2));
+    assert_eq!(
+        PagingFormat::from_parser_version(SZSE_PARSER_VERSION_V2),
+        Some(PagingFormat::SzseMetadataV2)
+    );
+    let v2 = envelope(two_blocks, PagingFormat::SzseMetadataV2);
+    assert_eq!((v2.page_count, v2.rows), (2, 1));
     // Old frozen pages replay with the old meaning: `[0]`.
     assert!(known_parser_version(SZSE_PARSER_VERSION_V1));
     assert_eq!(
@@ -270,7 +312,7 @@ fn the_soa_dialect_pages_by_page_help_page_no() {
     // `pageHelp.beginPage=1`; the page number is `pageHelp.pageNo` (PR-11
     // evidence: `beginPage=2&endPage=2` answered page 1 again).
     let body = br#"{"pageHelp":{"beginPage":1,"pageNo":2,"pageCount":2,"total":28,"data":[{"x":"1"},{"x":"2"}]}}"#;
-    let page = validate::parse_page(PagingFormat::SseSoaPageNo, body).unwrap();
+    let page = validate::parse_page(PagingFormat::SseSoaPageNo, None, body).unwrap();
     assert_eq!(
         (page.page, page.page_count, page.rows, page.total),
         (2, 2, 2, Some(28))

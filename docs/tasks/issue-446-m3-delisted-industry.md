@@ -627,23 +627,73 @@ fetch（HTTP，bounded retries，Referer/UA）
   在同一个 `szse_delisting_main` 项里；断言期望被误写成 8。已改为 7，并保留「每个种类
   的 id 列表都非空」检查；请求数 8 与两页采集断言不变，没有放宽覆盖。
 
-### 7.6 简称/风险警示表按声明 `TABKEY` 选块（2026-10-31，XDM-142）
+### 7.6 PR-3 修复三落位：A-1/A-2 块选择、代码列与形状守卫（2026-10-31，XDM-140）
 
-状态：**代码待合并（Refs #446），未部署**。§7.5 只修了 A-1/A-2 终止上市名单的块选择；
-本次修 PR-10/PR-12 共用的深市简称变更表解析器。
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+依据 `reports/x-data-mcp/135/report.md` §4：用 preview.38 产品二进制 + 真实冻结字节实测，
+A-1/A-2 端到端在采集/解析层 fail-closed，`derived:security_master` 不产出新主表。三个缺陷
+互相独立，逐条修：
+
+- **D1 选块**（`src/exchange_source/validate.rs`）：`szse_block` 原先把
+  `metadata.tabkey=="tab2"` 当作第一条规则，`CATALOGID=1110` 的真实响应是 4 块而只有
+  `tab1` 有数据（`pagecount=146`、`recordcount=2905`），于是读到空块、`page_count is 0`。
+  现在按**请求声明的 `TABKEY`** 选块；没有声明时选**唯一非空块**；多个块都非空则
+  `source_invalid`，不再「优先 tab2」或取 `[0]`。声明值从请求参数读取（参数名不区分大小写），
+  重放从清单 `origin` 的规范指纹读回同一个值；信封与 `a1a2::rows` 共用同一个选择函数。
+  选中块的 `tabkey`、选择依据（`declared_tabkey`/`unique_non_empty`/`only_block`）和各块
+  row/page 数进 item 证据 `block_selection`，线上可直接区分「选错块」与「块本来就空」。
+- **D2 代码列**（`src/official_security/a1a2.rs` `code_of`）：深市分支原先硬编码 `zqdm`；
+  1110 上市行只有 `agdm`。现在按行接受 `zqdm` 或 `agdm`（两者都有且不等 → `source_invalid`，
+  都没有 → `source_invalid`），沪市分支的 `A_STOCK_CODE`/`COMPANY_CODE` 优先级不变。
+- **D3 形状守卫**（同文件 `parse_page`）：守卫原用过滤前 `row_count`，深市退市主板第 9 页
+  10 行全是 B 股时被误判为「列表形状变了」。现在改用**过滤后 A 股行数**：有 A 股行但全部
+  缺退市日才是形状变化；整页只有 B 股为「本页无事实」（非 A 前缀仍按 #398 fail-closed）；
+  整页 0 行仍走既有零行策略。
+  错误信息带本页总行数 / 过滤后行数 / B 股跳过数。
+- **版本**：信封 `exchange-szse-page-v2` → `v3`（v2 保留为「`tab2` 优先」的旧重放语义，v1
+  仍是第一个 block；同一份字节不会因升级被改写行数/页数）；业务 parser
+  `exchange-a1a2-v3` → `v4`。
+- **夹具**（`tests/fixtures/exchange-a1a2/`）：`szse_listing.json` 改为 1110 的真实
+  4 block 形状（`tab1` 有数据、`tab2`/`tab3`/`tab4` 空，行用 `agdm`），新增
+  `szse_delisting_main_b_only.json`（第 9 页 10 个 B 股代码）。计数按样本裁剪到自洽
+  （1 页 6 行），不提交 146 页大文件；README 的 sha 表同提交更新。
+- **测试（CI，不联网）**：`exchange_source::tests` 覆盖声明优先、唯一非空、多非空
+  fail-closed、声明缺失 fail-closed、v2/v1 旧语义；`a1a2/tests.rs` 新增
+  `the_current_szse_list_is_read_from_the_only_non_empty_block`（D1）、
+  `the_szse_code_column_is_zqdm_or_agdm`（D2）、
+  `a_page_of_only_b_shares_is_not_a_shape_change`（D3），以及
+  `frozen_szse_bytes_replay_to_the_same_row_level_facts`：从来源库读回每个冻结页，
+  用同一选块/行解析重算 `row_count/page_count` 与 `szse_listing`、`szse_delisting_main`、
+  `szse_delisting_nm` 的**行级事实数**，并断言 `block_selection` 证据——信封级 replay
+  正是三个缺陷都逃过的缺口。
+- **文档**：`docs/exchange-source.md` §2/§5/§6 同步选块、代码列、形状守卫与版本。
+- **未验证/未部署**：产品实跑、真实主表 5,565 行 / `listed_ever` 338 仍未验证（本任务
+  不联网、不部署）；合并优先级、退市日语义（15 条沪市差异）与 338/277 口径不在本次范围。
+
+验证：本机只跑 `cargo fmt`、`git diff --check` 与 `scripts/check_current_facts.py`；
+Rust 由 PR CI（fmt/clippy `-D warnings`/nextest/export feature）证明。推送前逐字贴出
+`scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main`
+的输出。不改 SLO 门禁、不部署、不动 `docs/STATUS.md` 的部署事实。
+
+### 7.7 简称/风险警示表按声明 `TABKEY` 选块（2026-10-31，XDM-142）
+
+状态：**代码待合并（Refs #446），未部署**。§7.6 的 `validate::szse_block(value, declared)`
+已按请求声明的 `TABKEY` 选块（声明缺失/多义 fail-closed）；本次把 PR-10/PR-12 共用的深市
+简称变更表解析器接到同一个函数上。
 
 - **问题**：`official_security::risk_warnings::sz_rows` 仍取「第一个带 `data` 数组的块」。
   真实 `SSGSGMXX`/`TABKEY=tab2` 响应是 `tab1`（暂停上市）`data: []` + `tab2`（简称变更）
   有行，于是读到空 `tab1` → `changes` 为空 → `derived:security_names` 以 `empty_name_set`
   失败、`derived:risk_warnings` 写 0 行/`pending_source`。
-- **选块**：新增 `validate::szse_block_for(value, declared)`（不改 §7.5 的
-  `validate::szse_block`/`a1a2` 逻辑）：有声明时必须是 `metadata.tabkey` 等于声明值的块，
-  响应缺该块 → `source_invalid`；无声明时只接受唯一的非空 `data` 块（单块旧形状仍可读），
-  多个非空块 fail-closed。`sz_rows` 不再用 `find_map(first data array)`。
+- **选块**：`sz_rows` 改用 §7.6 的 `validate::szse_block(value, declared)`（不再
+  `find_map(first data array)`，也不再另写一份选块）：声明的 `tab2` 必须存在、未声明而多个
+  块非空都 fail-closed；单块旧形状仍可读。`a1a2` 的选块与证据逻辑未改。
 - **计划到解析器**：`plans()` 的 `TABKEY` 提为 `SZSE_SHORT_NAME_TABKEY`；
-  `acquire_sz_short_name_table` 从 `plan.params` 读声明值并传给 `parse_sz_page`；
-  `szse_declared_tabkey()` 把同一值给两个 replay 入口，`security_names::replay` 走同一
-  `parse_sz_page`，因此 live 与 replay 取同一块。SSE 公告页没有 tab 块，选块声明不适用。
+  `acquire_sz_short_name_table` 用 `validate::declared_tabkey(&plan.params)` 读出声明值
+  并传给 `parse_sz_page`；`szse_declared_tabkey()` 把同一值给两个 replay 入口，
+  `security_names::replay` 走同一 `parse_sz_page`，因此 live 与 replay 取同一块。
+  SSE 公告页没有 tab 块，选块声明不适用。
 - **解析器版本**：`risk-warnings-v1` → `risk-warnings-v2`、`security-names-v1` →
   `security-names-v2`；解析语义变了，证据需可区分。旧版本记录仍可读，本次不回放旧版本。
 - **夹具与测试**：新增两块形状夹具（`tab1` 空 + `tab2` 四行）
@@ -657,6 +707,7 @@ fetch（HTTP，bounded retries，Referer/UA）
 - **验证**：本机不编译，Rust 正确性只由 PR 的 CI（fmt、clippy `-D warnings`、nextest、
   export feature）证明；推送前跑 `scripts/check_current_facts.py` 与
   `prepush_check.py --repo <worktree> --base origin/main`，输出摘要贴 PR 正文。
+
 
 ## 8. generation 保留与裁剪
 
@@ -1445,6 +1496,102 @@ owner 决策/口径：
 验证：本机只跑 `cargo fmt`、`git diff --check`、`scripts/check_current_facts.py` 与
 `prepush_check.py`；Rust 由 PR CI（fmt/clippy `-D warnings`/nextest/export feature）证明。
 不改 0.01% 阈值、不改早期深市边界、不联网、不部署、不动 `docs/STATUS.md` 的部署事实。
+
+### 14.8 XDM-134：confirmed 区间未完全落在日历覆盖内（最小设计）
+
+状态：**最小设计（先于代码）；实现未部署**（Refs #446；证据来源 XDM-131
+`calendar-suspensions-attribution.md` §B）。
+
+2026-10-31 协调者按推荐语义授权执行，owner 可在部署前否决：两种零交易日形态都不写行、
+item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其它 fail-closed。
+
+**问题**：`assemble_suspensions` 对每条 confirmed fact 用闭区间数已提交日历的交易日，
+`== 0` 即 `Error::TradingDayRange`，整个 `derived:suspensions` 失败、一行不写。A-3 的
+`end_day` 是「复牌日前一自然日」，且来源窗口末段可晚于日历 `last_day`，因此
+（a）整段在 `last_day` 之后、（b）整段落在周末/假日块内都会让全市场停牌数据集失败。
+另有一个更隐蔽的形态：区间**部分**越过 `last_day`（例如 `10-20..10-29`，日历到 `10-28`），
+若按覆盖内交易日写行会把 `maybe-trading` 的 `10-29` 少算进 `missing_days`。
+
+**判定（唯一口径，先看覆盖再看交易日）**：设日历覆盖 `[first_day, last_day]`。
+
+1. 日历为空，或区间未完全落在 `[first_day, last_day]` 内（`start_day < first_day` 或
+   `end_day > last_day`）→ `deferred_beyond_calendar`：整行不写、计数、最多 10 条样例；
+   item 成功。**这条不看区间内有多少交易日**（部分越界的 `10-20..10-29` 即使覆盖内
+   有 7 个交易日也整行 deferred）；**不 clamp `end_day`、不写部分 `missing_days`**；
+   下一次运行日历前进后同一 fact 自然纳入。covered 子段
+   `[max(start_day, first_day), min(end_day, last_day)]`（非空时）加入 `explained`，
+   只用于向 gap 派生解释「这些天是已知 confirmed 停牌」，避免把缺 bar 误报成
+   `unresolved_gap`；不写 suspension 行、不改 deferred 计数。整段在 `last_day` 之后
+   或完全在 `first_day` 之前时无子段可加。
+2. 区间完全落在 `[first_day, last_day]` 内且 `trading_days_within == 0` →
+   `skipped_no_trading_day`：整行不写、计数、最多 10 条样例；item 成功。没有可交易日
+   就没有可交易性影响，不能因为一个周末区间让全市场停牌数据失败。
+3. 其余（覆盖完整且至少 1 个交易日）保持现状：`missing_days = trading_days_within`，
+   正常写行。
+
+**证据（不得静默）**：item `outcome_json` 与 `derived_dataset_versions.evidence` 各增加
+`deferred_beyond_calendar`、`deferred_samples`、`skipped_no_trading_day`、
+`skipped_samples`。样例顺序为输入 facts 顺序，字段 `entity` / `start_day` / `end_day` /
+`source_record_id`；上限 10 条（计数是完整计数，样例只是截断）。稳定词逐字固定为
+`deferred_beyond_calendar` / `skipped_no_trading_day`。
+
+**不变式**：
+
+- 表约束 `missing_days > 0`（`migrations/tasks/023_security_master.sql:218`）不放宽；
+  跳过形态不产生行，因此不写 0。
+- `Error::TradingDayRange` 保留，但不再用于上述两种形态；`UnknownEntity` / `Overlap` /
+  `Duplicate` / `Range` / `MissingDays` / `Reason` / `SourceKind` 等仍 fail-closed。
+- 与 `unresolved_gap` 不双计：`deferred_beyond_calendar` 的 covered 子段进
+  `explained`（只解释缺 bar，不写行）；`skipped_no_trading_day` 不进 `explained`
+  （区间内没有交易日），两种情况都不产生 gap 行。
+- digest 只覆盖已写行：跳过不改变 `suspensions-v1` 的输入，也不改 `algorithm_version`。
+
+**测试清单（CI，不联网）**
+
+| 场景 | 断言 |
+|---|---|
+| 纯周末区间（覆盖内） | `Ok`、`skipped_no_trading_day == 1`、无行、样例含 entity/起止/来源 id |
+| 整段在 `last_day` 之后（`10-29`，日历到 `10-28`） | `Ok`、`deferred_beyond_calendar == 1`、无行 |
+| 部分越界（`10-20..10-29`，日历到 `10-28`） | `deferred_beyond_calendar == 1`、无行、`missing_days` 不出现部分计数 |
+| 跨交易日区间（覆盖完整） | 正常行、`missing_days` = 区间内交易日数 |
+| 既有 fail-closed | `UnknownEntity`/`Overlap`/`Duplicate`/`Range` 回归不变 |
+| deferred 的 covered 子段 | 覆盖段内缺 bar → 不产生 gap 行；日历前进后同一区间写出正常 confirmed 行且 `missing_days` 完整 |
+| digest / gap | 跳过不改变 digest；skipped 区间不产生 explained/gap 行 |
+| 写入器 | evidence 落库含 4 个字段，计数与样例一致，行数不变 |
+
+**落点**：`src/security_master/suspensions.rs`（计数与样例、覆盖边界、分支）、
+`src/data_supply/derived.rs`（item outcome）、`src/sqlite_market/suspensions.rs`
+（evidence）、两处测试文件。不改表结构、不改读面、不改 `docs/STATUS.md` 部署事实。
+
+**落地记录（未部署）**
+
+实现状态：代码与测试已提交；本机禁止 Rust 编译（只跑 `cargo fmt` 与文档门禁），Rust 正确性
+由 PR CI（`cargo clippy --all-targets --all-features -- -D warnings`、`cargo nextest run`）证明。
+
+- 域层：`SuspensionSet` 新增 `deferred_beyond_calendar` / `deferred_samples` /
+  `skipped_no_trading_day` / `skipped_samples`；`assemble_suspensions` 先判覆盖
+  （`calendar_covers`，空日历返回 false）再数交易日；样例上限 `SKIP_SAMPLE_LIMIT = 10`。
+  `Error::TradingDayRange` 保留但不再由本函数返回。
+- gap 交互：`deferred_beyond_calendar` 区间的 covered 子段进 `explained`
+  （不写行、不改计数），覆盖段内的缺 bar 不再产生 `unresolved_gap`；`skipped` 区间不进。
+- 证据：item `outcome_json` 与 `derived_dataset_versions` evidence 各 4 个字段（样例
+  `entity`/`start_day`/`end_day`/`source_record_id`）；写入器新增 H3 同形校验，拒绝
+  「样例数 > 计数」的集合（行计数器校验不变）。
+- 边界：数据集最终无任何行（无 gap、全部 deferred/skipped）时仍按既有规则不登记
+  `derived_dataset_versions`（空集不造空登记），跳过计数只出现在 item outcome。
+- 测试：`src/security_master/suspensions/tests.rs`
+  `a_weekend_only_interval_is_skipped_with_a_sample`、
+  `an_interval_past_the_calendar_last_day_is_deferred_whole`（含部分越界 `10-20..10-29`）、
+  `a_covered_interval_keeps_its_trading_day_count`、
+  `a_skipped_interval_neither_splits_a_gap_nor_adds_a_row`、
+  `a_deferred_interval_explains_its_covered_days_and_writes_no_gap`、
+  `a_skipped_interval_does_not_enter_the_digest`、
+  `skip_counts_stay_complete_when_samples_are_truncated`、
+  `a_confirmed_fact_for_an_unknown_entity_is_refused`（回归）；
+  `src/sqlite_market/suspensions/tests.rs`
+  `skipped_confirmed_intervals_are_counted_in_evidence_and_write_no_row`、
+  `a_set_whose_skip_samples_outnumber_their_counters_is_refused`。
+- 文档：`docs/data-catalog.md` 第 11 行（停牌）补零交易日口径，状态列不变。
 
 ## 15. 本机与 CI 验证方式
 

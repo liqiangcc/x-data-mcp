@@ -20,7 +20,7 @@ use chrono::{DateTime, NaiveDate};
 use serde::Serialize;
 
 use super::BasisStatus;
-use super::request::PagingFormat;
+use super::request::{ExchangeRequest, PagingFormat};
 use super::validate;
 use crate::hash::sha256;
 use crate::source_store::{ManifestRecord, SourceStore, StoreError, StoreKind};
@@ -185,7 +185,14 @@ pub fn rebuild(store: &SourceStore, records: &[&ManifestRecord]) -> Result<Rebui
             continue;
         };
         let bytes = store.read_verified(snapshot_id)?;
-        let envelope = match validate::parse_page(format, &bytes) {
+        // The SZSE block selection (#446 D1) belongs to the request: the
+        // `TABKEY` that selected a block is stored in the canonical
+        // fingerprint the manifest keeps as `origin`, so replay reads it back
+        // instead of guessing a block.
+        let declared = ExchangeRequest::from_fingerprint(&record.origin)
+            .ok()
+            .and_then(|request| validate::declared_tabkey(&request.params).map(str::to_owned));
+        let envelope = match validate::parse_page(format, declared.as_deref(), &bytes) {
             Ok(envelope) => envelope,
             Err(error) => {
                 problems.push(problem(

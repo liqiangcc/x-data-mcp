@@ -48,10 +48,9 @@ use std::sync::Arc;
 use chrono::{NaiveDate, Utc};
 use serde_json::{Value, json};
 
-use crate::exchange_source::validate::{ValidateError, szse_block_for};
 use crate::exchange_source::{
     AcquireError, AcquisitionPlan, Client, Entry, PagingFormat, RequestError, RunCache,
-    SnapshotBinding, SourceId, TransportError, quarter_segments,
+    SnapshotBinding, SourceId, TransportError, quarter_segments, validate,
 };
 use crate::security_master::assembly::PendingSource;
 use crate::security_master::risk_warnings::{
@@ -78,7 +77,6 @@ pub const SZSE_SHORT_NAME_CATALOG: &str = "SSGSGMXX";
 /// `TABKEY` of the SZSE short-name change table (简称变更): the plan declares
 /// it and the parser selects exactly that block.
 pub const SZSE_SHORT_NAME_TABKEY: &str = "tab2";
-const SZSE_TABKEY_PARAM: &str = "TABKEY";
 /// SSE company-bulletin index endpoint.
 pub const SSE_BULLETIN_URL: &str =
     "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do";
@@ -128,7 +126,7 @@ pub fn plans() -> Vec<(Kind, AcquisitionPlan)> {
     )
     .param("SHOWTYPE", "JSON")
     .param("CATALOGID", SZSE_SHORT_NAME_CATALOG)
-    .param(SZSE_TABKEY_PARAM, SZSE_SHORT_NAME_TABKEY);
+    .param("TABKEY", SZSE_SHORT_NAME_TABKEY);
     let bulletin = |kind: Kind, title: &str| {
         let plan = AcquisitionPlan::new(
             SourceId::SseBulletin,
@@ -299,7 +297,7 @@ pub(crate) fn szse_declared_tabkey() -> Option<String> {
     plans()
         .into_iter()
         .find(|(kind, _)| *kind == Kind::SzseShortName)
-        .and_then(|(_, plan)| plan.params.get(SZSE_TABKEY_PARAM).cloned())
+        .and_then(|(_, plan)| validate::declared_tabkey(&plan.params).map(str::to_string))
 }
 
 /// Acquire, freeze and parse the SZSE `SSGSGMXX`/`tab2` table through PR-2's
@@ -318,7 +316,7 @@ pub(crate) fn acquire_sz_short_name_table(
         .expect("the SZSE plan is static");
     // The declared tab travels with the request into the parser: a page whose
     // `tab1` is an empty tab must not be read as an empty table.
-    let declared_tabkey = plan.params.get(SZSE_TABKEY_PARAM).cloned();
+    let declared_tabkey = validate::declared_tabkey(&plan.params).map(str::to_string);
     let outcome = entry.acquire(&plan)?;
     let mut changes = Vec::new();
     let mut rows = 0usize;
@@ -552,13 +550,14 @@ pub(crate) fn parse_sz_page(
 /// The 2026-10-30 real `SSGSGMXX` response has two blocks: `tab1` with
 /// `data: []` and `tab2` with the change rows. Reading "the first block with a
 /// `data` array" therefore read the empty tab and made a whole-market table
-/// look empty (zero `changes`, `empty_name_set`). The declared tab is the
-/// request's selector; without one only a unique non-empty block is accepted,
-/// and a declared tab missing from the response fails closed.
+/// look empty (zero `changes`, `empty_name_set`). The selection is the same
+/// `validate::szse_block` A-1/A-2 use (#446 D1): the declared tab must be
+/// present, and without a declaration only a unique non-empty block is
+/// accepted.
 fn sz_rows(value: &Value, declared_tabkey: Option<&str>) -> Result<Vec<Value>, Error> {
-    let block = szse_block_for(value, declared_tabkey).map_err(|error| {
+    let (block, _selection) = validate::szse_block(value, declared_tabkey).map_err(|error| {
         let detail = match error {
-            ValidateError::Format { detail } => detail,
+            validate::ValidateError::Format { detail } => detail,
             other => other.to_string(),
         };
         Error::invalid(format!("SZSE short-name page: {detail}"))
