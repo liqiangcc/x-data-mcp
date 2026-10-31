@@ -99,7 +99,7 @@ AC 定义见 Issue #383 的验收表。CI 只覆盖小夹具，下面这些必�
 |---|---|---|
 | AC-M1-1 | 抽 ≥20 个实体（含 1 个手日 bar 的实体），把 `adjustment=0` 序列与同一 generation 的 `.day` 成员逐根比对（4 个价格字段 + volume/amount/`r7_raw`） | 逐根相等；volume 按 #381 归一（手日 ×100、无法确认 `null`） |
 | AC-M1-2 | 用库里的不复权 bar + `adjustment_events` 重跑 `qfq-exact-v1`，与库内 6dp 序列比对 | 逐位相等 |
-| AC-M1-4 | 对全部 A 股不复权 bar 检查 `trade_day ∈ trading_days` | 落在日历外的比例 ≤0.01%（1/10000），逐条列出（1991 年深市边界） |
+| AC-M1-4 | 对全部 A 股不复权 bar：区间内检查 `trade_day ∈ trading_days`，`last_day` 之后的 bar 只单列 `stale_bars` | 落在日历覆盖区间 `[first_day,last_day]` 内、但日历无该行的比例 ≤0.01%（1/10000），逐条列出（1991 年深市边界）；`last_day` 之后为 unknown，单列 `stale_bars`，不进门禁 |
 | AC-M1-7 | 同一 active generation、无日更，导出两次 | 两次 `snapshot_id` 与全部文件 sha256 相同 |
 | AC-M1-10 | `query_data` 取 `sh.000001`、取 raw/因子/日历/指数 | `market.daily(sh.000001)` → absent；`market.index`/`market.calendar`/`market.adjustment_events` 自 #410 起由 `query_data` 直接返回（v8 的 dataset 分支：`src/sqlite_supply.rs:411-423`、`docs/contracts/generic-data-v8.md:129-131`）；只有 `market.daily` 的 `adjustment=0`（raw）序列仍只在导出里可见 |
 
