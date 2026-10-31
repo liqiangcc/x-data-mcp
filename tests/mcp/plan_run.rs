@@ -1054,8 +1054,21 @@ fn internal_derived_item_failure_marks_the_run_partially_failed() {
 fn strict_without_a_source_store_fails_the_four_items_and_keeps_the_master() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let _env = SourceStoreEnv::unset();
+    // One captured "today" feeds both the fixture dates and the expected
+    // `market_series.last_day`, so a Shanghai midnight between the two cannot
+    // shift one side by a day.
+    let today = x_data_mcp::calendar::shanghai_date(Utc::now());
+    let date = |days: i64| today - chrono::Duration::days(days);
+    let ymd = |d: chrono::NaiveDate| d.format("%Y%m%d").to_string().parse::<u32>().unwrap();
+    // `market_series.last_day` stores days since the Unix epoch, not `YYYYMMDD`.
+    let epoch = |d: chrono::NaiveDate| {
+        (d - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days()
+    };
     // Run 1 (default `Optional`): a normal daily run commits the main table.
-    let r = rig(&[("sh", "600006", day_u32(2)), ("sz", "000002", day_u32(2))]);
+    let r = rig(&[
+        ("sh", "600006", ymd(date(2))),
+        ("sz", "000002", ymd(date(2))),
+    ]);
     let p1 = plan(&r.api, "market.daily");
     assert_eq!(p1["counts"]["eligible"], 2, "{p1}");
     run(&r.api, "market.daily", "run-optional", &p1);
@@ -1086,12 +1099,15 @@ fn strict_without_a_source_store_fails_the_four_items_and_keeps_the_master() {
     assert!(before_rows > 0);
     assert_eq!(
         head_day(&c),
-        i64::from(day_u32(2)),
-        "run 1 advanced the bars"
+        epoch(date(2)),
+        "run 1's head is its fixture day"
     );
 
     // Run 2: the production policy, a newer generation, and no source store.
-    let members = [("sh", "600006", day_u32(1)), ("sz", "000002", day_u32(1))];
+    let members = [
+        ("sh", "600006", ymd(date(1))),
+        ("sz", "000002", ymd(date(1))),
+    ];
     let day_members: Vec<(String, Vec<u8>)> = members
         .iter()
         .map(|(ex, code, last)| {
@@ -1187,7 +1203,7 @@ fn strict_without_a_source_store_fails_the_four_items_and_keeps_the_master() {
     }
     assert_eq!(
         head_day(&c),
-        i64::from(day_u32(1)),
+        epoch(date(1)),
         "the entity items advanced the bars"
     );
     // The earlier main table is still the latest readable version: same
