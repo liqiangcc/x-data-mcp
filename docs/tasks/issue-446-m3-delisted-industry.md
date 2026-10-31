@@ -627,6 +627,55 @@ fetch（HTTP，bounded retries，Referer/UA）
   在同一个 `szse_delisting_main` 项里；断言期望被误写成 8。已改为 7，并保留「每个种类
   的 id 列表都非空」检查；请求数 8 与两页采集断言不变，没有放宽覆盖。
 
+### 7.6 PR-3 修复三落位：A-1/A-2 块选择、代码列与形状守卫（2026-10-31，XDM-140）
+
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+依据 `reports/x-data-mcp/135/report.md` §4：用 preview.38 产品二进制 + 真实冻结字节实测，
+A-1/A-2 端到端在采集/解析层 fail-closed，`derived:security_master` 不产出新主表。三个缺陷
+互相独立，逐条修：
+
+- **D1 选块**（`src/exchange_source/validate.rs`）：`szse_block` 原先把
+  `metadata.tabkey=="tab2"` 当作第一条规则，`CATALOGID=1110` 的真实响应是 4 块而只有
+  `tab1` 有数据（`pagecount=146`、`recordcount=2905`），于是读到空块、`page_count is 0`。
+  现在按**请求声明的 `TABKEY`** 选块；没有声明时选**唯一非空块**；多个块都非空则
+  `source_invalid`，不再「优先 tab2」或取 `[0]`。声明值从请求参数读取（参数名不区分大小写），
+  重放从清单 `origin` 的规范指纹读回同一个值；信封与 `a1a2::rows` 共用同一个选择函数。
+  选中块的 `tabkey`、选择依据（`declared_tabkey`/`unique_non_empty`/`only_block`）和各块
+  row/page 数进 item 证据 `block_selection`，线上可直接区分「选错块」与「块本来就空」。
+- **D2 代码列**（`src/official_security/a1a2.rs` `code_of`）：深市分支原先硬编码 `zqdm`；
+  1110 上市行只有 `agdm`。现在按行接受 `zqdm` 或 `agdm`（两者都有且不等 → `source_invalid`，
+  都没有 → `source_invalid`），沪市分支的 `A_STOCK_CODE`/`COMPANY_CODE` 优先级不变。
+- **D3 形状守卫**（同文件 `parse_page`）：守卫原用过滤前 `row_count`，深市退市主板第 9 页
+  10 行全是 B 股时被误判为「列表形状变了」。现在改用**过滤后 A 股行数**：有 A 股行但全部
+  缺退市日才是形状变化；整页只有 B 股为「本页无事实」（非 A 前缀仍按 #398 fail-closed）；
+  整页 0 行仍走既有零行策略。
+  错误信息带本页总行数 / 过滤后行数 / B 股跳过数。
+- **版本**：信封 `exchange-szse-page-v2` → `v3`（v2 保留为「`tab2` 优先」的旧重放语义，v1
+  仍是第一个 block；同一份字节不会因升级被改写行数/页数）；业务 parser
+  `exchange-a1a2-v3` → `v4`。
+- **夹具**（`tests/fixtures/exchange-a1a2/`）：`szse_listing.json` 改为 1110 的真实
+  4 block 形状（`tab1` 有数据、`tab2`/`tab3`/`tab4` 空，行用 `agdm`），新增
+  `szse_delisting_main_b_only.json`（第 9 页 10 个 B 股代码）。计数按样本裁剪到自洽
+  （1 页 6 行），不提交 146 页大文件；README 的 sha 表同提交更新。
+- **测试（CI，不联网）**：`exchange_source::tests` 覆盖声明优先、唯一非空、多非空
+  fail-closed、声明缺失 fail-closed、v2/v1 旧语义；`a1a2/tests.rs` 新增
+  `the_current_szse_list_is_read_from_the_only_non_empty_block`（D1）、
+  `the_szse_code_column_is_zqdm_or_agdm`（D2）、
+  `a_page_of_only_b_shares_is_not_a_shape_change`（D3），以及
+  `frozen_szse_bytes_replay_to_the_same_row_level_facts`：从来源库读回每个冻结页，
+  用同一选块/行解析重算 `row_count/page_count` 与 `szse_listing`、`szse_delisting_main`、
+  `szse_delisting_nm` 的**行级事实数**，并断言 `block_selection` 证据——信封级 replay
+  正是三个缺陷都逃过的缺口。
+- **文档**：`docs/exchange-source.md` §2/§5/§6 同步选块、代码列、形状守卫与版本。
+- **未验证/未部署**：产品实跑、真实主表 5,565 行 / `listed_ever` 338 仍未验证（本任务
+  不联网、不部署）；合并优先级、退市日语义（15 条沪市差异）与 338/277 口径不在本次范围。
+
+验证：本机只跑 `cargo fmt`、`git diff --check` 与 `scripts/check_current_facts.py`；
+Rust 由 PR CI（fmt/clippy `-D warnings`/nextest/export feature）证明。推送前逐字贴出
+`scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main`
+的输出。不改 SLO 门禁、不部署、不动 `docs/STATUS.md` 的部署事实。
+
 ## 8. generation 保留与裁剪
 
 ### 8.1 现状
