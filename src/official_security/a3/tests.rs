@@ -638,3 +638,23 @@ fn the_plan_is_registered_under_the_suspension_source_id() {
         Some(SourceId::SseSuspension)
     );
 }
+
+#[test]
+fn a_strict_run_without_a_source_store_fails_the_suspension_item() {
+    // `silent-path #446` §14.5: A-3 reads the same `X_DATA_MCP_SOURCE_STORE`;
+    // under `Policy::Required` its absence fails the item instead of leaving a
+    // gap-only success.
+    let _lock = crate::source_store::TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _env = crate::source_store::PolicyEnv::set(None, false);
+    let fixture = Fixture::new();
+    let error = run_source(&fixture.market, &[], day(2026, 10, 31), Policy::Required).unwrap_err();
+    assert_eq!(error.code(), "source_store_unconfigured");
+    assert!(
+        error.to_string().starts_with("source_store_unconfigured: "),
+        "the stable code leads the item error text: {error}"
+    );
+    assert!(!fixture.store.has_entries().unwrap());
+    assert!(fixture.market.read_exchange_snapshots().unwrap().is_empty());
+}

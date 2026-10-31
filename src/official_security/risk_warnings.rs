@@ -57,7 +57,7 @@ use crate::security_master::risk_warnings::{
     self, CoverageWindow, RiskWarningAction, RiskWarningSet, RiskWarningStatusEvent, SzNameChange,
 };
 use crate::security_master::{Exchange, RiskStatus};
-use crate::source_store::{SourceStore, StoreError};
+use crate::source_store::{Policy, SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
 
 /// Business-field parser version of this adapter. It is registered on the
@@ -65,7 +65,7 @@ use crate::sqlite_market::backend::MarketBackend;
 pub const PARSER_VERSION: &str = "risk-warnings-v1";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
-pub const SOURCE_STORE_ENV: &str = "X_DATA_MCP_SOURCE_STORE";
+pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
 /// SZSE `ShowReport` data endpoint.
 pub const SZSE_URL: &str = "https://www.szse.cn/api/report/ShowReport/data";
 /// SZSE short-name change catalog (`SSGSGMXX`, tab 2).
@@ -236,13 +236,23 @@ pub enum RunSource {
 
 /// Resolve the source store and fetch client, then acquire.
 ///
-/// Not configured is not a fetch failure: the item records `pending_source`
-/// and writes zero rows instead of failing the daily run. A configured store
-/// whose fetch fails is a real failure. `cache` is the run-level download
+/// Under [`Policy::Optional`] not configured is not a fetch failure: the item
+/// records `pending_source` and writes zero rows. Under [`Policy::Required`]
+/// (ops entry on a compact backend) a missing or unreadable store fails the item
+/// with `source_store_unconfigured` instead of a silent zero-row success. A
+/// configured store whose fetch fails is a real failure. `cache` is the run-level download
 /// cache (§10.1): the SZSE table is shared with `derived:security_names`
 /// (PR-12), which asks for the same request in the same run.
-pub fn run_source(market: &MarketBackend, cache: Arc<RunCache>) -> Result<RunSource, Error> {
-    let Some(root) = std::env::var_os(SOURCE_STORE_ENV) else {
+pub fn run_source(
+    market: &MarketBackend,
+    cache: Arc<RunCache>,
+    policy: Policy,
+) -> Result<RunSource, Error> {
+    let Some(store) = crate::source_store::configured(policy).map_err(|error| Error::Invalid {
+        code: error.code(),
+        detail: error.detail().to_string(),
+    })?
+    else {
         return Ok(RunSource::Pending(PendingSource {
             dataset: risk_warnings::DATASET_KIND,
             source: "exchange_risk_warning_announcement",
@@ -250,7 +260,6 @@ pub fn run_source(market: &MarketBackend, cache: Arc<RunCache>) -> Result<RunSou
                      (X_DATA_MCP_SOURCE_STORE); historical ST stays pending_source",
         }));
     };
-    let store = SourceStore::new(root);
     let client = Client::helper()?;
     Ok(RunSource::Admitted(acquire_today(
         &store,
@@ -790,5 +799,29 @@ mod tests {
                 Some(RiskStatus::OtherRiskWarning)
             ))
         );
+    }
+
+    #[test]
+    fn a_strict_run_without_a_source_store_fails_the_item() {
+        // `silent-path #446` §14.5: this consumer reads the same
+        // `X_DATA_MCP_SOURCE_STORE`; under a Required policy its absence is a
+        // configuration failure, not "0 rows succeeded".
+        let _lock = crate::source_store::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _env = crate::source_store::PolicyEnv::set(None, false);
+        let (_dir, market) = crate::official_security::compact_market_fixture();
+        let error = run_source(
+            &market,
+            std::sync::Arc::new(RunCache::new()),
+            Policy::Required,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "source_store_unconfigured");
+        assert!(
+            error.to_string().starts_with("source_store_unconfigured: "),
+            "the stable code leads the item error text: {error}"
+        );
+        assert!(market.read_exchange_snapshots().unwrap().is_empty());
     }
 }

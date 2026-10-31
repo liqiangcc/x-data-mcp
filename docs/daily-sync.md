@@ -20,9 +20,12 @@
 M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 `market.security_master`、`market.risk_warnings`、`market.suspensions`、
 `market.price_limit_rules` 由**同一次日更 run 的 4 个内部派生 item** 维护
-（见下文「内部派生 item」）；交易所上市/退市名单、历史 ST（#308）、停复牌公告、
-涨跌停规则原文未接入时按 `pending_source` 记录，`risk_warnings`/`trading_rules`
-写 0 行、读取仍为 `absent`。因此日更成功后，M2 数据集的新鲜度与日线同步，
+（见下文「内部派生 item」）；交易所上市/退市名单、历史 ST（#308）、停复牌公告
+读同一个 `X_DATA_MCP_SOURCE_STORE`，未配置时按部署形态区分：默认（stdio、测试、
+非 ops 入口、legacy 后端）记 `pending_source`、`risk_warnings` 写 0 行且读取仍为
+`absent`；生产形态（`data_service` 的 ops 入口 + compact 后端）是 item 失败（稳定码
+`source_store_unconfigured`），不静默写 0 行（见下文「内部派生 item」）。
+涨跌停规则原文未接入时仍按 `pending_source` 记录、`trading_rules` 写 0 行。因此日更成功后，M2 数据集的新鲜度与日线同步，
 不需要单独跑任务（详见 [STATUS](STATUS.md)「数据」段的 M2 数据集行）。
 
 已部署实例为 fresh compact schema 24；代码（main）同为 schema 24（M1 的 schema 22 +
@@ -229,8 +232,19 @@ worker 还会追加 **16** 个服务器内部派生 item（9 个指数基准 + �
 全市场数据集：`derived:security_master`、`derived:risk_warnings`、
 `derived:suspensions`、`derived:trading_rules` + M3 的
 `derived:industry_snapshot`、`derived:delisted_series_check`）；它们的 item 级结果只用于报告
-（`entity`/`period` 为 null），不进入实体补漏清单。4 个 M2 item 在来源未准入时
-**成功且写 0 行**（evidence 里带 `pending_sources`），只有 `error` 才是失败；tool 面
+（`entity`/`period` 为 null），不进入实体补漏清单。4 个 M2 item 共用
+`X_DATA_MCP_SOURCE_STORE`，缺来源库时按部署形态区分：
+- 默认策略（stdio、测试、`research`/`maint` 入口、legacy 后端）下**成功且写 0 行**
+  （evidence 里带 `pending_sources`），只有 `error` 才是失败；
+- 生产策略（`data_service` 的 ops 入口 + compact 后端，代码显式下传 Required）下
+  变量缺失或路径不可读 → 每个 item **失败**，`error` 以稳定码
+  `source_store_unconfigured` 开头，run 收尾 `partially_failed`；日线实体 item 已先行
+  提交，上一版主表仍是 latest。空 store（首次部署）合法，只校验变量已配置且路径可读。
+  四个失败是同一个配置问题，按错误码聚合，不要当成四个独立故障。
+- 显式开发豁免 `X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE=1` 时回到
+  `pending_source`，并在首次使用时打印 non-production override；部署单元不设置它。
+
+tool 面
 （`get_task_progress`/`get_task`）只暴露失败项，成功项的取值按 Skill §4 用
 `list_data_versions` 回读（M3 item 写的是索引表而不是版本行，取值看 evidence）。
 M3 的 `derived:delisted_series_check` 是**只读**检查（不写业务表）：它在实体 item

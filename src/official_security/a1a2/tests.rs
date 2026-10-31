@@ -888,7 +888,7 @@ fn an_unconfigured_source_store_keeps_the_branch_pending() {
     if std::env::var_os(SOURCE_STORE_ENV).is_some() {
         return;
     }
-    let run = run_source(&fixture.market).unwrap();
+    let run = run_source(&fixture.market, Policy::Optional).unwrap();
     match run {
         RunSource::Pending(pending) => {
             assert_eq!(pending.dataset, DATASET_KIND);
@@ -897,6 +897,46 @@ fn an_unconfigured_source_store_keeps_the_branch_pending() {
         RunSource::Admitted(_) => panic!("an unconfigured store cannot be admitted"),
     }
     assert!(fixture.market.read_exchange_snapshots().unwrap().is_empty());
+}
+
+#[test]
+fn a_strict_run_without_a_source_store_fails_and_keeps_the_previous_master() {
+    // `silent-path #446` §14.5: with `Policy::Required` the missing store is a
+    // configuration failure of this item, not a successful zero-row answer.
+    let _lock = crate::source_store::TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _env = crate::source_store::PolicyEnv::set(None, false);
+    let fixture = Fixture::new();
+    let connection = fixture.connection();
+    let binding = seed_binding(&connection);
+
+    // A committed main table from an earlier (Optional) run.
+    let earlier =
+        assembly::assemble_security_master(&tdx_facts(), &[], assembly::exchange_source(None), &[])
+            .unwrap();
+    let written =
+        replace_security_master(&connection, &earlier, binding, "task-1", "item-1").unwrap();
+    let before = read_security_master(&connection).unwrap();
+    assert!(!before.is_empty());
+
+    let error = run_source(&fixture.market, Policy::Required).unwrap_err();
+    assert_eq!(error.code(), "source_store_unconfigured");
+    assert!(
+        error.to_string().starts_with("source_store_unconfigured: "),
+        "the stable code leads the item error text: {error}"
+    );
+    assert!(error.to_string().contains(SOURCE_STORE_ENV));
+    // The refusal happens before any acquisition or store write.
+    assert!(!fixture.store.has_entries().unwrap());
+    assert!(fixture.market.read_exchange_snapshots().unwrap().is_empty());
+
+    // Failure before commit: the earlier version is still the readable one.
+    let version = read_version(&connection, DATASET_KIND, assembly::DATASET_KEY)
+        .unwrap()
+        .expect("the earlier registration is still there");
+    assert_eq!(version.version_id, written.version_id);
+    assert_eq!(read_security_master(&connection).unwrap(), before);
 }
 
 fn seed_binding(c: &Connection) -> crate::compact_market::Digest {

@@ -25,6 +25,11 @@ pub struct DataApi {
     entry: Option<super::registry::EntryKind>,
     market_source: Option<crate::official_market::TdxMarketSource>,
     generation: Option<super::generation::GenerationSource>,
+    /// How the four same-source derived items treat `X_DATA_MCP_SOURCE_STORE`
+    /// (`silent-path #446` §14.5). Only a test or `data_service` changes it:
+    /// the default keeps the pre-existing `pending_source` answer, and the
+    /// service sets `Required` for the ops entry on a compact backend.
+    source_store_policy: crate::source_store::Policy,
     #[cfg(target_os = "linux")]
     worker_gate: Option<std::sync::Arc<crate::local_runtime::WorkerGate>>,
 }
@@ -184,6 +189,7 @@ impl DataApi {
             entry: None,
             market_source: crate::official_market::TdxMarketSource::from_env(),
             generation,
+            source_store_policy: crate::source_store::Policy::Optional,
             #[cfg(target_os = "linux")]
             worker_gate: None,
         })
@@ -192,6 +198,15 @@ impl DataApi {
     /// it; the stdio/dev constructors leave it unset (all tools).
     pub fn with_entry(mut self, entry: super::registry::EntryKind) -> Self {
         self.entry = Some(entry);
+        self
+    }
+    /// How the four same-source derived items treat a missing
+    /// `X_DATA_MCP_SOURCE_STORE`. `data_service` sets `Required` when the
+    /// process serves an ops entry on a compact backend; everything else
+    /// (stdio, tests, legacy) keeps the `Optional` default so an
+    /// unconfigured store stays `pending_source`.
+    pub fn with_source_store_policy(mut self, policy: crate::source_store::Policy) -> Self {
+        self.source_store_policy = policy;
         self
     }
     /// Override the env-installed official-file snapshot source (tests).
@@ -1002,6 +1017,7 @@ impl DataApi {
                     &self.queries.repository.market,
                     self.market_source.as_ref(),
                     self.generation.as_ref(),
+                    self.source_store_policy,
                 )
                 .map_err(mapped)?;
                 encode(WorkerOutput {

@@ -22,6 +22,7 @@ pub fn run_once(
     market: &crate::sqlite_market::backend::MarketBackend,
     market_source: Option<&crate::official_market::TdxMarketSource>,
     generation_source: Option<&GenerationSource>,
+    policy: crate::source_store::Policy,
 ) -> Result<Option<TaskSnapshot>, Error> {
     let Some(candidate) = control
         .repository
@@ -302,6 +303,7 @@ pub fn run_once(
             &candidate.task.task_id,
             &control.run_id,
             &derived,
+            policy,
         )?;
     }
     // M3 PR-8: same registration as the first-establishment path; an

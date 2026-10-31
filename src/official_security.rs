@@ -34,6 +34,26 @@ pub mod a3;
 pub mod risk_warnings;
 pub mod security_names;
 
+/// Compact `MarketBackend` fixture for the adapters' strict-store tests
+/// (`silent-path #446` §14.5): the `Policy::Required` refusal happens before
+/// any read, so an empty compact database is all those tests need.
+#[cfg(test)]
+pub(crate) fn compact_market_fixture() -> (
+    tempfile::TempDir,
+    crate::sqlite_market::backend::MarketBackend,
+) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .unwrap();
+    let tasks = crate::sqlite_tasks::SqliteTasks::new(dir.path().join("market.sqlite"));
+    tasks.initialize_compact().unwrap();
+    std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let market = crate::sqlite_market::backend::MarketBackend::open(&tasks).unwrap();
+    (dir, market)
+}
+
 /// One anchored field: name, dBase type byte, length, decimals (#399 A-5).
 #[derive(Debug, Clone, Copy)]
 struct FieldAnchor {

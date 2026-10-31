@@ -80,7 +80,7 @@ use crate::security_master::assembly::{
     ExchangeListingFact, ExchangeSnapshot, MigrationCertainty, PendingSource,
 };
 use crate::security_master::{DelistingReason, Exchange};
-use crate::source_store::{SourceStore, StoreError};
+use crate::source_store::{Policy, SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
 
 /// Business-field parser version of this adapter. The frozen snapshots record
@@ -93,9 +93,9 @@ use crate::sqlite_market::backend::MarketBackend;
 pub const PARSER_VERSION: &str = "exchange-a1a2-v3";
 
 /// Environment variable naming the deployment's source store (§9.4.1). The
-/// deploy script uses `<deploy-state>/source-store`; without it the A-1/A-2
-/// branch stays `pending_source` instead of failing every daily run.
-pub const SOURCE_STORE_ENV: &str = "X_DATA_MCP_SOURCE_STORE";
+/// deploy script uses `<deploy-state>/source-store`; resolution (and the
+/// strict/optional difference) lives in [`crate::source_store::configured`].
+pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
 
 /// SSE `commonQuery.do` endpoint (both lists share it, `sqlId` differs).
 pub const SSE_URL: &str = "https://query.sse.com.cn/sseQuery/commonQuery.do";
@@ -342,12 +342,21 @@ pub enum RunSource {
 
 /// Resolve the deployment's source store and fetch client, then acquire.
 ///
-/// Not configured is *not* a fetch failure: the security-master item keeps the
+/// Under [`Policy::Optional`] (stdio, tests, non-ops and legacy entries) not
+/// configured is *not* a fetch failure: the security-master item keeps the
 /// TDX-only result and records `pending_source`, so an environment that has not
-/// enabled A-1/A-2 does not fail its daily run. A configured store whose fetch
-/// fails is a real failure and reaches the item as such.
-pub fn run_source(market: &MarketBackend) -> Result<RunSource, A1A2Error> {
-    let Some(root) = std::env::var_os(SOURCE_STORE_ENV) else {
+/// enabled A-1/A-2 does not fail its daily run. Under [`Policy::Required`] (the
+/// ops entry of `data_service` on a compact backend) a missing or unreadable
+/// store fails the item with the stable code `source_store_unconfigured`
+/// instead of writing a zero-exchange master. A configured store whose fetch
+/// fails is a real failure and reaches the item as such either way.
+pub fn run_source(market: &MarketBackend, policy: Policy) -> Result<RunSource, A1A2Error> {
+    let Some(store) =
+        crate::source_store::configured(policy).map_err(|error| A1A2Error::Invalid {
+            code: error.code(),
+            detail: error.detail().to_string(),
+        })?
+    else {
         return Ok(RunSource::Pending(PendingSource {
             dataset: DATASET_KIND,
             source: "exchange_list",
@@ -355,7 +364,6 @@ pub fn run_source(market: &MarketBackend) -> Result<RunSource, A1A2Error> {
                      (X_DATA_MCP_SOURCE_STORE); A-1/A-2 stay pending_source",
         }));
     };
-    let store = SourceStore::new(root);
     let client = Client::helper()?;
     Ok(RunSource::Admitted(acquire(&store, market, &client)?))
 }

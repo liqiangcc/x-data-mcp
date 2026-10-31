@@ -46,6 +46,146 @@ pub const TMP_DIR: &str = "tmp";
 /// Advisory `flock` file: exclusive for writers, shared for manifest readers.
 pub const LOCK_FILE: &str = ".lock";
 
+/// Environment variable naming the deployment's source store (§9.4.1).
+///
+/// The four derived datasets that read the same store
+/// (`derived:security_master`, `derived:suspensions`, `derived:security_names`,
+/// `derived:risk_warnings`) resolve it through [`configured`], never by reading
+/// this variable themselves.
+pub const CONFIG_ENV: &str = "X_DATA_MCP_SOURCE_STORE";
+/// Explicit development exemption: `1` turns a [`Policy::Required`] resolution
+/// without [`CONFIG_ENV`] back into `pending_source` and prints
+/// [`OVERRIDE_NOTICE`] once. Deployment units never set it.
+pub const ALLOW_UNCONFIGURED_ENV: &str = "X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE";
+/// Stable reason code for a [`Policy::Required`] resolution that the process
+/// cannot satisfy. Not part of `task_v2::REASON_CODES` (owner 2026-10-31); the
+/// item `error` text starts with it so a Skill can aggregate the four items.
+pub const UNCONFIGURED_CODE: &str = "source_store_unconfigured";
+/// Printed once when [`ALLOW_UNCONFIGURED_ENV`] makes a Required resolution
+/// behave like the development/stdio surface.
+pub const OVERRIDE_NOTICE: &str = "non-production override: \
+     X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE=1 is set, so a missing \
+     X_DATA_MCP_SOURCE_STORE keeps the derived items pending_source instead of \
+     failing them; deployment units must not set it";
+
+/// How a consumer wants [`CONFIG_ENV`] treated.
+///
+/// `Optional` is the default everywhere (stdio, tests, `research`/`maint`
+/// entries, legacy backends): an unconfigured store keeps the pre-existing
+/// `pending_source` answer. `Required` is set by `data_service` for the ops
+/// entry on a compact backend: the four same-source derived items must fail
+/// (not silently write zero rows) when the store is missing or unreadable.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Policy {
+    #[default]
+    Optional,
+    Required,
+}
+
+/// Why a [`Policy::Required`] resolution has no usable store. [`Self::code`]
+/// is the stable `source_store_unconfigured` reason; `Display` puts it first so
+/// the v2 error truncation (`task_v2`) keeps it routable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unconfigured {
+    detail: String,
+}
+
+impl Unconfigured {
+    fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+        }
+    }
+
+    /// Stable reason code (`source_store_unconfigured`).
+    pub fn code(&self) -> &'static str {
+        UNCONFIGURED_CODE
+    }
+
+    /// The message after the code: what was missing or unreadable.
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+}
+
+impl std::fmt::Display for Unconfigured {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{UNCONFIGURED_CODE}: {}", self.detail)
+    }
+}
+
+impl std::error::Error for Unconfigured {}
+
+/// Resolve [`CONFIG_ENV`] under `policy`.
+///
+/// `Optional` never fails: configured means a store rooted at the value (its
+/// readability is the writer's problem, exactly as before), unconfigured means
+/// `None` and the caller keeps `pending_source`.
+///
+/// `Required` fails with [`Unconfigured`] unless the variable names a readable
+/// store: the path must be a directory and an existing `manifest.jsonl` must be
+/// readable. An empty store (no manifest, no blobs) is legal — requiring
+/// entries would deadlock the first deployment. The dev exemption
+/// [`ALLOW_UNCONFIGURED_ENV`] applies only to the *missing variable* case and
+/// prints [`OVERRIDE_NOTICE`] once.
+pub fn configured(policy: Policy) -> Result<Option<SourceStore>, Unconfigured> {
+    let Some(root) = std::env::var_os(CONFIG_ENV) else {
+        if policy == Policy::Required && !dev_override() {
+            return Err(Unconfigured::new(format!(
+                "{CONFIG_ENV} is not configured; the production form \
+                 (data_service --entry ops on a compact store) requires a readable \
+                 M3 source store, and an unconfigured store fails the four \
+                 same-source derived items instead of writing zero rows"
+            )));
+        }
+        if policy == Policy::Required {
+            notice_once();
+        }
+        return Ok(None);
+    };
+    let store = SourceStore::new(root);
+    if policy == Policy::Required
+        && let Err(detail) = readable(&store)
+    {
+        return Err(Unconfigured::new(format!(
+            "{CONFIG_ENV}={} is not a readable source store: {detail}",
+            store.root().display()
+        )));
+    }
+    Ok(Some(store))
+}
+
+fn dev_override() -> bool {
+    std::env::var_os(ALLOW_UNCONFIGURED_ENV).is_some_and(|value| value.to_str() == Some("1"))
+}
+
+fn notice_once() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| eprintln!("{OVERRIDE_NOTICE}"));
+}
+
+/// Read-only check behind [`Policy::Required`]: the root must be a readable
+/// directory and an existing manifest must open. It never creates the lock
+/// file or any directory, and a missing manifest is the empty store.
+fn readable(store: &SourceStore) -> Result<(), String> {
+    let root = store.root();
+    match fs::metadata(root) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err("the path is not a directory".into()),
+        Err(error) => return Err(format!("cannot stat it: {error}")),
+    }
+    fs::read_dir(root).map_err(|error| format!("cannot read the directory: {error}"))?;
+    match fs::metadata(store.manifest_path()) {
+        Ok(meta) if meta.is_file() => File::open(store.manifest_path())
+            .map(|_| ())
+            .map_err(|error| format!("cannot read {MANIFEST_FILE}: {error}")),
+        Ok(_) => Err(format!("{MANIFEST_FILE} is not a regular file")),
+        // No manifest yet: the empty store a fresh deployment starts with.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot stat {MANIFEST_FILE}: {error}")),
+    }
+}
+
 /// Logical source id for the `base.zip` member extraction.
 pub const TDXHY_SOURCE_ID: &str = "tdx.base.zip!tdxhy.cfg";
 /// Logical source id for the nested `gbbq.zip!zhb.zip!incon.dat` extraction.
@@ -619,6 +759,63 @@ fn fsync_dir(path: &Path) -> io::Result<()> {
     {
         let _ = path;
         Ok(())
+    }
+}
+
+/// Serializes unit tests that read or write [`CONFIG_ENV`] /
+/// [`ALLOW_UNCONFIGURED_ENV`]: both are process-global, and the test binaries
+/// run test functions in parallel.
+#[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Sets [`CONFIG_ENV`]/[`ALLOW_UNCONFIGURED_ENV`] for one unit test and
+/// restores the previous values when dropped. The caller must hold
+/// [`TEST_ENV_LOCK`]: the variables are process-global and tests run in
+/// parallel threads of one binary.
+#[cfg(test)]
+pub(crate) struct PolicyEnv {
+    config: Option<std::ffi::OsString>,
+    allow: Option<std::ffi::OsString>,
+}
+
+#[cfg(test)]
+impl PolicyEnv {
+    pub(crate) fn set(config: Option<&Path>, allow: bool) -> Self {
+        let previous = Self {
+            config: std::env::var_os(CONFIG_ENV),
+            allow: std::env::var_os(ALLOW_UNCONFIGURED_ENV),
+        };
+        // SAFETY: the caller holds `TEST_ENV_LOCK`, so no other test in this
+        // binary reads or writes these variables concurrently.
+        unsafe {
+            match config {
+                Some(path) => std::env::set_var(CONFIG_ENV, path),
+                None => std::env::remove_var(CONFIG_ENV),
+            }
+            if allow {
+                std::env::set_var(ALLOW_UNCONFIGURED_ENV, "1");
+            } else {
+                std::env::remove_var(ALLOW_UNCONFIGURED_ENV);
+            }
+        }
+        previous
+    }
+}
+
+#[cfg(test)]
+impl Drop for PolicyEnv {
+    fn drop(&mut self) {
+        // SAFETY: same lock as `set`; the test has not released it yet.
+        unsafe {
+            match &self.config {
+                Some(value) => std::env::set_var(CONFIG_ENV, value),
+                None => std::env::remove_var(CONFIG_ENV),
+            }
+            match &self.allow {
+                Some(value) => std::env::set_var(ALLOW_UNCONFIGURED_ENV, value),
+                None => std::env::remove_var(ALLOW_UNCONFIGURED_ENV),
+            }
+        }
     }
 }
 
