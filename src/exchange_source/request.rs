@@ -230,9 +230,14 @@ pub enum PagingFormat {
     /// `beginPage=2&endPage=2` answered page 1).
     SseSoaPageNo,
     /// SZSE JSON array of `{metadata:{tabkey,pagecount,...},data:[...]}`,
-    /// paged by `PAGENO`; the envelope is read from the `tabkey=tab2` block
-    /// (the terminated list), not from the first block.
+    /// paged by `PAGENO`. The block is chosen by the `TABKEY` the request
+    /// declared; a request without one takes the only block that carries
+    /// rows, and several non-empty blocks fail closed (#446 D1).
     SzseMetadata,
+    /// SZSE `metadata` envelopes written while the block was chosen by
+    /// `tabkey=tab2` first, unique non-empty block second. Kept only for
+    /// replay: the same bytes must keep their old counts.
+    SzseMetadataV2,
     /// SZSE `metadata` envelopes frozen before the block-selection change:
     /// these always read the first block. Kept only for replay.
     SzseMetadataV1,
@@ -246,10 +251,15 @@ pub const SSE_PARSER_VERSION: &str = "exchange-sse-page-v2";
 pub const SSE_PARSER_VERSION_V1: &str = "exchange-sse-page-v1";
 /// Parser version recorded for SSE `commonSoaQuery.do` envelopes.
 pub const SSE_SOA_PARSER_VERSION: &str = "exchange-sse-soa-page-v1";
-/// Parser version recorded for SZSE `metadata` envelopes. v2 selects the
-/// `tabkey=tab2` block (2026-10-30 evidence: the terminated list is tab2, tab1
-/// is the empty suspended list).
-pub const SZSE_PARSER_VERSION: &str = "exchange-szse-page-v2";
+/// Parser version recorded for SZSE `metadata` envelopes. v3 selects the
+/// block the request declared (`TABKEY`), otherwise the only non-empty block;
+/// several non-empty blocks fail closed (#446 D1: `CATALOGID=1110` answers four
+/// blocks and only tab1 carries the current list).
+pub const SZSE_PARSER_VERSION: &str = "exchange-szse-page-v3";
+/// The SZSE `metadata` version that chose `tabkey=tab2` first and the only
+/// non-empty block second. Frozen snapshots keep that meaning on replay: the
+/// same bytes must not silently change their row/page counts.
+pub const SZSE_PARSER_VERSION_V2: &str = "exchange-szse-page-v2";
 /// The SZSE `metadata` version written before the block-selection fix. Old
 /// snapshots stay replayable with their old meaning: v1 always read the first
 /// block, so replay must not re-read them as tab2.
@@ -266,6 +276,7 @@ impl PagingFormat {
             Self::SsePageHelp => SSE_PARSER_VERSION,
             Self::SseSoaPageNo => SSE_SOA_PARSER_VERSION,
             Self::SzseMetadata => SZSE_PARSER_VERSION,
+            Self::SzseMetadataV2 => SZSE_PARSER_VERSION_V2,
             Self::SzseMetadataV1 => SZSE_PARSER_VERSION_V1,
         }
     }
@@ -275,6 +286,7 @@ impl PagingFormat {
             SSE_PARSER_VERSION | SSE_PARSER_VERSION_V1 => Some(Self::SsePageHelp),
             SSE_SOA_PARSER_VERSION => Some(Self::SseSoaPageNo),
             SZSE_PARSER_VERSION => Some(Self::SzseMetadata),
+            SZSE_PARSER_VERSION_V2 => Some(Self::SzseMetadataV2),
             SZSE_PARSER_VERSION_V1 => Some(Self::SzseMetadataV1),
             _ => None,
         }
@@ -298,7 +310,7 @@ impl PagingFormat {
                 );
                 params.insert("pageHelp.pageNo".to_string(), page);
             }
-            Self::SzseMetadata | Self::SzseMetadataV1 => {
+            Self::SzseMetadata | Self::SzseMetadataV2 | Self::SzseMetadataV1 => {
                 params.insert("PAGENO".to_string(), page);
             }
         }

@@ -17,6 +17,8 @@
 
 use serde_json::Value;
 
+use std::collections::BTreeMap;
+
 use super::request::{PagingFormat, Segment};
 use chrono::NaiveDate;
 
@@ -151,15 +153,22 @@ pub fn require_status(status: u16) -> Result<(), ValidateError> {
 ///
 /// Only the envelope is decoded here — the row payload stays the consumer
 /// parser's business (PR-3/PR-10/PR-11/PR-12), so this function must not start
-/// interpreting source fields.
-pub fn parse_page(format: PagingFormat, body: &[u8]) -> Result<PageEnvelope, ValidateError> {
+/// interpreting source fields. `declared_tabkey` is the `TABKEY` the request
+/// sent (SZSE block selection, #446 D1); it is part of the request fingerprint,
+/// so replay can read it back from the store.
+pub fn parse_page(
+    format: PagingFormat,
+    declared_tabkey: Option<&str>,
+    body: &[u8],
+) -> Result<PageEnvelope, ValidateError> {
     let value: Value = serde_json::from_slice(body).map_err(|error| ValidateError::Format {
         detail: format!("not JSON: {error}"),
     })?;
     match format {
         PagingFormat::SsePageHelp => parse_sse(&value),
         PagingFormat::SseSoaPageNo => parse_sse_soa(&value),
-        PagingFormat::SzseMetadata => parse_szse(&value),
+        PagingFormat::SzseMetadata => parse_szse(&value, declared_tabkey),
+        PagingFormat::SzseMetadataV2 => parse_szse_v2(&value),
         PagingFormat::SzseMetadataV1 => parse_szse_first_block(&value),
     }
 }
@@ -243,21 +252,172 @@ fn parse_sse(value: &Value) -> Result<PageEnvelope, ValidateError> {
     })
 }
 
-/// Pick the SZSE block that carries this list.
+/// Where one block of a SZSE response stands, for evidence (#446 D1).
 ///
-/// The 2026-10-30 real responses always contain two blocks: `tab1` (暂停上市,
-/// zero rows, `pagecount=0`) followed by `tab2` (终止上市, the data). Taking
-/// `blocks.first()` therefore reads the empty block and fails later with
-/// `page_count is 0`. The rule is:
+/// The evidence is what lets an operator tell "the list moved to another tab"
+/// from "the list is empty": the selected `tabkey` alone is not enough when
+/// four blocks answer with different `pagecount`s.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SzseBlockInfo {
+    pub tabkey: Option<String>,
+    pub rows: usize,
+    pub page_count: Option<u64>,
+}
+
+impl SzseBlockInfo {
+    fn has_rows(&self) -> bool {
+        self.rows > 0
+    }
+}
+
+/// Why [`szse_block`] selected the block it selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SzseBlockBasis {
+    /// The request declared a `TABKEY` and a block carries it.
+    DeclaredTabkey,
+    /// The request declared none and exactly one block carries rows.
+    UniqueNonEmpty,
+    /// The response has one block only (the old single-block shape).
+    OnlyBlock,
+}
+
+impl SzseBlockBasis {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::DeclaredTabkey => "declared_tabkey",
+            Self::UniqueNonEmpty => "unique_non_empty",
+            Self::OnlyBlock => "only_block",
+        }
+    }
+}
+
+/// The selected block plus the evidence of why it was selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SzseBlockSelection {
+    pub basis: SzseBlockBasis,
+    pub tabkey: Option<String>,
+    pub blocks: Vec<SzseBlockInfo>,
+}
+
+/// The `TABKEY` a request declared, if any.
 ///
-/// 1. `metadata.tabkey == "tab2"` — the terminated list;
+/// The SZSE requests spell the parameter in upper case (`TABKEY=tab2`); the
+/// name is matched case-insensitively so a plan cannot silently lose its
+/// declaration, and an empty value counts as "not declared".
+pub fn declared_tabkey(params: &BTreeMap<String, String>) -> Option<&str> {
+    params
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("TABKEY"))
+        .map(|(_, value)| value.trim())
+        .filter(|value| !value.is_empty())
+}
+
+/// Pick the SZSE block that carries this list (#446 D1).
+///
+/// Two real shapes exist (2026-10-30 and 2026-10-31 forensics):
+///
+/// - `CATALOGID=1793_ssgs` always answers two blocks: `tab1` (暂停上市, zero
+///   rows, `pagecount=0`) followed by `tab2` (终止上市, the data). The request
+///   declares `TABKEY=tab2`, so the declaration decides.
+/// - `CATALOGID=1110` answers four blocks and only `tab1` carries the current
+///   list (`tab2`/`tab3`/`tab4` are empty, `pagecount=0`). The request declares
+///   no tabkey, so "the only non-empty block" decides.
+///
+/// The rule is therefore:
+///
+/// 1. a block whose `metadata.tabkey` equals the declared tabkey (case
+///    insensitively); a declared tabkey that no block carries fails closed;
 /// 2. otherwise the only block whose `data` array is non-empty;
 /// 3. otherwise the only block (the old single-block shape);
-/// 4. otherwise fail closed instead of silently picking the first block.
+/// 4. otherwise fail closed instead of preferring `tab2` or `[0]`: several
+///    blocks with rows are ambiguous, and a request declares which one it
+///    wants.
 ///
 /// `a1a2::rows` calls this same function so the row array and the pagination
 /// metadata can never come from different blocks.
-pub(crate) fn szse_block(value: &Value) -> Result<&Value, ValidateError> {
+pub(crate) fn szse_block<'a>(
+    value: &'a Value,
+    declared: Option<&str>,
+) -> Result<(&'a Value, SzseBlockSelection), ValidateError> {
+    let blocks = value.as_array().ok_or_else(|| ValidateError::Format {
+        detail: "top level is not an array of blocks".to_string(),
+    })?;
+    if blocks.is_empty() {
+        return Err(ValidateError::Format {
+            detail: "empty block array".to_string(),
+        });
+    }
+    let infos: Vec<SzseBlockInfo> = blocks.iter().map(block_info).collect();
+    let selected = |basis: SzseBlockBasis, index: usize| SzseBlockSelection {
+        basis,
+        tabkey: infos[index].tabkey.clone(),
+        blocks: infos.clone(),
+    };
+    if let Some(declared) = declared.map(str::trim).filter(|key| !key.is_empty()) {
+        let matching: Vec<usize> = infos
+            .iter()
+            .enumerate()
+            .filter(|(_, info)| {
+                info.tabkey
+                    .as_deref()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(declared))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        return match matching.as_slice() {
+            [index] => Ok((
+                &blocks[*index],
+                selected(SzseBlockBasis::DeclaredTabkey, *index),
+            )),
+            // No fallback to "the only block": a request that declares a
+            // tabkey and gets a response that does not carry it is a source
+            // change, even when there is only one block.
+            [] => Err(ValidateError::Format {
+                detail: format!(
+                    "the request declared tabkey {declared:?} but no block carries it (blocks: {})",
+                    describe(&infos)
+                ),
+            }),
+            _ => Err(ValidateError::Format {
+                detail: format!(
+                    "the request declared tabkey {declared:?} but {} blocks carry it; \
+                     refusing to pick one (blocks: {})",
+                    matching.len(),
+                    describe(&infos)
+                ),
+            }),
+        };
+    }
+    let mut non_empty = infos.iter().enumerate().filter(|(_, info)| info.has_rows());
+    let first = non_empty.next();
+    let second = non_empty.next();
+    match (first, second) {
+        (Some((index, _)), None) => Ok((
+            &blocks[index],
+            selected(SzseBlockBasis::UniqueNonEmpty, index),
+        )),
+        (None, _) if blocks.len() == 1 => Ok((&blocks[0], selected(SzseBlockBasis::OnlyBlock, 0))),
+        (None, _) => Err(ValidateError::Format {
+            detail: format!(
+                "no block carries rows and the response has {} blocks; \
+                 refusing to pick one (blocks: {})",
+                blocks.len(),
+                describe(&infos)
+            ),
+        }),
+        (Some(_), Some(_)) => Err(ValidateError::Format {
+            detail: format!(
+                "several blocks carry rows and the request declared no tabkey; \
+                 refusing to pick one (blocks: {})",
+                describe(&infos)
+            ),
+        }),
+    }
+}
+
+/// Replay of `exchange-szse-page-v2`: `tab2` first, then the only non-empty
+/// block. The same bytes must keep the counts they were indexed with.
+fn szse_block_v2(value: &Value) -> Result<&Value, ValidateError> {
     let blocks = value.as_array().ok_or_else(|| ValidateError::Format {
         detail: "top level is not an array of blocks".to_string(),
     })?;
@@ -294,6 +454,37 @@ pub(crate) fn szse_block(value: &Value) -> Result<&Value, ValidateError> {
     }
 }
 
+fn block_info(block: &Value) -> SzseBlockInfo {
+    SzseBlockInfo {
+        tabkey: block_tabkey(block).map(str::to_string),
+        rows: block
+            .get("data")
+            .and_then(Value::as_array)
+            .map_or(0, |data| data.len()),
+        page_count: block
+            .get("metadata")
+            .and_then(|metadata| metadata.get("pagecount"))
+            .and_then(number),
+    }
+}
+
+/// Human-readable block list for a fail-closed message: tabkey plus the
+/// counts that tell an empty list from a mis-selected one.
+fn describe(infos: &[SzseBlockInfo]) -> String {
+    infos
+        .iter()
+        .map(|info| {
+            let tabkey = info.tabkey.as_deref().unwrap_or("<none>");
+            let page_count = info
+                .page_count
+                .map(|count| count.to_string())
+                .unwrap_or_else(|| "none".to_string());
+            format!("{tabkey}: {} row(s), pagecount {page_count}", info.rows)
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn block_tabkey(block: &Value) -> Option<&str> {
     block
         .get("metadata")
@@ -302,8 +493,13 @@ fn block_tabkey(block: &Value) -> Option<&str> {
         .map(str::trim)
 }
 
-fn parse_szse(value: &Value) -> Result<PageEnvelope, ValidateError> {
-    parse_szse_block(szse_block(value)?)
+fn parse_szse(value: &Value, declared: Option<&str>) -> Result<PageEnvelope, ValidateError> {
+    parse_szse_block(szse_block(value, declared)?.0)
+}
+
+/// v2 replay: `tab2` first, then the only non-empty block.
+fn parse_szse_v2(value: &Value) -> Result<PageEnvelope, ValidateError> {
+    parse_szse_block(szse_block_v2(value)?)
 }
 
 /// v1 replay: the first block, exactly as the old parser read it.

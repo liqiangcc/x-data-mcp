@@ -14,6 +14,7 @@ use rusqlite::Connection;
 use serde_json::json;
 
 use super::*;
+use crate::exchange_source::validate;
 use crate::exchange_source::{
     self, HttpRequest, HttpResponse, PagingFormat, RetryPolicy, Transport, TransportError,
 };
@@ -41,6 +42,8 @@ const SZSE_DELISTING_MAIN: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_main.json");
 const SZSE_DELISTING_MAIN_P2: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_main_p2.json");
+const SZSE_DELISTING_MAIN_B_ONLY: &[u8] =
+    include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_main_b_only.json");
 const SZSE_DELISTING_NM: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-a1a2/szse_delisting_nm.json");
 const SSE_QUERY_PAGE_IGNORED: &[u8] =
@@ -314,6 +317,25 @@ fn seven_requests_reuse_the_pr2_source_ids() {
         Some("JSON")
     );
     assert_eq!(szse.format, PagingFormat::SzseMetadata);
+    // #446 D1: the terminated modules declare which block they mean. `1110`
+    // (the current list) answers one non-empty block, so it declares none.
+    for kind in [
+        ListKind::SzseDelistingMain,
+        ListKind::SzseDelistingShortName,
+    ] {
+        let (_, plan) = plans.iter().find(|(found, _)| *found == kind).unwrap();
+        assert_eq!(
+            plan.params.get("TABKEY").map(String::as_str),
+            Some(SZSE_DELISTING_TABKEY),
+            "{}",
+            kind.label()
+        );
+    }
+    let (_, listing) = plans
+        .iter()
+        .find(|(found, _)| *found == ListKind::SzseListing)
+        .unwrap();
+    assert_eq!(listing.params.get("TABKEY"), None);
     for (_, plan) in plans {
         assert_eq!(
             plan.basis_status,
@@ -328,7 +350,7 @@ fn seven_requests_reuse_the_pr2_source_ids() {
 
 #[test]
 fn b_shares_are_filtered_and_star_chinext_rows_are_kept() {
-    let sse_main = parse_page(ListKind::SseListingMain, SSE_LISTING_MAIN).unwrap();
+    let sse_main = parse_page(ListKind::SseListingMain, None, SSE_LISTING_MAIN).unwrap();
     assert_eq!(
         sse_main.b_shares_skipped, 1,
         "the 900901 B row is not a fact"
@@ -343,12 +365,12 @@ fn b_shares_are_filtered_and_star_chinext_rows_are_kept() {
 
     // A+B company: only the A row survives, so no false listing conflict can
     // be built from the B row's different date (§7.1).
-    let star = parse_page(ListKind::SseListingStar, SSE_LISTING_STAR).unwrap();
+    let star = parse_page(ListKind::SseListingStar, None, SSE_LISTING_STAR).unwrap();
     assert_eq!(star.listing.len(), 2);
     assert!(star.listing.iter().all(|fact| fact.instrument_class == 0));
     assert_eq!(star.b_shares_skipped, 0);
 
-    let szse = parse_page(ListKind::SzseListing, SZSE_LISTING).unwrap();
+    let szse = parse_page(ListKind::SzseListing, None, SZSE_LISTING).unwrap();
     assert_eq!(szse.b_shares_skipped, 1, "the 200002 B row is filtered");
     let codes: Vec<&str> = szse.listing.iter().map(|fact| fact.code.as_str()).collect();
     assert_eq!(
@@ -359,18 +381,23 @@ fn b_shares_are_filtered_and_star_chinext_rows_are_kept() {
     // The SZSE list has no security-type column, so an unknown prefix fails
     // closed instead of becoming an A-share fact.
     let unknown = br#"[{"metadata":{"pageNo":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"400001","zqjc":"x","agssrq":"19910101"}]}]"#;
-    let error = parse_page(ListKind::SzseListing, unknown).unwrap_err();
+    let error = parse_page(ListKind::SzseListing, None, unknown).unwrap_err();
     assert_eq!(error.code(), "source_invalid");
     assert!(error.to_string().contains("400001"));
 
     // An unknown SSE `STOCK_TYPE` is a vocabulary change: refuse it instead of
     // treating the row as an A share.
     let sse_unknown = br#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":1,"total":1,"data":[{"A_STOCK_CODE":"600001","COMPANY_CODE":"600001","LIST_DATE":"19980618","STOCK_TYPE":"9"}]}}"#;
-    let error = parse_page(ListKind::SseListingMain, sse_unknown).unwrap_err();
+    let error = parse_page(ListKind::SseListingMain, None, sse_unknown).unwrap_err();
     assert_eq!(error.code(), "source_invalid");
     assert!(error.to_string().contains("STOCK_TYPE"));
 
-    let delisting = parse_page(ListKind::SzseDelistingMain, SZSE_DELISTING_MAIN).unwrap();
+    let delisting = parse_page(
+        ListKind::SzseDelistingMain,
+        Some("tab2"),
+        SZSE_DELISTING_MAIN,
+    )
+    .unwrap();
     assert_eq!(delisting.b_shares_skipped, 1);
     assert_eq!(delisting.delisting.len(), 1);
     assert_eq!(delisting.delisting_rows_without_date, 0);
@@ -386,11 +413,11 @@ fn b_shares_are_filtered_and_star_chinext_rows_are_kept() {
     // fact (the list also carries suspended companies), but the count stays
     // visible; a page where no row has the date is a shape change.
     let mixed = br#"[{"metadata":{"pageNo":1,"pagecount":1,"recordcount":2},"data":[{"zqdm":"000003","ssrq":"19910703","zzrq":"20020614"},{"zqdm":"000005","ssrq":"19920101","zzrq":""}]}]"#;
-    let page = parse_page(ListKind::SzseDelistingMain, mixed).unwrap();
+    let page = parse_page(ListKind::SzseDelistingMain, None, mixed).unwrap();
     assert_eq!(page.delisting.len(), 1);
     assert_eq!(page.delisting_rows_without_date, 1);
     let none = br#"[{"metadata":{"pageNo":1,"pagecount":1,"recordcount":1},"data":[{"zqdm":"000005","ssrq":"19920101","zzrq":""}]}]"#;
-    let error = parse_page(ListKind::SzseDelistingMain, none).unwrap_err();
+    let error = parse_page(ListKind::SzseDelistingMain, None, none).unwrap_err();
     assert_eq!(error.code(), "source_invalid");
     assert!(error.to_string().contains("delisting date"));
 }
@@ -400,12 +427,22 @@ fn the_szse_terminated_list_is_read_from_the_tab2_block() {
     // Both fixtures start with the empty `tab1` (暂停上市) block whose
     // `pagecount=0`; reading `[0]` would fail as `page_count is 0` (main) or
     // drop every row.
-    let first = parse_page(ListKind::SzseDelistingMain, SZSE_DELISTING_MAIN).unwrap();
+    let first = parse_page(
+        ListKind::SzseDelistingMain,
+        Some("tab2"),
+        SZSE_DELISTING_MAIN,
+    )
+    .unwrap();
     assert_eq!(first.b_shares_skipped, 1);
     assert_eq!(first.delisting.len(), 1);
     assert_eq!(first.delisting[0].code, "000003");
 
-    let second = parse_page(ListKind::SzseDelistingMain, SZSE_DELISTING_MAIN_P2).unwrap();
+    let second = parse_page(
+        ListKind::SzseDelistingMain,
+        Some("tab2"),
+        SZSE_DELISTING_MAIN_P2,
+    )
+    .unwrap();
     assert_eq!(second.delisting.len(), 1);
     assert_eq!(second.delisting[0].code, "000005");
     assert_eq!(second.delisting[0].delisting_date, day(2024, 4, 26));
@@ -417,20 +454,174 @@ fn the_szse_terminated_list_is_read_from_the_tab2_block() {
       {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":1,"recordcount":1},
        "data":[{"zqdm":"000003","ssrq":"1991-01-14","zzrq":"2002-06-14"}]}
     ]"#;
-    let page = parse_page(ListKind::SzseDelistingMain, two_blocks).unwrap();
+    let page = parse_page(ListKind::SzseDelistingMain, Some("tab2"), two_blocks).unwrap();
     assert_eq!(page.delisting.len(), 1);
     assert_eq!(page.delisting[0].code, "000003");
 
-    // No tab2 and several blocks with rows: refuse instead of taking `[0]`.
+    // No block carries the declared tabkey: fail closed, never fall back to
+    // the first block or to "tab2".
     let ambiguous = br#"[
       {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":1,"recordcount":1},
        "data":[{"zqdm":"000001","ssrq":"1991-04-03","zzrq":"2020-01-01"}]},
       {"metadata":{"tabkey":"tab3","pageno":1,"pagecount":1,"recordcount":1},
        "data":[{"zqdm":"000003","ssrq":"1991-01-14","zzrq":"2002-06-14"}]}
     ]"#;
-    let error = parse_page(ListKind::SzseDelistingMain, ambiguous).unwrap_err();
+    let error = parse_page(ListKind::SzseDelistingMain, Some("tab2"), ambiguous).unwrap_err();
     assert_eq!(error.code(), "source_invalid");
-    assert!(error.to_string().contains("refusing"), "{error}");
+    assert!(error.to_string().contains("declared tabkey"), "{error}");
+    assert!(error.to_string().contains("tab1"), "{error}");
+}
+
+#[test]
+fn the_current_szse_list_is_read_from_the_only_non_empty_block() {
+    // #446 D1: `CATALOGID=1110` answers four blocks and only `tab1` carries the
+    // current list (`tab2`/`tab3`/`tab4` are empty with `pagecount=0`). The
+    // request declares no `TABKEY`, so the only non-empty block decides; the
+    // old "tab2 first" rule read the empty block and later failed
+    // `page_count is 0`.
+    let envelope = validate::parse_page(PagingFormat::SzseMetadata, None, SZSE_LISTING).unwrap();
+    assert_eq!(
+        (
+            envelope.page,
+            envelope.page_count,
+            envelope.rows,
+            envelope.total
+        ),
+        (1, 1, 6, Some(6)),
+        "the counts and the rows come from tab1, the block with data"
+    );
+    let page = parse_page(ListKind::SzseListing, None, SZSE_LISTING).unwrap();
+    assert_eq!(page.b_shares_skipped, 1);
+    let codes: Vec<&str> = page.listing.iter().map(|fact| fact.code.as_str()).collect();
+    assert_eq!(
+        codes,
+        vec!["000001", "000002", "000004", "301569", "302132"]
+    );
+    let selection = page.block_selection.as_ref().expect("SZSE block evidence");
+    assert_eq!(selection.basis.as_str(), "unique_non_empty");
+    assert_eq!(selection.tabkey.as_deref(), Some("tab1"));
+    assert_eq!(selection.blocks.len(), 4);
+    assert_eq!(selection.blocks[0].tabkey.as_deref(), Some("tab1"));
+    assert_eq!(selection.blocks[0].rows, 6);
+    assert_eq!(selection.blocks[0].page_count, Some(1));
+    assert_eq!(selection.blocks[1].tabkey.as_deref(), Some("tab2"));
+    assert_eq!(selection.blocks[1].rows, 0);
+    assert_eq!(selection.blocks[1].page_count, Some(0));
+
+    // A declaration wins over "the only non-empty block": tab2 is empty
+    // here, and the selection follows the request instead of silently
+    // switching to tab1. The window then fails the zero-row policy, which is
+    // the honest answer to "the block I asked for has nothing".
+    let declared = validate::parse_page(PagingFormat::SzseMetadata, Some("tab2"), SZSE_LISTING)
+        .expect("the declared block exists, it is just empty");
+    assert_eq!((declared.page_count, declared.rows), (0, 0));
+
+    // A declared tabkey no block carries is a source change, not a fallback.
+    let error =
+        validate::parse_page(PagingFormat::SzseMetadata, Some("tab9"), SZSE_LISTING).unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("tab9"), "{error}");
+}
+
+#[test]
+fn the_szse_code_column_is_zqdm_or_agdm() {
+    // #446 D2: the current list (`CATALOGID=1110`) carries `agdm`, the
+    // terminated lists carry `zqdm`. The row states which one it has; a code
+    // is never taken from the plan name.
+    let body = |tabkey: &str, fields: &str| {
+        format!(
+            "[{{\"metadata\":{{\"tabkey\":\"{tabkey}\",\"pageno\":1,\"pagecount\":1,\"recordcount\":1}},\n               \"data\":[{{{fields}}}]}}]"
+        )
+        .into_bytes()
+    };
+    // `agdm` alone (the 1110 row shape).
+    let page = parse_page(
+        ListKind::SzseListing,
+        None,
+        &body("tab1", r#""agdm":"000001","agssrq":"19910403""#),
+    )
+    .unwrap();
+    assert_eq!(page.listing[0].code, "000001");
+    // `zqdm` alone (the terminated-list row shape).
+    let page = parse_page(
+        ListKind::SzseDelistingMain,
+        Some("tab2"),
+        &body(
+            "tab2",
+            r#""zqdm":"000003","ssrq":"1991-01-14","zzrq":"2002-06-14""#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(page.delisting[0].code, "000003");
+    // Both present and agreeing is one code.
+    let page = parse_page(
+        ListKind::SzseListing,
+        None,
+        &body(
+            "tab1",
+            r#""zqdm":"000001","agdm":"000001","agssrq":"19910403""#,
+        ),
+    )
+    .unwrap();
+    assert_eq!(page.listing[0].code, "000001");
+    // Both present and disagreeing is a shape change, not a guess.
+    let error = parse_page(
+        ListKind::SzseListing,
+        None,
+        &body(
+            "tab1",
+            r#""zqdm":"000001","agdm":"000002","agssrq":"19910403""#,
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("disagree"), "{error}");
+    // Neither column: fail closed with both names.
+    let error = parse_page(
+        ListKind::SzseListing,
+        None,
+        &body("tab1", r#""agjc":"x","agssrq":"19910403""#),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("zqdm nor agdm"), "{error}");
+}
+
+#[test]
+fn a_page_of_only_b_shares_is_not_a_shape_change() {
+    // #446 D3: the 9th SZSE main page is ten B shares (200160/200168/200413/
+    // 200418/200513/200613/200706/200770/200771/200986). Filtering leaves no
+    // fact, but the page is not a renamed date column.
+    let page = parse_page(
+        ListKind::SzseDelistingMain,
+        Some("tab2"),
+        SZSE_DELISTING_MAIN_B_ONLY,
+    )
+    .unwrap();
+    assert!(page.delisting.is_empty());
+    assert_eq!(page.b_shares_skipped, 10);
+    assert_eq!(page.delisting_rows_without_date, 0);
+
+    // One A-share row without the date is still a shape change, and the
+    // message carries the three counts the operator needs.
+    let a_only = br#"[{"metadata":{"tabkey":"tab2","pageno":9,"pagecount":9,"recordcount":1},
+      "data":[{"zqdm":"000005","ssrq":"1992-01-01","zzrq":""}]}]"#;
+    let error = parse_page(ListKind::SzseDelistingMain, Some("tab2"), a_only).unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+    let message = error.to_string();
+    assert!(message.contains("1 row(s)"), "{message}");
+    assert!(message.contains("1 A-share row(s)"), "{message}");
+    assert!(message.contains("0 B-share row(s)"), "{message}");
+    assert!(message.contains("delisting date"), "{message}");
+
+    // A mixed page is filtered first: only the A row can trigger the guard.
+    let mixed = br#"[{"metadata":{"tabkey":"tab2","pageno":9,"pagecount":9,"recordcount":2},
+      "data":[{"zqdm":"200160"},{"zqdm":"000005","ssrq":"1992-01-01","zzrq":""}]}]"#;
+    let error = parse_page(ListKind::SzseDelistingMain, Some("tab2"), mixed).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("2 row(s)"), "{message}");
+    assert!(message.contains("1 A-share row(s)"), "{message}");
+    assert!(message.contains("1 B-share row(s)"), "{message}");
 }
 
 #[test]
@@ -443,7 +634,7 @@ fn a_synthetic_shared_code_is_merged_across_the_two_szse_modules() {
             "[{{\"metadata\":{{\"tabkey\":\"tab2\",\"pageno\":1,\"pagecount\":1,\"recordcount\":1}},\
                \"data\":[{{\"zqdm\":\"{code}\",\"ssrq\":\"1991-01-14\",\"zzrq\":\"2002-06-14\"}}]}}]"
         );
-        parse_page(kind, body.as_bytes()).unwrap()
+        parse_page(kind, Some("tab2"), body.as_bytes()).unwrap()
     };
     let mut facts = page(ListKind::SzseDelistingMain, "000003").delisting;
     facts.extend(page(ListKind::SzseDelistingShortName, "000003").delisting);
@@ -463,6 +654,7 @@ fn the_sse_code_is_a_stock_code_with_a_company_code_fallback() {
     // `COMPANY_CODE` alone still yields the code (the real rows carry both).
     let page = parse_page(
         ListKind::SseListingMain,
+        None,
         &body(r#"{"COMPANY_CODE":"600018","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#),
     )
     .unwrap();
@@ -470,7 +662,7 @@ fn the_sse_code_is_a_stock_code_with_a_company_code_fallback() {
     // `A_STOCK_CODE` wins when both exist and agree.
     let page = parse_page(
         ListKind::SseListingMain,
-        &body(
+        None, &body(
             r#"{"A_STOCK_CODE":"600018","COMPANY_CODE":"600018","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#,
         ),
     )
@@ -479,7 +671,7 @@ fn the_sse_code_is_a_stock_code_with_a_company_code_fallback() {
     // Both and disagreeing is a shape change: never guessed.
     let error = parse_page(
         ListKind::SseListingMain,
-        &body(
+        None, &body(
             r#"{"A_STOCK_CODE":"600018","COMPANY_CODE":"600019","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#,
         ),
     )
@@ -489,6 +681,7 @@ fn the_sse_code_is_a_stock_code_with_a_company_code_fallback() {
     // Neither field is a shape change too.
     let error = parse_page(
         ListKind::SseListingMain,
+        None,
         &body(r#"{"COMPANY_ABBR":"x","LIST_DATE":"20000719","STOCK_TYPE":"1"}"#),
     )
     .unwrap_err();
@@ -609,6 +802,126 @@ fn acquire_merges_the_four_lists_and_the_five_key_codes() {
         4,
         "binding is per source_id, not per request"
     );
+}
+
+#[test]
+fn frozen_szse_bytes_replay_to_the_same_row_level_facts() {
+    // Regression for #446 D1/D2/D3: `source_store replay` only re-derives the
+    // envelope, and all three defects passed it. This test re-reads every
+    // frozen SZSE page from the store (no network) and re-derives the row-level
+    // facts with the same block selection the acquisition used.
+    let fixture = Fixture::new();
+    let lists = Lists::serving_fixtures();
+    let admitted = acquired(&fixture, &lists);
+
+    struct Expected {
+        label: &'static str,
+        kind: ListKind,
+        declared: Option<&'static str>,
+        page_count: u32,
+        rows: usize,
+        listing: usize,
+        delisting: usize,
+        b_shares: usize,
+    }
+    let expected = [
+        Expected {
+            label: "szse_listing",
+            kind: ListKind::SzseListing,
+            declared: None,
+            page_count: 1,
+            rows: 6,
+            listing: 5,
+            delisting: 0,
+            b_shares: 1,
+        },
+        Expected {
+            label: "szse_delisting_main",
+            kind: ListKind::SzseDelistingMain,
+            declared: Some("tab2"),
+            page_count: 2,
+            rows: 3,
+            listing: 2,
+            delisting: 2,
+            b_shares: 2,
+        },
+        Expected {
+            label: "szse_delisting_nm",
+            kind: ListKind::SzseDelistingShortName,
+            declared: Some("tab2"),
+            page_count: 1,
+            rows: 1,
+            listing: 1,
+            delisting: 1,
+            b_shares: 0,
+        },
+    ];
+    for case in expected {
+        let ids = &admitted.snapshot_ids[case.label];
+        assert_eq!(
+            ids.len() as u32,
+            case.page_count,
+            "{}: frozen page count",
+            case.label
+        );
+        let mut rows = 0;
+        let mut listing = 0;
+        let mut delisting = 0;
+        let mut b_shares = 0;
+        for id in ids {
+            let bytes = fixture.store.read_verified(id).unwrap();
+            let envelope =
+                validate::parse_page(PagingFormat::SzseMetadata, case.declared, &bytes).unwrap();
+            let page = parse_page(case.kind, case.declared, &bytes).unwrap();
+            rows += envelope.rows;
+            listing += page.listing.len();
+            delisting += page.delisting.len();
+            b_shares += page.b_shares_skipped;
+            if case.kind.listing() {
+                assert_eq!(
+                    envelope.rows,
+                    page.listing.len() + page.b_shares_skipped,
+                    "{}: envelope rows are the A-share facts plus the skipped B rows",
+                    case.label
+                );
+            } else {
+                assert_eq!(
+                    envelope.rows,
+                    page.delisting.len() + page.b_shares_skipped + page.delisting_rows_without_date,
+                    "{}: envelope rows are the delisting facts plus skipped/undated rows",
+                    case.label
+                );
+            }
+        }
+        assert_eq!(
+            (rows, listing, delisting, b_shares),
+            (case.rows, case.listing, case.delisting, case.b_shares),
+            "{}: row-level replay",
+            case.label
+        );
+    }
+
+    // The evidence names the selected block and every block's row/page counts,
+    // so a mis-selected block is visible without downloading the page again.
+    let evidence = admitted.evidence();
+    let listing = &evidence["block_selection"]["szse_listing"];
+    assert_eq!(listing["pages"], json!(1));
+    assert_eq!(listing["basis"]["unique_non_empty"], json!(1));
+    assert_eq!(listing["selected_tabkey"]["tab1"], json!(1));
+    assert_eq!(listing["blocks"][0]["tabkey"], json!("tab1"));
+    assert_eq!(listing["blocks"][0]["rows"], json!(6));
+    assert_eq!(listing["blocks"][0]["page_count"], json!(1));
+    assert_eq!(listing["blocks"][1]["tabkey"], json!("tab2"));
+    assert_eq!(listing["blocks"][1]["rows"], json!(0));
+    assert_eq!(listing["blocks"][1]["page_count"], json!(0));
+    let main = &evidence["block_selection"]["szse_delisting_main"];
+    assert_eq!(main["pages"], json!(2));
+    assert_eq!(main["basis"]["declared_tabkey"], json!(2));
+    assert_eq!(main["selected_tabkey"]["tab2"], json!(2));
+    assert_eq!(main["blocks"][0]["tabkey"], json!("tab1"));
+    assert_eq!(main["blocks"][1]["tabkey"], json!("tab2"));
+    assert_eq!(main["blocks"][1]["rows"], json!(3));
+    assert_eq!(main["blocks"][1]["page_count"], json!(2));
 }
 
 #[test]
@@ -861,7 +1174,8 @@ fn a_frozen_snapshot_below_the_required_tier_is_source_not_admitted() {
         body: SSE_LISTING_MAIN.to_vec(),
     };
     let envelope =
-        exchange_source::validate::parse_page(PagingFormat::SsePageHelp, SSE_LISTING_MAIN).unwrap();
+        exchange_source::validate::parse_page(PagingFormat::SsePageHelp, None, SSE_LISTING_MAIN)
+            .unwrap();
     exchange_source::freeze_page(
         &fixture.store,
         &fixture.market,
