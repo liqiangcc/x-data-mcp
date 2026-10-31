@@ -961,7 +961,7 @@ maint replay_source_store --scope industry|exchange|generation_facts|risk_warnin
 | `generation_facts` | `generation_facts`（按 `origin` 里的 generation sha + `role` + 派生表摘要重算 `fact_digest`/`evidence_sha256`） | 与 §8.3 门禁同源的校验函数 |
 | `risk_warnings` | `risk_warning_intervals` + `derived_dataset_versions` 登记（冻结的深交所简称表 + 沪交所公告页，不重发 HTTP） | 字节 sha 读回校验；未知 `parser_version` fail-closed；空结果不写 0 行 |
 | `security_names` | `security_name_history` + 其 `derived_dataset_versions` 登记（冻结的深交所 `SSGSGMXX`/`tab2` 表，不重发 HTTP，不读时钟） | 字节 sha 读回校验；未知 `parser_version` fail-closed；0 行变更表 → `empty_name_set`，不写库 |
-| `suspensions` | `suspension_intervals` + 其 `derived_dataset_versions` 登记（冻结的 A-3 停复牌页 → facts；再用**该库**的 `security_master`、交易日历、bar_days 装配，见 §14.9） | 字节 sha 读回校验；未知 `parser_version` fail-closed；库缺主表/日历 → `suspension_replay_not_ready`，不写空表 |
+| `suspensions` | `suspension_intervals` + 其 `derived_dataset_versions` 登记（冻结的 A-3 停复牌页 → facts；再用**该库**的 `security_master`、交易日历、bar_days 装配，见 §14.10） | 字节 sha 读回校验；未知 `parser_version` fail-closed；库缺主表/日历 → `suspension_replay_not_ready`，不写空表 |
 
 - **确定性**：区间重算的排序键固定为 `(effective_from, ingested_at, sha256)`，同日多变更按 §5.2 处理；同一来源库 + 同一 `parser_version` 重放两次必须产出逐位相同的表内容（AC-M3-9 的仓内定义）。
 - **摘要对账**：每个 scope 输出规范化摘要（按主键排序的固定字段 JSON 的 sha256）。`--verify-only` 只重算并与 DB 比较，返回 `match` 或 `drift` + 差异主键（前 20 条）与计数；不写 DB。
@@ -1595,7 +1595,29 @@ item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其�
   `a_set_whose_skip_samples_outnumber_their_counters_is_refused`。
 - 文档：`docs/data-catalog.md` 第 11 行（停牌）补零交易日口径，状态列不变。
 
-### 14.9 XDM-138：停牌 confirmed 的来源库重放（条件可重放，未部署）
+### 14.9 出站请求最小间隔 1 s（2026-10-31，XDM-143）
+
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+背景：XDM-135 实测 A-3 停复牌回填 1,296 个请求 / ~1,755 s，其中 795 个请求间隔 <1 s，
+不满足交易所「≥1 s/请求」的限速要求。owner 2026-10-31 选方案 (a)：强制 ≥1 s，合规优先。
+部署后的首次 `derived:suspensions` 就会触发，所以在部署前修好。
+
+- 落点：`src/exchange_source/transport.rs` 的 `Client`。每次尝试（首次与重试）在调用
+  transport 前等待到「距上一次尝试**开始** ≥ `min_interval`」，状态按 client 持有
+  （`Mutex<Option<Instant>>`），无全局静态锁；`Client::helper()` 从环境变量读取生效值。
+- 默认与配置：`DEFAULT_MIN_REQUEST_INTERVAL = 1,000 ms`；
+  `X_DATA_MCP_MIN_REQUEST_INTERVAL_MS`（整毫秒）可覆盖，`0` 关闭（仅测试/离线）；
+  非法值 fail-closed：`data_service` 启动拒绝，`Client::helper()` 返回
+  `source_transport_unavailable`。启动日志打印生效值。
+- 可测试性：`Pacer`（`now`/`sleep`）可注入，CI 用假 clock；`without_sleep()` 在测试里同时
+  关掉退避与间隔等待。测试断言连续 3 次请求开始差 ≥1 s、`0` 不等待、退避与间隔叠加不
+  double-sleep（两次 500 ms 退避 + 1 s 间隔 → 总等待 2 s）、两个 client 状态独立。
+- 范围：只加出站间隔；不改 A-3 请求数/分页，不改抓取窗口，不联网，不部署，不动生产。
+- 文档：`docs/exchange-source.md` §2 补「出站请求最小间隔」小节（默认值、环境变量、
+  启动日志、与重试的关系、A-3 的时间下界）。
+
+### 14.10 XDM-138：停牌 confirmed 的来源库重放（条件可重放，未部署）
 
 状态：**设计已确认，代码与测试已提交；未部署**（Refs #446）。
 

@@ -109,6 +109,26 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     {
         return Err("X_DATA_MCP_TEXT_MODE must be full, summary or off".into());
     }
+    // XDM-143 (Refs #446): adjacent outbound exchange requests of one fetch
+    // client start at least this far apart (default 1,000 ms, the exchanges'
+    // 1 request/s limit). An invalid override refuses to start instead of
+    // silently changing the limit, and the effective value is logged so a
+    // deployment shows which rate limit is in force. `0` is the tests/offline
+    // escape hatch and must never be set on a unit that fetches.
+    let interval = x_data_mcp::exchange_source::transport::min_request_interval(
+        std::env::var(x_data_mcp::exchange_source::transport::MIN_REQUEST_INTERVAL_ENV)
+            .ok()
+            .as_deref(),
+    )?;
+    eprintln!(
+        "exchange source outbound request interval: {} ms ({})",
+        interval.as_millis(),
+        if interval.is_zero() {
+            "disabled; tests/offline only, a deployment must not set this"
+        } else {
+            "per client; adjacent request starts are spaced by this interval"
+        }
+    );
     // XDM-64: a bad preparation-pool override refuses to start. `1` is the
     // operator rollback to the sequential run path.
     x_data_mcp::market_update::runner::prepare_workers_from_env()?;
