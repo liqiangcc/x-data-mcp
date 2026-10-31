@@ -605,8 +605,10 @@ impl Pacer for FakePacer {
     }
 }
 
-/// One scripted response queue for a [`TimedTransport`].
-type Responses = VecDeque<Result<HttpResponse, TransportError>>;
+/// One scripted response queue for a [`TimedTransport`] (caller side).
+type Responses = Vec<Result<HttpResponse, TransportError>>;
+/// The consumed form of [`Responses`] inside the transport.
+type Queue = VecDeque<Result<HttpResponse, TransportError>>;
 /// Fake-clock instants at which attempts started.
 type StartLog = std::sync::Arc<Mutex<Vec<Instant>>>;
 /// A client plus the fake clock and the start log the test asserts on.
@@ -616,7 +618,7 @@ type TimedClient = (Client, FakePacer, StartLog);
 struct TimedTransport {
     clock: std::sync::Arc<Mutex<Instant>>,
     starts: StartLog,
-    responses: Mutex<Responses>,
+    responses: Mutex<Queue>,
 }
 
 impl Transport for TimedTransport {
