@@ -1277,7 +1277,7 @@ owner 决策（2026-10-30/31，设计报告 `silent-path-design.md` 方案 2a）
 |---|---|---|---|
 | 共享策略入口 | `source_store` 新增 `CONFIG_ENV`、`ALLOW_UNCONFIGURED_ENV`、`Policy`、`configured(policy)`、`Unconfigured`（稳定码 `source_store_unconfigured`）；Required 校验变量存在 + 目录/清单可读，空 store 合法 | `src/source_store/mod.rs` + `src/source_store/tests.rs` | 未部署 |
 | 四个适配器 | `a1a2`/`a3`/`security_names`/`risk_warnings` 的 `run_source` 收 `Policy`；Required + 未配置 → `Invalid { code: source_store_unconfigured }`（不再是 Pending），Optional 保持原行为 | 四个 adapter 及其 tests（每个一例 Required，a1a2 另钉「上一版主表仍可读」） | 未部署 |
-| 下传 | `derived::run`/`execute`、`worker::run_once` 收 `Policy`；`DataApi` 新增字段与 `with_source_store_policy`，默认 Optional；`Handler::Worker` 透传 | `src/data_supply/{derived,worker,mcp}.rs` | 未部署 |
+| 下传 | `derived::RunContext`（PR-9 `WholeMarket` 同形）收 run 级事实含 `Policy`，`run`/`execute` 不再堆位置参数；`worker::run_once` 收 `Policy`；`DataApi` 新增字段与 `with_source_store_policy`，默认 Optional；`Handler::Worker` 透传 | `src/data_supply/{derived,worker,mcp}.rs` | 未部署 |
 | 服务入口 | `data_service` 在 backend 打开后判定 `has_ops && Compact` → Required；legacy 保持 Optional | `src/bin/data_service.rs` | 未部署 |
 | 触发面钉法 | 纯函数 `source_store_policy(has_ops, backend)` 单测：只有 ops + compact 才是 Required，其余四种组合都是 Optional | `src/bin/data_service.rs` 测试模块 | 未部署 |
 | 端到端钉法 | compact fixture 两代快照：先 Optional 日更提交主表，再 Required + 无 store 日更 → 四项失败各含稳定码、run `partially_failed`、实体日线已前进、主表版本/行不变 | `tests/mcp/plan_run.rs` | 未部署 |

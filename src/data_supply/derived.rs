@@ -123,22 +123,39 @@ pub fn item_specs(
     items
 }
 
+/// Everything one internal-item run needs, frozen once per worker turn.
+///
+/// A struct rather than a long positional argument list (the PR-9
+/// `WholeMarket` shape): the source-store `policy` was the argument that made
+/// `run` exceed clippy's seven-argument limit, and a struct means the next
+/// run-wide fact cannot silently shift a positional argument. The item list
+/// stays separate because it is the loop's subject, not run-wide context.
+pub struct RunContext<'a, 's> {
+    pub market: &'a MarketBackend,
+    pub session: Option<&'a MaterializeSession<'s>>,
+    pub generation_id: &'a str,
+    pub generation_manifest_sha256: &'a str,
+    pub task_id: &'a str,
+    pub run_id: &'a str,
+    pub policy: crate::source_store::Policy,
+}
+
 /// Execute every pending internal item of `items`, then close the execution.
 ///
 /// The caller appended these items to the running task before the entity
 /// items started (see `worker::run_once`), so the task cannot reach a
 /// terminal status ahead of them. Items already finished (a resumed run) are
 /// skipped; a terminal or cancelled task stops the loop.
-pub fn run(
-    market: &MarketBackend,
-    session: Option<&MaterializeSession<'_>>,
-    generation_id: &str,
-    generation_manifest_sha256: &str,
-    task_id: &str,
-    run_id: &str,
-    items: &[ItemSpec],
-    policy: crate::source_store::Policy,
-) -> Result<(), Error> {
+pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
+    let RunContext {
+        market,
+        session,
+        generation_id,
+        generation_manifest_sha256,
+        task_id,
+        run_id,
+        policy,
+    } = *ctx;
     // `security_facts` reads and parses `base.dbf`; the main table and the
     // suspension binding both need the same member facts, so one worker turn
     // parses them at most once (issue-391 §12.1).
@@ -192,20 +209,8 @@ pub fn run(
             check_delisted_series(market, spec)
         } else {
             match session {
-                Some(session) => execute(
-                    market,
-                    session,
-                    generation_id,
-                    generation_manifest_sha256,
-                    task_id,
-                    run_id,
-                    item,
-                    revision,
-                    &source_cache,
-                    &run_cache,
-                    policy,
-                )
-                .map_err(ItemFailure::Plain),
+                Some(_) => execute(ctx, item, revision, &source_cache, &run_cache)
+                    .map_err(ItemFailure::Plain),
                 None => Err(ItemFailure::Plain(Error::Invalid(format!(
                     "{} needs a verified official source; none is installed for this run",
                     item.item_id
@@ -349,20 +354,27 @@ fn check_delisted_series(market: &MarketBackend, item: &ItemSpec) -> Result<Valu
 
 /// One internal item's acquisition + commit, returning the evidence recorded
 /// on its outcome row.
-#[allow(clippy::too_many_arguments)]
 fn execute(
-    market: &MarketBackend,
-    session: &MaterializeSession<'_>,
-    generation_id: &str,
-    generation_manifest_sha256: &str,
-    task_id: &str,
-    run_id: &str,
+    ctx: &RunContext,
     item: &ItemSpec,
     expected_task_revision: u64,
     source_cache: &RefCell<Option<DatasetSource>>,
     run_cache_cell: &RefCell<Option<Arc<RunCache>>>,
-    policy: crate::source_store::Policy,
 ) -> Result<Value, Error> {
+    let RunContext {
+        market,
+        session: Some(session),
+        generation_id,
+        generation_manifest_sha256,
+        task_id,
+        run_id,
+        policy,
+    } = *ctx
+    else {
+        return Err(Error::Integrity(
+            "a derived item needs the run's verified source session".into(),
+        ));
+    };
     if let Some(entity) = task_control::derived::index_entity(&item.item_id) {
         let index = session
             .index_batch(entity)
