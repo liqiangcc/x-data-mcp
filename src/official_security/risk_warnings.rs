@@ -50,7 +50,7 @@ use serde_json::{Value, json};
 
 use crate::exchange_source::{
     AcquireError, AcquisitionPlan, Client, Entry, PagingFormat, RequestError, RunCache,
-    SnapshotBinding, SourceId, TransportError, quarter_segments,
+    SnapshotBinding, SourceId, TransportError, quarter_segments, validate,
 };
 use crate::security_master::assembly::PendingSource;
 use crate::security_master::risk_warnings::{
@@ -61,8 +61,12 @@ use crate::source_store::{Policy, SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
 
 /// Business-field parser version of this adapter. It is registered on the
-/// derived item's outcome evidence, not in PR-2's envelope manifest.
-pub const PARSER_VERSION: &str = "risk-warnings-v1";
+/// derived item's outcome evidence, not in PR-2's envelope manifest. v1 → v2:
+/// the SZSE rows come from the block the request declared (`TABKEY=tab2`)
+/// instead of the first block with a `data` array, so a page with an empty
+/// `tab1` no longer parses as an empty table; old evidence stays
+/// distinguishable and is not replayed under the new meaning.
+pub const PARSER_VERSION: &str = "risk-warnings-v2";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -70,6 +74,9 @@ pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
 pub const SZSE_URL: &str = "https://www.szse.cn/api/report/ShowReport/data";
 /// SZSE short-name change catalog (`SSGSGMXX`, tab 2).
 pub const SZSE_SHORT_NAME_CATALOG: &str = "SSGSGMXX";
+/// `TABKEY` of the SZSE short-name change table (简称变更): the plan declares
+/// it and the parser selects exactly that block.
+pub const SZSE_SHORT_NAME_TABKEY: &str = "tab2";
 /// SSE company-bulletin index endpoint.
 pub const SSE_BULLETIN_URL: &str =
     "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do";
@@ -119,7 +126,7 @@ pub fn plans() -> Vec<(Kind, AcquisitionPlan)> {
     )
     .param("SHOWTYPE", "JSON")
     .param("CATALOGID", SZSE_SHORT_NAME_CATALOG)
-    .param("TABKEY", "tab2");
+    .param("TABKEY", SZSE_SHORT_NAME_TABKEY);
     let bulletin = |kind: Kind, title: &str| {
         let plan = AcquisitionPlan::new(
             SourceId::SseBulletin,
@@ -282,6 +289,17 @@ pub(crate) struct SzShortNameTable {
     pub binding: SnapshotBinding,
 }
 
+/// The `TABKEY` the static `SSGSGMXX` plan declares, read back from the plan
+/// instead of hard-coded at a second site: the block a page is parsed from is
+/// the block the request asked for, and the live acquisition and both replay
+/// entries read the same value.
+pub(crate) fn szse_declared_tabkey() -> Option<String> {
+    plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == Kind::SzseShortName)
+        .and_then(|(_, plan)| validate::declared_tabkey(&plan.params).map(str::to_string))
+}
+
 /// Acquire, freeze and parse the SZSE `SSGSGMXX`/`tab2` table through PR-2's
 /// entry. This is the only acquisition of the dated name source; a second
 /// consumer must call it rather than open its own request or parser.
@@ -296,6 +314,9 @@ pub(crate) fn acquire_sz_short_name_table(
         .into_iter()
         .find(|(kind, _)| *kind == Kind::SzseShortName)
         .expect("the SZSE plan is static");
+    // The declared tab travels with the request into the parser: a page whose
+    // `tab1` is an empty tab must not be read as an empty table.
+    let declared_tabkey = validate::declared_tabkey(&plan.params).map(str::to_string);
     let outcome = entry.acquire(&plan)?;
     let mut changes = Vec::new();
     let mut rows = 0usize;
@@ -303,7 +324,8 @@ pub(crate) fn acquire_sz_short_name_table(
     let mut snapshot_ids = Vec::new();
     for snapshot in &outcome.snapshots {
         let bytes = store.read_verified(snapshot.snapshot_id())?;
-        let (mut parsed, page_rows, page_skipped) = parse_sz_page(&bytes, snapshot.snapshot_id())?;
+        let (mut parsed, page_rows, page_skipped) =
+            parse_sz_page(&bytes, snapshot.snapshot_id(), declared_tabkey.as_deref())?;
         rows += page_rows;
         skipped_codes += page_skipped;
         changes.append(&mut parsed);
@@ -475,15 +497,18 @@ fn acquire_today(
 
 /// Parse one SZSE page: `(changes, rows_read, skipped_non_a_codes)`.
 ///
-/// Shared with the name-history adapter (`official_security::security_names`,
-/// PR-12): one source row shape must not get a second parser.
+/// `declared_tabkey` is the `TABKEY` the request declared (`tab2` for the
+/// short-name table); the rows come from that block only. Shared with the
+/// name-history adapter (`official_security::security_names`, PR-12): one
+/// source row shape must not get a second parser.
 pub(crate) fn parse_sz_page(
     bytes: &[u8],
     snapshot_id: &str,
+    declared_tabkey: Option<&str>,
 ) -> Result<(Vec<SzNameChange>, usize, usize), Error> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|error| Error::invalid(format!("SZSE short-name page is not JSON: {error}")))?;
-    let rows = sz_rows(&value)?;
+    let rows = sz_rows(&value, declared_tabkey)?;
     let total = rows.len();
     let mut changes = Vec::new();
     let mut skipped = 0usize;
@@ -520,15 +545,27 @@ pub(crate) fn parse_sz_page(
     Ok((changes, total, skipped))
 }
 
-fn sz_rows(value: &Value) -> Result<Vec<Value>, Error> {
-    let data = if let Some(blocks) = value.as_array() {
-        blocks
-            .iter()
-            .find_map(|block| block.get("data").and_then(Value::as_array))
-    } else {
-        value.get("data").and_then(Value::as_array)
-    };
-    data.cloned()
+/// Rows of the block the request declared.
+///
+/// The 2026-10-30 real `SSGSGMXX` response has two blocks: `tab1` with
+/// `data: []` and `tab2` with the change rows. Reading "the first block with a
+/// `data` array" therefore read the empty tab and made a whole-market table
+/// look empty (zero `changes`, `empty_name_set`). The selection is the same
+/// `validate::szse_block` A-1/A-2 use (#446 D1): the declared tab must be
+/// present, and without a declaration only a unique non-empty block is
+/// accepted.
+fn sz_rows(value: &Value, declared_tabkey: Option<&str>) -> Result<Vec<Value>, Error> {
+    let (block, _selection) = validate::szse_block(value, declared_tabkey).map_err(|error| {
+        let detail = match error {
+            validate::ValidateError::Format { detail } => detail,
+            other => other.to_string(),
+        };
+        Error::invalid(format!("SZSE short-name page: {detail}"))
+    })?;
+    block
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
         .ok_or_else(|| Error::invalid("SZSE short-name page has no data row array"))
 }
 
@@ -714,13 +751,17 @@ pub fn replay(
     gaps: &[(NaiveDate, NaiveDate)],
     coverage: Vec<CoverageWindow>,
 ) -> Result<RiskWarningSet, Error> {
+    // The replay entry reads the same declared `TABKEY` as the live
+    // acquisition, so both paths select the same block from frozen bytes.
+    let declared_tabkey = szse_declared_tabkey();
     let mut sz_changes = Vec::new();
     let mut sh_events = Vec::new();
     let mut seen_bulletins = BTreeSet::new();
     for (source_id, snapshot_id, bytes) in pages {
         match *source_id {
             "szse_short_name" => {
-                let (mut changes, _, _) = parse_sz_page(bytes, snapshot_id)?;
+                let (mut changes, _, _) =
+                    parse_sz_page(bytes, snapshot_id, declared_tabkey.as_deref())?;
                 sz_changes.append(&mut changes);
             }
             "sse_bulletin" => {
@@ -761,11 +802,91 @@ mod tests {
 
     #[test]
     fn sz_page_parses_a_change_chain() {
-        let (changes, rows, skipped) =
-            parse_sz_page(&fixture("szse-name-changes.json"), "a").expect("fixture parses");
+        let (changes, rows, skipped) = parse_sz_page(
+            &fixture("szse-name-changes.json"),
+            "a",
+            Some(SZSE_SHORT_NAME_TABKEY),
+        )
+        .expect("fixture parses");
         assert_eq!(rows, 4);
         assert_eq!(skipped, 1, "a 200 B-share row is skipped");
         assert_eq!(changes.len(), 3);
+    }
+
+    /// The plan's `TABKEY` is what the parser is told to select; both are read
+    /// from one place so the request and the parsed block cannot drift apart.
+    #[test]
+    fn the_short_name_plan_declares_tab2() {
+        assert_eq!(
+            szse_declared_tabkey().as_deref(),
+            Some(SZSE_SHORT_NAME_TABKEY)
+        );
+    }
+
+    /// 2026-10-30 real shape: `tab1` (暂停上市) is empty with `pagecount=0` and
+    /// `tab2` carries the change rows. The old `find_map(first data array)` read
+    /// the empty `tab1` and made the whole-market table look empty.
+    #[test]
+    fn sz_page_reads_the_declared_tab2_block_after_an_empty_tab1() {
+        let body = fixture("szse-name-changes-tab1-empty.json");
+        let (changes, rows, skipped) =
+            parse_sz_page(&body, "a", Some(SZSE_SHORT_NAME_TABKEY)).expect("fixture parses");
+        assert_eq!(rows, 4, "the rows come from tab2, not from the empty tab1");
+        assert_eq!(skipped, 1);
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[0].code, "000004");
+
+        // Without a declaration the same page is still unambiguous: tab2 is the
+        // only block with rows, so the unique-non-empty fallback selects it.
+        let (changes, rows, _) =
+            parse_sz_page(&body, "a", None).expect("the unique non-empty block is accepted");
+        assert_eq!((rows, changes.len()), (4, 3));
+    }
+
+    /// A declared tab always wins over position: when both tabs have rows the
+    /// parser reads the declared one, while an undeclared page with two
+    /// non-empty blocks is refused instead of guessing.
+    #[test]
+    fn two_non_empty_tabs_without_a_declaration_fail_closed() {
+        let body = r#"[
+          {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":1,"recordcount":1},
+           "data":[{"bgrq":"2001-03-07","zqdm":"000004","bgqzqjc":"ST深安达","bghzqjc":"深安达A"}]},
+          {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":1,"recordcount":1},
+           "data":[{"bgrq":"2001-03-07","zqdm":"000005","bgqzqjc":"ST世纪星源","bghzqjc":"世纪星源"}]}
+        ]"#
+        .as_bytes();
+        let error = parse_sz_page(body, "a", None).expect_err("two candidates are refused");
+        assert_eq!(error.code(), "source_invalid");
+        assert!(
+            error.to_string().contains("several blocks"),
+            "the reason names the ambiguity: {error}"
+        );
+
+        // The declaration is the selector: tab2 is read even though tab1 has a
+        // row, and the row of tab1 is not in the result.
+        let (changes, rows, _) = parse_sz_page(body, "a", Some(SZSE_SHORT_NAME_TABKEY))
+            .expect("the declared tab is selected");
+        assert_eq!((rows, changes.len()), (1, 1));
+        assert_eq!(changes[0].code, "000005");
+    }
+
+    /// A request that declared `tab2` against a response without that block is
+    /// `source_invalid`: reading another tab would silently change the meaning.
+    #[test]
+    fn a_missing_declared_tab_fails_closed() {
+        let body = r#"[
+          {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":0,"recordcount":0},"data":[]},
+          {"metadata":{"tabkey":"tab3","pageno":1,"pagecount":1,"recordcount":1},
+           "data":[{"bgrq":"2001-03-07","zqdm":"000004","bgqzqjc":"ST深安达","bghzqjc":"深安达A"}]}
+        ]"#
+        .as_bytes();
+        let error = parse_sz_page(body, "a", Some(SZSE_SHORT_NAME_TABKEY))
+            .expect_err("a missing declared tab is refused");
+        assert_eq!(error.code(), "source_invalid");
+        assert!(
+            error.to_string().contains("tab2"),
+            "the reason names the declared tab: {error}"
+        );
     }
 
     #[test]
