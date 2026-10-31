@@ -602,6 +602,36 @@ pub fn validate_set(rows: &[SuspensionInterval]) -> Result<(), Error> {
     Ok(())
 }
 
+/// Content digest of the database inputs a suspension assembly reads:
+/// the `security_master` registration's content digest, the trading calendar
+/// days and the raw bar days per entity. The source store alone cannot name
+/// these, so a replay registers this digest as evidence: when the database's
+/// master or calendar advances, the digest legitimately changes and a
+/// `--verify-only` comparison can say "inputs changed" instead of treating the
+/// difference as store corruption.
+pub fn inputs_digest(
+    master_version_id: &str,
+    calendar: &[NaiveDate],
+    bar_days: &BTreeMap<String, Vec<NaiveDate>>,
+) -> String {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(b"suspension-inputs-v1\0");
+    push_text(&mut payload, master_version_id);
+    payload.extend_from_slice(&(calendar.len() as u64).to_be_bytes());
+    for day in calendar {
+        payload.extend_from_slice(&crate::compact_market::epoch_day(*day).to_be_bytes());
+    }
+    payload.extend_from_slice(&(bar_days.len() as u64).to_be_bytes());
+    for (entity, days) in bar_days {
+        push_text(&mut payload, entity);
+        payload.extend_from_slice(&(days.len() as u64).to_be_bytes());
+        for day in days {
+            payload.extend_from_slice(&crate::compact_market::epoch_day(*day).to_be_bytes());
+        }
+    }
+    crate::hash::sha256(&payload)
+}
+
 /// Content digest of the dataset: `SHA256("suspensions-v1" ‖ row_count ‖
 /// rows…)`. The source binding and the evidence bundle are excluded: they
 /// describe where the facts came from, not the dataset identity (§3.10). The

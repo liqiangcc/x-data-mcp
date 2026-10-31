@@ -918,7 +918,7 @@ CREATE TABLE retire_exemptions(
 一个 maint 入口，按域重放，幂等：
 
 ```text
-maint replay_source_store --scope industry|exchange|generation_facts|risk_warnings|security_names|all [--verify-only]
+maint replay_source_store --scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all [--verify-only]
 ```
 
 | scope | 从来源库重建什么 | 解析/校验 |
@@ -928,12 +928,14 @@ maint replay_source_store --scope industry|exchange|generation_facts|risk_warnin
 | `generation_facts` | `generation_facts`（按 `origin` 里的 generation sha + `role` + 派生表摘要重算 `fact_digest`/`evidence_sha256`） | 与 §8.3 门禁同源的校验函数 |
 | `risk_warnings` | `risk_warning_intervals` + `derived_dataset_versions` 登记（冻结的深交所简称表 + 沪交所公告页，不重发 HTTP） | 字节 sha 读回校验；未知 `parser_version` fail-closed；空结果不写 0 行 |
 | `security_names` | `security_name_history` + 其 `derived_dataset_versions` 登记（冻结的深交所 `SSGSGMXX`/`tab2` 表，不重发 HTTP，不读时钟） | 字节 sha 读回校验；未知 `parser_version` fail-closed；0 行变更表 → `empty_name_set`，不写库 |
+| `suspensions` | `suspension_intervals` + 其 `derived_dataset_versions` 登记（冻结的 A-3 停复牌页 → facts；再用**该库**的 `security_master`、交易日历、bar_days 装配，见 §14.9） | 字节 sha 读回校验；未知 `parser_version` fail-closed；库缺主表/日历 → `suspension_replay_not_ready`，不写空表 |
 
 - **确定性**：区间重算的排序键固定为 `(effective_from, ingested_at, sha256)`，同日多变更按 §5.2 处理；同一来源库 + 同一 `parser_version` 重放两次必须产出逐位相同的表内容（AC-M3-9 的仓内定义）。
 - **摘要对账**：每个 scope 输出规范化摘要（按主键排序的固定字段 JSON 的 sha256）。`--verify-only` 只重算并与 DB 比较，返回 `match` 或 `drift` + 差异主键（前 20 条）与计数；不写 DB。
 - **部署钩子**：`scripts/deploy_phase_g.sh` 在 fresh init 并起服务后、写部署报告前调用一次 `replay_source_store --scope all`（经 maint socket 或 PR-1a 选定的等价 CLI 入口）；来源库为空时返回 `store_empty` 并记入部署报告，不算失败（首次上线前先跑 §9.4.4 导入）。验收时比较重放前后的摘要，必须 `match`。
 - **失败语义**：任一 blob 读不回 → 整个 scope 失败、不写半成品（每域一个事务）；只影响 M3 表，不阻塞 TDX 日更与已有行情（§10.1 的隔离规则不变）。
 - **与日更的关系**：日更首个派生 item 可以顺带补本代缺失的索引，但**不能替代**部署后的显式重放——部署脚本不依赖日更是否成功。
+- **条件可重放**：`suspensions` 的 confirmed 行来自来源库，但装配还依赖该库的 `security_master`、已提交交易日历和每实体 bar_days；后三者是行情数据，不属于来源库。因此它不进 `--scope all`（fresh-init、服务启动前的 all 没有这些输入，纳进去会让每次 fresh-init 都因 `suspension_replay_not_ready` 失败），必须在主表/日历就绪后显式运行，或直接跑日更 `derived:suspensions`。
 
 **PR-6 落地（2026-10-29）**：`industry` scope 已实现（`exchange`/`generation_facts` 仍是
 `rebuilt=skeleton_no_op`）。入口形式在 PR-1a 的 CLI 上加两个参数：
@@ -1559,6 +1561,50 @@ item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其�
   `skipped_confirmed_intervals_are_counted_in_evidence_and_write_no_row`、
   `a_set_whose_skip_samples_outnumber_their_counters_is_refused`。
 - 文档：`docs/data-catalog.md` 第 11 行（停牌）补零交易日口径，状态列不变。
+
+### 14.9 XDM-138：停牌 confirmed 的来源库重放（条件可重放，未部署）
+
+状态：**设计已确认，代码与测试已提交；未部署**（Refs #446）。
+
+**结论：条件可重放，不是无条件可重放。** 来源库只持有 A-3 冻结页，能重解析出
+`ConfirmedSuspensionFact`；但整表装配还需要三样**行情数据**：`security_master` 区间、
+已提交交易日历、每实体 bar_days。fresh-init 后仅凭来源库无法重建 confirmed 行，
+因为这三个输入不在来源库里。可选路径只有两条：先重建主表/日历（日更
+`derived:security_master`/`derived:calendar`，或未来的重放路径），再显式
+`replay --scope suspensions`；或者直接跑日更 `derived:suspensions` 重新抓取/复用冻结页。
+
+**scope 行为**（`src/source_store/replay.rs`、`src/bin/source_store.rs`）：
+
+- 只选 `store_kind=http_fetch` 且 `source_id=sse_suspension` 的登记；清单 → 索引行
+  由 `exchange_source::rebuild` 重算（不依赖库里已有的 `exchange_source_snapshots`）。
+- **无 `--db`**：只解析冻结页并报告 `facts`（merged confirmed intervals）计数，
+  `rebuilt=computed_no_db`；没有主表就无从放置/裁剪 member window，不装配、不写库。
+- **有 `--db`**：先 `read_inputs_if_ready` 读主表注册、交易日历、bar_days；缺主表或
+  日历为空 → 状态/问题码 `suspension_replay_not_ready`，整表不动，绝不写空表冒充成功。
+  就绪后与日更走**同一个** `assemble_suspensions`，再用**同一个**
+  `commit_suspensions`（绑定到主表同一个 generation binding）整表替换
+  `suspension_intervals` 与 `derived_dataset_versions`，写后回读比较。
+- `--verify-only` 重算行并与库内比较：`match` 或 `drift` + 前 20 条差异键，不写库。
+- **确定性**：摘要只覆盖已写行（`suspensions-v1`）；同一来源库 + 同一库状态重放两次
+  得到同一 `summary`。三样库输入单独哈希为 `inputs_digest` 并写进登记证据（日更与重放
+  都写），所以库状态前进导致重算行变化时，`--verify-only` 报 `drift_cause=inputs_changed`
+  （报告同时给出新的 `inputs_digest`），而不是 `source_store_corrupt`；若输入未变而行
+  不同，则报 `drift_cause=rows_changed`。
+- **不进入 `--scope all`**：all 在 fresh-init、服务启动前运行，那时主表/日历必然不存在；
+  把条件 scope 放进 all 会让每次 fresh-init 部署都因 `suspension_replay_not_ready` 失败。
+  文档与 usage 都明确写「先主表/日历，再 replay suspensions，或直接跑日更」。
+
+**测试（CI，不联网）**：冻结页 → facts 计数；`--db` 装配的行与日更写入逐位一致；
+`--verify-only` `match` → 改库输入后 `drift`/`inputs_changed`；库缺日历 →
+`suspension_replay_not_ready` 且不写；未知 `parser_version` → fail-closed；空库 /
+无 `sse_suspension` 记录 → `store_empty`/`nothing_selected` 不碰库。
+
+**落点**：`src/source_store/replay.rs`、`src/bin/source_store.rs`、
+`src/official_security/a3.rs`（共享 reparse 与无主表计数）、
+`src/security_master/suspensions.rs`（`inputs_digest`）、
+`src/sqlite_market/suspensions.rs`（ready/missing/empty 三态、replay 输入摘要证据）、
+`src/data_supply/derived.rs`（日更也登记 `inputs_digest`）、`docs/source-store.md`。
+不改表结构、不改读面、不改部署脚本与 `docs/STATUS.md` 部署事实。
 
 ## 15. 本机与 CI 验证方式
 

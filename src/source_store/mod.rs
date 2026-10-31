@@ -820,4 +820,6 @@ impl Drop for PolicyEnv {
 }
 
 #[cfg(test)]
+mod suspensions_replay_tests;
+#[cfg(test)]
 mod tests;

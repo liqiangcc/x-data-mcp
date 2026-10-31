@@ -86,10 +86,10 @@ PR-1a 在 maint socket 工具与等价 CLI 之间选择了 **CLI**
 
 ```text
 source_store replay --store <dir> \
-  [--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
+  [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
   [--db <market.sqlite>] [--verify-only]
 source_store verify --store <dir> \
-  [--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
+  [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
   [--db <market.sqlite>]
 source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
   [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
@@ -107,10 +107,13 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 `generation_facts` 自 PR-8 起重建设备退役门禁索引（行业成员 + 已绑定的派生事实），
 `risk_warnings` 自 PR-10 起可重建 `risk_warning_intervals`，`security_names`
 自 PR-12 起可重建 `security_name_history` 与它的 `derived_dataset_versions`
-登记（整表替换，走日更 item 的同一写入器）。
+登记（整表替换，走日更 item 的同一写入器）；`suspensions`（XDM-138）可重放
+停牌数据集，但它是**条件可重放**：装配还依赖该库的主表、交易日历和 bar_days，
+详见 §4.2。
 `rebuilt` 取值：
 `nothing_selected`（该 scope 在清单里没有匹配记录，什么都没算、没写）、
-`skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）。
+`skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）、
+`not_rebuilt`（条件 scope 的库内输入缺失，fail-closed，表不动）。
 空库返回 `store_empty`，不算失败。
 
 `--db` 是「只算」与「重建」的分界：不给数据库时只计算并报告摘要，不打开也
@@ -153,6 +156,35 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 scope 状态是 `store_empty`、`rebuilt=nothing_selected`，不碰数据库；有记录但
 冻结表没有任何 A 股变更行时 fail-closed（`security_names_rebuild_failed`，
 reason 码 `empty_name_set`），不写库、上一版仍可读。
+
+### 4.2 `suspensions`：条件可重放
+
+`source_store replay --scope suspensions` 只选 `store_kind=http_fetch` 且
+`source_id=sse_suspension` 的冻结页（A-3），用与 `--scope exchange` 相同的清单 →
+索引重建再解析 facts。confirmed 行本身来自来源库，但整表装配还需要**该库**的
+`security_master`、已提交交易日历和每实体 bar_days——它们是行情数据，不是来源库
+字节，所以这个 scope 不是无条件可重放：
+
+- **无 `--db`**：只解析冻结页并报告 `facts` 计数（`rebuilt=computed_no_db`），
+  不装配、不打开也不创建数据库。
+- **有 `--db`**：从库读出三样输入，与日更 `derived:suspensions` 调用**同一个**
+  `assemble_suspensions`、**同一个** `commit_suspensions` 整表替换并登记
+  `derived_dataset_versions`；generation binding 直接沿用 `security_master` 的，
+  确保停牌 gap 与它所依据的 bars 属于同一代。
+- **fresh-init**：库还没有主表/日历 → fail-closed，状态与 reason 码都是
+  `suspension_replay_not_ready`，表不动；**不写空表冒充成功**。正确顺序是先重建
+  主表与日历（日更或对应写入路径），再显式运行本 scope；或直接跑日更
+  `derived:suspensions`。
+- **确定性**：`summary` 是已写行的 `suspensions-v1` 摘要；同一来源库 + 同一库状态
+  重放两次逐位相同。库状态前进会合法地改变结果：三样输入哈希成 `inputs_digest`
+  并写进登记证据，`--verify-only` 因此能报 `inputs_match=false` / `drift_cause=inputs_changed`
+  （不是 `source_store_corrupt`）；输入未变而行不同才报 `rows_changed`。
+- **不进入 `--scope all`**：all 在 fresh-init、服务启动前运行，那时三样输入必然
+  不存在；把条件 scope 放进 all 会让每次 fresh-init 都失败。`all` 只覆盖不依赖
+  M2 库内输入的 scope。
+
+`--scope suspensions` 的 `--db` 写入仍需服务停止（重放取数据库租约），与其它写库
+scope 相同。
 
 ## 5. 退役豁免
 
@@ -211,7 +243,11 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
 CI 覆盖写序故障注入（fsync/rename 各失败点无悬空清单行）、按 sha 读回不符 →
 `source_store_corrupt`、重复导入不增 blob/行、重放两次摘要相同、空库
 `store_empty`、含 manifest 不符条目的夹具进 `skipped_unverified`。
-`security_names` scope 另有 6 条端到端测试（`tests/source_store/security_names.rs`）：
+`suspensions` scope 另有端到端/单元测试：冻结页 → facts 计数、`--db` 装配与日更
+写入逐位一致、`--verify-only` `match`/`drift`（含 `inputs_changed`）、缺日历 →
+`suspension_replay_not_ready`、未知 `parser_version` fail-closed、空库 →
+`store_empty`/`nothing_selected`。`security_names` scope 另有 6 条端到端测试
+（`tests/source_store/security_names.rs`）：
 清库后重放得到逐位相同的摘要与登记证据（`evidence_digest` 相同）、
 `--verify-only` 为 `match`、篡改 blob → `source_store_corrupt`、未知
 `parser_version` → fail-closed、空库/无 `szse_short_name` 记录 →
