@@ -489,6 +489,26 @@ fn rig_full(
             )
         })
         .collect();
+    rig_from_members(members, day_members, include_derived, delisting)
+}
+
+/// The `.day` bytes of one generation, counted header + records.
+fn day_member_bytes(records: &[[u8; 32]]) -> Vec<u8> {
+    let mut bytes = (records.len() as u32).to_le_bytes().to_vec();
+    for record in records {
+        bytes.extend_from_slice(record);
+    }
+    bytes
+}
+
+/// `rig_full` with the entity `.day` members supplied by the caller, so a test
+/// can make generation N+1 contain generation N's bars byte-for-byte.
+fn rig_from_members(
+    members: &[(&str, &str, u32)],
+    day_members: Vec<(String, Vec<u8>)>,
+    include_derived: bool,
+    delisting: Option<(&str, u32)>,
+) -> Rig {
     let refs: Vec<(&str, &[u8])> = day_members
         .iter()
         .map(|(n, b)| (n.as_str(), b.as_slice()))
@@ -1064,11 +1084,33 @@ fn strict_without_a_source_store_fails_the_four_items_and_keeps_the_master() {
     let epoch = |d: chrono::NaiveDate| {
         (d - chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days()
     };
+    // The rig's index members carry a three-day window (`date(3)..date(1)`);
+    // the entity members stay inside it, so the `derived:calendar` item of
+    // both generations sees every stored bar inside the calendar (a 27th bar
+    // from a three-day-first-generation would sit outside and fail for a
+    // fixture reason, not a policy reason).
+    let d3 = day_record(ymd(date(3)), [1128, 1130, 1125, 1129], 0.0, 100);
+    let d2 = day_record(ymd(date(2)), [1129, 1132, 1128, 1131], 0.0, 110);
+    let d1 = day_record(ymd(date(1)), [1131, 1135, 1130, 1134], 0.0, 120);
+    let member = |records: &[[u8; 32]]| day_member_bytes(records);
     // Run 1 (default `Optional`): a normal daily run commits the main table.
-    let r = rig(&[
-        ("sh", "600006", ymd(date(2))),
-        ("sz", "000002", ymd(date(2))),
-    ]);
+    let gen1 = vec![
+        ("sh".to_string(), "600006".to_string(), member(&[d3, d2])),
+        ("sz".to_string(), "000002".to_string(), member(&[d3, d2])),
+    ];
+    let day_members = gen1
+        .iter()
+        .map(|(ex, code, bytes)| (format!("{ex}\\lday\\{ex}{code}.day"), bytes.clone()))
+        .collect();
+    let r = rig_from_members(
+        &[
+            ("sh", "600006", ymd(date(2))),
+            ("sz", "000002", ymd(date(2))),
+        ],
+        day_members,
+        true,
+        None,
+    );
     let p1 = plan(&r.api, "market.daily");
     assert_eq!(p1["counts"]["eligible"], 2, "{p1}");
     run(&r.api, "market.daily", "run-optional", &p1);
@@ -1110,10 +1152,10 @@ fn strict_without_a_source_store_fails_the_four_items_and_keeps_the_master() {
     ];
     let day_members: Vec<(String, Vec<u8>)> = members
         .iter()
-        .map(|(ex, code, last)| {
+        .map(|(ex, code, _)| {
             (
                 format!("{ex}\\lday\\{ex}{code}.day"),
-                fixture_day_member(code, *last),
+                day_member_bytes(&[d3, d2, d1]),
             )
         })
         .collect();
