@@ -492,13 +492,10 @@ fn rig_full(
     rig_from_members(members, day_members, include_derived, delisting)
 }
 
-/// The `.day` bytes of one generation, counted header + records.
+/// The `.day` bytes of one generation: records only, like `day_member` (the
+/// member format carries no count header).
 fn day_member_bytes(records: &[[u8; 32]]) -> Vec<u8> {
-    let mut bytes = (records.len() as u32).to_le_bytes().to_vec();
-    for record in records {
-        bytes.extend_from_slice(record);
-    }
-    bytes
+    records.concat()
 }
 
 /// `rig_full` with the entity `.day` members supplied by the caller, so a test
