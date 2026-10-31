@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::{fs::PermissionsExt, net::UnixStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -11,6 +11,7 @@ use std::{
 use x_data_mcp::{
     local_runtime::{DatabaseLease, Endpoint, WorkerGate},
     mcp::ToolHandler,
+    source_store::{ALLOW_UNCONFIGURED_ENV, CONFIG_ENV, OVERRIDE_NOTICE, UNCONFIGURED_CODE},
     sqlite_tasks::SqliteTasks,
     task_control::{
         Change, Contract, RequestOutcome, Status, TaskRepository, legacy::LegacyCollection,
@@ -581,6 +582,68 @@ fn startup_sweep_and_task_sqlite_check_reject_corrupt_history() {
     assert!(!socket.exists());
 }
 
+/// Starts one compact service entry with a child-only source-store
+/// environment, waits until it serves, stops it, and returns its stderr.
+fn startup_stderr(
+    db: &Path,
+    socket: &Path,
+    entry: &str,
+    config: Option<&Path>,
+    allow: bool,
+) -> String {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_data_service"));
+    command
+        .arg(db)
+        .arg(socket)
+        .args(["--entry", entry, "--poll-ms", "60000"])
+        .env_remove(CONFIG_ENV)
+        .env_remove(ALLOW_UNCONFIGURED_ENV)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    if let Some(root) = config {
+        command.env(CONFIG_ENV, root);
+    }
+    if allow {
+        command.env(ALLOW_UNCONFIGURED_ENV, "1");
+    }
+    let mut child = command.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "service exited before readiness"
+        );
+        if x_data_mcp::local_runtime::connect(socket).is_ok() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "service readiness deadline");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // SAFETY: this test owns the child PID and only sends SIGTERM to it.
+    assert_eq!(
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) },
+        0
+    );
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "service stop deadline");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    stderr
+}
+
 fn compact_database(dir: &Path) -> PathBuf {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
     let path = dir.join("compact.sqlite");
@@ -604,6 +667,45 @@ fn task_check(db: &Path) -> std::process::Output {
         .output()
         .unwrap()
 }
+/// Silent path 3a (#446): the ops entry on a compact database keeps serving
+/// without a source store, but its startup leaves the stable code in stderr.
+#[test]
+fn ops_startup_warns_with_the_stable_code_without_a_source_store() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = compact_database(dir.path());
+    let socket = dir.path().join("mcp.sock");
+    let stderr = startup_stderr(&db, &socket, "ops", None, false);
+    assert!(stderr.contains(UNCONFIGURED_CODE), "{stderr}");
+    assert!(stderr.contains(CONFIG_ENV), "{stderr}");
+    assert!(!stderr.contains(OVERRIDE_NOTICE), "{stderr}");
+}
+
+/// A configured empty store is legal: the path is logged and no warning is.
+#[test]
+fn ops_startup_logs_the_configured_source_store_without_the_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = compact_database(dir.path());
+    let socket = dir.path().join("mcp.sock");
+    let store = dir.path().join("source-store");
+    fs::create_dir(&store).unwrap();
+    let stderr = startup_stderr(&db, &socket, "ops", Some(&store), false);
+    let store_path = store.display().to_string();
+    assert!(stderr.contains(store_path.as_str()), "{stderr}");
+    assert!(!stderr.contains(UNCONFIGURED_CODE), "{stderr}");
+    assert!(!stderr.contains(OVERRIDE_NOTICE), "{stderr}");
+}
+
+/// The explicit dev exemption wins over strict: notice instead of the warning.
+#[test]
+fn ops_startup_prints_the_dev_override_instead_of_the_warning() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = compact_database(dir.path());
+    let socket = dir.path().join("mcp.sock");
+    let stderr = startup_stderr(&db, &socket, "ops", None, true);
+    assert!(stderr.contains(OVERRIDE_NOTICE), "{stderr}");
+    assert!(!stderr.contains(UNCONFIGURED_CODE), "{stderr}");
+}
+
 /// XP-025 A on the production schema (compact v20): healthy database starts
 /// and `task_sqlite check` runs read-only while the service holds the lease.
 #[test]
