@@ -147,14 +147,13 @@ pub struct RunContext<'a, 's> {
 /// terminal status ahead of them. Items already finished (a resumed run) are
 /// skipped; a terminal or cancelled task stops the loop.
 pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
+    // The remaining run-wide facts travel to `execute` through `ctx`.
     let RunContext {
         market,
         session,
-        generation_id,
-        generation_manifest_sha256,
         task_id,
         run_id,
-        policy,
+        ..
     } = *ctx;
     // `security_facts` reads and parses `base.dbf`; the main table and the
     // suspension binding both need the same member facts, so one worker turn
