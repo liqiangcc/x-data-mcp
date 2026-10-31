@@ -176,6 +176,9 @@ impl Fixture {
             .unwrap();
         let path = dir.path().join("market.db");
         SqliteTasks::new(&path).initialize_compact().unwrap();
+        // `MarketBackend::open` acquires the runtime lease, which only accepts
+        // a private (0600) database file.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let c = Connection::open(&path).unwrap();
         c.pragma_update(None, "foreign_keys", true).unwrap();
 
@@ -453,7 +456,7 @@ fn replay_rebuilds_the_daily_suspension_rows_bit_for_bit() {
 
     let report = report_for(&fixture, false);
     let scope = &report.scopes[0];
-    assert_eq!(scope.status, "ok");
+    assert_eq!(scope.status, "ok", "{report:?}");
     assert_eq!(scope.rebuilt, REBUILT_SUSPENSIONS);
     assert_eq!(scope.database, Some("match"));
     assert_eq!(scope.facts, Some(3));
@@ -473,7 +476,7 @@ fn verify_only_matches_then_reports_an_input_change() {
 
     let report = report_for(&fixture, true);
     let scope = &report.scopes[0];
-    assert_eq!(scope.status, "ok");
+    assert_eq!(scope.status, "ok", "{report:?}");
     assert_eq!(scope.database, Some("match"));
     assert_eq!(scope.inputs_match, Some(true));
     assert!(scope.drift.is_empty());
@@ -513,7 +516,7 @@ fn a_database_without_a_calendar_is_suspension_replay_not_ready() {
 
     let report = report_for(&fixture, false);
     let scope = &report.scopes[0];
-    assert_eq!(scope.status, SUSPENSION_REPLAY_NOT_READY);
+    assert_eq!(scope.status, SUSPENSION_REPLAY_NOT_READY, "{report:?}");
     assert_eq!(report.status, SUSPENSION_REPLAY_NOT_READY);
     assert!(
         suspensions::read_suspensions(&fixture.c)
@@ -540,7 +543,7 @@ fn a_database_without_a_master_is_suspension_replay_not_ready() {
 
     let report = report_for(&fixture, false);
     let scope = &report.scopes[0];
-    assert_eq!(scope.status, SUSPENSION_REPLAY_NOT_READY);
+    assert_eq!(scope.status, SUSPENSION_REPLAY_NOT_READY, "{report:?}");
     assert!(
         suspensions::read_suspensions(&fixture.c)
             .unwrap()
