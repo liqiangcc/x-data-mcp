@@ -435,8 +435,21 @@ fn execute(
             "day_count": registration.record_count,
             "coverage": {
                 "total_bars": coverage.total_bars,
+                "total_bars_scope": "inside [first_day,last_day]",
                 "outside_bars": coverage.outside_bars,
                 "ratio": coverage.ratio_text(),
+                // #446 tail: bars after the calendar's last day are unknown
+                // (§3.8), reported here so a lagging index input is visible
+                // on the item's own evidence instead of surfacing as an
+                // out-of-calendar ratio that fails the run.
+                "stale_bars": coverage.stale_bars,
+                "stale_days": coverage
+                    .stale_days
+                    .iter()
+                    .map(|(day, bars)| json!({"day": day.to_string(), "bars": bars}))
+                    .collect::<Vec<_>>(),
+                "stock_last_day": coverage.stock_last_day.map(|day| day.to_string()),
+                "calendar_last_day": coverage.calendar_last_day.map(|day| day.to_string()),
             },
         }));
     }

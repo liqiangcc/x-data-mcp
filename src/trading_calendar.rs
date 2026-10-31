@@ -20,6 +20,15 @@
 //! - a date after the last input bar is **unknown** (the calendar does not
 //!   predict future trading days, §3.8), so it is neither of the above.
 //!
+//! The coverage self-check keeps that three-valued answer
+//! ([`TradingCalendar::day_status`]): a bar on a `NonTrading` day is a real
+//! contradiction (the union missed a trading day) and is counted in the ratio
+//! the 0.01% limit gates; a bar on a `BeyondCalendar` day is **not** gated — it
+//! only says the stock inputs are fresher than the index inputs, so it is
+//! reported as a *stale* tail ([`CalendarCoverage::stale_bars`]) next to the
+//! calendar's `last_day`. The ratio's denominator is therefore the bars inside
+//! the covered span, never the whole stored history.
+//!
 //! The calendar cannot prove completeness either: there is no official
 //! calendar file, so "an index had a bar" is the only evidence a date is a
 //! trading day, and the derivation stays marked as derived data with its input
@@ -349,18 +358,29 @@ fn decode_sha256(text: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
-/// The coverage self-check of §5.2: how many 不复权 bars fall outside the
-/// calendar, and which ones.
+/// The coverage self-check of §5.2: how many 不复权 bars contradict the
+/// calendar, which ones, and how far the stock data runs past its last day.
 ///
 /// The check exists because the calendar cannot prove completeness (no
-/// official calendar file): a bar outside it means the union missed a real
-/// trading day. Over the limit the item fails instead of quietly publishing a
-/// calendar that contradicts the price data.
+/// official calendar file): a bar inside the covered span on a day without a
+/// row means the union missed a real trading day. Over the limit the item fails
+/// instead of quietly publishing a calendar that contradicts the price data.
+///
+/// Bars **after** `last_day` are a different fact, not a contradiction: the
+/// calendar declares those days unknown (§3.8), so a stock bar there only says
+/// the stock inputs are fresher than the index inputs. They are reported as
+/// [`Self::stale_bars`] and never enter [`Self::within_limit`]: gating them
+/// would make any one-day lag exceed 0.01% of a full-market bar count, and
+/// would turn "the index snapshot is old" into "the calendar is wrong".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalendarCoverage {
-    /// Bars checked (every stored 不复权 security bar).
+    /// Bars checked by the gate: every stored 不复权 security bar whose
+    /// `trade_day` is at or before the calendar's `last_day` (**inside the
+    /// covered span**). Bars after `last_day` are excluded from this
+    /// denominator and counted in [`Self::stale_bars`] instead.
     pub total_bars: i64,
-    /// Bars whose `trade_day` has no calendar row.
+    /// Bars inside the span whose `trade_day` has no calendar row
+    /// ([`DayStatus::NonTrading`]).
     pub outside_bars: i64,
     /// The 清单: out-of-calendar days with their bar counts, ascending.
     pub outside_days: Vec<(NaiveDate, i64)>,
@@ -370,6 +390,22 @@ pub struct CalendarCoverage {
     /// 清单 is never mistaken for a complete one.
     pub days_truncated: bool,
     pub samples_truncated: bool,
+    /// Bars after the calendar's `last_day` ([`DayStatus::BeyondCalendar`]):
+    /// unknown days, reported but **not** gated.
+    pub stale_bars: i64,
+    /// The tail 清单: days after `last_day` with their bar counts, ascending.
+    pub stale_days: Vec<(NaiveDate, i64)>,
+    /// Per-bar detail (`entity`, day) for the first stale bars, ascending.
+    pub stale_samples: Vec<(String, NaiveDate)>,
+    /// Set when the tail day list / bar detail hit their bounds.
+    pub stale_days_truncated: bool,
+    pub stale_samples_truncated: bool,
+    /// The last day any checked 不复权 bar carries (stock data freshness), and
+    /// the calendar's own `last_day` (index-input freshness). Together with
+    /// [`Self::stale_bars`] they say whether a tail exists and which side is
+    /// behind.
+    pub stock_last_day: Option<NaiveDate>,
+    pub calendar_last_day: Option<NaiveDate>,
     /// The calendar this measurement was taken against; the commit re-checks
     /// it so a coverage figure can never be paired with another calendar.
     pub calendar_digest: String,
@@ -377,7 +413,8 @@ pub struct CalendarCoverage {
 
 impl CalendarCoverage {
     /// `outside / total` as the exact fraction and its decimal form, for the
-    /// evidence and for error messages.
+    /// evidence and for error messages. `total` is the in-span bar count (see
+    /// [`Self::total_bars`]), never the stale tail.
     pub fn ratio_text(&self) -> String {
         if self.total_bars == 0 {
             return "no bars checked".into();
@@ -391,11 +428,14 @@ impl CalendarCoverage {
     }
 
     /// §5.2: at most `COVERAGE_LIMIT_NUMERATOR / COVERAGE_LIMIT_DENOMINATOR`
-    /// (0.01%) of the bars may fall outside the calendar.
+    /// (0.01%) of the **in-span** bars may contradict the calendar. A stale
+    /// tail (`stale_bars`) is unknown data, not a contradiction, and does not
+    /// enter this comparison.
     ///
-    /// A run that checked no bar is **not** within the limit: it proved
-    /// nothing, and accepting it would let an empty run register a calendar
-    /// the data never confirmed.
+    /// A run that checked no in-span bar is **not** within the limit: it proved
+    /// nothing, and accepting it would let an empty run (or a calendar that
+    /// ends before every stored bar) register a calendar the data never
+    /// confirmed.
     pub fn within_limit(&self) -> bool {
         self.total_bars > 0
             && self.outside_bars >= 0
@@ -404,29 +444,51 @@ impl CalendarCoverage {
     }
 
     /// The gate the calendar item runs through.
+    ///
+    /// A failure names both groups: the in-span bars that contradict the
+    /// calendar (the gated ones) and the stale tail that does not, together
+    /// with the two `last_day` values — otherwise a 99.6% tail cause can hide
+    /// behind the first eight early out-of-calendar days.
     pub fn require_within_limit(&self) -> Result<(), String> {
         if self.total_bars == 0 {
-            return Err(
-                "the coverage self-check found no 不复权 bar to check; a calendar \
-                 nobody confirmed is not published"
-                    .into(),
-            );
+            return Err(format!(
+                "the coverage self-check found no 不复权 bar inside the calendar's span to \
+                 check ({} bar(s) lie after the calendar's last day {}: unknown, not gated); \
+                 a calendar nobody confirmed is not published",
+                self.stale_bars,
+                day_text(self.calendar_last_day),
+            ));
         }
         if !self.within_limit() {
             return Err(format!(
                 "{} 不复权 bars fall outside the calendar ({}), over the 0.01% limit; \
-                 first days outside: {:?}",
+                 first days outside: {:?}; {} bar(s) after the calendar's last day {} are \
+                 unknown and not gated (stock data ends {}); first stale days: {:?}",
                 self.outside_bars,
                 self.ratio_text(),
                 self.outside_days
                     .iter()
                     .take(8)
                     .map(|(day, bars)| format!("{day} ({bars} bars)"))
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>(),
+                self.stale_bars,
+                day_text(self.calendar_last_day),
+                day_text(self.stock_last_day),
+                self.stale_days
+                    .iter()
+                    .take(8)
+                    .map(|(day, bars)| format!("{day} ({bars} bars)"))
+                    .collect::<Vec<_>>(),
             ));
         }
         Ok(())
     }
+}
+
+/// A day for an error message, `none` when the measurement saw no day at all
+/// (no bars, or no calendar).
+fn day_text(day: Option<NaiveDate>) -> String {
+    day.map_or_else(|| "none".into(), |day| day.to_string())
 }
 
 #[cfg(test)]

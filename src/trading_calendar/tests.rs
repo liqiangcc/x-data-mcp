@@ -46,6 +46,13 @@ fn coverage(total: i64, outside: i64) -> CalendarCoverage {
         outside_samples: Vec::new(),
         days_truncated: false,
         samples_truncated: false,
+        stale_bars: 0,
+        stale_days: Vec::new(),
+        stale_samples: Vec::new(),
+        stale_days_truncated: false,
+        stale_samples_truncated: false,
+        stock_last_day: None,
+        calendar_last_day: None,
         calendar_digest: "0".repeat(64),
     }
 }

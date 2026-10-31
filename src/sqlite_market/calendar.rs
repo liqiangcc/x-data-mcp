@@ -14,6 +14,14 @@
 //! rows, delete+insert, no incremental patch), so a date that disappears from
 //! the inputs disappears from the calendar in the same commit. Identity and
 //! audit live in the registration row, not in the rows themselves (§3.10).
+//!
+//! Two consequences of "the calendar ends at its last input bar" are enforced
+//! here (#446): the coverage self-check gates only bars **inside**
+//! `[first_day,last_day]` ([`measure_coverage`]) and reports the bars after
+//! `last_day` as a stale tail instead of counting them outside; and a
+//! derivation whose `last_day` is earlier than the stored calendar's is refused
+//! with [`CALENDAR_REGRESSED`] instead of replacing the rows, because that
+//! write would turn committed bars into "unknown" for every consumer.
 
 use chrono::NaiveDate;
 use rusqlite::{Connection, params};
@@ -25,12 +33,23 @@ use crate::compact_market::{self, EvidenceKind};
 use crate::market_data::CalendarBatch;
 use crate::market_storage::Error;
 use crate::trading_calendar::{
-    self, COVERAGE_BAR_LIMIT, COVERAGE_DAY_LIMIT, CalendarCoverage, TradingCalendar, TradingDay,
+    self, COVERAGE_BAR_LIMIT, COVERAGE_DAY_LIMIT, CalendarCoverage, DayStatus, TradingCalendar,
+    TradingDay,
 };
 
 fn invalid(message: impl std::fmt::Display) -> Error {
     Error::Invalid(message.to_string())
 }
+
+/// Stable error code of the no-regression guard (#446). A calendar whose
+/// `last_day` moves backwards would turn already committed stock bars into
+/// "unknown" for every consumer (suspensions, tradability, price limits), so
+/// the write is refused instead of replacing the table. The code is the first
+/// token of the integrity message (right after the `MARKET_INTEGRITY:` prefix)
+/// — the same shape the source adapters use for `source_store_unconfigured` —
+/// so `task_items.outcome_json.error` can be aggregated by code without parsing
+/// prose. There is no `force` override.
+pub(crate) const CALENDAR_REGRESSED: &str = "calendar_regressed";
 
 /// Why the calendar may not be used as a trading predicate (§5.2). Stored in
 /// the evidence so the limitation travels with the data, not with a document.
@@ -81,8 +100,26 @@ pub(crate) fn read_calendar(c: &Connection) -> Result<Option<TradingCalendar>, E
 /// adjustment=0` bar, which is exactly "every A-share 不复权 bar" while no
 /// other class-0 instrument exists. SQLite does the grouping and returns one
 /// row per distinct date (~8.8k), so the caller never holds 16.7M bars; the
-/// per-bar detail is only fetched for the (few) dates outside the calendar and
-/// is bounded by [`COVERAGE_DAY_LIMIT`] / [`COVERAGE_BAR_LIMIT`].
+/// per-bar detail is only fetched for the (few) days outside the calendar or
+/// after it, and is bounded by [`COVERAGE_DAY_LIMIT`] / [`COVERAGE_BAR_LIMIT`].
+///
+/// The split is [`TradingCalendar::day_status`], not `contains` (#446):
+///
+/// - `InCalendar` — the union proves the day; nothing to report;
+/// - `NonTrading` — inside the covered span and absent: the union missed a
+///   real trading day. Counted in `total_bars`/`outside_bars` and gated at
+///   0.01% (§5.2, AC-M1-4);
+/// - `BeyondCalendar` — after `last_day`: unknown by §3.8, because the
+///   calendar does not predict. A stock bar there only says the stock inputs
+///   are fresher than the index inputs, so it is reported as the stale tail
+///   (`stale_bars`, `stale_days`, `stale_samples`) and never enters the gate.
+///   Counting it as "outside" made a one-day index lag (~5.2k bars = 0.029%)
+///   fail a threshold whose whole budget is ~1.8k bars (`calendar-suspensions-
+///   attribution.md` §A).
+///
+/// `total_bars` is therefore the denominator of the ratio: **bars inside
+/// [first_day, last_day]**, i.e. `InCalendar + NonTrading`. The tail has its
+/// own count, so the ratio can never be diluted by unknown days.
 ///
 /// It runs on a read connection, before the calendar transaction: a full scan
 /// inside the write transaction would hold the write lock for the duration of
@@ -112,26 +149,52 @@ pub(crate) fn measure_coverage(
         .map_err(storage)?;
     let mut total_bars = 0i64;
     let mut outside_bars = 0i64;
+    let mut stale_bars = 0i64;
+    let mut stock_last_day: Option<NaiveDate> = None;
     let mut outside_days: Vec<(NaiveDate, i64)> = Vec::new();
+    let mut stale_days: Vec<(NaiveDate, i64)> = Vec::new();
     let mut days_truncated = false;
+    let mut stale_days_truncated = false;
     for row in rows {
         let (trade_day, bars) = row.map_err(storage)?;
-        total_bars += bars;
         let day = compact_market::epoch_date(trade_day).map_err(integrity)?;
-        if calendar.contains(day) {
-            continue;
-        }
-        outside_bars += bars;
-        if outside_days.len() < COVERAGE_DAY_LIMIT {
-            outside_days.push((day, bars));
-        } else {
-            days_truncated = true;
+        stock_last_day = Some(stock_last_day.map_or(day, |last| last.max(day)));
+        match calendar.day_status(day) {
+            Some(DayStatus::InCalendar) => total_bars += bars,
+            Some(DayStatus::NonTrading) => {
+                total_bars += bars;
+                outside_bars += bars;
+                if outside_days.len() < COVERAGE_DAY_LIMIT {
+                    outside_days.push((day, bars));
+                } else {
+                    days_truncated = true;
+                }
+            }
+            Some(DayStatus::BeyondCalendar) => {
+                stale_bars += bars;
+                if stale_days.len() < COVERAGE_DAY_LIMIT {
+                    stale_days.push((day, bars));
+                } else {
+                    stale_days_truncated = true;
+                }
+            }
+            None => {
+                return Err(integrity(
+                    "the coverage check needs a calendar with at least one day",
+                ));
+            }
         }
     }
     let (outside_samples, samples_truncated) = if outside_days.is_empty() || days_truncated {
         (Vec::new(), false)
     } else {
-        outside_bar_samples(c, &outside_days)?
+        bar_samples_on(c, &outside_days)?
+    };
+    let (stale_samples, stale_samples_truncated) = if stale_days.is_empty() || stale_days_truncated
+    {
+        (Vec::new(), false)
+    } else {
+        bar_samples_on(c, &stale_days)?
     };
     Ok(CalendarCoverage {
         total_bars,
@@ -140,17 +203,24 @@ pub(crate) fn measure_coverage(
         outside_samples,
         days_truncated,
         samples_truncated,
+        stale_bars,
+        stale_days,
+        stale_samples,
+        stale_days_truncated,
+        stale_samples_truncated,
+        stock_last_day,
+        calendar_last_day: calendar.last_day(),
         calendar_digest: calendar.digest_hex(),
     })
 }
 
-/// The per-bar detail of the 清单: which entity's bar fell on an out-of-calendar
-/// day, ascending by day then entity, bounded by [`COVERAGE_BAR_LIMIT`].
-fn outside_bar_samples(
+/// The per-bar detail of a day 清单: which entity's bar fell on one of `days`,
+/// ascending by day then entity, bounded by [`COVERAGE_BAR_LIMIT`].
+fn bar_samples_on(
     c: &Connection,
-    outside_days: &[(NaiveDate, i64)],
+    days: &[(NaiveDate, i64)],
 ) -> Result<(Vec<(String, NaiveDate)>, bool), Error> {
-    let placeholders = (1..=outside_days.len())
+    let placeholders = (1..=days.len())
         .map(|index| format!("?{}", index + 3))
         .collect::<Vec<_>>()
         .join(",");
@@ -168,7 +238,7 @@ fn outside_bar_samples(
         crate::market_data::Adjustment::Raw.code(),
         super::compact_repo::period_code(crate::market_data::Period::Day),
     ];
-    for (day, _) in outside_days {
+    for (day, _) in days {
         values.push(compact_market::epoch_day(*day));
     }
     let rows = statement
@@ -208,8 +278,11 @@ pub(crate) struct CalendarWrite<'a> {
 /// transaction.
 ///
 /// Gates, in order: the batch must form a valid union (§5.2 inputs); the
-/// coverage must be measured against **this** calendar and be within the
-/// 0.01% limit (AC-M1-4); then the rows, the `derived` evidence bundle and the
+/// derived span must not move backwards against the stored calendar
+/// ([`CALENDAR_REGRESSED`], reported before anything else because it is the
+/// root cause a tail failure would otherwise hide); the coverage must be
+/// measured against **this** calendar and be within the 0.01% limit
+/// (AC-M1-4); then the rows, the `derived` evidence bundle and the
 /// `derived_dataset_versions('trading_calendar','exchange_union')` row are
 /// written together, so a stored calendar never disagrees with the version it
 /// claims.
@@ -218,6 +291,31 @@ pub(crate) fn commit_calendar(
     w: &CalendarWrite<'_>,
 ) -> Result<DerivedVersionRow, Error> {
     let calendar = TradingCalendar::union(w.batch).map_err(invalid)?;
+    let first_day = calendar
+        .first_day()
+        .ok_or_else(|| integrity("calendar union produced no day"))?;
+    let last_day = calendar
+        .last_day()
+        .ok_or_else(|| integrity("calendar union produced no day"))?;
+    // No-regression guard (#446): the stored calendar is what consumers read,
+    // and §3.8 says days after its `last_day` are unknown. Letting a derivation
+    // whose index inputs are older replace it silently downgrades every bar
+    // already committed past that day, so refuse the whole write. An empty
+    // database has nothing to protect and commits as before; equal `last_day`
+    // is a normal re-derivation, not a regression.
+    let stored = read_calendar(c)?;
+    let stored_last = stored.as_ref().and_then(TradingCalendar::last_day);
+    if let Some(stored_last) = stored_last
+        && last_day < stored_last
+    {
+        let stored_days = stored.as_ref().map_or(0, TradingCalendar::len);
+        return Err(Error::Integrity(format!(
+            "{CALENDAR_REGRESSED}: the derived calendar ends at {last_day}, before the stored \
+             calendar's last day {stored_last} ({stored_days} stored days); the stored calendar \
+             is kept — the index inputs are older than the committed calendar, so refreshing \
+             them is the fix (there is no force override)"
+        )));
+    }
     w.coverage.require_within_limit().map_err(invalid)?;
     let digest_hex = calendar.digest_hex();
     if w.coverage.calendar_digest != digest_hex {
@@ -225,12 +323,6 @@ pub(crate) fn commit_calendar(
             "coverage was measured against a different calendar than the one committed",
         ));
     }
-    let first_day = calendar
-        .first_day()
-        .ok_or_else(|| integrity("calendar union produced no day"))?;
-    let last_day = calendar
-        .last_day()
-        .ok_or_else(|| integrity("calendar union produced no day"))?;
     let member_digest = calendar.source_member_digest_hex().map_err(invalid)?;
     let binding = series_commit::put_generation_binding(
         c,
@@ -329,11 +421,16 @@ fn calendar_evidence(
             .collect::<Vec<_>>(),
         "semantics": ONE_WAY_SEMANTICS,
         "beyond_last_day": "unknown: the calendar ends at the last input bar and \
-             does not predict future trading days",
+             does not predict future trading days; stock bars there are reported as \
+             coverage.stale_bars and are not counted in the coverage ratio",
         "coverage": {
             "basis": "every stored 不复权 security bar (instrument_class=0, \
-                 adjustment=0), which AC-M1-1 pins to the .day member verbatim",
+                 adjustment=0), which AC-M1-1 pins to the .day member verbatim; \
+                 total_bars counts only the bars inside [first_day,last_day] (the \
+                 ratio's denominator), while bars after last_day are the unknown \
+                 tail counted in stale_bars",
             "total_bars": coverage.total_bars,
+            "total_bars_scope": "inside [first_day,last_day] (InCalendar + NonTrading)",
             "outside_bars": coverage.outside_bars,
             "ratio": coverage.ratio_text(),
             "limit": "1/10000 (0.01%)",
@@ -349,6 +446,23 @@ fn calendar_evidence(
                 .collect::<Vec<_>>(),
             "days_truncated": coverage.days_truncated,
             "samples_truncated": coverage.samples_truncated,
+            // The tail (#446): bars after last_day are unknown (§3.8), so they
+            // are visible here and never in the ratio above.
+            "stale_bars": coverage.stale_bars,
+            "stale_days": coverage
+                .stale_days
+                .iter()
+                .map(|(day, bars)| json!({"day": day.to_string(), "bars": bars}))
+                .collect::<Vec<_>>(),
+            "stale_bars_detail": coverage
+                .stale_samples
+                .iter()
+                .map(|(entity, day)| json!({"entity": entity, "day": day.to_string()}))
+                .collect::<Vec<_>>(),
+            "stale_days_truncated": coverage.stale_days_truncated,
+            "stale_samples_truncated": coverage.stale_samples_truncated,
+            "stock_last_day": coverage.stock_last_day.map(|day| day.to_string()),
+            "calendar_last_day": coverage.calendar_last_day.map(|day| day.to_string()),
         },
         "limitations": [
             COMPLETENESS_LIMIT,
