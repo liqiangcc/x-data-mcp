@@ -1,0 +1,25 @@
+{
+  "status": "PASS",
+  "version": "x-data-mcp 0.2.0-preview.39 8173991d6780032c43038bc1922bf6a042a4b904 NOT_PRODUCTION_READY",
+  "binary_sha256": "7b2b0cdad9585e7758984b5307f29f5d63327021dcc1d0708a5a82512400813d",
+  "checks": [
+    "explicit_fixture_init_and_no_clobber",
+    "initialize_discovery_24_tools_generic_data_v8",
+    "catalog_null_and_yearly_confirmed_qfq_fixed_paging",
+    "fixed_compute_deterministic_fixture_vector",
+    "request_task_retry_cancel_and_source_gate",
+    "yearly_update_frozen_input_and_blocked_worker_preserves_fixture",
+    "publication_inspection_discovery_and_never_started_refusal_without_binding",
+    "stopping_inspection_proves_never_started_without_source_execution",
+    "bounded_inspection_historical_request_without_recursive_task_or_rewrite",
+    "persistent_service_proxy_discovery_and_reconnect",
+    "same_proxy_idle_over_30_seconds_then_calls_again",
+    "acquire_service_socket_discovery_and_capabilities",
+    "export_research_synthetic_snapshot_manifest_and_file_sha256",
+    "package_manifest_records_export_feature_and_binary_bytes"
+  ],
+  "export_readers": "NOT_RUN (pyarrow/duckdb are installed only in the export CI job; scripts/export_smoke.py --snapshot-dir covers the read-back there)",
+  "live_source": "NOT_RUN",
+  "production": "NOT_PRODUCTION_READY",
+  "data": "SYNTHETIC_FIXTURE_ONLY"
+}
