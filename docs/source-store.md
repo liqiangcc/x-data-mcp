@@ -85,9 +85,11 @@ PR-1a 在 maint socket 工具与等价 CLI 之间选择了 **CLI**
 - 不改变三个静态 allowlist、capability revision 与文档里的工具数事实。
 
 ```text
-source_store replay --store <dir> [--scope industry|exchange|generation_facts|all] \
+source_store replay --store <dir> \
+  [--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
   [--db <market.sqlite>] [--verify-only]
-source_store verify --store <dir> [--scope industry|exchange|generation_facts|all] \
+source_store verify --store <dir> \
+  [--scope industry|exchange|generation_facts|risk_warnings|security_names|all] \
   [--db <market.sqlite>]
 source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
   [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
@@ -102,8 +104,12 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 排序后的规范化摘要。scope 的写入器到位情况：`exchange` 自 PR-2 起可从清单
 重建 `exchange_source_snapshots`（见 [交易所来源入口](exchange-source.md) §4），
 `industry` 自 PR-6 起可重建 `industry_snapshots`/`industry_assignments`，
-`generation_facts` 自 PR-8 起重建设备退役门禁索引（行业成员 + 已绑定的派生事实）。
+`generation_facts` 自 PR-8 起重建设备退役门禁索引（行业成员 + 已绑定的派生事实），
+`risk_warnings` 自 PR-10 起可重建 `risk_warning_intervals`，`security_names`
+自 PR-12 起可重建 `security_name_history` 与它的 `derived_dataset_versions`
+登记（整表替换，走日更 item 的同一写入器）。
 `rebuilt` 取值：
+`nothing_selected`（该 scope 在清单里没有匹配记录，什么都没算、没写）、
 `skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）。
 空库返回 `store_empty`，不算失败。
 
@@ -112,7 +118,9 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 重算摘要比较，`match` 才算成功，否则输出 `drift` 与前 20 条差异主键。
 `--verify-only` 只重算并比较、不写。重放在服务启动前执行，因此直接取数据库
 租约，不和在线写入竞争。`generation_facts` 的报告多一个 `facts` 计数（重放
-后索引的总行数）；摘要不含登记时间，清空表后重放应得到同一 `summary`。
+后索引的总行数），`security_names` 多一个 `as_of`（沪/北 `NOT_AVAILABLE` 窗口的
+结束日 = 冻结表最后一个变更日，由字节算出）；摘要不含登记时间，清空表后重放应
+得到同一 `summary`。
 
 `industry` 的时间线只由清单里**带发布方 `last_modified` 的登记**构成观测（见
 [行业快照设计](tasks/issue-446-m3-delisted-industry.md) §5.6.1）：相邻且内容相同的
@@ -120,6 +128,31 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 `last_modified` 的登记只是同一份字节的副本，不占时间线位置，只有整份内容都没有
 发布方时间时才取最早获取时间作为唯一一次回退边界。同一内容的多条登记合并成一个
 `industry_snapshots` 行（§5.3），时间与等级取该内容全部登记的最优值。
+
+### 4.1 `security_names`：可重放的 as-of
+
+`security_names` 只选 `store_kind=http_fetch` 且 `source_id=szse_short_name` 的
+登记，并且只重放**最近一次采集**的那组页（深交所简称表是整市场快照，不是追加
+日志；重放旧页集会把同一条变更链重复一遍）。一次多页抓取的所有页共用同一个
+`acquired_at`（PR-2 的 `freeze_bytes(fetched_at)`），所以一组就是一套完整页集。
+已知限制：清单没有「采集是否完整」字段，多页抓取在后面的页失败时，已冻结的前几页
+仍留在库里（先冻结后解析）且带同一个 `acquired_at`，重放无法把它与完整页集区分；
+日更写入端不会写这种半套结果。写入走 `derived:security_names`
+的同一写入器：一个事务里整表替换 `security_name_history`、登记
+`derived_dataset_versions`、绑定 generation。
+
+覆盖窗口（`coverage`）是登记证据的一部分，所以它必须由字节算出，不能由
+**当天日期**算出：深/沪/北三档里沪、北是 `NOT_AVAILABLE` 的未观测窗口，如果把
+它的 `to` 写成写入当天，同一份冻结字节每重放一次就产生新的证据摘要。现在写入端
+与重放端共用同一个组装函数，把沪/北未观测窗口的结束日固定为**该表最后一个变更
+日**（报告的 `as_of` 字段就是这一天）；采集日仍是来源库清单的事实
+（`acquired_at`），不属于数据集证据。`--verify-only` 重算行 **与覆盖窗口** 并
+与库内登记比较，覆盖窗口被重新盖章也算 `drift`。
+
+两类「没有数据」都不写成「空表已重建」：清单里没有 `szse_short_name` 记录时
+scope 状态是 `store_empty`、`rebuilt=nothing_selected`，不碰数据库；有记录但
+冻结表没有任何 A 股变更行时 fail-closed（`security_names_rebuild_failed`，
+reason 码 `empty_name_set`），不写库、上一版仍可读。
 
 ## 5. 退役豁免
 
@@ -177,7 +210,12 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
 
 CI 覆盖写序故障注入（fsync/rename 各失败点无悬空清单行）、按 sha 读回不符 →
 `source_store_corrupt`、重复导入不增 blob/行、重放两次摘要相同、空库
-`store_empty`、含 manifest 不符条目的夹具进 `skipped_unverified`。测试全部使用
+`store_empty`、含 manifest 不符条目的夹具进 `skipped_unverified`。
+`security_names` scope 另有 6 条端到端测试（`tests/source_store/security_names.rs`）：
+清库后重放得到逐位相同的摘要与登记证据（`evidence_digest` 相同）、
+`--verify-only` 为 `match`、篡改 blob → `source_store_corrupt`、未知
+`parser_version` → fail-closed、空库/无 `szse_short_name` 记录 →
+`store_empty`/`nothing_selected` 且不碰库、全程离线。测试全部使用
 临时目录与合成归档，不联网、不依赖本机路径。
 
 真实归档导入、`docs/STATUS.md` 的批次留痕和 fresh-init 后的

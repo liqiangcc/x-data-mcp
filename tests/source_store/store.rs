@@ -234,7 +234,7 @@ fn all_scope_replay_covers_every_scope_and_agrees_with_verify() {
     let replay =
         replay_mod::replay(&store, &replay_mod::ReplayRequest::new(None, false, None)).unwrap();
     assert_eq!(replay.scope, "all");
-    assert_eq!(replay.scopes.len(), 4);
+    assert_eq!(replay.scopes.len(), 5);
     assert_eq!(replay.entries, 2);
     let verify =
         replay_mod::verify(&store, &replay_mod::ReplayRequest::new(None, false, None)).unwrap();

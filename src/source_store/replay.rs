@@ -20,10 +20,22 @@
 //!   events, daily series) from the derived tables' generation bindings; the
 //!   table is replaced in one transaction and `--verify-only` compares the
 //!   recomputed summary with the stored rows (`match` / `drift`).
+//! - `risk_warnings` (M3 PR-10): the frozen SZSE short-name table and SSE
+//!   bulletin pages are re-parsed and `risk_warning_intervals` is replaced.
+//! - `security_names` (M3 PR-12): the frozen SZSE `SSGSGMXX`/`tab2` table is
+//!   re-parsed and `security_name_history` (plus its
+//!   `derived_dataset_versions` registration) is replaced through the same
+//!   writer the live item uses. The coverage windows are derived from the
+//!   bytes — the SH/BJ `NOT_AVAILABLE` windows end on the table's last change
+//!   day, never on `Utc::now()` — so a fresh init replays the evidence the
+//!   first write recorded instead of re-stamping it. A frozen table with no
+//!   A-share change row is `empty_name_set`: nothing is written, and "no data"
+//!   is never reported as "the empty table was rebuilt".
 //!
 //! Determinism: two replays of one store with one parser version produce the
-//! same summary digest — the summary is sha256 over the canonical row lines, so
-//! "clear the DB and replay" is checkable instead of asserted.
+//! same summary digest — the summary is sha256 over the canonical row lines
+//! (`security_names` adds its coverage windows to the row digest), so "clear
+//! the DB and replay" is checkable instead of asserted.
 //!
 //! Without a database the scopes only compute and report their summary, so a
 //! read never touches a database and never creates the store.
@@ -41,6 +53,7 @@ use serde::Serialize;
 use super::{ManifestRecord, SourceStore, StoreError, known_parser_version};
 use crate::hash::sha256;
 use crate::security_master::Exchange;
+use crate::security_master::names::{self, NameInterval};
 use crate::security_master::risk_warnings::{self, CoverageWindow};
 use crate::sqlite_market::backend::MarketBackend;
 
@@ -63,9 +76,20 @@ pub const COMPUTED_GENERATION_FACTS_NO_DB: &str = "computed_no_db";
 pub const REBUILT_RISK_WARNINGS: &str = "rebuilt";
 /// The risk-warning table set was recomputed but no `--db` was given.
 pub const COMPUTED_RISK_WARNINGS_NO_DB: &str = "computed_no_db";
+/// The name-history table set was recomputed and written.
+pub const REBUILT_SECURITY_NAMES: &str = "rebuilt";
+/// The name-history table set was recomputed but no `--db` was given.
+pub const COMPUTED_SECURITY_NAMES_NO_DB: &str = "computed_no_db";
+/// The scope had no matching manifest records: nothing was computed or written.
+/// It is never reported as `rebuilt` — "no data" is not "an empty table".
+pub const NOTHING_SELECTED: &str = "nothing_selected";
+
+/// Source id of the frozen SZSE `SSGSGMXX`/`tab2` short-name table (PR-2).
+const SZSE_SHORT_NAME_SOURCE_ID: &str = "szse_short_name";
 
 pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6), `generation_facts` \
-(M3 PR-8) and `risk_warnings` (M3 PR-10) rebuild their tables from the store.";
+(M3 PR-8), `risk_warnings` (M3 PR-10) and `security_names` (M3 PR-12) rebuild their \
+tables from the store.";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -74,14 +98,16 @@ pub enum Scope {
     Exchange,
     GenerationFacts,
     RiskWarnings,
+    SecurityNames,
 }
 
 impl Scope {
-    pub const ALL: [Scope; 4] = [
+    pub const ALL: [Scope; 5] = [
         Scope::Industry,
         Scope::Exchange,
         Scope::GenerationFacts,
         Scope::RiskWarnings,
+        Scope::SecurityNames,
     ];
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -90,6 +116,7 @@ impl Scope {
             "exchange" => Some(Self::Exchange),
             "generation_facts" => Some(Self::GenerationFacts),
             "risk_warnings" => Some(Self::RiskWarnings),
+            "security_names" => Some(Self::SecurityNames),
             _ => None,
         }
     }
@@ -100,6 +127,7 @@ impl Scope {
             Self::Exchange => "exchange",
             Self::GenerationFacts => "generation_facts",
             Self::RiskWarnings => "risk_warnings",
+            Self::SecurityNames => "security_names",
         }
     }
 
@@ -129,6 +157,10 @@ impl Scope {
                         record.source_id.as_str(),
                         "sse_bulletin" | "szse_short_name"
                     )
+            }
+            Self::SecurityNames => {
+                record.store_kind == super::StoreKind::HttpFetch
+                    && record.source_id == SZSE_SHORT_NAME_SOURCE_ID
             }
         }
     }
@@ -187,6 +219,12 @@ pub struct ScopeReport {
     /// Registered generation facts (`generation_facts`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts: Option<usize>,
+    /// The replayable as-of bound (`security_names`): the last change day the
+    /// frozen table proves. The SH/BJ `NOT_AVAILABLE` coverage windows end
+    /// here. It is derived from the bytes, never from the clock, so the same
+    /// store reports the same value on any day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -275,11 +313,9 @@ fn run(
                     sha256: record.sha256.clone(),
                     source_id: record.source_id.clone(),
                     reason: "unknown_parser",
-                    expected: format!(
-                        "{}|{}",
-                        super::TDXHY_PARSER_VERSION,
-                        super::INCON_PARSER_VERSION
-                    ),
+                    expected: "a parser_version this binary can replay \
+                               (source_store::known_parser_version)"
+                        .to_string(),
                     actual: version.to_string(),
                 });
                 continue;
@@ -302,11 +338,18 @@ fn run(
         } else {
             "ok"
         };
-        let mut rebuilt = SKELETON_REBUILT;
+        let mut rebuilt = if *scope == Scope::SecurityNames && selected.is_empty() {
+            // "No matching record" is not "rebuilt": the fresh-init table is
+            // left untouched and the status stays `store_empty`.
+            NOTHING_SELECTED
+        } else {
+            SKELETON_REBUILT
+        };
         let mut summary = None;
         let mut database_verdict = None;
         let mut drift_keys = Vec::new();
         let mut snapshot_count = None;
+        let mut as_of = None;
         let mut counts = (None, None, None);
         if *scope == Scope::Industry && status == "ok" {
             match rebuild_industry(store, request) {
@@ -418,6 +461,34 @@ fn run(
                 }
             }
         }
+        if *scope == Scope::SecurityNames && status == "ok" {
+            match rebuild_security_names(store, &selected, request.verify_only, request.database) {
+                Ok(outcome) => {
+                    rebuilt = outcome.rebuilt;
+                    summary = Some(outcome.summary);
+                    database_verdict = outcome.database;
+                    drift_keys = outcome.drift;
+                    snapshot_count = Some(outcome.rows);
+                    as_of = outcome.as_of;
+                    if outcome.status != "ok" {
+                        status = outcome.status;
+                    }
+                }
+                Err(error) => {
+                    // A frozen table that cannot become a name set is
+                    // fail-closed and nothing is written; the reason code says
+                    // which (`empty_name_set`, `source_invalid`, ...).
+                    status = "security_names_rebuild_failed";
+                    problems.push(BlobProblem {
+                        sha256: String::new(),
+                        source_id: SZSE_SHORT_NAME_SOURCE_ID.to_string(),
+                        reason: "security_names_rebuild_failed",
+                        expected: "a parseable SZSE short-name change table".to_string(),
+                        actual: error,
+                    });
+                }
+            }
+        }
         scope_reports.push(ScopeReport {
             scope: scope.name(),
             status,
@@ -435,6 +506,7 @@ fn run(
             facts: (*scope == Scope::GenerationFacts)
                 .then_some(snapshot_count)
                 .flatten(),
+            as_of,
         });
     }
     let selected_all: Vec<&ManifestRecord> = records
@@ -631,8 +703,12 @@ fn rebuild_risk_warnings(
 
     let mut coverage = Vec::new();
     if let Some(backend) = &backend
-        && let Some((stored_coverage, _)) =
-            registered_coverage(backend).map_err(|e| e.to_string())?
+        && let Some((stored_coverage, _)) = registered_coverage(
+            backend,
+            risk_warnings::DATASET_KIND,
+            risk_warnings::DATASET_KEY,
+        )
+        .map_err(|e| e.to_string())?
     {
         coverage = stored_coverage;
     }
@@ -720,20 +796,21 @@ fn rebuild_risk_warnings(
     Ok(outcome)
 }
 
-/// The coverage windows the live writer recorded. Replay must cut intervals at
-/// the same `not_observed` gaps, otherwise a gap would become a warning that
-/// spans evidence the run did not observe.
+/// The coverage windows a derived dataset's live writer recorded, read from its
+/// `derived_dataset_versions` registration evidence.
+///
+/// `risk_warnings` must cut intervals at the same `not_observed` gaps, otherwise
+/// a gap would become a warning that spans evidence the run did not observe;
+/// `security_names` compares them with the windows it recomputes from the store
+/// (its own path needs no stored cover, but `--verify-only` must catch a
+/// database whose evidence was stamped with a different window set).
 fn registered_coverage(
     backend: &MarketBackend,
+    dataset_kind: &str,
+    dataset_key: &str,
 ) -> Result<Option<(Vec<CoverageWindow>, usize)>, String> {
     let registration = backend
-        .read(|c| {
-            crate::sqlite_market::derived::read_version(
-                c,
-                risk_warnings::DATASET_KIND,
-                risk_warnings::DATASET_KEY,
-            )
-        })
+        .read(|c| crate::sqlite_market::derived::read_version(c, dataset_kind, dataset_key))
         .map_err(|error| error.to_string())?;
     let Some(registration) = registration else {
         return Ok(None);
@@ -744,7 +821,9 @@ fn registered_coverage(
         })
         .map_err(|error| error.to_string())?;
     if kind != crate::compact_market::EvidenceKind::Derived {
-        return Err("risk-warning registration evidence is not derived evidence".into());
+        return Err(format!(
+            "{dataset_kind} registration evidence is not derived evidence"
+        ));
     }
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|error| format!("evidence_json: {error}"))?;
@@ -757,9 +836,9 @@ fn registered_coverage(
             .get("exchange")
             .and_then(serde_json::Value::as_str)
             .and_then(Exchange::parse)
-            .ok_or_else(|| "risk-warning coverage has an unregistered exchange".to_string())?;
-        let from = parse_window_day(row, "from")?;
-        let to = parse_window_day(row, "to")?;
+            .ok_or_else(|| format!("{dataset_kind} coverage has an unregistered exchange"))?;
+        let from = parse_window_day(row, "from", dataset_kind)?;
+        let to = parse_window_day(row, "to", dataset_kind)?;
         windows.push(CoverageWindow {
             source_kind: row
                 .get("source_kind")
@@ -789,13 +868,17 @@ fn registered_coverage(
     Ok(Some((windows, not_observed)))
 }
 
-fn parse_window_day(row: &serde_json::Value, field: &str) -> Result<NaiveDate, String> {
+fn parse_window_day(
+    row: &serde_json::Value,
+    field: &str,
+    dataset_kind: &str,
+) -> Result<NaiveDate, String> {
     let text = row
         .get(field)
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| format!("risk-warning coverage has no {field}"))?;
+        .ok_or_else(|| format!("{dataset_kind} coverage has no {field}"))?;
     NaiveDate::parse_from_str(text, "%Y-%m-%d")
-        .map_err(|_| format!("risk-warning coverage {field}={text:?} is not a day"))
+        .map_err(|_| format!("{dataset_kind} coverage {field}={text:?} is not a day"))
 }
 
 fn row_drift(
@@ -820,6 +903,272 @@ fn row_drift(
     let left = keys(left);
     let right = keys(right);
     left.symmetric_difference(&right)
+        .take(20)
+        .cloned()
+        .collect()
+}
+
+/// The `security_names` scope's outcome, or the reason no table set was
+/// produced.
+struct SecurityNamesOutcome {
+    status: &'static str,
+    rebuilt: &'static str,
+    summary: String,
+    database: Option<&'static str>,
+    drift: Vec<String>,
+    rows: usize,
+    as_of: Option<String>,
+}
+
+/// Rebuild `security_name_history` from the frozen SZSE short-name table
+/// (M3 PR-12, D-61).
+///
+/// Only `szse_short_name` `http_fetch` records are selected, and only the
+/// latest acquisition group: the table is a whole-market snapshot, so replaying
+/// an older page set would duplicate the same change chain. One multi-page
+/// fetch stamps every page with the same `acquired_at` (PR-2
+/// `freeze_bytes(fetched_at)`), so a group is one complete page set. The
+/// manifest has no acquisition-completeness flag: pages frozen by a fetch that
+/// failed on a later page stay behind with the same `acquired_at`, so replay
+/// cannot tell such a partial group apart (the live item never wrote it). The
+/// set is built by
+/// the adapter's replay entry, which derives the coverage windows from the
+/// bytes, and written through the live item's own writer (whole-table replace +
+/// `derived_dataset_versions` registration) in one transaction. `--verify-only`
+/// compares the recomputed rows **and** coverage windows with the stored ones.
+fn rebuild_security_names(
+    store: &SourceStore,
+    records: &[&ManifestRecord],
+    verify_only: bool,
+    database: Option<&Path>,
+) -> Result<SecurityNamesOutcome, String> {
+    let mut selected: Vec<&ManifestRecord> = records
+        .iter()
+        .copied()
+        .filter(|record| record.source_id == SZSE_SHORT_NAME_SOURCE_ID)
+        .collect();
+    selected.sort_by(|left, right| {
+        (
+            left.acquired_at.as_str(),
+            left.origin.as_str(),
+            left.sha256.as_str(),
+        )
+            .cmp(&(
+                right.acquired_at.as_str(),
+                right.origin.as_str(),
+                right.sha256.as_str(),
+            ))
+    });
+    let latest = selected
+        .iter()
+        .map(|record| record.acquired_at.as_str())
+        .max();
+    let mut seen = BTreeSet::new();
+    let mut pages = Vec::new();
+    for record in selected {
+        if Some(record.acquired_at.as_str()) != latest {
+            continue;
+        }
+        if !seen.insert(record.sha256.as_str()) {
+            continue;
+        }
+        let bytes = store
+            .read_verified(&record.sha256)
+            .map_err(|error| error.to_string())?;
+        pages.push((record.source_id.as_str(), record.sha256.clone(), bytes));
+    }
+
+    let set = crate::official_security::security_names::replay(&pages)
+        .map_err(|error| error.to_string())?;
+    let summary = names_summary(&set.rows, &set.coverage);
+    let as_of = set
+        .coverage
+        .iter()
+        .map(|window| window.to)
+        .max()
+        .map(|day| day.to_string());
+    let mut outcome = SecurityNamesOutcome {
+        status: "ok",
+        rebuilt: COMPUTED_SECURITY_NAMES_NO_DB,
+        summary,
+        database: None,
+        drift: Vec::new(),
+        rows: set.rows.len(),
+        as_of,
+    };
+    let Some(database) = database else {
+        return Ok(outcome);
+    };
+    let backend = open_database(database)?;
+    if verify_only {
+        let (stored_rows, stored_coverage) = stored_security_names(&backend)?;
+        let stored_rows = stored_intervals(&stored_rows)?;
+        let stored_coverage = stored_coverage.unwrap_or_default();
+        let stored_summary = names_summary(&stored_rows, &stored_coverage);
+        if stored_summary == outcome.summary {
+            outcome.database = Some("match");
+            return Ok(outcome);
+        }
+        outcome.status = "drift";
+        outcome.database = Some("drift");
+        outcome.drift = names_drift(&set.rows, &set.coverage, &stored_rows, &stored_coverage);
+        return Ok(outcome);
+    }
+
+    let manifest_text = records
+        .iter()
+        .map(|record| {
+            format!(
+                "{}|{}|{}|{}",
+                record.source_id, record.sha256, record.acquired_at, record.origin
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let manifest_sha = sha256(manifest_text.as_bytes());
+    let member_sha = sha256(b"source_store_replay:member");
+    let event_sha = sha256(b"source_store_replay:event");
+    let generation_evidence = serde_json::json!({
+        "replay": true,
+        "scope": "security_names",
+        "records": pages.len(),
+        "rows": set.rows.len(),
+        "coverage_windows": set.coverage.len(),
+        // The replayable bound of the SH/BJ `NOT_AVAILABLE` windows (the last
+        // change day the frozen table proves), not the acquisition clock.
+        "as_of": outcome.as_of.clone(),
+    });
+    let write = crate::sqlite_market::security_names::SecurityNameWrite {
+        set: &set,
+        task_id: "source_store_replay",
+        item_id: "derived:security_names",
+        generation_id: "source_store_replay",
+        generation_manifest_sha256: &manifest_sha,
+        member_sha256: &member_sha,
+        security_event_sha256: &event_sha,
+        generation_evidence: &generation_evidence,
+    };
+    backend
+        .commit_security_names(&write)
+        .map_err(|error| error.to_string())?;
+    // A write only counts once it reads back as the computed rows and windows.
+    let (stored_rows, stored_coverage) = stored_security_names(&backend)?;
+    let stored_rows = stored_intervals(&stored_rows)?;
+    let stored_coverage = stored_coverage
+        .ok_or_else(|| "the name-history registration has no coverage evidence".to_string())?;
+    let stored_summary = names_summary(&stored_rows, &stored_coverage);
+    if stored_summary == outcome.summary {
+        outcome.rebuilt = REBUILT_SECURITY_NAMES;
+        outcome.database = Some("match");
+        return Ok(outcome);
+    }
+    outcome.status = "drift";
+    outcome.database = Some("drift");
+    outcome.drift = names_drift(&set.rows, &set.coverage, &stored_rows, &stored_coverage);
+    Ok(outcome)
+}
+
+/// Stored `security_name_history` rows and the coverage windows of its
+/// registration (`None` when it was never written).
+fn stored_security_names(
+    backend: &MarketBackend,
+) -> Result<
+    (
+        Vec<crate::sqlite_market::security::SecurityNameRow>,
+        Option<Vec<CoverageWindow>>,
+    ),
+    String,
+> {
+    let rows = backend
+        .read(crate::sqlite_market::security::read_security_names)
+        .map_err(|error| error.to_string())?;
+    let coverage = registered_coverage(backend, names::DATASET_KIND, names::DATASET_KEY)
+        .map_err(|error| error.to_string())?
+        .map(|(windows, _)| windows);
+    Ok((rows, coverage))
+}
+
+/// Decode the read model's rows back into the domain type so one canonical
+/// summary covers both sides of the comparison.
+fn stored_intervals(
+    rows: &[crate::sqlite_market::security::SecurityNameRow],
+) -> Result<Vec<NameInterval>, String> {
+    rows.iter()
+        .map(|row| {
+            let exchange = Exchange::parse(&row.exchange).ok_or_else(|| {
+                format!(
+                    "security_name_history exchange {:?} is unregistered",
+                    row.exchange
+                )
+            })?;
+            Ok(NameInterval {
+                exchange,
+                code: row.code.clone(),
+                effective_from: row.effective_from,
+                effective_to: row.effective_to,
+                name: row.name.clone(),
+                certainty: row.certainty,
+                known_at: row.known_at,
+                source_kind: row.source_kind,
+                source_record_id: row.source_record_id.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Canonical summary of one name-history answer: the length-prefixed row digest
+/// plus the coverage windows. Coverage is part of the recorded evidence, so a
+/// set with the same rows but re-stamped windows must not compare as `match`.
+fn names_summary(rows: &[NameInterval], coverage: &[CoverageWindow]) -> String {
+    let mut lines = vec![format!(
+        "rows|{}",
+        crate::compact_market::digest_hex(&names::dataset_digest(rows))
+    )];
+    lines.extend(coverage.iter().map(coverage_line));
+    lines.sort();
+    lines.dedup();
+    sha256(lines.join("\n").as_bytes())
+}
+
+fn coverage_line(window: &CoverageWindow) -> String {
+    format!(
+        "coverage|{}|{}|{}|{}|{}|{}|{}",
+        window.source_kind,
+        window.exchange.as_str(),
+        window.from,
+        window.to,
+        window.observed,
+        window.rows,
+        window.reason
+    )
+}
+
+fn name_row_key(row: &NameInterval) -> String {
+    format!(
+        "{}.{}@{}..{}|{}|{}",
+        row.exchange.as_str(),
+        row.code,
+        row.effective_from,
+        row.effective_to
+            .map_or_else(|| "open".to_string(), |day| day.to_string()),
+        row.name,
+        row.certainty.as_str()
+    )
+}
+
+fn names_drift(
+    recomputed_rows: &[NameInterval],
+    recomputed_coverage: &[CoverageWindow],
+    stored_rows: &[NameInterval],
+    stored_coverage: &[CoverageWindow],
+) -> Vec<String> {
+    let keys = |rows: &[NameInterval], coverage: &[CoverageWindow]| {
+        let mut keys: BTreeSet<String> = rows.iter().map(name_row_key).collect();
+        keys.extend(coverage.iter().map(coverage_line));
+        keys
+    };
+    keys(recomputed_rows, recomputed_coverage)
+        .symmetric_difference(&keys(stored_rows, stored_coverage))
         .take(20)
         .cloned()
         .collect()
@@ -1040,4 +1389,75 @@ pub fn digest<'a>(records: impl Iterator<Item = &'a ManifestRecord>) -> String {
     lines.sort();
     lines.dedup();
     sha256(lines.join("\n").as_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::security_master::names::{NameCertainty, NameSourceKind};
+
+    fn day(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).expect("valid day")
+    }
+
+    fn row() -> NameInterval {
+        NameInterval {
+            exchange: Exchange::Sz,
+            code: "000004".into(),
+            effective_from: day(2001, 3, 7),
+            effective_to: None,
+            name: "深安达".into(),
+            certainty: NameCertainty::Unbounded,
+            known_at: None,
+            source_kind: NameSourceKind::SzseNameHistory,
+            source_record_id: Some("2001-03-07|000004|深安达".into()),
+        }
+    }
+
+    fn sh_window(to: NaiveDate) -> CoverageWindow {
+        CoverageWindow {
+            source_kind: "unknown".into(),
+            exchange: Exchange::Sh,
+            from: day(1994, 1, 3),
+            to,
+            observed: false,
+            rows: 0,
+            reason: "NOT_AVAILABLE".into(),
+        }
+    }
+
+    /// A re-stamped window (`to = today` instead of the table's last change
+    /// day) must be drift even when every row is identical: coverage is part of
+    /// the recorded evidence, so it belongs in the compared summary.
+    #[test]
+    fn a_restamped_coverage_window_is_drift_without_a_row_change() {
+        let rows = vec![row()];
+        let first = vec![sh_window(day(2001, 3, 7))];
+        let restamped = vec![sh_window(day(2026, 10, 31))];
+        let stable = names_summary(&rows, &first);
+        assert_eq!(stable, names_summary(&rows, &first.clone()));
+        assert_ne!(stable, names_summary(&rows, &restamped));
+        let drift = names_drift(&rows, &first, &rows, &restamped);
+        assert_eq!(drift.len(), 2, "one window left, one entered: {drift:?}");
+        assert!(
+            drift.iter().all(|key| key.starts_with("coverage|")),
+            "{drift:?}"
+        );
+    }
+
+    /// The row digest ignores row order, so a replayed (sorted) set and a
+    /// stored (SQL-ordered) set that are equal compare as `match`.
+    #[test]
+    fn the_summary_is_row_order_independent() {
+        let mut second = row();
+        second.code = "000001".into();
+        second.name = "深发展A".into();
+        let forward = vec![row(), second.clone()];
+        let backward = vec![second, row()];
+        let coverage = vec![sh_window(day(2001, 3, 7))];
+        assert_eq!(
+            names_summary(&forward, &coverage),
+            names_summary(&backward, &coverage)
+        );
+    }
 }
