@@ -90,7 +90,7 @@ use crate::sqlite_market::backend::MarketBackend;
 /// re-derivation must pin. It stays out of the generation binding evidence on
 /// purpose: that digest must be identical for every whole-market item of one
 /// generation (`derived:suspensions` fails closed otherwise).
-pub const PARSER_VERSION: &str = "exchange-a1a2-v3";
+pub const PARSER_VERSION: &str = "exchange-a1a2-v4";
 
 /// Environment variable naming the deployment's source store (§9.4.1). The
 /// deploy script uses `<deploy-state>/source-store`; resolution (and the
@@ -121,6 +121,10 @@ const SSE_B_SHARE: &str = "2";
 const SZSE_A_PREFIXES: [&str; 7] = ["000", "001", "002", "003", "300", "301", "302"];
 /// SZSE B-share code prefix.
 const SZSE_B_PREFIX: &str = "200";
+/// `TABKEY` both SZSE terminated lists declare. The envelope and the row
+/// parser both take the selected block from this request parameter, so the
+/// declaration and the selection cannot drift apart (#446 D1).
+const SZSE_DELISTING_TABKEY: &str = "tab2";
 
 /// The seven acquisitions of this adapter: one per request the two exchanges
 /// need. The list is static so a run performs the same requests in the same
@@ -211,12 +215,12 @@ pub fn plans() -> Vec<(ListKind, AcquisitionPlan)> {
         szse_plan(
             ListKind::SzseDelistingMain,
             SZSE_DELISTING_CATALOG,
-            &[("TABKEY", "tab2"), ("selectModule", "main")],
+            &[("TABKEY", SZSE_DELISTING_TABKEY), ("selectModule", "main")],
         ),
         szse_plan(
             ListKind::SzseDelistingShortName,
             SZSE_DELISTING_CATALOG,
-            &[("TABKEY", "tab2"), ("selectModule", "nm")],
+            &[("TABKEY", SZSE_DELISTING_TABKEY), ("selectModule", "nm")],
         ),
     ]
 }
@@ -292,6 +296,89 @@ impl A1A2Error {
     }
 }
 
+/// One SZSE block as counted across the pages of one plan (#446 D1 evidence).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SzseBlockRows {
+    /// Rows over every page of the plan.
+    pub rows: usize,
+    /// Pages that carried this block.
+    pub pages: usize,
+    /// Pages where the block had at least one row.
+    pub pages_with_rows: usize,
+    /// `metadata.pagecount` the block last reported (0 for an empty block).
+    pub page_count: u64,
+}
+
+/// Which block each page of one SZSE plan was read from, and why.
+///
+/// The selection basis and the per-block counts are evidence in their own
+/// right: `page_count is 0` alone cannot tell an empty list from a mis-selected
+/// block (#446 D1), so an operator reads the selected `tabkey` and every
+/// block's row/page counts from the item's evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlockSelectionEvidence {
+    pub pages: usize,
+    /// `basis → pages`, e.g. `declared_tabkey` or `unique_non_empty`.
+    pub basis: BTreeMap<&'static str, usize>,
+    /// `selected tabkey → pages` (`<none>` for a block without `metadata.tabkey`).
+    pub selected: BTreeMap<String, usize>,
+    /// Per block (keyed by `tabkey`) counts over the pages of the plan.
+    pub blocks: BTreeMap<String, SzseBlockRows>,
+}
+
+impl BlockSelectionEvidence {
+    fn add(&mut self, selection: &validate::SzseBlockSelection) {
+        self.pages += 1;
+        *self.basis.entry(selection.basis.as_str()).or_insert(0) += 1;
+        *self
+            .selected
+            .entry(block_key(selection.tabkey.as_deref()))
+            .or_insert(0) += 1;
+        for block in &selection.blocks {
+            let tally = self
+                .blocks
+                .entry(block_key(block.tabkey.as_deref()))
+                .or_default();
+            tally.rows += block.rows;
+            tally.pages += 1;
+            if block.rows > 0 {
+                tally.pages_with_rows += 1;
+            }
+            if let Some(page_count) = block.page_count {
+                tally.page_count = page_count;
+            }
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let blocks: Vec<Value> = self
+            .blocks
+            .iter()
+            .map(|(tabkey, tally)| {
+                json!({
+                    "tabkey": tabkey,
+                    "rows": tally.rows,
+                    "pages": tally.pages,
+                    "pages_with_rows": tally.pages_with_rows,
+                    "page_count": tally.page_count,
+                })
+            })
+            .collect();
+        json!({
+            "pages": self.pages,
+            "basis": self.basis,
+            "selected_tabkey": self.selected,
+            "blocks": blocks,
+        })
+    }
+}
+
+fn block_key(tabkey: Option<&str>) -> String {
+    tabkey
+        .map(str::to_string)
+        .unwrap_or_else(|| "<none>".to_string())
+}
+
 /// An admitted snapshot plus everything the derived item must register:
 /// the binding (snapshot ids + parser versions + basis status), the acquisition
 /// labels and the rows the A-share filter refused.
@@ -310,12 +397,19 @@ pub struct Admitted {
     /// Listing facts suppressed because the code is a confirmed-migration
     /// target whose exchange date is the inherited subject-level day.
     pub suppressed_listing_targets: Vec<String>,
+    /// Per SZSE plan: which block the pages were read from (#446 D1).
+    pub block_selection: BTreeMap<&'static str, BlockSelectionEvidence>,
 }
 
 impl Admitted {
     /// Everything a re-derivation needs to pin this acquisition (§6.3 "bind",
     /// §9.4.2 replay).
     pub fn evidence(&self) -> Value {
+        let block_selection: BTreeMap<String, Value> = self
+            .block_selection
+            .iter()
+            .map(|(label, evidence)| ((*label).to_string(), evidence.to_json()))
+            .collect();
         json!({
             "adapter": "A-1/A-2",
             "parser_version": PARSER_VERSION,
@@ -325,6 +419,7 @@ impl Admitted {
             "b_shares_skipped": self.b_shares_skipped,
             "delisting_rows_without_date": self.delisting_rows_without_date,
             "suppressed_listing_targets": self.suppressed_listing_targets,
+            "block_selection": block_selection,
             "listing_facts": self.snapshot.listing.len(),
             "delisting_facts": self.snapshot.delisting.len(),
             "confirmed_migrations": self.snapshot.migrations.len(),
@@ -382,14 +477,24 @@ pub fn acquire(
     let mut delisting_rows_without_date = 0usize;
     let mut snapshot_ids: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     let mut bindings: BTreeMap<String, SnapshotBinding> = BTreeMap::new();
+    let mut block_selection: BTreeMap<&'static str, BlockSelectionEvidence> = BTreeMap::new();
     let mut as_of: Option<String> = None;
     for (kind, plan) in plans() {
         let outcome = entry.acquire(&plan)?;
         bindings.insert(outcome.source_id.to_string(), outcome.binding.clone());
+        // The block selection follows the request's own declaration (#446 D1);
+        // the same value is what replay reads back from the fingerprint.
+        let declared = validate::declared_tabkey(&plan.params);
         let mut ids = Vec::new();
         for snapshot in &outcome.snapshots {
             let bytes = store.read_verified(snapshot.snapshot_id())?;
-            let page = parse_page(kind, &bytes)?;
+            let page = parse_page(kind, declared, &bytes)?;
+            if let Some(selection) = &page.block_selection {
+                block_selection
+                    .entry(kind.label())
+                    .or_default()
+                    .add(selection);
+            }
             listing.extend(page.listing);
             delisting.extend(page.delisting);
             b_shares_skipped += page.b_shares_skipped;
@@ -440,6 +545,7 @@ pub fn acquire(
         b_shares_skipped,
         delisting_rows_without_date,
         suppressed_listing_targets,
+        block_selection,
     })
 }
 
@@ -454,12 +560,21 @@ struct ParsedPage {
     /// facts (a suspended company also appears on some of these lists) but the
     /// count is kept so a field rename cannot look like "nothing delisted".
     delisting_rows_without_date: usize,
+    /// SZSE only: which block the envelope and the rows were read from (#446 D1).
+    block_selection: Option<validate::SzseBlockSelection>,
 }
 
-fn parse_page(kind: ListKind, bytes: &[u8]) -> Result<ParsedPage, A1A2Error> {
-    let rows = rows(kind, bytes)?;
+fn parse_page(
+    kind: ListKind,
+    declared: Option<&str>,
+    bytes: &[u8],
+) -> Result<ParsedPage, A1A2Error> {
+    let (rows, block_selection) = rows(kind, declared, bytes)?;
     let row_count = rows.len();
-    let mut page = ParsedPage::default();
+    let mut page = ParsedPage {
+        block_selection,
+        ..ParsedPage::default()
+    };
     for row in rows {
         let code = code_of(kind, &row)?;
         if kind.sse() {
@@ -558,32 +673,47 @@ fn parse_page(kind: ListKind, bytes: &[u8]) -> Result<ParsedPage, A1A2Error> {
             (false, None) => unreachable!("a delisting plan always names its date field"),
         }
     }
-    if !kind.listing() && page.delisting.is_empty() && row_count > 0 {
+    // A terminated page is only a shape change when it *has* A-share rows and
+    // none of them carries the delisting day. A page of B shares has no fact
+    // (the 9th SZSE main page is ten B shares, #446 D3), so the guard counts
+    // rows after the same filter that produces the facts.
+    let a_share_rows = row_count.saturating_sub(page.b_shares_skipped);
+    if !kind.listing() && page.delisting.is_empty() && a_share_rows > 0 {
         return Err(A1A2Error::invalid(format!(
-            "{}: {row_count} rows but none carries the delisting date; the list shape changed",
-            kind.label()
+            "{}: page has {row_count} row(s), {a_share_rows} A-share row(s) after filtering \
+             and {} B-share row(s) skipped, but none of the A-share rows carries the delisting \
+             date; the list shape changed",
+            kind.label(),
+            page.b_shares_skipped
         )));
     }
     Ok(page)
 }
 
-/// The `data` array of one envelope. The envelope itself was already validated
-/// by PR-2; this only re-reads the rows with the same SZSE block selection
-/// (`metadata.tabkey=tab2`) the envelope used, so the rows and the pagination
-/// counts can never come from different blocks.
-fn rows(kind: ListKind, bytes: &[u8]) -> Result<Vec<Value>, A1A2Error> {
+/// The `data` array of one envelope plus, for SZSE, the block selection used to
+/// reach it. The envelope itself was already validated by PR-2; this only
+/// re-reads the rows with the same selection (declared `TABKEY`, otherwise the
+/// unique non-empty block, #446 D1), so the rows and the pagination counts can
+/// never come from different blocks.
+fn rows(
+    kind: ListKind,
+    declared: Option<&str>,
+    bytes: &[u8],
+) -> Result<(Vec<Value>, Option<validate::SzseBlockSelection>), A1A2Error> {
     let value: Value = serde_json::from_slice(bytes)
         .map_err(|error| A1A2Error::invalid(format!("{}: not JSON: {error}", kind.label())))?;
-    let data = if kind.sse() {
-        value
-            .get("pageHelp")
-            .and_then(|help| help.get("data"))
-            .and_then(Value::as_array)
+    let (data, selection) = if kind.sse() {
+        (
+            value
+                .get("pageHelp")
+                .and_then(|help| help.get("data"))
+                .and_then(Value::as_array),
+            None,
+        )
     } else {
-        validate::szse_block(&value)
-            .map_err(|error| A1A2Error::invalid(format!("{}: {error}", kind.label())))?
-            .get("data")
-            .and_then(Value::as_array)
+        let (block, selection) = validate::szse_block(&value, declared)
+            .map_err(|error| A1A2Error::invalid(format!("{}: {error}", kind.label())))?;
+        (block.get("data").and_then(Value::as_array), Some(selection))
     };
     let Some(data) = data else {
         return Err(A1A2Error::invalid(format!(
@@ -591,7 +721,7 @@ fn rows(kind: ListKind, bytes: &[u8]) -> Result<Vec<Value>, A1A2Error> {
             kind.label()
         )));
     };
-    Ok(data.clone())
+    Ok((data.clone(), selection))
 }
 
 fn code_of(kind: ListKind, row: &Value) -> Result<String, A1A2Error> {
@@ -618,14 +748,35 @@ fn code_of(kind: ListKind, row: &Value) -> Result<String, A1A2Error> {
             }
         }
     } else {
-        let field = "zqdm";
-        let Some(code) = row.get(field).and_then(Value::as_str) else {
-            return Err(A1A2Error::invalid(format!(
-                "{}: a row has no {field}",
-                kind.label()
-            )));
-        };
-        code
+        // Two SZSE list dialects: the terminated lists carry `zqdm`, the
+        // current A-share list (`CATALOGID=1110`) carries `agdm` (#446 D2).
+        // Neither is a plan-name constant: the row states its code, and a row
+        // where both exist and disagree is a shape change, not a guess.
+        let zqdm = row
+            .get("zqdm")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|code| !code.is_empty());
+        let agdm = row
+            .get("agdm")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|code| !code.is_empty());
+        match (zqdm, agdm) {
+            (Some(zqdm), Some(agdm)) if zqdm != agdm => {
+                return Err(A1A2Error::invalid(format!(
+                    "{}: zqdm {zqdm:?} and agdm {agdm:?} disagree",
+                    kind.label()
+                )));
+            }
+            (Some(code), _) | (None, Some(code)) => code,
+            (None, None) => {
+                return Err(A1A2Error::invalid(format!(
+                    "{}: a row has neither zqdm nor agdm",
+                    kind.label()
+                )));
+            }
+        }
     };
     let code = code.trim();
     if code.len() != 6 || !code.bytes().all(|byte| byte.is_ascii_digit()) {

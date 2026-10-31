@@ -39,15 +39,21 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 - 信封解析（`PagingFormat`）只读分页计数，不解释业务字段：
   - `exchange-sse-page-v2`：`pageHelp.pageNo`（缺失回退 `beginPage`）/ `pageHelp.pageCount`
     / `pageHelp.total` / `pageHelp.data`；
-  - `exchange-szse-page-v2`：按 `metadata.tabkey="tab2"` 选中块的 `pageNo`/`pageno`、
-    `pagecount`、`recordcount`、`data`；没有 `tab2` 时只接受唯一有非空 `data` 的块，
-    多义时 fail-closed（不再取 `[0]`）。`exchange-szse-page-v1` 为旧快照保留：仍按
-    `[0]` 重算，不会用新选块规则改写旧索引；
+  - `exchange-szse-page-v3`：按**请求声明的 `TABKEY`** 选中块（不区分大小写）；没有声明
+    时只接受唯一有非空 `data` 的块，单个 block 的旧形状仍可读；声明了但没有任何块携带
+    该 `tabkey`、或多个块都有数据而没有声明时 fail-closed。块的 `pageNo`/`pageno`、
+    `pagecount`、`recordcount`、`data` 一律取自同一个被选中的块。`CATALOGID=1110` 真实
+    响应是 4 个块而只有 `tab1` 有数据（2026-10-31 取证），因此不能再「优先 `tab2`」；
+    `CATALOGID=1793_ssgs` 请求声明 `TABKEY=tab2`，仍选 `tab2`。
+  - `exchange-szse-page-v2`：选块为「优先 `tabkey=tab2`，否则唯一非空块」。只为旧快照
+    重放保留：同样字节必须保持写入时的行数/页数，不能按 v3 改写。
+  - `exchange-szse-page-v1`：更早的快照，仍按 `[0]`（第一个 block）重算。
+    三个 SZSE 版本的选块规则互不覆盖：旧快照按登记的版本重放，不会被 v3 改写；
   - `exchange-sse-soa-page-v1`：`pageHelp.pageNo` / `pageHelp.pageCount` /
     `pageHelp.total` / `pageHelp.data`（`commonSoaQuery` 方言）。
-  这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数；名单信封换过两次
-  （`exchange-sse-page-v1` → `v2`、`exchange-szse-page-v1` → `v2`），旧快照仍按登记的
-  旧版本重放（SZSE v1 保持「第一个 block」的旧语义）。
+  这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数；名单信封换过三次
+  （`exchange-sse-page-v1` → `v2`，`exchange-szse-page-v1` → `v2` → `v3`），旧快照仍按
+  登记的旧版本重放（SZSE v1 保持「第一个 block」、v2 保持「`tab2` 优先」的旧语义）。
 - 分段：公告索引下界 `2000-01-01`，单请求区间 ≤93 天且按自然季度对齐
   （`quarter_segments`）。超过 93 天的区间在构造时即被拒（`segment_too_long`），
   不会发出请求。
@@ -126,7 +132,7 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
 additive）。
 
 `parser_version` 现在记录信封解析器版本（`exchange-sse-page-v2` /
-`exchange-szse-page-v2`；旧快照的 `v1` 仍可重放），重放据此重算行数与页数。
+`exchange-szse-page-v3`；旧快照的 SZSE `v2`/`v1` 仍可重放），重放据此重算行数与页数。
 具体来源 parser 从 PR-3 起登记自己的版本；未登记的版本按 §9.4.1 一律 fail-closed（`unknown_parser`，
 scope 不重建），不会用「不认识就跳过」掩盖字节。
 
@@ -143,17 +149,28 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
   交易所分支写 `pending_source`，只落 TDX 事实；生产形态（`data_service` 的 ops 入口 +
   compact 后端）未配置或不可读时，`derived:security_master` 以稳定码
   `source_store_unconfigured` 失败，日线实体 item 照常、上一版主表仍是 latest。
-- 业务字段 parser 版本 `exchange-a1a2-v3`（v1 → v2：沪行改读 `A_STOCK_CODE`，缺失回退
+- 业务字段 parser 版本 `exchange-a1a2-v4`（v1 → v2：沪行改读 `A_STOCK_CODE`，缺失回退
   `COMPANY_CODE`，两者都有且不等 → `source_invalid`；v2 → v3：深市名单按 `metadata.tabkey`
-  选块，行数组与分页计数取同一个块）与来源绑定登记在 item 的结果证据
+  选块，行数组与分页计数取同一个块；v3 → v4：深市代码列接受 `zqdm`|`agdm`、形状守卫改用
+  过滤后 A 股行数、选块依据写入结果证据）与来源绑定登记在 item 的结果证据
   `exchange_source` 里；清单的 `parser_version` 仍是信封版本，因为
   `--scope exchange` 重放只重建行数/页数索引。**不要**把该证据加进 generation
   evidence：同一代的 whole-market item 共用同一个 binding digest
   （`derived:suspensions` 会重算并拒绝跨代主表），追加字段会让其余 item 失败。
-- 深市终止上市响应恒为两个 block：`tab1`（暂停上市）0 行、`pagecount=0`，`tab2`
-  （终止上市）有数据。信封与消费者都从 `tab2` 取页码/`pagecount`/`recordcount`/行数组；
-  因此 `page_count is 0` 是旧选块错误，不是零页窗口。没有 `tab2` 时只退「唯一有非空
-  `data` 的块」，多个候选则 `source_invalid`。
+- 深市选块按**请求声明的 `TABKEY`**，没有声明时选**唯一非空块**；多个块都非空则
+  `source_invalid`，不「优先 `tab2`」也不取 `[0]`。`1793_ssgs` 的两个模块都声明
+  `TABKEY=tab2`（`tab1` 暂停上市为 0 行 `pagecount=0`）；`1110` 不声明，真实响应 4 个块
+  只有 `tab1` 有数据。信封与消费者共用同一个选择函数，行数组与分页计数不会来自不同块。
+  选中块的 `tabkey`、选择依据（`declared_tabkey`/`unique_non_empty`/`only_block`）与各块
+  的 row/page 数写入 item 证据的 `block_selection`，因此 `page_count is 0` 能直接看出是
+  「选错块」还是「块本来就空」。
+- 深市代码列：终止上市名单是 `zqdm`，`CATALOGID=1110` 的当前名单是 `agdm`（#446 D2）。
+  按行取存在的那个（不按计划名硬编码）；两者都有且不等 → `source_invalid`，都没有也
+  `source_invalid`。
+- 退市页的形状守卫用**过滤后**的 A 股行数：本页有 A 股行但全部缺退市日 → 形状变化
+  （错误信息带本页总行数/过滤后行数/B 股跳过数）；整页只有 B 股 → 本页无事实，不是
+  形状变化（深市退市主板第 9 页就是 10 行 B 股）；未知前缀的非 A 行仍按 #398 fail-closed；
+  整页 0 行仍走既有零行策略。
 - 沪名单计划是单页计划：`pageHelp.pageSize=2000` 一次取完（实测最大 1,845 行），
   `pageCount>1` 失败（`page_size_ignored`），`pageCount=1` 时每个计划只发 1 次请求。
 - 失败码沿用本入口（`source_unavailable` / `source_invalid` /
