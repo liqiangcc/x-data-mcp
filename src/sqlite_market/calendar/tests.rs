@@ -14,7 +14,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::Connection;
 use serde_json::json;
 
-use super::{CalendarCoverage, CalendarWrite, read_calendar, read_days};
+use super::{CALENDAR_REGRESSED, CalendarCoverage, CalendarWrite, read_calendar, read_days};
 use crate::compact_market::{self, EvidenceKind, PRICE_SCALE_QFQ, SourceBinding, VersionEvidence};
 use crate::market_data::{
     Adjustment, AdjustmentEventSet, AdjustmentEvidence, Bar, CalendarBatch, CalendarInputDates,
@@ -267,6 +267,11 @@ fn commit_writes_the_rows_the_registration_and_the_evidence() {
     // calendar (fail closed), so the commit cannot run either.
     let empty = repo.measure_calendar_coverage(&calendar).unwrap();
     assert_eq!(empty.total_bars, 0);
+    // No bar at all: nothing inside the span, nothing in the tail, and no stock
+    // day to compare with the calendar's own end.
+    assert_eq!(empty.stale_bars, 0);
+    assert_eq!(empty.stock_last_day, None);
+    assert_eq!(empty.calendar_last_day, calendar.last_day());
     assert!(
         commit(&repo, &batch, &empty)
             .unwrap_err()
@@ -499,6 +504,209 @@ fn coverage_counts_raw_security_bars_only() {
         .query_row("SELECT count(*) FROM market_series", [], |r| r.get(0))
         .unwrap();
     assert_eq!(series, 2);
+}
+
+/// `#446`: `last_day` is the end of what the calendar claims (§3.8). A stock
+/// bar after it is unknown data, not an out-of-calendar bar: it is reported in
+/// the stale tail and **never** enters the 0.01% gate. Counting it as
+/// "outside" made any one-day lag of the index inputs (~5.2k bars = 0.029%)
+/// exceed a budget of ~1.8k bars, which is the `derived:calendar` failure of
+/// `calendar-suspensions-attribution.md` §A.
+#[test]
+fn bars_after_the_calendar_are_stale_and_do_not_gate_the_commit() {
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    let in_span = [day(2026, 10, 21), day(2026, 10, 22), day(2026, 10, 23)];
+    let tail = [day(2026, 10, 26), day(2026, 10, 27), day(2026, 10, 28)];
+    let all: Vec<NaiveDate> = in_span.iter().chain(tail.iter()).copied().collect();
+    commit_raw_series(&repo, "req-a", "sh.600006", &all);
+    let batch = calendar_batch(&in_span, &in_span);
+    let calendar = TradingCalendar::union(&batch).unwrap();
+    let coverage = repo.measure_calendar_coverage(&calendar).unwrap();
+    // The ratio's denominator is the in-span bars only: the three tail bars are
+    // not part of it, so the ratio stays 0/3 instead of 0/6.
+    assert_eq!(coverage.total_bars, 3);
+    assert_eq!(coverage.outside_bars, 0);
+    assert_eq!(coverage.stale_bars, 3);
+    assert_eq!(
+        coverage.stale_days,
+        tail.iter().map(|day| (*day, 1)).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        coverage.stale_samples,
+        tail.iter()
+            .map(|day| ("sh.600006".to_string(), *day))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(coverage.stock_last_day, Some(tail[2]));
+    assert_eq!(coverage.calendar_last_day, Some(in_span[2]));
+    assert!(coverage.within_limit());
+    // The tail is a successful commit, not a failure: the calendar covers what
+    // its index inputs cover.
+    let written = commit(&repo, &batch, &coverage).unwrap();
+    assert_eq!(written.last_day, compact_market::epoch_day(in_span[2]));
+    // The tail travels with the data (§5.2 evidence bundle).
+    let c = Connection::open(&path).unwrap();
+    let (_, canonical) = evidence_store::read_evidence(&c, &written.evidence_digest).unwrap();
+    let evidence: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+    assert_eq!(
+        evidence["coverage"]["total_bars_scope"],
+        "inside [first_day,last_day] (InCalendar + NonTrading)"
+    );
+    assert_eq!(evidence["coverage"]["total_bars"], 3);
+    assert_eq!(evidence["coverage"]["outside_bars"], 0);
+    assert_eq!(evidence["coverage"]["stale_bars"], 3);
+    assert_eq!(evidence["coverage"]["stale_days"][2]["day"], "2026-10-28");
+    assert_eq!(
+        evidence["coverage"]["stale_bars_detail"][0]["entity"],
+        "sh.600006"
+    );
+    assert_eq!(evidence["coverage"]["stock_last_day"], "2026-10-28");
+    assert_eq!(evidence["coverage"]["calendar_last_day"], "2026-10-23");
+    // The stored calendar still ends where its inputs do.
+    assert_eq!(
+        read_calendar(&c).unwrap().unwrap().last_day(),
+        Some(in_span[2])
+    );
+}
+
+/// `#446`: in-span non-trading bars remain a real contradiction and still gate
+/// at 0.01%; the failure names the gated group **and** the unknown tail, so a
+/// 99.6% tail cause can no longer hide behind the first eight early days.
+#[test]
+fn in_span_non_trading_bars_fail_and_the_message_names_the_tail_too() {
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    // 10-22 is inside [10-21,10-23] and absent from the calendar: one bar there
+    // contradicts the union. 10-24 is a Saturday after `last_day`, so it would
+    // be unknown rather than non-trading; the three tail days below are the
+    // real `#446` shape (Monday to Wednesday past the index inputs).
+    let tail = [day(2026, 10, 26), day(2026, 10, 27), day(2026, 10, 28)];
+    let days = [
+        day(2026, 10, 21),
+        day(2026, 10, 22),
+        tail[0],
+        tail[1],
+        tail[2],
+    ];
+    commit_raw_series(&repo, "req-a", "sh.600006", &days);
+    let batch = calendar_batch(
+        &[day(2026, 10, 21), day(2026, 10, 23)],
+        &[day(2026, 10, 21), day(2026, 10, 23)],
+    );
+    let calendar = TradingCalendar::union(&batch).unwrap();
+    let coverage = repo.measure_calendar_coverage(&calendar).unwrap();
+    assert_eq!(
+        (
+            coverage.total_bars,
+            coverage.outside_bars,
+            coverage.stale_bars
+        ),
+        (2, 1, 3)
+    );
+    let error = commit(&repo, &batch, &coverage).unwrap_err().to_string();
+    // The gated group, its ratio and its days.
+    assert!(error.contains("fall outside the calendar"), "{error}");
+    assert!(error.contains("1/2"), "{error}");
+    assert!(error.contains("2026-10-22 (1 bars)"), "{error}");
+    // The non-gated tail, both ends and the stock's own last day.
+    assert!(
+        error.contains("3 bar(s) after the calendar's last day 2026-10-23"),
+        "{error}"
+    );
+    assert!(error.contains("stock data ends 2026-10-28"), "{error}");
+    assert!(error.contains("2026-10-28 (1 bars)"), "{error}");
+    // A failing measurement writes neither rows nor a registration.
+    let c = Connection::open(&path).unwrap();
+    assert!(read_days(&c).unwrap().is_empty());
+}
+
+/// `#446` boundary: a bar exactly on `first_day` or `last_day` is inside the
+/// calendar, so it is neither "outside" nor stale.
+#[test]
+fn bars_on_the_first_and_last_calendar_day_are_not_miscounted() {
+    let dir = tempdir();
+    let (_path, repo) = repo(&dir);
+    let first = day(2026, 10, 21);
+    let last = day(2026, 10, 23);
+    commit_raw_series(&repo, "req-a", "sh.600006", &[first, last]);
+    let batch = calendar_batch(&[first, last], &[first, last]);
+    let calendar = TradingCalendar::union(&batch).unwrap();
+    let coverage = repo.measure_calendar_coverage(&calendar).unwrap();
+    assert_eq!(coverage.total_bars, 2);
+    assert_eq!(coverage.outside_bars, 0);
+    assert_eq!(coverage.stale_bars, 0);
+    assert_eq!(coverage.stock_last_day, Some(last));
+    assert_eq!(coverage.calendar_last_day, Some(last));
+    commit(&repo, &batch, &coverage).unwrap();
+}
+
+/// `#446`: a calendar that ends before the stored one is refused with the
+/// stable code `calendar_regressed` and leaves the stored rows and registration
+/// untouched. The later index snapshot may not silently turn already committed
+/// stock bars into "unknown" (§3.8), and there is no force override.
+#[test]
+fn a_calendar_that_ends_before_the_stored_one_is_refused() {
+    let dir = tempdir();
+    let (path, repo) = repo(&dir);
+    commit_raw_series(
+        &repo,
+        "req-a",
+        "sh.600006",
+        &[day(2026, 10, 21), day(2026, 10, 22)],
+    );
+    let wide_days = [
+        day(2026, 10, 21),
+        day(2026, 10, 22),
+        day(2026, 10, 26),
+        day(2026, 10, 27),
+        day(2026, 10, 28),
+    ];
+    let wide = calendar_batch(&wide_days, &wide_days);
+    let wide_coverage = repo
+        .measure_calendar_coverage(&TradingCalendar::union(&wide).unwrap())
+        .unwrap();
+    let written = commit(&repo, &wide, &wide_coverage).unwrap();
+    assert_eq!(written.last_day, compact_market::epoch_day(wide_days[4]));
+
+    // The next index snapshot stops at 10-23. Its coverage against the stored
+    // bars is clean (both bars are inside its span), so only the no-regression
+    // guard can refuse it — exactly the production shape of `#446`.
+    let regressed = calendar_batch(
+        &[day(2026, 10, 21), day(2026, 10, 22), day(2026, 10, 23)],
+        &[day(2026, 10, 21), day(2026, 10, 22), day(2026, 10, 23)],
+    );
+    let regressed_coverage = repo
+        .measure_calendar_coverage(&TradingCalendar::union(&regressed).unwrap())
+        .unwrap();
+    assert!(regressed_coverage.within_limit());
+    let error = commit(&repo, &regressed, &regressed_coverage)
+        .unwrap_err()
+        .to_string();
+    assert_eq!(CALENDAR_REGRESSED, "calendar_regressed");
+    assert!(
+        error.starts_with("MARKET_INTEGRITY: calendar_regressed: "),
+        "{error}"
+    );
+    assert!(error.contains("2026-10-23"), "{error}");
+    assert!(error.contains("2026-10-28"), "{error}");
+
+    // Nothing was replaced: the rows, the registration and its evidence are the
+    // wide calendar's.
+    let c = Connection::open(&path).unwrap();
+    let stored = read_calendar(&c).unwrap().unwrap();
+    assert_eq!(stored.days(), TradingCalendar::union(&wide).unwrap().days());
+    assert_eq!(stored.last_day(), Some(wide_days[4]));
+    let (version_id, record_count): (String, i64) = c
+        .query_row(
+            "SELECT version_id,record_count FROM derived_dataset_versions \
+             WHERE dataset_kind='trading_calendar' AND dataset_key='exchange_union'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(version_id, written.version_id);
+    assert_eq!(record_count, wide_days.len() as i64);
 }
 
 // issue-383 §9.3 (PR-7): the calendar phase runs once per daily run, and its

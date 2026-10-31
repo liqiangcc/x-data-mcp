@@ -1803,6 +1803,13 @@ fn commit_calendar_days(fixture: &Fixture, days: &[NaiveDate]) {
         outside_samples: vec![],
         days_truncated: false,
         samples_truncated: false,
+        stale_bars: 0,
+        stale_days: vec![],
+        stale_samples: vec![],
+        stale_days_truncated: false,
+        stale_samples_truncated: false,
+        stock_last_day: days.last().copied(),
+        calendar_last_day: calendar.last_day(),
         calendar_digest: calendar.digest_hex(),
     };
     let manifest = "0b".repeat(32);

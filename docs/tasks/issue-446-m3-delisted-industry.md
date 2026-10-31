@@ -1332,6 +1332,61 @@ owner 决策/口径：
 `scripts/check_current_facts.py` 与 `prepush_check.py --repo <worktree> --base origin/main`
 的输出。不改 SLO 门禁、不部署、不动 `docs/STATUS.md` 的部署事实。
 
+### 14.7 日历覆盖率闸门修正：尾部未知与不回退（2026-10-31，XDM-132）
+
+状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+
+实现状态：本 PR 已实现 `measure_coverage` 的三值判定、尾部字段、`calendar_regressed`
+不回退保护、对应测试与文档；未部署。
+
+依据：`calendar-suspensions-attribution.md` §A（XDM-131，只读归因）。失败轮
+`derived:calendar` 报 15,712/17,873,567 = 0.08791% 超 0.01%，其中 15,651 根（99.6%）
+是 2026-10-26/27/28 三个正常交易日，晚于该轮日历 `last_day=2026-10-23`；其余 61 根是
+1991–1993 深市周六/周日真实早期 bar（0.00034%）。`measure_coverage` 当时只用
+`calendar.contains(day)`，没有区间判断，把 `last_day` 之后的 `unknown` 计成 outside，
+与 `src/trading_calendar.rs` 模块文档和 `day_status()` 的 `BeyondCalendar` 语义冲突。
+
+口径（本次修订，不改阈值）：
+
+1. 覆盖率自检改用 `TradingCalendar::day_status()`：`NonTrading`（区间内无行）计入
+   `outside_bars` 并过 0.01% 闸门；`BeyondCalendar`（晚于 `last_day`）只记
+   `stale_bars`，不进门禁。
+2. `CalendarCoverage::total_bars` 口径明确为**区间内 bar**（`InCalendar + NonTrading`），
+   是比率分母；尾部 bar 不进入分母，避免用未知天数稀释或放大比率。
+3. 新增尾部字段 `stale_bars` / `stale_days` / `stale_samples` / `stock_last_day` /
+   `calendar_last_day`（另有 `stale_days_truncated` / `stale_samples_truncated`），
+   写入 `derived` evidence 的 `coverage` 与 item 成功 evidence；失败信息同时列出区间内
+   外点与尾部两组计数，不再只按日期升序给出前 8 个 1991 年外点。
+4. `commit_calendar` 读已存日历（`read_calendar`）：新日历 `last_day` 早于已存
+   `last_day` 时返回稳定错误码 `calendar_regressed`（`Error::Integrity`，消息以该码
+   开头），不整表替换；空库（`None`）照常提交；`last_day` 相等属正常重算，不拒绝；
+   本 PR 不提供 force 开关。
+5. 0.01% 阈值（`COVERAGE_LIMIT_NUMERATOR/DENOMINATOR`）不变；1991–1993 深市边界判定
+   不变（61 根仍在区间内、仍计入 `outside`，0.00034% 通过）。
+
+| 工作项 | 计划 | 证据/落点 | 状态 |
+|---|---|---|---|
+| 三值覆盖率 | `measure_coverage` 按 `day_status()` 分流：区间内无行 → `outside`；晚于 `last_day` → `stale`；`total_bars` 只含区间内 bar | `src/sqlite_market/calendar.rs` | 未部署 |
+| 尾部字段 | `CalendarCoverage` 增 `stale_bars`/`stale_days`/`stale_samples`/`stock_last_day`/`calendar_last_day` 与截断标记；`ratio_text`/`require_within_limit` 注释与信息说明分母与两组 | `src/trading_calendar.rs` | 未部署 |
+| 证据与信息 | evidence bundle 的 `coverage` 增 `total_bars_scope` 与全部尾部字段；item 成功 evidence 同时给出 `stale_bars`/`stale_days`/两个 `last_day`；失败信息同时给出区间内与尾部 | `src/sqlite_market/calendar.rs`、`src/data_supply/derived.rs` | 未部署 |
+| 不回退保护 | `commit_calendar` 先 `read_calendar`，`last_day` 回退 → `calendar_regressed`（Integrity），不写行/不换版本；空库、相等照常 | `src/sqlite_market/calendar.rs` | 未部署 |
+| 测试 | 尾部 3 天 + 日历到前一日 → 通过且 stale 字段正确；区间内非交易日超限 → 失败且消息同时给出两组；`last_day` 回退 → `calendar_regressed` 且已存行/版本不变；首/末个日历日不误计；空 bar 既有行为不变 | `src/sqlite_market/calendar/tests.rs` | 未部署 |
+| 文档 | 本节 + `src/trading_calendar.rs`、`src/sqlite_market/calendar.rs` 注释；`docs/tasks/issue-383-m1-research-data.md` §5.2 口径澄清与不回退一句；不改阈值数值 | 三个文件 | 未部署 |
+
+测试名（CI，不联网）：`bars_after_the_calendar_are_stale_and_do_not_gate_the_commit`、
+`in_span_non_trading_bars_fail_and_the_message_names_the_tail_too`、
+`a_calendar_that_ends_before_the_stored_one_is_refused`、
+`bars_on_the_first_and_last_calendar_day_are_not_miscounted`；既有
+`commit_writes_the_rows_the_registration_and_the_evidence`（空 bar）保持通过。
+
+**为什么这不是放宽门槛**：闸门仍按 0.01% 拒绝区间内真实矛盾 bar（早期深市 61 根照计），
+只是把日历自己声明为 `unknown` 的 `last_day` 之后 bar 从“日历外”改记为尾部信息，
+并新增“日历不得回退”的独立拒绝；分母改为区间内 bar，比率不再被未知天数影响。
+
+验证：本机只跑 `cargo fmt`、`git diff --check`、`scripts/check_current_facts.py` 与
+`prepush_check.py`；Rust 由 PR CI（fmt/clippy `-D warnings`/nextest/export feature）证明。
+不改 0.01% 阈值、不改早期深市边界、不联网、不部署、不动 `docs/STATUS.md` 的部署事实。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
