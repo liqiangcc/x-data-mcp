@@ -8,6 +8,7 @@ directory adds rows, not a second parser.
 | File | Shape | What it proves |
 |---|---|---|
 | `szse-chain.json` | SZSE `ShowReport` / `SSGSGMXX` / `tab2` envelope (`metadata` + `data`), four rows: a three-change chain for `000004` plus one `200xxx` B-share row | A change chain becomes two closed intervals and one `unbounded` last interval; the B-share row is skipped, not turned into a name |
+| `szse-chain-tab1-empty.json` | The same four rows in the real two-block shape: `tab1` (暂停上市) with `data: []` and `pagecount=0` first, then `tab2` (简称变更) with the rows | Replay reads the block the request declared (`TABKEY=tab2`), not the first block with a `data` array: the empty `tab1` no longer rebuilds zero rows |
 | `szse-xd-xr.json` | Three rows: an `XD` marker row for `000002`, a real rename for `000002`, and an `XR` marker row for `000001` | XD/XR prefixes are normalised before a name lands; a marker-only row links the chain and opens no interval |
 | `szse-same-day.json` | Two changes for one code on one day | Same-day multiple changes fail closed (`source_invalid`), no row is written |
 | `szse-empty.json` | Envelope with `data: []` and `recordcount: 0` | A zero-row table is *not* an empty name history: zero rows are assembled with only the `not_observed` windows, and the live item refuses to write them |

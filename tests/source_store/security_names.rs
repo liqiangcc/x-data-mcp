@@ -188,6 +188,32 @@ fn replay_rebuilds_the_name_history_and_verifies_it() {
     );
 }
 
+/// The frozen page keeps the real two-block shape (`tab1` empty, `tab2` with
+/// rows): `source_store replay --scope security_names` reads the declared tab,
+/// so the page that used to rebuild zero rows now rebuilds the change chain.
+#[test]
+fn replay_reads_tab2_when_the_frozen_page_starts_with_an_empty_tab1() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("store"));
+    frozen_short_name(
+        &store,
+        &fixture("szse-chain-tab1-empty.json"),
+        SZSE_PARSER_VERSION,
+    );
+
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    assert_eq!(report["status"], "ok");
+    let scope = &report["scopes"][0];
+    assert_eq!(scope["rebuilt"], "rebuilt");
+    assert_eq!(scope["database"], "match");
+    assert_eq!(scope["snapshots"], 3);
+    assert_eq!(scope["as_of"], "2001-03-07");
+    assert_eq!(name_rows(&db), 3);
+    assert_eq!(registrations(&db), 1);
+}
+
 /// Without `--db` the scope only computes: a summary and the as-of bound, and
 /// no database is opened or created by the read.
 #[test]

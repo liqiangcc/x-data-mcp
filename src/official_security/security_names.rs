@@ -81,8 +81,11 @@ use crate::source_store::{SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
 
 /// Business-field parser version of this adapter. It is registered on the
-/// derived item's outcome evidence, not in PR-2's envelope manifest.
-pub const PARSER_VERSION: &str = "security-names-v1";
+/// derived item's outcome evidence, not in PR-2's envelope manifest. v1 → v2:
+/// the short-name rows are read from the block the request declared
+/// (`TABKEY=tab2`), matching the live acquisition, so a frozen page with an
+/// empty `tab1` in front no longer replays as an empty table.
+pub const PARSER_VERSION: &str = "security-names-v2";
 /// Reason code for a frozen table with no A-share change row: a whole-market
 /// snapshot with zero change rows is a source defect, never an empty history.
 pub const EMPTY_TABLE_CODE: &str = "empty_name_set";
@@ -313,17 +316,22 @@ fn unavailable_markets(last_change_day: NaiveDate) -> Vec<CoverageWindow> {
 ///
 /// `pages` are `(source_id, snapshot_id, bytes)` in manifest order; only
 /// `szse_short_name` pages matter (the SSE bulletin pages belong to PR-10).
+/// The declared `TABKEY` comes from the same plan the live acquisition uses
+/// (`risk_warnings::szse_declared_tabkey`), so live and replay read the same
+/// block: the real page has an empty `tab1` in front of the `tab2` rows.
 /// Coverage is derived from the bytes by `assemble_table`, the same function
 /// the live writer uses, so a fresh init replays the windows the first write
 /// recorded instead of re-stamping them with the current day. A table with no
 /// A-share change row fails with [`EMPTY_TABLE_CODE`].
 pub fn replay(pages: &[(&str, String, Vec<u8>)]) -> Result<NameSet, Error> {
+    let declared_tabkey = risk_warnings::szse_declared_tabkey();
     let mut changes = Vec::new();
     for (source_id, snapshot_id, bytes) in pages {
         if *source_id != "szse_short_name" {
             continue;
         }
-        let (mut parsed, _, _) = risk_warnings::parse_sz_page(bytes, snapshot_id)?;
+        let (mut parsed, _, _) =
+            risk_warnings::parse_sz_page(bytes, snapshot_id, declared_tabkey.as_deref())?;
         changes.append(&mut parsed);
     }
     assemble_table(&changes)
@@ -363,6 +371,19 @@ mod tests {
         assert_eq!(set.not_observed_windows(), 2);
     }
 
+    /// The real `SSGSGMXX` page carries an empty `tab1` before the `tab2` rows.
+    /// Replay reads the declared tab through the same parser the live writer
+    /// uses, so the two-block page rebuilds the chain instead of zero rows.
+    #[test]
+    fn a_two_block_page_replays_the_declared_tab2_rows() {
+        let set =
+            replay(&page("szse-chain-tab1-empty.json")).expect("the declared tab2 rows replay");
+        assert_eq!(set.rows.len(), 3);
+        assert_eq!(set.rows[0].name, "ST深安达");
+        assert_eq!(set.rows[0].effective_from, day(1998, 4, 28));
+        assert_eq!(set.observed_windows(), 1);
+    }
+
     #[test]
     fn xd_xr_marker_rows_do_not_become_intervals() {
         let set = replay(&page("szse-xd-xr.json")).expect("marker fixture replays");
@@ -385,6 +406,24 @@ mod tests {
         // item must not write that as the name history, and the replay must
         // not write it as "the empty table was rebuilt".
         let error = replay(&page("szse-empty.json")).expect_err("an empty table is refused");
+        assert_eq!(error.code(), EMPTY_TABLE_CODE);
+    }
+
+    /// The same fail-closed answer for the real two-block shape: the declared
+    /// `tab2` is selected and it is empty, so the table is empty, not a
+    /// reason to fall back to another block or to write zero rows.
+    #[test]
+    fn a_two_block_empty_table_is_not_an_empty_history() {
+        let body = br#"[
+          {"metadata":{"tabkey":"tab1","pagecount":0,"recordcount":0},"data":[]},
+          {"metadata":{"tabkey":"tab2","pagecount":0,"recordcount":0},"data":[]}
+        ]"#;
+        let pages = vec![(
+            "szse_short_name",
+            "empty-two-block-sha".to_string(),
+            body.to_vec(),
+        )];
+        let error = replay(&pages).expect_err("an empty two-block table is refused");
         assert_eq!(error.code(), EMPTY_TABLE_CODE);
     }
 
@@ -411,8 +450,10 @@ mod tests {
     fn the_live_writer_and_the_replay_record_the_same_coverage() {
         let pages = page("szse-chain.json");
         let replayed = replay(&pages).expect("chain replays");
+        let declared = risk_warnings::szse_declared_tabkey();
         let (changes, _, _) =
-            risk_warnings::parse_sz_page(&pages[0].2, &pages[0].1).expect("the fixture parses");
+            risk_warnings::parse_sz_page(&pages[0].2, &pages[0].1, declared.as_deref())
+                .expect("the fixture parses");
         let written = assemble_table(&changes).expect("the live writer assembles the same chain");
         assert_eq!(replayed, written);
 
