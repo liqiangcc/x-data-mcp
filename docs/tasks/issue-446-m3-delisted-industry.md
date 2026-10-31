@@ -1387,6 +1387,65 @@ owner 决策/口径：
 `prepush_check.py`；Rust 由 PR CI（fmt/clippy `-D warnings`/nextest/export feature）证明。
 不改 0.01% 阈值、不改早期深市边界、不联网、不部署、不动 `docs/STATUS.md` 的部署事实。
 
+### 14.8 XDM-134：confirmed 区间未完全落在日历覆盖内（最小设计）
+
+状态：**最小设计（先于代码）；实现未部署**（Refs #446；证据来源 XDM-131
+`calendar-suspensions-attribution.md` §B）。
+
+owner 2026-10-31 裁决：两种零交易日形态都不写行、item 成功，计数与样例进证据；
+不写 `missing_days=0`，不放宽其它 fail-closed。
+
+**问题**：`assemble_suspensions` 对每条 confirmed fact 用闭区间数已提交日历的交易日，
+`== 0` 即 `Error::TradingDayRange`，整个 `derived:suspensions` 失败、一行不写。A-3 的
+`end_day` 是「复牌日前一自然日」，且来源窗口末段可晚于日历 `last_day`，因此
+（a）整段在 `last_day` 之后、（b）整段落在周末/假日块内都会让全市场停牌数据集失败。
+另有一个更隐蔽的形态：区间**部分**越过 `last_day`（例如 `10-20..10-29`，日历到 `10-28`），
+若按覆盖内交易日写行会把 `maybe-trading` 的 `10-29` 少算进 `missing_days`。
+
+**判定（唯一口径，先看覆盖再看交易日）**：设日历覆盖 `[first_day, last_day]`。
+
+1. 日历为空，或区间未完全落在 `[first_day, last_day]` 内（`start_day < first_day` 或
+   `end_day > last_day`）→ `deferred_beyond_calendar`：整行不写、计数、最多 10 条样例；
+   item 成功。**不 clamp `end_day`、不写部分 `missing_days`**；下一次运行日历前进后
+   同一 fact 自然纳入。
+2. 区间完全落在 `[first_day, last_day]` 内且 `trading_days_within == 0` →
+   `skipped_no_trading_day`：整行不写、计数、最多 10 条样例；item 成功。没有可交易日
+   就没有可交易性影响，不能因为一个周末区间让全市场停牌数据失败。
+3. 其余（覆盖完整且至少 1 个交易日）保持现状：`missing_days = trading_days_within`，
+   正常写行。
+
+**证据（不得静默）**：item `outcome_json` 与 `derived_dataset_versions.evidence` 各增加
+`deferred_beyond_calendar`、`deferred_samples`、`skipped_no_trading_day`、
+`skipped_samples`。样例顺序为输入 facts 顺序，字段 `entity` / `start_day` / `end_day` /
+`source_record_id`；上限 10 条（计数是完整计数，样例只是截断）。稳定词逐字固定为
+`deferred_beyond_calendar` / `skipped_no_trading_day`。
+
+**不变式**：
+
+- 表约束 `missing_days > 0`（`migrations/tasks/023_security_master.sql:218`）不放宽；
+  跳过形态不产生行，因此不写 0。
+- `Error::TradingDayRange` 保留，但不再用于上述两种形态；`UnknownEntity` / `Overlap` /
+  `Duplicate` / `Range` / `MissingDays` / `Reason` / `SourceKind` 等仍 fail-closed。
+- 与 `unresolved_gap` 不双计：被跳过的区间不进 `explained`，不产生 gap 行
+  （这些天本来没有 bar）。
+- digest 只覆盖已写行：跳过不改变 `suspensions-v1` 的输入，也不改 `algorithm_version`。
+
+**测试清单（CI，不联网）**
+
+| 场景 | 断言 |
+|---|---|
+| 纯周末区间（覆盖内） | `Ok`、`skipped_no_trading_day == 1`、无行、样例含 entity/起止/来源 id |
+| 整段在 `last_day` 之后（`10-29`，日历到 `10-28`） | `Ok`、`deferred_beyond_calendar == 1`、无行 |
+| 部分越界（`10-20..10-29`，日历到 `10-28`） | `deferred_beyond_calendar == 1`、无行、`missing_days` 不出现部分计数 |
+| 跨交易日区间（覆盖完整） | 正常行、`missing_days` = 区间内交易日数 |
+| 既有 fail-closed | `UnknownEntity`/`Overlap`/`Duplicate`/`Range` 回归不变 |
+| digest / gap | 跳过不改变 digest；被跳过区间不产生 explained/gap 行 |
+| 写入器 | evidence 落库含 4 个字段，计数与样例一致，行数不变 |
+
+**落点**：`src/security_master/suspensions.rs`（计数与样例、覆盖边界、分支）、
+`src/data_supply/derived.rs`（item outcome）、`src/sqlite_market/suspensions.rs`
+（evidence）、两处测试文件。不改表结构、不改读面、不改 `docs/STATUS.md` 部署事实。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
