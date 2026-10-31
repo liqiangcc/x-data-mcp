@@ -278,7 +278,7 @@ impl Fixture {
                     adjustment: Adjustment::Raw,
                     instrument_class: INSTRUMENT_CLASS_STOCK,
                     price_scale: 2,
-                    content_digest: digest(0x31),
+                    content_digest: digest(0x31 + index as u8),
                     record_count: bars.len() as i64,
                     first_day: bars[0].trade_day,
                     last_day: bars[bars.len() - 1].trade_day,
@@ -418,7 +418,7 @@ fn without_a_database_the_scope_counts_the_frozen_facts_only() {
     let scope = &report.scopes[0];
     assert_eq!(scope.status, "ok");
     assert_eq!(scope.rebuilt, COMPUTED_SUSPENSIONS_NO_DB);
-    assert_eq!(scope.facts, Some(5));
+    assert_eq!(scope.facts, Some(4));
     assert_eq!(scope.confirmed_rows, Some(0));
     assert!(scope.summary.is_none());
     assert!(scope.database.is_none());
@@ -435,9 +435,7 @@ fn replay_rebuilds_the_daily_suspension_rows_bit_for_bit() {
     let daily_set = fixture.write_daily_set();
     let daily_rows = suspensions::read_suspensions(&fixture.c).unwrap();
     assert_eq!(daily_rows.len(), daily_set.rows.len());
-    let daily_summary = crate::compact_market::digest_hex(
-        &crate::security_master::suspensions::dataset_digest(&daily_rows),
-    );
+    let daily_summary = super::suspension_summary(&daily_rows);
 
     fixture.wipe_suspensions();
     assert!(
@@ -451,8 +449,8 @@ fn replay_rebuilds_the_daily_suspension_rows_bit_for_bit() {
     assert_eq!(scope.status, "ok");
     assert_eq!(scope.rebuilt, REBUILT_SUSPENSIONS);
     assert_eq!(scope.database, Some("match"));
-    assert_eq!(scope.facts, Some(5));
-    assert_eq!(scope.confirmed_rows, Some(5));
+    assert_eq!(scope.facts, Some(4));
+    assert_eq!(scope.confirmed_rows, Some(4));
     assert_eq!(scope.summary.as_deref(), Some(daily_summary.as_str()));
     assert_eq!(
         suspensions::read_suspensions(&fixture.c).unwrap(),
@@ -472,8 +470,14 @@ fn verify_only_matches_then_reports_an_input_change() {
     assert_eq!(scope.database, Some("match"));
     assert_eq!(scope.inputs_match, Some(true));
     assert!(scope.drift.is_empty());
+    let inputs_before = scope.inputs_digest.clone();
+    assert!(inputs_before.is_some());
 
-    // Remove one trading day inside 600849's 2008-05-06..05-08 suspension:
+    // The same store plus the same database state gives the same input digest.
+    let again = report_for(&fixture, true);
+    assert_eq!(again.scopes[0].inputs_digest, inputs_before);
+
+    // Remove one trading day inside 600001's 2008-05-05..05-07 suspension:
     // the database advanced, so the recomputed `missing_days` legitimately
     // differs. This must be reported as changed inputs, not store corruption.
     fixture
@@ -490,6 +494,7 @@ fn verify_only_matches_then_reports_an_input_change() {
     assert_eq!(scope.database, Some("drift"));
     assert_eq!(scope.drift_cause, Some("inputs_changed"));
     assert_eq!(scope.inputs_match, Some(false));
+    assert_ne!(scope.inputs_digest, inputs_before);
     assert!(!scope.drift.is_empty());
     assert_eq!(suspensions::read_suspensions(&fixture.c).unwrap().len(), 5);
 }

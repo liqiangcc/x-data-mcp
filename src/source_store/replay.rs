@@ -53,8 +53,8 @@
 //! deterministic over **both** inputs: the same store plus the same database
 //! state gives the same digest, while a changed master/calendar legitimately
 //! changes it. The replay records that state's digest (`inputs_digest`) in the
-//! registration evidence, so `--verify-only` can report `inputs_changed`
-//! instead of calling a database advance `drift` or corruption.
+//! registration evidence, so `--verify-only` labels a database advance
+//! `inputs_changed` (not `rows_changed`) and never calls it store corruption.
 //!
 //! Without a database the scopes only compute and report their summary, so a
 //! read never touches a database and never creates the store.
@@ -1555,7 +1555,7 @@ fn rebuild_suspensions(
         .read(crate::sqlite_market::suspensions::read_inputs_if_ready)
         .map_err(|error| format!("database_inputs: {error}"))?;
     let inputs = match readiness {
-        crate::sqlite_market::suspensions::SuspensionInputsReadiness::Ready(inputs) => inputs,
+        crate::sqlite_market::suspensions::SuspensionInputsReadiness::Ready(inputs) => *inputs,
         crate::sqlite_market::suspensions::SuspensionInputsReadiness::MissingMaster => {
             return Ok(SuspensionsOutcome::not_ready(
                 "no stored security_master; rebuild it (or run the daily item) before \

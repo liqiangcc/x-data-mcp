@@ -337,9 +337,8 @@ pub(crate) type BarDays = std::collections::BTreeMap<String, Vec<chrono::NaiveDa
 /// Why [`read_inputs_if_ready`] could not read the four inputs. The replay
 /// maps both to the stable `suspension_replay_not_ready` code; the daily item
 /// keeps its existing fail-closed messages.
-#[derive(Debug)]
 pub(crate) enum SuspensionInputsReadiness {
-    Ready(SuspensionInputs),
+    Ready(Box<SuspensionInputs>),
     MissingMaster,
     EmptyCalendar,
 }
@@ -366,19 +365,21 @@ pub(crate) fn read_inputs_if_ready(c: &Connection) -> Result<SuspensionInputsRea
         return Ok(SuspensionInputsReadiness::EmptyCalendar);
     }
     let bar_days = super::series::read_raw_bar_days(c)?;
-    Ok(SuspensionInputsReadiness::Ready(SuspensionInputs {
-        intervals,
-        master,
-        calendar,
-        bar_days,
-    }))
+    Ok(SuspensionInputsReadiness::Ready(Box::new(
+        SuspensionInputs {
+            intervals,
+            master,
+            calendar,
+            bar_days,
+        },
+    )))
 }
 
 /// Read [`SuspensionInputs`], failing closed when an input is absent: a
 /// missing master or an empty calendar would otherwise be read as "no gaps".
 pub(crate) fn read_inputs(c: &Connection) -> Result<SuspensionInputs, Error> {
     match read_inputs_if_ready(c)? {
-        SuspensionInputsReadiness::Ready(inputs) => Ok(inputs),
+        SuspensionInputsReadiness::Ready(inputs) => Ok(*inputs),
         SuspensionInputsReadiness::MissingMaster => Err(integrity(
             "suspensions need a stored security_master; none exists for this run",
         )),
