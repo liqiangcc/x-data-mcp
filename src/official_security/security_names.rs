@@ -182,13 +182,6 @@ impl Error {
             Self::Invalid { code, .. } => code,
         }
     }
-
-    fn invalid(detail: impl Into<String>) -> Self {
-        Self::Invalid {
-            code: "source_invalid",
-            detail: detail.into(),
-        }
-    }
 }
 
 /// Resolve the source store and fetch client, then acquire.
