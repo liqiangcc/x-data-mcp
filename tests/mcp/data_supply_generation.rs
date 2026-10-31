@@ -282,6 +282,7 @@ fn missing_and_null_bindings_refuse_the_source() {
         &x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market2.clone()),
         None,
         Some(&empty_generation),
+        x_data_mcp::source_store::Policy::Optional,
     )
     .unwrap()
     .unwrap();
