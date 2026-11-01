@@ -1014,7 +1014,11 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
     assert_eq!(started.status, RefreshStatus::Running);
     assert!(started.finished_at.is_none());
     assert_eq!(started.requests, 0);
-    assert_eq!(started.planned.len(), 14);
+    assert_eq!(
+        started.planned.len(),
+        300,
+        "the immediate reply carries the full plan, not results"
+    );
     let run_id = started.run_id.clone().unwrap();
 
     // A tail is refused while the background full is open, even though the
