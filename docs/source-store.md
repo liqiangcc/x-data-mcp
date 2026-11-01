@@ -241,6 +241,28 @@ source_store register-generation-member --store <dir> \
 `source_store exempt` 覆盖该代确未写入的行情派生事实（理由写 `source_bindings=0`）；
 完整退役序列见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §8.3。
 
+### 4.4 `generation_facts`：摘要的含义与提交后刷新
+
+`generation_facts.fact_digest` 是**这一代在库里当前仍被引用的派生内容**的摘要：
+`market_series`（`daily_series`，含 forward/raw 两个口径）、`capital_events`、
+`adjustment_events` 里 `source_binding_digest` 指向该代的那些行。它不是「这一代
+写入时那一刻」的快照：日更或前进窗口会把行改挂到新代的 binding（`series_commit.rs`
+的 `UPDATE … source_binding_digest`），旧代仍在引用的内容因此变少，摘要随之变小。
+
+- **每次成功提交后刷新所有代**：写入侧在日更提交后调用
+  `refresh_derived_generation_facts()`，对「仍持有 binding 的代」与「`generation_facts`
+  里已有派生行的代」重算摘要并 upsert（主键 `(generation, role, kind)`，幂等），
+  不再只登记刚提交的那一代。成本约为 `3 × 代数` 次摘要查询（另加一次代数集合
+  查询和一次已有行查询）。`replay --scope generation_facts --verify-only` 因此在
+  任何一次提交之后都应与库内行一致，不需要人工修复。
+- **不删除行**：一个代的 binding 全部被改挂走之后，它的事实行保留（退役门禁按
+  「行存在」判断该事实类别是否登记），摘要改为**空集摘要**；只要该代曾登记过
+  某个派生 kind，重放也为它算出同一空集摘要。
+- **不发明行**：该代从未登记过的派生 kind 仍然缺席，门禁照旧按缺失处理，不会
+  因为刷新而凭空多出一类事实。
+
+`--verify-only` 的比较口径不变（`facts_summary`，不含 `registered_at`）。
+
 ## 5. 退役豁免
 
 退役门禁（[M3 设计](tasks/issue-446-m3-delisted-industry.md) §8.3）默认拒绝：
@@ -311,7 +333,10 @@ CI 覆盖写序故障注入（fsync/rename 各失败点无悬空清单行）、�
 （`tests/source_store/risk_warnings.rs`、`tests/source_store/security_names.rs`）：
 多页完整页集与单页快照重放出同一摘要、同指纹两份 sha 只算最新（旧页事件不重复
 计入）、缺页或行数与 `recordcount` 不符 → `snapshot_incomplete` 且上一版仍可读、
-`--verify-only` 与同一选择比对为 `match`、旧 v2 扁平公告页仍可重放。测试全部使用
+`--verify-only` 与同一选择比对为 `match`、旧 v2 扁平公告页仍可重放。`generation_facts`
+的跨代刷新（XDM-161）在 `src/sqlite_market/generation_facts/tests.rs` 用两代行级夹具
+验证：改挂前重放 `drift`、提交后刷新转 `match`、空集摘要保留、退役门禁仍通过、
+重复刷新幂等。测试全部使用
 临时目录与合成归档，不联网、不依赖本机路径。
 
 真实归档导入、`docs/STATUS.md` 的批次留痕和 fresh-init 后的

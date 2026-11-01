@@ -18,6 +18,16 @@
 //! "clear the DB and replay" reproduces the same summary (§9.4.2). Bytes for
 //! the irreproducible facts stay in the source store; for the facts that the
 //! derived tables already explain, the digest is computed from those tables.
+//!
+//! A derived summary means "what this generation still references in the
+//! database **right now**" (XDM-161). A later daily run or forward-window
+//! write re-points rows to a new generation's binding
+//! (`series_commit.rs`'s `UPDATE market_series … source_binding_digest`), so
+//! the old generation's summary shrinks. Every successful commit therefore
+//! refreshes all generations, not just the one that just wrote
+//! ([`refresh_derived_facts`]); a generation whose bindings all moved away
+//! keeps its rows — the retire gate reads row existence, not the digest —
+//! with the empty-set digest.
 
 use std::path::Path;
 
@@ -274,20 +284,111 @@ pub(crate) fn derived_facts_for(
 }
 
 /// Recompute every generation's market-derived facts (replay's DB half).
+///
+/// The generation set is the union of "currently holds a `source_bindings`
+/// row" and "already has a derived row in `generation_facts`". The second
+/// half matters after a write re-points every row of a generation to a newer
+/// binding: its facts must stay readable (the retire gate checks row
+/// existence), and the replay must reproduce exactly that row, so a kind
+/// with no live rows keeps its row with the empty-set digest. Kinds the
+/// generation never registered are still absent — the gate refuses them
+/// instead of the writer inventing a fact.
 pub(crate) fn all_derived_facts(c: &Connection) -> Result<Vec<GenerationFact>, Error> {
     let mut stmt = c
-        .prepare("SELECT DISTINCT generation_manifest_sha256 FROM source_bindings")
+        .prepare(
+            "SELECT DISTINCT generation_manifest_sha256 FROM source_bindings \
+             ORDER BY generation_manifest_sha256",
+        )
         .map_err(storage)?;
-    let generations = stmt
+    let mut generations = stmt
         .query_map([], |row| row.get::<_, Vec<u8>>(0))
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
+    // Derived kinds the index already knows about, so an orphaned generation
+    // keeps its rows instead of silently dropping out of the replay.
+    let mut known = c
+        .prepare(
+            "SELECT generation_manifest_sha256,role,fact_kind FROM generation_facts \
+             ORDER BY generation_manifest_sha256,role,fact_kind",
+        )
+        .map_err(storage)?;
+    let known = known
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    let mut registered: std::collections::BTreeSet<(Vec<u8>, String, String)> =
+        std::collections::BTreeSet::new();
+    for (generation, role, kind) in known {
+        if is_derived_kind(&role, &kind) {
+            registered.insert((generation, role, kind));
+        }
+    }
+    for (generation, _, _) in &registered {
+        if !generations.contains(generation) {
+            generations.push(generation.clone());
+        }
+    }
+    generations.sort();
+    generations.dedup();
     let mut rows = Vec::new();
     for generation in generations {
-        rows.extend(derived_facts_for(c, &hex(&generation))?);
+        let generation_hex = hex(&generation);
+        let live = derived_facts_for(c, &generation_hex)?;
+        for (role, kind) in DERIVED_FACTS {
+            if let Some(fact) = live.iter().find(|fact| fact.fact_kind == kind) {
+                rows.push(fact.clone());
+            } else if registered.contains(&(generation.clone(), role.into(), kind.into())) {
+                rows.push(GenerationFact {
+                    generation_manifest_sha256: generation_hex.clone(),
+                    role: role.into(),
+                    fact_kind: kind.into(),
+                    fact_digest: content_digest(kind, &generation, &[]),
+                    evidence_sha256: None,
+                    parser_version: None,
+                    registered_at: timestamp(chrono::Utc::now()),
+                });
+            }
+        }
     }
     Ok(rows)
+}
+
+/// The derived `(role, fact_kind)` pairs this index owns.
+const DERIVED_FACTS: [(&str, &str); 3] = [
+    (ROLE_DAY, KIND_DAILY_SERIES),
+    (ROLE_GBBQ, KIND_CAPITAL_EVENTS),
+    (ROLE_GBBQ, KIND_ADJUSTMENT_EVENTS),
+];
+
+fn is_derived_kind(role: &str, fact_kind: &str) -> bool {
+    DERIVED_FACTS
+        .iter()
+        .any(|(known_role, known_kind)| *known_role == role && *known_kind == fact_kind)
+}
+
+/// Recompute and upsert every generation's market-derived facts after a
+/// successful commit (XDM-161).
+///
+/// The daily run registers only the generation it wrote, but its writes can
+/// re-point rows of older generations, so those summaries go stale. This is
+/// the writer's half of the replay: it reads the same rows
+/// [`all_derived_facts`] reads and upserts them (the key is
+/// `(generation, role, kind)`), which is idempotent and never deletes a fact
+/// row. Cost is two metadata queries (binding generations, registered derived
+/// kinds) plus three digest queries per generation, i.e. about
+/// `3 × generations` reads per commit.
+pub(crate) fn refresh_derived_facts(c: &Connection) -> Result<usize, Error> {
+    let facts = all_derived_facts(c)?;
+    record_facts(c, &facts)?;
+    Ok(facts.len())
 }
 
 fn content_digest(kind: &str, generation: &[u8], lines: &[String]) -> String {
@@ -400,3 +501,6 @@ fn adjustment_events_digest(c: &Connection, generation: &[u8]) -> Result<Option<
         &lines,
     )))
 }
+
+#[cfg(test)]
+mod tests;
