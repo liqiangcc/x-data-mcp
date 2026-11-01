@@ -2323,6 +2323,233 @@ fn seed_security_master(f: &Fixture, rows: &[(&str, Option<NaiveDate>)]) {
     .unwrap();
 }
 
+/// Seed `derived:security_names` the way the daily item does: one generation
+/// binding, then the whole-table replace. The read test goes through the public
+/// `query_data` handler, so the stored rows are exactly what a real run leaves.
+fn seed_security_names(f: &Fixture) {
+    use crate::security_master::Exchange;
+    use crate::security_master::names::{NameCertainty, NameInterval, NameSet, NameSourceKind};
+    use crate::sqlite_market::security_names::SecurityNameWrite;
+
+    let row = |code: &str,
+               from: NaiveDate,
+               to: Option<NaiveDate>,
+               name: &str,
+               certainty: NameCertainty,
+               known_at: Option<NaiveDate>,
+               record: Option<&str>| NameInterval {
+        exchange: Exchange::Sz,
+        code: code.into(),
+        effective_from: from,
+        effective_to: to,
+        name: name.into(),
+        certainty,
+        known_at,
+        source_kind: NameSourceKind::SzseNameHistory,
+        source_record_id: record.map(str::to_owned),
+    };
+    // XDM-157: the two dated rows are first known on the Shanghai capture days
+    // 2026-11-01/2026-11-02; the third row predates the rule and keeps NULL.
+    let set = NameSet {
+        rows: vec![
+            row(
+                "000001",
+                NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
+                Some(NaiveDate::from_ymd_opt(2027, 6, 1).unwrap()),
+                "ST旧名",
+                NameCertainty::Interval,
+                Some(NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()),
+                Some("record-1"),
+            ),
+            row(
+                "000002",
+                NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
+                None,
+                "新名",
+                NameCertainty::Unbounded,
+                Some(NaiveDate::from_ymd_opt(2026, 11, 2).unwrap()),
+                Some("record-2"),
+            ),
+            row(
+                "000003",
+                NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+                None,
+                "无日期",
+                NameCertainty::Unbounded,
+                None,
+                None,
+            ),
+        ],
+        coverage: Vec::new(),
+        pending_sources: Vec::new(),
+    };
+    f.backend
+        .commit_security_names(&SecurityNameWrite {
+            set: &set,
+            task_id: "task-names",
+            item_id: "derived:security_names",
+            generation_id: "gen-names",
+            generation_manifest_sha256: &"41".repeat(32),
+            member_sha256: &"42".repeat(32),
+            security_event_sha256: &"43".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-names"}),
+        })
+        .unwrap()
+        .expect("a non-empty name set registers its version");
+}
+
+/// One complete `szse_short_name` refresh, the durable owner of the dataset's
+/// `metadata.verified_through` (XDM-157, `issue-446` §5.3/§5.6).
+fn seed_names_refresh_run(f: &Fixture, verified_through: &str) {
+    use crate::exchange_source::SourceId;
+    use crate::sqlite_market::refresh_runs::{RunFinish, RunSourceRow, RunStart};
+
+    let run_id = "refresh-names-1".to_owned();
+    let source = SourceId::SzseShortName;
+    let claimed = f
+        .backend
+        .claim_source_refresh_run(&RunStart {
+            run_id: run_id.clone(),
+            mode: "full".into(),
+            scope: source.as_str().into(),
+            started_at: "2026-11-02T01:00:00Z".into(),
+            task_id: None,
+            owner_instance: "mcp-tests".into(),
+        })
+        .unwrap();
+    assert!(claimed.is_none(), "the test refresh run opens");
+    f.backend
+        .finish_source_refresh_run(
+            &run_id,
+            &RunFinish {
+                status: "succeeded".into(),
+                finished_at: "2026-11-02T02:00:00Z".into(),
+                requests: 1,
+                reused: 0,
+                changed: 0,
+                failed_windows: 0,
+                unobserved_windows: 0,
+                verified_through: Some(verified_through.to_owned()),
+                detail: None,
+            },
+            &[RunSourceRow {
+                run_id: run_id.clone(),
+                source_id: source.as_str().into(),
+                class: "table".into(),
+                complete: true,
+                requests: 1,
+                snapshots: 0,
+                changed: 0,
+                unobserved_windows: 0,
+                failed_windows: 0,
+                elapsed_ms: 1,
+                verified_through: Some(verified_through.to_owned()),
+            }],
+            &[],
+        )
+        .unwrap();
+}
+
+fn query_security_names(f: &Fixture, known_at: Option<&str>) -> Value {
+    let mut request = json!({
+        "dataset": "market.security_names",
+        "contract_version": "v2",
+        "selection": {
+            "kind": "batch",
+            "entities": [{"exchange": "sz", "code": "000001"},
+                         {"exchange": "sz", "code": "000002"},
+                         {"exchange": "sz", "code": "000003"}]
+        },
+        "filter": {"kind": "daily", "start_date": "2026-01-01",
+                   "end_date": "2026-12-31", "as_of": "2026-12-31"},
+        "version": {"kind": "latest_per_entity"}
+    });
+    if let Some(day) = known_at {
+        request["known_at"] = json!(day);
+    }
+    f.api.call("query_data", request).unwrap()
+}
+
+/// XDM-163: `market.security_names` is no longer a placeholder. The read face
+/// serves the stored intervals with the row shape and metadata the other M2
+/// fact datasets use, and the `known_at` filter is a Shanghai-day information
+/// set applied before the effective-window/`as_of` record set.
+#[test]
+fn security_names_read_face_serves_intervals_and_filters_known_at() {
+    let f = fixture();
+    seed_security_names(&f);
+    seed_names_refresh_run(&f, "2026-11-02");
+
+    let page = query_security_names(&f, None);
+    assert_eq!(page["layout"], "table");
+    assert_eq!(page["row_count"], 3, "{page}");
+    assert_eq!(
+        page["entities"],
+        json!(["sz.000001", "sz.000002", "sz.000003"])
+    );
+    assert_eq!(page["columns"]["name"], json!(["ST旧名", "新名", "无日期"]));
+    assert_eq!(
+        page["columns"]["effective_from"],
+        json!(["2026-01-05", "2026-04-01", "2026-01-01"])
+    );
+    assert_eq!(
+        page["columns"]["effective_to"],
+        json!(["2027-06-01", null, null])
+    );
+    assert_eq!(
+        page["columns"]["certainty"],
+        json!(["interval", "unbounded", "unbounded"])
+    );
+    assert_eq!(
+        page["columns"]["known_at"],
+        json!(["2026-11-01", "2026-11-02", null])
+    );
+    assert_eq!(
+        page["columns"]["source_kind"],
+        json!([
+            "szse_name_history",
+            "szse_name_history",
+            "szse_name_history"
+        ])
+    );
+    assert_eq!(page["versions"][0]["status"], "present");
+    let metadata = &page["metadata"];
+    assert_eq!(metadata["verified_through"], "2026-11-02");
+    let reason = metadata["coverage_reason"].as_str().unwrap();
+    assert!(reason.contains("effective-time"), "{reason}");
+    assert!(reason.contains("knowledge-time"), "{reason}");
+    assert!(reason.contains("Shanghai"), "{reason}");
+
+    // A PIT query known by the first Shanghai capture day sees only the row
+    // first stored that day; the next day's row and the NULL-known_at row are
+    // excluded, and the NULL one is reported instead of silently dropped.
+    let first = query_security_names(&f, Some("2026-11-01"));
+    assert_eq!(first["row_count"], 1);
+    assert_eq!(first["columns"]["name"], json!(["ST旧名"]));
+    assert_eq!(first["temporal"]["known_at"], "2026-11-01");
+    assert_eq!(first["temporal"]["unknown_known_at_rows"], 1);
+    assert_eq!(first["temporal"]["datasets_without_known_at"], json!([]));
+
+    let second = query_security_names(&f, Some("2026-11-02"));
+    assert_eq!(second["row_count"], 2);
+    assert_eq!(second["columns"]["name"], json!(["ST旧名", "新名"]));
+    assert_eq!(second["temporal"]["unknown_known_at_rows"], 1);
+}
+
+/// An empty database (no registration) answers `absent` with zero rows and no
+/// metadata, including when the caller passes a `known_at` cutoff: the read
+/// path never panics and never invents a name or a version.
+#[test]
+fn security_names_read_face_is_absent_before_any_write() {
+    let f = fixture();
+    let page = query_security_names(&f, Some("2026-11-01"));
+    assert_eq!(page["layout"], "table");
+    assert_eq!(page["row_count"], 0);
+    assert_eq!(page["versions"][0]["status"], "absent");
+    assert!(page.get("metadata").is_none(), "{page}");
+    assert_eq!(page["temporal"]["unknown_known_at_rows"], 0);
+}
+
 /// AC-M3-1/§10.3: `universe.scope=sh_sz_a_listed_ever` resolves the member set
 /// from the main table, including a code the catalog does not hold, and no
 /// catalog version is echoed. All three read tools agree on the members.

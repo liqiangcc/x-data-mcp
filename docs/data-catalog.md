@@ -308,7 +308,9 @@ T 日股票池 `universe(as_of=T)`。
 
 写入路径：`market.security_master`、`market.risk_warnings`、`market.suspensions`、
 `market.price_limit_rules` 由日更 run 的内部 item 维护，`market.capital_events` 随每条日线
-提交同事务写入；`market.security_names` 的写入器已实现（代码已合并，未部署）。**来源状态**：
+提交同事务写入；`market.security_names` 的写入器与读取面均已实现（代码已合并，未部署；
+XDM-163 起 `query_data` 读取 `security_name_history` 区间并带 `metadata.verified_through`，
+未登记版本仍回答 `absent`/0 行）。**来源状态**：
 交易所上市/退市名单与 A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、涨跌停
 规则原文（D-59）与简称历史（D-61）已准入。规则书与 `derived:trading_rules` 的写路径已在
 代码中实现（仓库内版本化规则数据 + 校验；内容不变为 `no_change`），但 preview.37 实例仍是

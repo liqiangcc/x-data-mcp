@@ -12,10 +12,9 @@
 //! `absent` and **no rows**; unversioned data is never served (issue-391 §9.3).
 //! `market.capital_events` registers one set per entity (PR-2);
 //! `market.security_master` and `market.price_limit_rules` register one
-//! whole-dataset row. The three datasets without a writer yet
-//! (`security_names`, `risk_warnings`, `suspensions`) read their single
-//! registration by dataset kind, so the first admitted writer does not need a
-//! second read-path change.
+//! whole-dataset row. The whole-market interval datasets (`security_names`,
+//! `risk_warnings`, `suspensions`) register one row per dataset kind and are
+//! read by that kind here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,18 +67,6 @@ fn registration(
         return Ok(None);
     };
     derived::read_kind_version(c, kind)
-}
-
-fn manifest(
-    c: &Connection,
-    dataset: Dataset,
-    entity: Option<&Security>,
-    coverage_reason: &str,
-) -> Result<ManifestEntry, Error> {
-    let Some(registration) = registration(c, dataset, entity)? else {
-        return Ok(super::absent(entity));
-    };
-    derived_manifest(c, dataset, entity, &registration, coverage_reason)
 }
 
 /// The `temporal` block for one answer (issue-391 §12.2). A dataset whose
@@ -198,15 +185,7 @@ pub(super) fn query(
         Dataset::Suspensions => suspensions(c, plan, access, start, end, &mut report, &mut result)?,
         Dataset::PriceLimitRules => price_limit_rules(c, start, end, &mut report, &mut result)?,
         Dataset::SecurityNames => {
-            // No writer exists yet (§16 PR-6/#308 own the admitted sources), so
-            // the table can only be empty. The dataset still answers with the
-            // honest `absent` manifest instead of pretending it has data.
-            result.manifest.push(manifest(
-                c,
-                dataset,
-                None,
-                "security names have no admitted source yet",
-            )?);
+            security_names(c, plan, access, start, end, &mut report, &mut result)?
         }
         _ => return Err(invalid("dataset is not an M2 fact dataset")),
     }
@@ -290,6 +269,73 @@ fn security_master(
         check_budget(result)?;
     }
     pin_is_current(plan, registration.as_ref(), None)?;
+    Ok(())
+}
+
+/// `market.security_names`: the SZSE dated name intervals (D-61). The writer
+/// (`derived:security_names`, #446 PR-12) replaces the whole table and
+/// registers one version; this reader applies the same entity filter,
+/// `known_at` information set and half-open interval window as
+/// `market.risk_warnings` (`issue-391` §12.2).
+fn security_names(
+    c: &Connection,
+    plan: &QueryPlan,
+    access: &Access,
+    start: NaiveDate,
+    end: NaiveDate,
+    report: &mut TemporalReport,
+    result: &mut QuerySnapshot,
+) -> Result<(), Error> {
+    let registration = registration(c, Dataset::SecurityNames, None)?;
+    result.manifest.push(derived_or_absent(
+        c,
+        Dataset::SecurityNames,
+        None,
+        registration.as_ref(),
+        "coverage: effective-time name history is available from the source start \
+         (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) \
+         is available from the first capture day. known_at is the Shanghai day on \
+         which the first snapshot containing the change row was stored, never the \
+         change day; SH/BJ have no dated name source (D-61), so their absence is a \
+         coverage window and is not back-filled from a current name",
+    )?);
+    if registration.is_none() {
+        // No registration means the dataset was never written (or a quiet,
+        // empty source removed it); `absent` with zero rows is the answer, and
+        // the read never invents a current name to fill the gap.
+        return Ok(());
+    }
+    let as_of = report.as_of;
+    let selected: BTreeSet<String> = plan.entities.iter().map(Security::symbol).collect();
+    for row in security::read_security_names(c)? {
+        let entity = entity(&format!("{}.{}", row.exchange, row.code))?;
+        if !selected.contains(&entity.symbol())
+            || !access.allows(Dataset::SecurityNames, Some(&entity))
+        {
+            continue;
+        }
+        // Information set first, record set second (`issue-391` §12.2): a NULL
+        // known_at row is counted even when a later step excludes the interval.
+        if !report.observe("security_names", row.known_at) {
+            continue;
+        }
+        if !interval_hits(row.effective_from, row.effective_to, start, end, as_of) {
+            continue;
+        }
+        result.rows.push(Row::Fact {
+            entity: Some(entity),
+            day: row.effective_from,
+            cells: cells(vec![
+                ("effective_from", date(Some(row.effective_from))),
+                ("effective_to", date(row.effective_to)),
+                ("name", text(row.name)),
+                ("certainty", text(row.certainty.as_str())),
+                ("known_at", date(row.known_at)),
+                ("source_kind", text(row.source_kind.as_str())),
+            ]),
+        });
+        check_budget(result)?;
+    }
     Ok(())
 }
 
