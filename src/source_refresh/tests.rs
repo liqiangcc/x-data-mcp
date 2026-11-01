@@ -555,6 +555,10 @@ fn a_window_revision_is_recorded() {
     );
     assert_eq!(first.requests, 4);
     assert_eq!(first.changed, 0);
+    assert!(
+        first.verified_through.is_none(),
+        "a two-window tail verifies no complete source"
+    );
     fixture.set_bulletin_revision(1);
     let second = run_refresh(
         &fixture,

@@ -219,6 +219,7 @@ pub fn build(
 /// Keep the open window and the previous natural quarter (D-66 Q2, L=1).
 fn trim_tail(windows: &mut Vec<Segment>) {
     if windows.len() > 2 {
-        windows.drain(..windows.len() - 2);
+        let keep_from = windows.len() - 2;
+        windows.drain(..keep_from);
     }
 }

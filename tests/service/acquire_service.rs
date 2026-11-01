@@ -115,7 +115,7 @@ pub(crate) fn open(root: &Path, mirror: &Path) -> AcquireService {
 }
 
 /// The retirement gate's two read authorities for a test deployment: the
-/// source store and a fresh compact market database (schema 25).
+/// source store and a fresh compact market database (current schema).
 pub(crate) struct GateFixture {
     pub store: SourceStore,
     pub database: std::path::PathBuf,

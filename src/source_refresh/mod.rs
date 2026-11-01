@@ -137,7 +137,12 @@ pub fn run(
     } else {
         RefreshStatus::Succeeded
     };
-    let verified_through = (!failed).then(|| today.to_string());
+    // The run-level date is only meaningful when at least one source was
+    // observed as a complete set: a tail scoped to one window source verifies
+    // no complete set and must not claim a date. Per-source rows carry the
+    // finer truth, and `latest_complete_verified_through` reads those.
+    let any_complete = sources.iter().any(|source| source.complete);
+    let verified_through = (!failed && any_complete).then(|| today.to_string());
     if !failed {
         for source in &mut sources {
             if source.complete {

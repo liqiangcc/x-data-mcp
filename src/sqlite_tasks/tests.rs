@@ -1235,7 +1235,7 @@ fn hex32(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
 
-/// Schema 25 length/order assertion (issue-446 §9.1/§9.3): the fixed array
+/// Schema 26 length/order assertion (issue-446 §9.1/§9.3): the fixed array
 /// length, the schema constant and the `schema_migrations` rows must agree, and
 /// the tail of the chain must be the refresh-run step and the step before it
 /// the M3 index tables. 022/023/024 stay immutable.

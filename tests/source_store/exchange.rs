@@ -1,5 +1,5 @@
 //! End-to-end tests of the exchange entry against a real (temp) source store
-//! and a schema-25 database. Everything is a fixture: no network, no host path.
+//! and a current compact-schema database. Everything is a fixture: no network, no host path.
 //!
 //! The four design claims exercised here are §6.3's ("freeze before parse",
 //! "one row per response byte identity", "0 rows is a failure", bounded
