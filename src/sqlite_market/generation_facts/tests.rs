@@ -130,10 +130,11 @@ fn insert_series(
 ) -> Result<(), Error> {
     let content = [digest_byte; 32];
     c.execute(
-        "INSERT INTO market_series(series_key,entity,period,adjustment,version_id,\
-         content_digest,digest_format,record_count,first_day,last_day,coverage_status,\
-         source_binding_digest,evidence_digest,last_event_seq,created_at,updated_at) \
-         VALUES(?1,?2,1,1,?3,?4,'series-fold-v1',1,0,0,1,?5,?6,1,\
+        "INSERT INTO market_series(series_key,entity,period,adjustment,\
+         instrument_class,price_scale,version_id,content_digest,digest_format,\
+         record_count,first_day,last_day,coverage_status,source_binding_digest,\
+         evidence_digest,last_event_seq,created_at,updated_at) \
+         VALUES(?1,?2,1,1,0,2,?3,?4,'series-fold-v2',1,0,0,1,?5,?6,1,\
          '2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')",
         params![
             series_key,
