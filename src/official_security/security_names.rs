@@ -150,6 +150,9 @@ impl Admitted {
 
 /// The daily item's answer: an admitted set, or the reason the source is
 /// pending.
+// One item reads one source per run: the enum is not hot, so the large
+// `Admitted` payload stays inline (as `PublishOutcome` does).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunSource {
     Admitted(Admitted),

@@ -500,18 +500,28 @@ fn freeze_a3_except(scenario: &Scenario, today: NaiveDate, keep: impl Fn(Segment
             );
         }
     }
+    // The run confirmed the set the day before `today`, so the H gate measures
+    // 1 day whatever `today` the test picks.
+    let confirmed = today
+        .pred_opt()
+        .expect("a test day after 2008-01-01")
+        .format("%Y-%m-%d")
+        .to_string();
     record_test_refresh_run(
         &scenario.market,
         SourceId::SseSuspension,
-        "2008-04-14",
-        A3_OBSERVED_AT,
+        &confirmed,
+        &format!("{confirmed}T02:00:00Z"),
     );
 }
 
 #[test]
 fn the_suspension_item_reads_every_window_and_keeps_the_quiet_one_as_a_gap() {
     let scenario = Scenario::new();
-    let today = day(2008, 4, 15);
+    // The frozen Q2 fixture is a whole quarter, so its window must be the whole
+    // quarter: `today` one day after Q2 ends keeps the open-ended row
+    // (`601607`, not resumed yet) ending after it starts.
+    let today = day(2008, 7, 1);
     freeze_a3_except(&scenario, today, |_| true);
     let manifest = scenario.manifest_lines();
 
