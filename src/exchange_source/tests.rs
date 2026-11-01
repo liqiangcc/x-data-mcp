@@ -13,8 +13,9 @@ use chrono::NaiveDate;
 
 use super::index::{self, SnapshotRow};
 use super::request::{
-    SSE_PARSER_VERSION, SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION, SZSE_PARSER_VERSION,
-    SZSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V2,
+    SSE_BULLETIN_PAGE_SIZE, SSE_BULLETIN_PARSER_VERSION, SSE_PAGE_SIZE, SSE_PARSER_VERSION,
+    SSE_PARSER_VERSION_V1, SSE_SOA_PARSER_VERSION, SZSE_PARSER_VERSION, SZSE_PARSER_VERSION_V1,
+    SZSE_PARSER_VERSION_V2,
 };
 use super::transport::{DEFAULT_MIN_REQUEST_INTERVAL, Pacer, min_request_interval};
 use super::*;
@@ -97,8 +98,7 @@ fn risk_warning_request() -> ExchangeRequest {
     )
     .param("isPagination", "true")
     .param("TITLE", "风险警示")
-    .paged(PagingFormat::SsePageHelp, 1)
-    .param("pageHelp.pageSize", "100")
+    .paged(PagingFormat::SsePageHelpBeginPage, 1)
 }
 
 /// XDM-144 (Refs #446): preview.39 failed `derived:risk_warnings` with
@@ -216,8 +216,7 @@ fn the_outbound_encoding_does_not_change_the_fingerprint() {
         SourceId::SseBulletin,
         "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do",
     )
-    .paged(PagingFormat::SsePageHelp, 1)
-    .param("pageHelp.pageSize", "100")
+    .paged(PagingFormat::SsePageHelpBeginPage, 1)
     .param("TITLE", "风险警示")
     .param("isPagination", "true");
     assert_eq!(reordered.fingerprint(), fingerprint);
@@ -232,7 +231,7 @@ fn the_sse_risk_warning_outbound_url_is_a_golden_ascii_string() {
         concat!(
             "https://query.sse.com.cn/security/stock/queryCompanyBulletinNew.do?",
             "TITLE=%E9%A3%8E%E9%99%A9%E8%AD%A6%E7%A4%BA&isPagination=true&",
-            "pageHelp.pageNo=1&pageHelp.pageSize=100"
+            "pageHelp.beginPage=1&pageHelp.endPage=1&pageHelp.pageNo=1&pageHelp.pageSize=100"
         )
     );
     // A parameter name is encoded by the same rule as its value.
@@ -465,6 +464,53 @@ fn the_sse_dialect_pages_by_page_help_page_no() {
         PagingFormat::from_parser_version(SSE_PARSER_VERSION_V1),
         Some(PagingFormat::SsePageHelp)
     );
+}
+
+#[test]
+fn the_sse_bulletin_dialect_pages_by_begin_page() {
+    // XDM-151 §3 (2026-11-01 evidence): `queryCompanyBulletinNew.do` downgrades
+    // `pageSize=2000` to 25 and ignores `pageHelp.pageNo` for the data (it only
+    // echoes it). The data page is selected by `pageHelp.beginPage`/`endPage`,
+    // and `pageNo` must be sent too or the envelope reports page 1 and the
+    // entry refuses the page.
+    assert_eq!(SSE_BULLETIN_PAGE_SIZE, 100, "the measured ceiling");
+    let mut params = std::collections::BTreeMap::new();
+    PagingFormat::SsePageHelpBeginPage.apply_page(&mut params, 2);
+    for (name, value) in [
+        ("pageHelp.pageSize", "100"),
+        ("pageHelp.pageNo", "2"),
+        ("pageHelp.beginPage", "2"),
+        ("pageHelp.endPage", "2"),
+    ] {
+        assert_eq!(params.get(name).map(String::as_str), Some(value), "{name}");
+    }
+    assert_eq!(
+        PagingFormat::SsePageHelpBeginPage.parser_version(),
+        SSE_BULLETIN_PARSER_VERSION
+    );
+    assert!(known_parser_version(SSE_BULLETIN_PARSER_VERSION));
+    assert_eq!(
+        PagingFormat::from_parser_version(SSE_BULLETIN_PARSER_VERSION),
+        Some(PagingFormat::SsePageHelpBeginPage)
+    );
+    // The envelope shape is the list services' `pageHelp`: same fields, same
+    // page-number source, so both dialects read the same body identically.
+    let body =
+        br#"{"pageHelp":{"beginPage":2,"pageNo":2,"pageCount":2,"total":28,"data":[{"x":"1"}]}}"#;
+    let bulletin = envelope(body, PagingFormat::SsePageHelpBeginPage);
+    let list = envelope(body, PagingFormat::SsePageHelp);
+    assert_eq!(bulletin, list);
+    assert_eq!((bulletin.page, bulletin.page_count), (2, 2));
+    // The list dialect keeps its own page size; the bulletin dialect must not
+    // have changed what A-1/A-2 send.
+    let mut list_params = std::collections::BTreeMap::new();
+    PagingFormat::SsePageHelp.apply_page(&mut list_params, 1);
+    assert_eq!(
+        list_params.get("pageHelp.pageSize").map(String::as_str),
+        Some("2000")
+    );
+    assert_eq!(SSE_PAGE_SIZE, 2000, "the list dialect keeps its page size");
+    assert!(!list_params.contains_key("pageHelp.beginPage"));
 }
 
 #[test]
