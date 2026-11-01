@@ -2355,14 +2355,14 @@ fn seed_security_names(f: &Fixture) {
             row(
                 "000001",
                 NaiveDate::from_ymd_opt(2026, 1, 5).unwrap(),
-                Some(NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()),
+                Some(NaiveDate::from_ymd_opt(2027, 6, 1).unwrap()),
                 "ST旧名",
                 NameCertainty::Interval,
                 Some(NaiveDate::from_ymd_opt(2026, 11, 1).unwrap()),
                 Some("record-1"),
             ),
             row(
-                "000001",
+                "000002",
                 NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(),
                 None,
                 "新名",
@@ -2371,7 +2371,7 @@ fn seed_security_names(f: &Fixture) {
                 Some("record-2"),
             ),
             row(
-                "000002",
+                "000003",
                 NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
                 None,
                 "无日期",
@@ -2457,7 +2457,8 @@ fn query_security_names(f: &Fixture, known_at: Option<&str>) -> Value {
         "selection": {
             "kind": "batch",
             "entities": [{"exchange": "sz", "code": "000001"},
-                         {"exchange": "sz", "code": "000002"}]
+                         {"exchange": "sz", "code": "000002"},
+                         {"exchange": "sz", "code": "000003"}]
         },
         "filter": {"kind": "daily", "start_date": "2026-01-01",
                    "end_date": "2026-12-31", "as_of": "2026-12-31"},
@@ -2484,7 +2485,7 @@ fn security_names_read_face_serves_intervals_and_filters_known_at() {
     assert_eq!(page["row_count"], 3, "{page}");
     assert_eq!(
         page["entities"],
-        json!(["sz.000001", "sz.000001", "sz.000002"])
+        json!(["sz.000001", "sz.000002", "sz.000003"])
     );
     assert_eq!(page["columns"]["name"], json!(["ST旧名", "新名", "无日期"]));
     assert_eq!(
@@ -2493,7 +2494,7 @@ fn security_names_read_face_serves_intervals_and_filters_known_at() {
     );
     assert_eq!(
         page["columns"]["effective_to"],
-        json!(["2026-04-01", null, null])
+        json!(["2027-06-01", null, null])
     );
     assert_eq!(
         page["columns"]["certainty"],
