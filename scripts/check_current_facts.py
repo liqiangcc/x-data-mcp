@@ -10,8 +10,8 @@ EXPECTED_PACKAGE_VERSION = "0.2.0-preview.40"
 EXPECTED_LEGACY_SCHEMA = 18
 # Fresh `init` output schema (code constant). The DEPLOYED schema is a
 # deployment fact and is read from docs/STATUS.md (see DEPLOYED_SCHEMA_ROW):
-# the code constant may be ahead of it, e.g. schema 25 built by M3 PR-1 while
-# the deployed instance still runs schema 24.
+# the code constant may be ahead of it, e.g. schema 25 built by M3 PR-1 before
+# the preview.39 phase-g deployment; since preview.39 deployed == code == 25.
 EXPECTED_COMPACT_SCHEMA = 25
 # Registry/code fact (v8 PR-2 adds list_catalog_facets: 23 -> 24).
 EXPECTED_DATA_TOOLS = 24
