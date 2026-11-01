@@ -247,13 +247,17 @@ worker 还会追加 **17** 个服务器内部派生 item（9 个指数基准 + �
   `source_store_unconfigured` 开头，run 收尾 `partially_failed`；日线实体 item 已先行
   提交，上一版主表仍是 latest。空 store（首次部署）合法，只校验变量已配置且路径可读。
   四个失败是同一个配置问题，按错误码聚合，不要当成四个独立故障。
+  配置正确的 store 里若没有**完整且未过期**的冻结集，item 以
+  `source_snapshot_not_found` / `snapshot_incomplete` / `source_refresh_overdue` 失败：
+  先跑 `refresh_exchange_sources`（每次日更 `tail`、每周 `full`，见下文「来源刷新」），
+  不要用补漏或重试实体 item 处理。
 - 启动可见性（3a）：ops + compact 启动时检查同一变量；缺失且未开 dev 豁免 →
   journal 一条以 `source_store_unconfigured` 开头的告警，**仍继续 bind socket 并服务**
   （research/maint 读面不受影响）。已配置时记录来源库根路径（不含密钥）；变量存在但
   路径不可读也只告警。Skill 看不到 journal，所以部署与巡检清单要把「启动日志无该码」
   当作配置完成条件。
-- 怎么看：运行终态后按 `get_task_progress`/`get_task` 的失败项读 `error`；四个同码
-  失败按**一个部署配置问题**报告 owner/operator（不要只报一个、不要 `retry_task`、
+- 怎么看：运行终态后按 `get_task_progress`/`get_task` 的失败项读 `error`；
+  `source_store_unconfigured` 的四个同码失败按**一个部署配置问题**报告 owner/operator（不要只报一个、不要 `retry_task`、
   不要用 `update_data` 补漏），配置变量后重新 plan/run。日线实体 item 已先行提交，
   上一版主表仍是 latest，所以本次没有新 master 版本是预期结果。
 - 显式开发豁免 `X_DATA_MCP_ALLOW_UNCONFIGURED_SOURCE_STORE=1` 时回到
@@ -283,6 +287,35 @@ error/evidence 里列出实体，run 收尾
 没有发布方 `last_modified` 的登记不算观测（只证明我们持有这份字节），该内容已在表中
 时直接跳过；若这条观测会改变**已公布**区间的起点，日更 fail-closed 指向
 `source_store replay --scope industry`，不要手工改表。
+
+### 来源刷新（v9：`refresh_exchange_sources`，四个同源 item 的输入）
+
+v9 起四个同源 item（`derived:security_master`、`derived:security_names`、
+`derived:risk_warnings`、`derived:suspensions`）**不再自己发请求**：它们只读
+`X_DATA_MCP_SOURCE_STORE` 中由 `refresh_exchange_sources` 冻结的快照，并要求该来源最近
+一次**完整**刷新距今不超过 `H=14` 天（超过即 `source_refresh_overdue` fail-closed，旧版本
+仍可读）。刷新任务只写来源库/索引与运行记录，不发布数据集；日更的请求预算与「先刷新、
+再派生」的顺序由 Skill 负责：
+
+```text
+（每次日更，capability revision >= generic-data-v9）
+→ refresh_exchange_sources {"mode":"tail"}          # 开窗 + 上一自然季度；整表类重读整表（深市上市/简称先探页 1）
+→ 读 RefreshReport：requests/reused/changed/failed_windows/unobserved_windows/revisions
+→ plan_market_update → run_market_update（四个同源 item 读本次冻结集）
+```
+
+- **每周一次 `{"mode":"full"}`**：窗口类来源补齐全部季度、整表类来源重读整表，并推进
+  `verified_through`。`tail` 只覆盖开窗与上一自然季度，不能单独让闸门长期通过。`full`
+  放低峰（周末候选）；预算 `tail` <300s、触发整表 <600s、`full` <60min，1 req/s 不变。
+- **全新数据库（fresh init）**：在首次日更前先跑一次 `full`。否则四个同源 item 以
+  `source_snapshot_not_found` 失败——这是配置/首次顺序问题，不是数据缺陷。
+- `source_refresh_overdue` → 先 `full`，再重跑 `plan_market_update`/`run_market_update`。
+  不要用 `update_data` 补漏，也不要把它当成实体 item 重试；上一版主表/数据集仍是 latest。
+- `source_snapshot_not_found` / `snapshot_incomplete` → 同样先 `full`；`snapshot_incomplete`
+  还可能来自页集合不完整（缺页、页数或行数与发布方计数不符），`full` 重跑一次仍失败则报
+  owner/operator。
+- v8 运行时的 `ops` 入口没有该工具（item 内联获取），本步跳过；v9 运行时该工具缺失是
+  `SKILL_CONTRACT_MISMATCH`。
 
 ### 全新数据库
 
