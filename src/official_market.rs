@@ -268,9 +268,27 @@ impl TdxMarketSource {
     pub(crate) fn from_installed(
         installed: &crate::generation::Installed,
     ) -> Result<Self, SourceError> {
+        Self::from_generation(
+            installed.dir.clone(),
+            installed.manifest_sha256.clone(),
+            &installed.manifest,
+        )
+    }
+
+    /// Build a source view from a generation directory plus the digest of its
+    /// manifest bytes. The caller owns the byte verification of the roles it
+    /// reads: `from_installed` inherits it from `verify_installed`, and
+    /// `source_store register-generation-member` (XDM-150) verifies the two
+    /// archives it extracts (`base.zip`, `gbbq.zip`) against their manifest
+    /// pins itself, because it deliberately does not read the ~550 MB day
+    /// archive. Neither path reads a role without a verified digest.
+    pub(crate) fn from_generation(
+        root: PathBuf,
+        manifest_sha256: String,
+        manifest: &snapshot::SnapshotManifest,
+    ) -> Result<Self, SourceError> {
         let take = |role| {
-            installed
-                .manifest
+            manifest
                 .files
                 .iter()
                 .find(|f| f.role == role)
@@ -278,12 +296,11 @@ impl TdxMarketSource {
                 .ok_or_else(|| SourceError::NotVerified("inspected role missing".into()))
         };
         Ok(Self {
-            root: installed.dir.clone(),
-            manifest_sha256: installed.manifest_sha256.clone(),
+            root,
+            manifest_sha256,
             day: take(FileRole::Day)?,
             gbbq: take(FileRole::Gbbq)?,
-            base: installed
-                .manifest
+            base: manifest
                 .files
                 .iter()
                 .find(|f| f.role == FileRole::BaseIndustry)
@@ -291,6 +308,7 @@ impl TdxMarketSource {
             archives: SharedArchives::default(),
         })
     }
+
     /// Service install hook: only when `X_DATA_MCP_OFFICIAL_MANIFEST`
     /// (manifest file) and `X_DATA_MCP_OFFICIAL_DIR` (snapshot root) are both
     /// configured AND the manifest passes `inspect()` does a source exist.
@@ -511,6 +529,9 @@ pub struct IndustrySnapshotFacts {
     pub incon_observed_at: String,
     /// sha256 of the `base.zip` container (evidence, never stored bytes).
     pub base_zip_sha256: String,
+    /// sha256 of the `gbbq.zip` container the `incon.dat` member came out of:
+    /// the dictionary's source-store line names its own container (XDM-150).
+    pub gbbq_zip_sha256: String,
     /// sha256 of the inspected manifest (the source binding).
     pub manifest_sha256: String,
 }
@@ -901,6 +922,7 @@ impl MaterializeSession<'_> {
                 self.source.gbbq.acquisition_completed_at,
             ),
             base_zip_sha256: base_input.sha256.clone(),
+            gbbq_zip_sha256: self.source.gbbq.sha256.clone(),
             manifest_sha256: self.source.manifest_sha256.clone(),
         }))
     }

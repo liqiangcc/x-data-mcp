@@ -754,6 +754,49 @@ retire(generation) 前置：
 
 **PR-8 落地（2026-10-29，XDM-108）**：门禁实现在 acquire 进程（`src/generation_gate.rs`），手动 `retire_generation` 与激活后的自动保留都经过同一个 `RetireGate::check`，字节删除前没有旁路。读面不写市场库：acquire 以只读连接（`query_only`）读 `generation_facts`/`retire_exemptions`，WAL 读不占 data_service 的写租约（D-56）。来源库根沿用 `X_DATA_MCP_SOURCE_STORE`，默认 `<market db parent>/source-store`；acquire 服务需要显式 `--market-db`，未配置时退役一律 `retire_gate_unconfigured`，不会静默放行。证据检查对每个 role 取清单里**该代 manifest sha 的全部登记**逐一按 sha 读回，任一可读即视为证据在库（重复登记不误报）；全部失败或未登记才报 `source_store_evidence_missing`，并列出 `(role, source_id, sha256)`。派生事实按 `(role, fact_kind)` 集合判断，缺失时 `derived_facts_missing` 并提示 `replay --scope generation_facts`；索引可重建，不作为唯一依据。豁免由 `source_store exempt` 写入（必需非空 reason、recorded_by、时间；`source_store_evidence` 键另需 `--owner-approve-evidence`），退役成功时回复 `detail=exemptions: <keys>` 留痕，豁免行不随字节删除。
 
+**遗留代补登记（XDM-150，方案 A）**：来源库出现之前采集的 generation，成员字节可能已经在库里（`archive_import` 行，sha 与重算一致），但清单里没有 `origin=generation:<manifest sha>` 的成员行 —— 门禁按 provenance 判定，所以照旧拒绝（XDM-146 报告 §3、§4.3 方案 A）。`source_store import` 补不上：它的 origin 形状固定为 `<batch>:<container>!<suffix>`；唯一写 `generation:<sha>` 的 `industry::register_generation_members` 只在日更行业 item 里对当前代调用。新增运维子命令：
+
+```bash
+source_store register-generation-member --store <dir> \
+    --generation <manifest sha> --generation-dir <generations/generations/<sha>>
+```
+
+- **成员清单不另起一份**：按 `--generation-dir/snapshot-manifest.json` 的角色绑定，用日更 item 同一个 `TdxMarketSource::industry_facts` 抽 `base.zip!tdxhy.cfg` 与 `gbbq.zip!zhb.zip!incon.dat`，再复用 `industry::register_generation_members` 的内部函数登记（`register_generation_members_detailed`）。sha256 一律从字节重算，命令没有可以伪造 sha 或 origin 的参数。
+- **入参校验**：`--generation` 必须等于目录里 manifest 字节的 sha256（generation id 的定义），否则 `generation_manifest_mismatch`；`base.zip`/`gbbq.zip` 按 manifest 的 `bytes`+`sha256` 重算比对，不符则 `generation_container_mismatch`。不读 ≈550 MB 的 `hsjday.zip`：本命令不登记任何日线字节，代身份已由 manifest 摘要覆盖。
+- **写入语义**：走 `SourceStore::register`，沿用来源库 flock、torn-tail 检查与 `(sha256, source_id, origin)` 幂等键；blob 已在库 → 只追加清单行、复用并校验已有 blob；不在库 → 按 §9.4.1 写序落 blob。**只追加**，不改写也不删除任何已有行；重复执行不新增行。
+- **失败不伪装成功**：该代没有 `tdxhy.cfg` 时报 `generation_has_no_industry_member` 并退出 1（门禁同样会拒，报 `ok` 会误导）。
+- **输出 JSON**：每个成员的 `role`/`source_id`/`member`/`sha256`/`size_bytes`/`added`（本次是否新增清单行）/`blob_reused`（是否复用已有 blob），以及门禁要找的 `origin`。
+- 只写来源库、不写市场库；两个服务仍持有来源库读锁，所以在与退役相同的停服窗口内执行。
+
+**遗留代退役操作序列（XDM-146 §8.0，方案 A）**：以 `9d9e38d7…`/`c184e9c4…` 为例。方案 C（改门禁）已否，门禁规则不改；豁免只覆盖「这一代确实从未向本库写入过那三类行情派生事实」。
+
+```bash
+S=/opt/x-data-mcp-preview/state; B=/opt/x-data-mcp-preview/current/bin
+G=<generation manifest sha>
+systemctl stop x-data-mcp-acquire x-data-mcp-data
+# 1) 补登记（幂等，可重复）
+$B/source_store register-generation-member --store $S/source-store \
+    --generation $G --generation-dir /opt/x-data-mcp-preview/generations/generations/$G
+# 2) 重建事实索引（幂等）
+$B/source_store replay --store $S/source-store --scope generation_facts --db $S/preview.sqlite
+# 3) 每代 3 条行情派生事实豁免（该代 source_bindings=0，从未写入过这些事实）
+for K in derived_fact:gbbq.zip:capital_events \
+         derived_fact:gbbq.zip:adjustment_events \
+         derived_fact:hsjday.zip:daily_series; do
+  $B/source_store exempt --db $S/preview.sqlite --generation $G --missing $K \
+      --reason "generation predates the source store and never wrote market-derived facts into this database (source_bindings=0); <采集窗口>" \
+      --recorded-by "<owner>"
+done
+systemctl start x-data-mcp-data x-data-mcp-acquire
+# 4) 逐代退役（confirm_token = generation sha）
+retire_generation(request_id="retire-<date>-<gen8>", generation_id=$G, confirm_token=$G)
+# 期望 state=evidence_only，detail=exemptions: derived_fact:...
+```
+
+- **豁免理由模板必须写 `source_bindings=0`**：它说明「该代从未向本库写入这三类行情事实」，而不是「找不到就算了」。证据段不再需要豁免 —— 补登记后字节是真的、origin 是对的。
+- 顺序是补登记 → replay → 豁免 → 退役；任一代 gate 意外拒绝就停下、`systemctl start` 恢复服务再查因，不回滚已完成的退役。
+- `incon.dat` 清单行的 `container_sha256` 自 XDM-150 起写 `gbbq.zip` 的 sha（此前误写 `base.zip` 的）。门禁与两个 replay 只用 `(origin, source_id, sha256)`，不读该字段，所以这次修复不改变任何已有门禁/重放结论；按来源库只追加规则，已写入的错误行不改写。
+
 ### 8.4 磁盘与性能估算（只估算，不否决正确性优先）
 
 | 项 | 估算 | 依据 |
@@ -999,6 +1042,8 @@ maint replay_source_store --scope industry|exchange|generation_facts|risk_warnin
 验证：`tests/source_store/security_names.rs` 六条端到端（清库重放证据摘要逐位相同、`--verify-only` `match`、篡改 blob → `source_store_corrupt`、未知 `parser_version` fail-closed、空库/无该来源记录、0 行变更表）；适配器单测钉住「写入端与重放端产出同一 coverage」。本机只跑 `cargo fmt`，Rust 由 PR CI 证明。
 
 **PR-1a 落地（2026-10-28）**：入口选定为 CLI `source_store {replay,verify,import}`（release 包内二进制），不注册 maint MCP 工具：maint 入口是只读运维/取证面，来源库写入属于离线运维动作，且不改变三个静态 allowlist、capability revision 与工具数事实；部署钩子直接调用 release 二进制。PR-1a 只注册 `industry`/`exchange`/`generation_facts` 三个 scope 与按 sha 读回的校验路径（报告 `rebuilt=skeleton_no_op`），索引表与域写入器分别由 PR-1、PR-2/PR-6/PR-8 补齐。库格式、清单字段与导入索引格式见 [来源库说明](../source-store.md)。
+
+**遗留代补登记子命令（XDM-150）**：入口再加 `source_store register-generation-member --store <dir> --generation <manifest sha> --generation-dir <dir>`，把已安装代目录里的 `tdxhy.cfg`/`incon.dat` 按 `generation:<sha>` 补登记进来源库（只追加、幂等、blob 复用），详细语义与退役操作序列见 §8.3。
 
 #### 9.4.3 退役门禁
 

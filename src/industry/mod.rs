@@ -70,6 +70,10 @@ pub const SOURCE_STORE_ENV: &str = "X_DATA_MCP_SOURCE_STORE";
 /// `incon.dat` section holding the research-industry dictionary (§5.6).
 pub const DICTIONARY_SECTION: &str = "TDXRSHY";
 
+/// The research-industry dictionary a snapshot carries: level-2 code → the
+/// publisher's display name (§5.6).
+pub type Dictionary = BTreeMap<String, String>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("industry_member_invalid: {0}")]
@@ -371,7 +375,7 @@ fn best_grade(left: &str, right: &str) -> String {
 pub struct SnapshotFacts {
     pub record: SnapshotRecord,
     pub members: Vec<IndustryMember>,
-    pub dictionary: BTreeMap<String, String>,
+    pub dictionary: Dictionary,
     /// The source carried a dictionary at all. A snapshot without one names
     /// every assignment `unknown_dictionary` instead of pretending the code is
     /// absent from a dictionary we never read.
@@ -492,7 +496,7 @@ pub fn parse_members(bytes: &[u8]) -> Result<(i64, Vec<IndustryMember>), Error> 
 /// Parse `incon.dat` and keep the research-industry dictionary (§5.6).
 /// `None` means the file carries no `#TDXRSHY` section; an empty map from a
 /// present section is reported as present-but-empty.
-pub fn parse_dictionary(bytes: &[u8]) -> Result<Option<BTreeMap<String, String>>, Error> {
+pub fn parse_dictionary(bytes: &[u8]) -> Result<Option<Dictionary>, Error> {
     let sections = incon::parse(bytes)?;
     let Some(entries) = incon::section_map(&sections, DICTIONARY_SECTION) else {
         return Ok(None);
@@ -511,7 +515,7 @@ pub fn parse_dictionary(bytes: &[u8]) -> Result<Option<BTreeMap<String, String>>
 struct Step<'a> {
     member_sha256: &'a str,
     members: &'a [IndustryMember],
-    dictionary: &'a BTreeMap<String, String>,
+    dictionary: &'a Dictionary,
     dictionary_present: bool,
     /// Interval start of this step (§5.2).
     day: i64,
@@ -1251,8 +1255,14 @@ pub struct GenerationMembers<'a> {
     pub incon_bytes: &'a [u8],
     pub incon_publisher_last_modified: Option<&'a str>,
     pub incon_observed_at: &'a str,
-    /// sha256 of the `base.zip` container the member was extracted from.
+    /// sha256 of the `base.zip` container `tdxhy.cfg` was extracted from.
     pub base_zip_sha256: &'a str,
+    /// sha256 of the `gbbq.zip` container `incon.dat` was extracted from.
+    /// Each member's manifest line names **its own** container (XDM-150: the
+    /// `incon.dat` line used to carry `base.zip`'s digest; nothing reads the
+    /// field — the gate and both replays key on `(origin, source_id, sha256)` —
+    /// so the fix only corrects lines written from now on).
+    pub gbbq_zip_sha256: &'a str,
 }
 
 /// What registering a generation's members produces: the observation itself and
@@ -1265,6 +1275,31 @@ pub struct GenerationSnapshot {
     /// again" (one run) from "an older content, seen again" (a new interval,
     /// A → B → A): the table cannot answer that, the observation log can.
     pub previous_member_sha256: Option<String>,
+}
+
+/// What one member's registration did (§9.4.1 idempotency key
+/// `(sha256, source_id, origin)`). The operator surface
+/// (`source_store register-generation-member`, XDM-150) reports both members
+/// with these flags, so "already registered" and "blob reused" are visible
+/// instead of inferred.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationMemberRegistration {
+    pub member: String,
+    pub source_id: &'static str,
+    pub sha256: String,
+    /// This call published the blob; `false` means the blob was already in the
+    /// store and was reused (an existing blob is verified, never overwritten).
+    pub written_blob: bool,
+    /// This call appended the manifest line; `false` means the identical
+    /// `(sha256, source_id, origin)` registration already existed.
+    pub appended_line: bool,
+}
+
+/// A generation registration plus what each member's registration did.
+pub struct RegisteredGeneration {
+    pub snapshot: GenerationSnapshot,
+    pub tdxhy: GenerationMemberRegistration,
+    pub incon: GenerationMemberRegistration,
 }
 
 /// Register a generation's industry members in the source store and build the
@@ -1283,6 +1318,17 @@ pub fn register_generation_members(
     store: &SourceStore,
     members: &GenerationMembers<'_>,
 ) -> Result<GenerationSnapshot, Error> {
+    Ok(register_generation_members_detailed(store, members)?.snapshot)
+}
+
+/// [`register_generation_members`] plus the per-member registration outcome the
+/// retroactive `source_store register-generation-member` surface reports
+/// (XDM-150). One implementation: the daily item and the operator command
+/// cannot drift apart.
+pub fn register_generation_members_detailed(
+    store: &SourceStore,
+    members: &GenerationMembers<'_>,
+) -> Result<RegisteredGeneration, Error> {
     // The replay pairs a snapshot with its dictionary by `origin`, so the
     // member names must be the canonical ones the pairing rule knows; a
     // differently named member is refused instead of silently stored as
@@ -1335,8 +1381,17 @@ pub fn register_generation_members(
     incon.parser_version = Some(crate::source_store::INCON_PARSER_VERSION.to_string());
     incon.evidence_grade = Some(grade.to_string());
     incon.publisher_last_modified = members.incon_publisher_last_modified.map(str::to_string);
-    incon.container_sha256 = Some(members.base_zip_sha256.to_string());
-    let dictionary_sha256 = store.register(members.incon_bytes, &incon)?.sha256;
+    // `incon.dat` comes out of `gbbq.zip!zhb.zip`, so its container evidence is
+    // the gbbq archive, not `base.zip` (XDM-150 fix).
+    incon.container_sha256 = Some(members.gbbq_zip_sha256.to_string());
+    let registered_incon = store.register(members.incon_bytes, &incon)?;
+    let dictionary_sha256 = registered_incon.sha256.clone();
+    let dictionary_expected = crate::hash::sha256(members.incon_bytes);
+    if dictionary_sha256 != dictionary_expected {
+        return Err(Error::Invalid(format!(
+            "{dictionary_expected} read back as {dictionary_sha256} from the source store"
+        )));
+    }
     // The observation log, not the table, says what came before (§5.3): the
     // registration above is the last line of the manifest, so the previous
     // `tdxhy.cfg` observation is the last one that is not ours.
@@ -1351,7 +1406,7 @@ pub fn register_generation_members(
         .map(|record| record.sha256.clone());
 
     let record = SnapshotRecord {
-        member_sha256,
+        member_sha256: member_sha256.clone(),
         store_sha256: registered.sha256,
         base_zip_sha256: Some(members.base_zip_sha256.to_string()),
         generation_manifest_sha256: Some(members.manifest_sha256.to_string()),
@@ -1365,20 +1420,36 @@ pub fn register_generation_members(
         row_count,
         scope_member_count: i64::try_from(parsed_members.len())
             .map_err(|_| Error::Invalid("scope member count overflow".into()))?,
-        dictionary_sha256: Some(dictionary_sha256),
+        dictionary_sha256: Some(dictionary_sha256.clone()),
         // The member names are not a snapshot fact: they are visible in the
         // source-store registration, and `notes` is part of the replay summary
         // (a value only the daily path could set would drift on rebuild).
         notes: None,
     };
-    Ok(GenerationSnapshot {
-        facts: SnapshotFacts {
-            record,
-            members: parsed_members,
-            dictionary_present: dictionary.is_some(),
-            dictionary: dictionary.unwrap_or_default(),
+    Ok(RegisteredGeneration {
+        snapshot: GenerationSnapshot {
+            facts: SnapshotFacts {
+                record,
+                members: parsed_members,
+                dictionary_present: dictionary.is_some(),
+                dictionary: dictionary.unwrap_or_default(),
+            },
+            previous_member_sha256,
         },
-        previous_member_sha256,
+        tdxhy: GenerationMemberRegistration {
+            member: members.tdxhy_member.to_string(),
+            source_id: crate::source_store::TDXHY_SOURCE_ID,
+            sha256: member_sha256,
+            written_blob: registered.written_blob,
+            appended_line: registered.appended_line,
+        },
+        incon: GenerationMemberRegistration {
+            member: members.incon_member.to_string(),
+            source_id: crate::source_store::INCON_SOURCE_ID,
+            sha256: dictionary_sha256,
+            written_blob: registered_incon.written_blob,
+            appended_line: registered_incon.appended_line,
+        },
     })
 }
 
