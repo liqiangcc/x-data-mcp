@@ -33,7 +33,7 @@
   `complete=1` 的来源才推进日期。tail 的两窗口、未触发的探针都不推进。
 - `source_refresh_run_members`：`(run_id, source_id, request_fingerprint) → snapshot_id`，
   外加页数、行数、`as_of`、`fetched_at`、是否变更、窗口。R3 的重放选择按 run 成员
-  取页；探针页与失败的表尝试不是被选中的页，不写入成员。
+  取页；0 行窗口没有可选页，探针页与失败的表尝试也不是被选中的页，均不写入成员。
 - `exchange_source_snapshots` 的主键由 `snapshot_id` 改为
   `(snapshot_id, request_fingerprint)`：相同字节的不同请求（例如多个空窗口）必须能
   各自复用；同一请求以不同 sha 仍保留多行历史。

@@ -23,12 +23,12 @@
 --    so a daily tail cannot silently satisfy the H=14-day gate that exists to
 --    force the weekly full (§5.1/§5.3).
 --
---    Members list every page this run froze or confirmed, keyed by
+--    Members list every selected page this run froze or confirmed, keyed by
 --    `(run_id, source_id, request_fingerprint)`: that is "which snapshot_id
 --    this run selected for this request", the input R3's replay selection
---    needs (§5.5). Proposed but unconfirmed pages (a probe page, or a table
---    attempt that failed integrity) are not selected members and are not
---    written here.
+--    needs (§5.5). An observed empty window has no page to select; a probe
+--    page and a table attempt that failed integrity are proposed but
+--    unconfirmed. None of those are written here.
 --
 -- Append-only: 019-025 are unchanged. Fresh-init only (D-08), so the copy
 -- below normally sees an empty table; it keeps the step correct for a
