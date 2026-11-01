@@ -47,6 +47,13 @@ pub struct SzNameChange {
     pub after_name: String,
     pub source_record_id: String,
     pub source_document_sha256: String,
+    /// The day the first snapshot containing this row entered the source
+    /// store (`issue-446` §5.3, Q4). The page carries the change day but no
+    /// publication time, so the adapter fills this from the store instead of
+    /// leaving the fact's knowledge time unknown: with `known_at` NULL, a
+    /// `known_at` filter would hide every SZ row forever. `None` only when no
+    /// store could answer (a `--scope` replay without a database).
+    pub known_at: Option<NaiveDate>,
 }
 
 /// What a SH announcement index row says happened. The source is event-level;
@@ -346,7 +353,9 @@ fn interval_from_sz(code: &str, change: &SzNameChange, status: RiskStatus) -> Ri
         raw_status_code: raw_status(status).to_string(),
         status,
         announced_at: None,
-        known_at: None,
+        // §5.3/Q4: the knowledge time is the snapshot day, not the change
+        // day; the adapter resolves it, this module never guesses it.
+        known_at: change.known_at,
         source_kind: "szse_name_history".to_string(),
         source_record_id: Some(change.source_record_id.clone()),
         source_document_sha256: Some(change.source_document_sha256.clone()),
@@ -532,6 +541,7 @@ mod tests {
             after_name: after.into(),
             source_record_id: format!("{when}|{code}|{after}"),
             source_document_sha256: "a".repeat(64),
+            known_at: None,
         }
     }
 

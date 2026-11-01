@@ -270,6 +270,7 @@ def export_smoke(binaries):
         assert manifest["schema"] in {
             "x-data-mcp.research-snapshot.v2",
             "x-data-mcp.research-snapshot.v3",
+            "x-data-mcp.research-snapshot.v4",
         }, manifest["schema"]
         assert manifest["snapshot_id"] == summary["snapshot_id"] == directory.name, summary
         files = {entry["path"]: entry for entry in manifest["files"]}

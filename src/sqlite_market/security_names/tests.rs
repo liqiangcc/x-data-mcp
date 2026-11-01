@@ -142,12 +142,37 @@ fn round_trip_keeps_provenance_and_registers_counts() {
     assert_eq!(stored[0].certainty, NameCertainty::Interval);
     assert_eq!(stored[1].certainty, NameCertainty::Unbounded);
     assert_eq!(stored[0].source_kind, NameSourceKind::SzseNameHistory);
-    // The SZSE table carries no publication time, so known_at stays NULL.
+    // The writer stores the knowledge time the domain carries; it never fills
+    // one in (XDM-157: the adapter resolves it from the snapshot store).
     assert!(stored.iter().all(|row| row.known_at.is_none()));
     let stored_registration = read_registration(&f.c)
         .unwrap()
         .expect("registration exists");
     assert_eq!(stored_registration.version_id, registration.version_id);
+}
+
+/// XDM-157: the knowledge time the adapter resolved survives the round trip,
+/// and it is a *different* day from the effective one. The writer must not
+/// derive `known_at` from `effective_from` (separation point 3).
+#[test]
+fn the_stored_row_keeps_the_knowledge_time_the_domain_carries() {
+    let f = Fixture::new();
+    let mut interval = row("000004", day(2001, 3, 7), None, "深安达");
+    interval.known_at = Some(day(2026, 10, 31));
+    replace_security_names(
+        &f.c,
+        &set(vec![interval]),
+        f.binding,
+        "task-1",
+        "derived:security_names",
+    )
+    .unwrap()
+    .expect("non-empty set registers");
+
+    let stored = read_names(&f.c).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].known_at, Some(day(2026, 10, 31)));
+    assert_eq!(stored[0].effective_from, day(2001, 3, 7));
 }
 
 #[test]

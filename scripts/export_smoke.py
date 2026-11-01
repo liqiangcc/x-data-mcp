@@ -34,6 +34,7 @@ anything and never touches the network.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import pathlib
 import sys
@@ -230,10 +231,14 @@ CONTRACT = {
 }
 
 # The snapshots this reader accepts. v2 stays readable: a directory written
-# before #446 PR-9 has no M3 files and the five-column universe file.
+# before #446 PR-9 has no M3 files and the five-column universe file. v4
+# (XDM-157) adds `derived[].verified_through` (optional, only when a complete
+# refresh run proves it) and the security-names/risk-warning registrations; its
+# files and columns are v3's, so every check below is `>= 3`.
 SCHEMAS = {
     "x-data-mcp.research-snapshot.v2": 2,
     "x-data-mcp.research-snapshot.v3": 3,
+    "x-data-mcp.research-snapshot.v4": 4,
 }
 V3_ONLY_FILES = ("industry_assignments.parquet", "code_migrations.parquet")
 V2_UNIVERSE_COLUMNS = ("entity", "member_from", "member_to", "basis", "flags")
@@ -418,6 +423,25 @@ def check_snapshot(directory: pathlib.Path) -> None:
         check_with_duckdb(name, path, rows)
         print(f"ok   {name}: {rows} rows, schema matches §7.4")
 
+    # XDM-157 (#446 §5.3): `derived[].verified_through` is optional — a fresh
+    # init has no complete refresh run to name — but when present it is a day,
+    # not a timestamp or a free-form string.
+    for entry in manifest.get("derived") or []:
+        if "verified_through" not in entry:
+            continue
+        day = entry["verified_through"]
+        valid = isinstance(day, str) and len(day) == 10 and day[4] == "-" and day[7] == "-"
+        if valid:
+            try:
+                datetime.date.fromisoformat(day)
+            except ValueError:
+                valid = False
+        check(
+            valid,
+            f"derived {entry.get('dataset')}: verified_through {day!r} is not YYYY-MM-DD",
+        )
+        print(f"ok   derived {entry.get('dataset')}: verified_through {day}")
+
     # The owner decision (#381 option 1, D-34): the column exists in the
     # exported schema even while M1 stores NULL.
     if (directory / "daily_raw.parquet").is_file() and duckdb is not None:
@@ -434,7 +458,6 @@ def check_snapshot(directory: pathlib.Path) -> None:
 
 def self_check() -> None:
     """Exercise the readers and the §7.4 type contract without Rust."""
-    import datetime
     import decimal
 
     # #446 PR-9: a v2 snapshot stays readable. Its universe file has the five
@@ -485,7 +508,6 @@ def measure() -> None:
     integers would compress unrealistically well and hide the fixed-width
     floor (4 × int64 prices + int64 volume + 9-byte amount).
     """
-    import datetime
     import decimal
 
     rows = 100_000

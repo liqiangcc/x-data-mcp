@@ -150,7 +150,13 @@ fail-closed；`today` 是上海日期、每次日更只取一次）已在代码�
 释放；只有进程退出留下的行才依赖下一次启动回收。
 `tail` 保持同步：28 个计划请求，探针触发整表时上限 549 个（约 13 min）；G2 因此按表计量
 （D-67：未触发整表的 tail <300 s，触发后每张被触发的表各自 <600 s、run 总量不设门禁，
-读 `source_refresh_run_sources.elapsed_ms`）。R5 的 `known_at`/coverage 尚未实现。参数、时间语义
+读 `source_refresh_run_sources.elapsed_ms`）。R5（XDM-157）已在代码中：深市简称/ST 行的
+`known_at` = 首次包含该行的快照的入库日（适配器在解析后按来源库清单的 `acquired_at` 从旧到新
+读回冻结字节求出，日更读路径、采集与两个 replay scope 用同一个函数，不需要数据库），未知则
+fail-closed；数据集证据与
+`docs/data-catalog.md` 按两句写 coverage（有效时间历史从来源起点起可用；知识时间 PIT 从首次
+采集日起）；读面 `metadata.verified_through` 与导出 `research-snapshot.v4` 的
+`derived[].verified_through` 带上“最旧来源的完整确认日”。参数、时间语义
 （`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
 [issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md) 与
 [generic-data-v9](contracts/generic-data-v9.md)。

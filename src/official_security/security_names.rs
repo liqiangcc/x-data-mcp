@@ -46,6 +46,15 @@
 //! reports a 0-row page set as `unverified_zero`). A `not_observed` coverage
 //! window is recorded as a window, never as a row.
 //!
+//! ## Knowledge time (XDM-157)
+//!
+//! Same rule as the ST adapter, resolved by the same function
+//! ([`risk_warnings::resolve_known_at`]): a name interval is known from the day
+//! the earliest registered SZSE short-name snapshot that contains its recorded
+//! row entered the store. The change day stays `effective_from`; the write day
+//! is never used. The registration lives in the source store manifest, so a
+//! `--scope` replay dates rows the same way the daily item does.
+//!
 //! ## Replay determinism (#446 §9.4.2)
 //!
 //! `source_store replay --scope security_names` rebuilds the set from the frozen
@@ -83,8 +92,11 @@ use crate::sqlite_market::backend::MarketBackend;
 /// derived item's outcome evidence, not in PR-2's envelope manifest. v1 → v2:
 /// the short-name rows are read from the block the request declared
 /// (`TABKEY=tab2`), matching the live acquisition, so a frozen page with an
-/// empty `tab1` in front no longer replays as an empty table.
-pub const PARSER_VERSION: &str = "security-names-v2";
+/// empty `tab1` in front no longer replays as an empty table. v2 → v3: an SZ
+/// interval carries `known_at` = the day the first snapshot containing its
+/// change row was stored (§5.3/Q4), so replay writes the same knowledge time
+/// the daily item does and old rows stay distinguishable.
+pub const PARSER_VERSION: &str = "security-names-v3";
 /// Reason code for a frozen table with no A-share change row: a whole-market
 /// snapshot with zero change rows is a source defect, never an empty history.
 pub const EMPTY_TABLE_CODE: &str = "empty_name_set";
@@ -109,10 +121,14 @@ pub struct Admitted {
     /// §5.3 freshness of the selected table: `as_of` is the oldest selected
     /// page, `verified_through` is the refresh run's confirmation date.
     pub freshness: Freshness,
+    /// The day the oldest registered short-name snapshot entered the store:
+    /// the start of the knowledge-time window in the evidence (§5.3/Q4).
+    pub first_capture_day: Option<NaiveDate>,
 }
 
 impl Admitted {
     pub fn evidence(&self) -> Value {
+        let first_capture_day = self.first_capture_day;
         json!({
             "adapter": "security name history (S-6, D-61)",
             "parser_version": PARSER_VERSION,
@@ -140,8 +156,21 @@ impl Admitted {
             },
             "normalisation": "XD/XR/DR marker prefixes are stripped before a name lands; \
                 a row whose names differ only by a marker opens no interval",
-            "known_at_policy": "SZ rows carry known_at = NULL: the table dates the change \
-                but carries no publication time",
+            // §5.3/Q4: two sentences, not one. The effective-time history is the
+            // source's own; the knowledge-time (PIT) window starts when we first
+            // stored a snapshot, because a row's `known_at` is that day. Writing
+            // "names are available from <first capture>" would be a different,
+            // false claim.
+            "known_at_coverage": {
+                "known_at_policy": "SZ rows carry known_at = the day the first snapshot \
+                    containing the change row entered the source store; the table dates the \
+                    change but carries no publication time",
+                "effective_history": format!("effective-time name history is available from the \
+                    source start (SZSE SSGSGMXX/tab2, {})", history_start()),
+                "known_at_pit": format!("knowledge-time PIT (known_at filtering) is \
+                    available from the first capture day, {}", first_capture_day
+                        .map_or_else(|| "not yet captured".to_string(), |day| day.to_string())),
+            },
             "absence_policy": "a not_observed window is never a name; an empty table fails \
                 closed instead of replacing the dataset with zero rows",
         })
@@ -247,6 +276,7 @@ pub(crate) fn read_table(
         sz_rows: table.rows,
         sz_skipped_codes: table.skipped_codes,
         freshness: read.freshness,
+        first_capture_day: table.first_capture_day,
     })
 }
 
@@ -326,9 +356,12 @@ fn unavailable_markets(last_change_day: NaiveDate) -> Vec<CoverageWindow> {
 /// block: the real page has an empty `tab1` in front of the `tab2` rows.
 /// Coverage is derived from the bytes by `assemble_table`, the same function
 /// the live writer uses, so a fresh init replays the windows the first write
-/// recorded instead of re-stamping them with the current day. A table with no
-/// A-share change row fails with [`EMPTY_TABLE_CODE`].
-pub fn replay(pages: &[(&str, String, Vec<u8>)]) -> Result<NameSet, Error> {
+/// recorded instead of re-stamping them with the current day. `store` dates the
+/// rows: `known_at` is the day the first registration containing a change
+/// entered the store, resolved by the same function the daily read path uses
+/// (`risk_warnings::resolve_known_at`). A table with no A-share change row fails
+/// with [`EMPTY_TABLE_CODE`].
+pub fn replay(store: &SourceStore, pages: &[(&str, String, Vec<u8>)]) -> Result<NameSet, Error> {
     let declared_tabkey = risk_warnings::szse_declared_tabkey();
     let mut changes = Vec::new();
     for (source_id, snapshot_id, bytes) in pages {
@@ -339,6 +372,9 @@ pub fn replay(pages: &[(&str, String, Vec<u8>)]) -> Result<NameSet, Error> {
             risk_warnings::parse_sz_page(bytes, snapshot_id, declared_tabkey.as_deref())?;
         changes.append(&mut parsed);
     }
+    // §5.3/Q4: the same store-derived `known_at` the daily item writes, so a
+    // replay cannot differ from the live write only in the knowledge time.
+    let _ = risk_warnings::resolve_known_at(store, &mut changes, declared_tabkey.as_deref())?;
     assemble_table(&changes)
 }
 
@@ -353,6 +389,31 @@ mod tests {
 
     fn page(name: &str) -> Vec<(&'static str, String, Vec<u8>)> {
         vec![("szse_short_name", format!("{name}-sha"), fixture(name))]
+    }
+
+    /// The byte tests register the pages themselves so they can be dated: the
+    /// store manifest is what `known_at` comes from, exactly as in production.
+    /// A table that was never registered fails closed instead.
+    fn store_with(pages: &[(&str, String, Vec<u8>)]) -> (tempfile::TempDir, SourceStore) {
+        let dir = tempfile::tempdir().expect("a scratch directory");
+        let store = SourceStore::new(dir.path().join("source-store"));
+        for (source_id, _, bytes) in pages {
+            let registration = crate::source_store::Registration::new(
+                *source_id,
+                crate::source_store::StoreKind::HttpFetch,
+                "test",
+                "2026-10-31T02:00:00Z",
+            );
+            store
+                .register(bytes, &registration)
+                .expect("the page registers");
+        }
+        (dir, store)
+    }
+
+    fn replay(pages: &[(&str, String, Vec<u8>)]) -> Result<NameSet, Error> {
+        let (_dir, store) = store_with(pages);
+        super::replay(&store, pages)
     }
 
     fn day(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -454,11 +515,17 @@ mod tests {
     #[test]
     fn the_live_writer_and_the_replay_record_the_same_coverage() {
         let pages = page("szse-chain.json");
-        let replayed = replay(&pages).expect("chain replays");
+        let (_dir, store) = store_with(&pages);
+        let replayed = super::replay(&store, &pages).expect("chain replays");
         let declared = risk_warnings::szse_declared_tabkey();
-        let (changes, _, _) =
+        let (mut changes, _, _) =
             risk_warnings::parse_sz_page(&pages[0].2, &pages[0].1, declared.as_deref())
                 .expect("the fixture parses");
+        // The live item's writer resolves the knowledge time from the same
+        // store before assembling (XDM-157), so the two sides are comparable
+        // only after the same step.
+        risk_warnings::resolve_known_at(&store, &mut changes, declared.as_deref())
+            .expect("the registered page dates its rows");
         let written = assemble_table(&changes).expect("the live writer assembles the same chain");
         assert_eq!(replayed, written);
 

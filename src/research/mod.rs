@@ -417,6 +417,14 @@ pub enum DerivedDataset {
     /// identity so a consumer can name the `version_id`/`algorithm_version` the
     /// exported files were recomputed from (AC-M2-11).
     SecurityMaster,
+    /// The two R3 read-path datasets whose rows carry a knowledge time
+    /// (XDM-157): `security_names.parquet` and `risk_warnings.parquet` are part
+    /// of the security export, but their registration was not named in the
+    /// identity. R5 names the untouched `version_id` and the dataset-level
+    /// `verified_through` so a consumer can tell what the file was recomputed
+    /// from and through which day its sources were confirmed.
+    SecurityNames,
+    RiskWarnings,
     Suspensions,
     PriceLimitRules,
 }
@@ -427,6 +435,8 @@ impl DerivedDataset {
             Self::TradingCalendar => "trading_calendar",
             Self::AdjustmentEvents => "adjustment_events",
             Self::SecurityMaster => "security_master",
+            Self::SecurityNames => "security_names",
+            Self::RiskWarnings => "risk_warnings",
             Self::Suspensions => "suspensions",
             Self::PriceLimitRules => "price_limit_rules",
         }
@@ -446,6 +456,11 @@ pub struct DerivedEntry {
     pub digest_format: String,
     pub algorithm_version: String,
     pub source_binding_digest: String,
+    /// `issue-446` §5.3: the oldest latest-complete refresh confirmation of the
+    /// dataset's sources. `None` when no complete run proves one (fresh init) or
+    /// the dataset has no refresh inputs. Part of the identity: an export of a
+    /// confirmed set and one of an unconfirmed set are not the same input.
+    pub verified_through: Option<NaiveDate>,
 }
 
 /// One file the export will produce. `rows`/`bytes`/`sha256` are only known
@@ -643,7 +658,9 @@ pub const PRICE_LIMIT_RULES_COLUMNS: &[&str] = &[
 /// `research-snapshot.v3` adds the confirmed-identity columns M3 PR-7 put on
 /// the read model (#446 §4.3/§10.4): the canonical code of a confirmed code
 /// migration and the other codes in its chain. Candidates never add an alias,
-/// so the file cannot be used to collapse an unproven rename.
+/// so the file cannot be used to collapse an unproven rename. `v4` (XDM-157)
+/// changes no file: it adds `derived[].verified_through` and the two whole-table
+/// dataset identities (`security_names`/`risk_warnings`) to the manifest.
 pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] = &[
     "entity",
     "canonical_entity",
@@ -933,13 +950,20 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
     }
     if request.dataset.includes_security() {
         // Whole-market M2 registrations only: the per-entity ones
-        // (`capital_events`, and the not-yet-written names/risk warnings)
-        // would add one entry per entity without adding traceability a
-        // consumer cannot get from the file itself.
+        // (`capital_events`) would add one entry per entity without adding
+        // traceability a consumer cannot get from the file itself.
         for (dataset, kind) in [
             (
                 DerivedDataset::SecurityMaster,
                 crate::security_master::assembly::DATASET_KIND,
+            ),
+            (
+                DerivedDataset::SecurityNames,
+                crate::security_master::names::DATASET_KIND,
+            ),
+            (
+                DerivedDataset::RiskWarnings,
+                crate::security_master::risk_warnings::DATASET_KIND,
             ),
             (
                 DerivedDataset::Suspensions,
@@ -950,12 +974,12 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
                 crate::trading_rules::DATASET_KIND,
             ),
         ] {
-            let key = if dataset == DerivedDataset::SecurityMaster {
-                crate::security_master::assembly::DATASET_KEY
-            } else if dataset == DerivedDataset::Suspensions {
-                crate::security_master::suspensions::DATASET_KEY
-            } else {
-                crate::trading_rules::DATASET_KEY
+            let key = match dataset {
+                DerivedDataset::SecurityMaster => crate::security_master::assembly::DATASET_KEY,
+                DerivedDataset::SecurityNames => crate::security_master::names::DATASET_KEY,
+                DerivedDataset::RiskWarnings => crate::security_master::risk_warnings::DATASET_KEY,
+                DerivedDataset::Suspensions => crate::security_master::suspensions::DATASET_KEY,
+                _ => crate::trading_rules::DATASET_KEY,
             };
             if let Some(entry) = read::panel_version(c, dataset, kind, key)? {
                 derived.push(entry);

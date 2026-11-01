@@ -71,11 +71,25 @@ pub(crate) fn record_test_refresh_run(
         source.as_str(),
         crate::exchange_source::freeze::now()
     );
-    let members: Vec<RunMemberRow> = market
-        .read_exchange_snapshots()
-        .unwrap()
-        .into_iter()
-        .filter(|row| row.source_id == source.as_str())
+    // One member per request fingerprint: a test that freezes two content
+    // versions of the same request (XDM-157's two rounds) leaves both index
+    // rows, and the run record names the page the reader selects — the newest
+    // acquisition, exactly what `select::Reader` picks without a run record.
+    type Newest = std::collections::BTreeMap<String, crate::exchange_source::index::SnapshotRow>;
+    let mut newest: Newest = Newest::new();
+    for row in market.read_exchange_snapshots().unwrap() {
+        if row.source_id != source.as_str() {
+            continue;
+        }
+        let newer = newest.get(&row.request_fingerprint).is_none_or(|seen| {
+            (&row.fetched_at, &row.snapshot_id) > (&seen.fetched_at, &seen.snapshot_id)
+        });
+        if newer {
+            newest.insert(row.request_fingerprint.clone(), row);
+        }
+    }
+    let members: Vec<RunMemberRow> = newest
+        .into_values()
         .map(|row| RunMemberRow {
             run_id: run_id.clone(),
             source_id: row.source_id.clone(),

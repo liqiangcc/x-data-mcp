@@ -108,8 +108,21 @@ pub(crate) fn replace_security_names(
             "sh": "NOT_AVAILABLE: no dated name history",
             "bj": "NOT_AVAILABLE: no canonical dated name source",
         },
-        "known_at_policy": "SZ name rows carry known_at = NULL: the table dates the \
-            change but has no publication time; a change day is never used as known_at",
+        // §5.3/Q4: `known_at` is the day the first snapshot carrying the row was
+        // stored (the adapter resolves it), never the change day and never the
+        // write day. The two coverage claims stay separate: effective-time
+        // history from the source start, knowledge-time PIT from the first
+        // capture.
+        "known_at_policy": "SZ name rows carry known_at = the day the first snapshot \
+            containing the change row entered the source store; the change day is never \
+            used as known_at",
+        "known_at_coverage": {
+            "effective_history": "effective-time name history is available from the \
+                source start (SZSE SSGSGMXX/tab2, 1994-01-03)",
+            "known_at_pit": "knowledge-time PIT (known_at filtering) is available from \
+                the first capture day; rows written before this rule keep known_at = NULL \
+                until a fresh init rewrites them",
+        },
         "absence_policy": "a not_observed coverage window is not a name; a missing \
             interval stays unknown and no current name is back-filled",
     });

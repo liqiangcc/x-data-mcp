@@ -565,6 +565,7 @@ fn derived_reference(
 }
 
 fn derived_manifest(
+    c: &Connection,
     dataset: Dataset,
     entity: Option<&Security>,
     registration: &crate::sqlite_market::derived::DerivedVersionRow,
@@ -583,6 +584,13 @@ fn derived_manifest(
             adjustment: None,
             lineage: None,
             index: None,
+            // §5.3: the dataset-level confirmation, from the refresh run
+            // records that own it. `None` for a dataset with no refresh inputs
+            // and for a fresh init with no complete run — never a guess.
+            verified_through: crate::sqlite_market::refresh_runs::dataset_verified_through(
+                c,
+                &registration.dataset_kind,
+            )?,
         }),
         stale: None,
         as_of_day: None,
@@ -618,6 +626,7 @@ fn calendar_query(
         return Ok(());
     };
     result.manifest.push(derived_manifest(
+        c,
         Dataset::Calendar,
         None,
         &registration,
@@ -660,6 +669,7 @@ fn events_query(c: &Connection, plan: &QueryPlan, result: &mut QuerySnapshot) ->
             }
         }
         result.manifest.push(derived_manifest(
+            c,
             Dataset::AdjustmentEvents,
             Some(entity),
             &registration,
@@ -744,6 +754,7 @@ pub(crate) fn query(
                 adjustment: None,
                 lineage: None,
                 index: None,
+                verified_through: None,
             }),
 
             stale: None,
@@ -1138,6 +1149,7 @@ fn event_stats(
     }
     Ok((
         Some(derived_manifest(
+            c,
             Dataset::AdjustmentEvents,
             Some(entity),
             &registration,
@@ -1295,6 +1307,8 @@ fn metadata(
             last_trading_date: l.last_trading_date,
         }),
         index,
+        // Bars come from the published series, not from a refresh-run table.
+        verified_through: None,
     }
 }
 
@@ -2735,6 +2749,10 @@ fn series_metadata(
         adjustment: Some(adjustment_evidence(&evidence.adjustment_evidence)),
         lineage,
         index,
+        // A price series is derived from the published generations, not from a
+        // refresh-run table (`issue-446` §5.3 applies to the four read-only
+        // source items).
+        verified_through: None,
     })
 }
 

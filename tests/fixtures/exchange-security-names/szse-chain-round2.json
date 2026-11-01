@@ -1,0 +1,50 @@
+[
+  {
+    "metadata": {
+      "catalogid": "SSGSGMXX",
+      "name": "简称变更",
+      "tabkey": "tab2",
+      "pagesize": 20,
+      "pageno": 1,
+      "pagecount": 1,
+      "recordcount": 5
+    },
+    "data": [
+      {
+        "bgrq": "2001-06-15",
+        "zqdm": "000005",
+        "zqjc": "ST星源",
+        "bgqzqjc": "世纪星源",
+        "bghzqjc": "ST星源"
+      },
+      {
+        "bgrq": "2001-03-07",
+        "zqdm": "000004",
+        "zqjc": "深安达",
+        "bgqzqjc": "深安达A",
+        "bghzqjc": "深安达"
+      },
+      {
+        "bgrq": "1999-04-27",
+        "zqdm": "000004",
+        "zqjc": "深安达A",
+        "bgqzqjc": "ST深安达",
+        "bghzqjc": "深安达A"
+      },
+      {
+        "bgrq": "1998-04-28",
+        "zqdm": "000004",
+        "zqjc": "ST深安达",
+        "bgqzqjc": "深安达A",
+        "bghzqjc": "ST深安达"
+      },
+      {
+        "bgrq": "1998-04-28",
+        "zqdm": "200001",
+        "zqjc": "深物业B",
+        "bgqzqjc": "深物业B",
+        "bghzqjc": "ST物业B"
+      }
+    ]
+  }
+]

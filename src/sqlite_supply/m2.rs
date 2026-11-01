@@ -79,7 +79,7 @@ fn manifest(
     let Some(registration) = registration(c, dataset, entity)? else {
         return Ok(super::absent(entity));
     };
-    derived_manifest(dataset, entity, &registration, coverage_reason)
+    derived_manifest(c, dataset, entity, &registration, coverage_reason)
 }
 
 /// The `temporal` block for one answer (issue-391 §12.2). A dataset whose
@@ -225,6 +225,7 @@ fn security_master(
 ) -> Result<(), Error> {
     let registration = registration(c, Dataset::SecurityMaster, None)?;
     result.manifest.push(derived_or_absent(
+        c,
         Dataset::SecurityMaster,
         None,
         registration.as_ref(),
@@ -304,6 +305,7 @@ fn capital_events(
     for entity in &plan.entities {
         let registration = registration(c, Dataset::CapitalEvents, Some(entity))?;
         result.manifest.push(derived_or_absent(
+            c,
             Dataset::CapitalEvents,
             Some(entity),
             registration.as_ref(),
@@ -350,6 +352,7 @@ fn risk_warnings(
 ) -> Result<(), Error> {
     let registration = registration(c, Dataset::RiskWarnings, None)?;
     result.manifest.push(derived_or_absent(
+        c,
         Dataset::RiskWarnings,
         None,
         registration.as_ref(),
@@ -405,6 +408,7 @@ fn suspensions(
 ) -> Result<(), Error> {
     let registration = registration(c, Dataset::Suspensions, None)?;
     result.manifest.push(derived_or_absent(
+        c,
         Dataset::Suspensions,
         None,
         registration.as_ref(),
@@ -454,6 +458,7 @@ fn price_limit_rules(
 ) -> Result<(), Error> {
     let registration = registration(c, Dataset::PriceLimitRules, None)?;
     result.manifest.push(derived_or_absent(
+        c,
         Dataset::PriceLimitRules,
         None,
         registration.as_ref(),
@@ -500,6 +505,7 @@ fn price_limit_rules(
 }
 
 fn derived_or_absent(
+    c: &Connection,
     dataset: Dataset,
     entity: Option<&Security>,
     registration: Option<&derived::DerivedVersionRow>,
@@ -508,7 +514,7 @@ fn derived_or_absent(
     let Some(registration) = registration else {
         return Ok(super::absent(entity));
     };
-    derived_manifest(dataset, entity, registration, coverage_reason)
+    derived_manifest(c, dataset, entity, registration, coverage_reason)
 }
 
 /// An explicit pin must name the current registration, otherwise the request
