@@ -1,10 +1,17 @@
-# 交易所来源共用入口（M3 PR-2）
+# 交易所来源共用入口与刷新（M3 PR-2 / XDM-149）
+
+**状态（R6，2026-11-02）：已实现（未部署）。** 入口（M3 PR-2）与刷新策略 R1–R5
+（XDM-149：窗口计划、`refresh_exchange_sources` 的 tail/full、日更只读与陈旧闸门、
+重放选择、`known_at`/coverage）的代码都在 main，随 `generic-data-v9` / compact schema 26
+**一起部署**；生产仍是 `generic-data-v8` / schema 25（见 [STATUS](STATUS.md)），四个同源日更 item
+目前仍在 item 内发请求。本文记录**代码实际行为**；部署后要按实测回填 [STATUS](STATUS.md)
+与 [SLO](SLO.md)，G2 的查询步骤见[来源刷新 runbook](source-refresh-runbook.md)。
 
 五个使用方（A-1 上市名单、A-2 终止上市名单、历史 ST、A-3 停复牌、S-6 简称历史）共用
 一条「获取 → 冻结 → 校验 → 绑定」链路，设计见
-[issue-446 M3 设计](tasks/issue-446-m3-delisted-industry.md) §6 与 §9.4。本文只记录
-PR-2 落地的入口、边界与失败语义；各来源的 parser 与写入器分别由后续 PR 提供
-（PR-3/PR-10/PR-11/PR-12）。
+[issue-446 M3 设计](tasks/issue-446-m3-delisted-industry.md) §6 与 §9.4、刷新策略见
+[issue-446-exchange-refresh](tasks/issue-446-exchange-refresh.md)。各来源的 parser 与写入器
+由 PR-3/PR-10/PR-11/PR-12 提供；§7 保留 PR-2 当时的非目标。
 
 ## 1. 代码位置与进程边界
 
@@ -125,7 +132,7 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 - 依据与代价：XDM-135 实测 A-3 停复牌回填 1,296 个请求 / ~1,755 s，其中 795 个请求间隔
   <1 s，不满足「≥1 s/请求」；owner 2026-10-31 选 (a) 强制 ≥1 s，合规优先。因此 A-3 一次
   全量回填的最短时间下界约为请求数 × 1 s（1,296 s 量级），这是预期成本，不是回归；
-  本 PR 不改 A-3 的请求数/分页，也不改抓取窗口。
+  该次改动不改 A-3 的请求数/分页，也不改抓取窗口。
 
 ### 运行内缓存
 
@@ -135,31 +142,63 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 （`Entry::with_cache`），不共享时行为与无缓存一致。校验仍在窗口结束时整体执行，
 缓存不会绕过 `truncated`/`unverified_zero` 判断。
 
-### 跨日复用与刷新周期（XDM-149）
+### 跨日复用与刷新周期（XDM-149，已实现未部署）
 
-R1 的跨日复用读路径、R2 的刷新任务（`refresh_exchange_sources` 的 tail/full、run 成员与
-页 1 守卫）与 R3 的只读日更路径（`exchange_source::select`：整表源取最新完整 run 的成员页，
-窗口源按窗口取最新完整页集，`today − verified_through > H=14d` 即 `source_refresh_overdue`
-fail-closed；`today` 是上海日期、每次日更只取一次）已在代码中，随 `generic-data-v9`/schema 26 未部署；日更的四个派生 item 不再
-内联获取，改动在部署后生效。R2b 把运行语义补齐：刷新**单飞**（已有 `running` run 时新开始被拒，
-`refresh_already_running` 并回带 run_id；tail 与 full 互斥，检查与插入同一写事务），
-`full` **异步**（立即返回 `running`，抓取在本进程后台线程，用 `{status_of: run_id}` 查询；
-客户端断开不影响），进程停止留下的 `running` 行由下次 `data_service` 启动按
-`owner_instance` 回收为 `failed`（`process_restarted`，不推进 `verified_through`）。
-抓取过程 panic 由执行入口 `catch_unwind` 当场结题（`refresh_panicked`），单飞闸门立刻
-释放；只有进程退出留下的行才依赖下一次启动回收。
-`tail` 保持同步：28 个计划请求，探针触发整表时上限 549 个（约 13 min）；G2 因此按表计量
-（D-67：未触发整表的 tail <300 s，触发后每张被触发的表各自 <600 s、run 总量不设门禁，
-读 `source_refresh_run_sources.elapsed_ms`）。R5（XDM-157）已在代码中：深市简称/ST 行的
-`known_at` = 首次包含该行的快照的**入库日（上海日期）**（适配器在解析后按来源库清单的
-`acquired_at` 取 `calendar::shanghai_date_of` 的日期、从旧到新读回冻结字节求出，日更读路径、
-采集与两个 replay scope 用同一个函数，不需要数据库），未知则 fail-closed；首份简称表登记于
-UTC `2026-10-31T18:43:40Z`，即上海日期 **2026-11-01**（Claude 审核裁定，D-66 Q4 原文的
-2026-10-31 是 UTC 日期）；数据集证据与
-`docs/data-catalog.md` 按两句写 coverage（有效时间历史从来源起点起可用；知识时间 PIT 从首次
-采集日（上海日期）2026-11-01 起可用）；读面 `metadata.verified_through` 与导出 `research-snapshot.v4` 的
-`derived[].verified_through` 带上“最旧来源的完整确认日”。参数、时间语义
-（`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
+刷新把「获取」与「派生」分开：`refresh_exchange_sources`（`ops` 工具）只写来源库、索引与
+run 记录；四个同源日更 item 只读它冻结的快照。代码行为如下（参数与门禁见
+[issue-446-exchange-refresh](tasks/issue-446-exchange-refresh.md) §5 与
+[generic-data-v9](contracts/generic-data-v9.md)）：
+
+- **计划决定请求数**：`tail` 对窗口源只取“当前开窗 + 上一自然季度”，对便宜的整表源
+  （`sse_listing`/`sse_delisting`/`szse_delisting`）取全表，对 `szse_listing` 与
+  `szse_short_name` 只取第 1 页探针（`szse_short_name` 仅当新行含 `ST`/`*ST`/`退` 才在
+  当天补全量）。`full` 覆盖全部 1,941 个指纹（停牌/公告的全部季度 + 整表全部页），逐指纹
+  与最新 sha 比对，输出 `revision`。关闭窗口在 `tail` 里根本不进计划，所以“关闭窗口不发
+  请求”由计划保证；R1 的 `ReusePolicy` 表已注册 7 个来源但全部 `Enabled::No`（R1 验收要求
+  默认不改变行为），读穿复用只在显式启用时生效，不是当前请求数下降的原因；`full` 按设计
+  必须重抓全部指纹检测修订，也不能靠读穿复用跳过。**要启用 R1 的 `ReusePolicy` 需另行决策，
+  目前没有计划。**
+- **R3 读路径**：`exchange_source::select` 给每个 item 选输入——整表源取**最新完整成功
+  run 的成员页**（跨 run 拼页、缺页、页数/行数与发布方计数不符都是 `snapshot_incomplete`），
+  窗口源按窗口取最新完整页集；没有 run 记录（fresh init 或 R2 前的库）时退回“每个请求
+  指纹取最新页 + 同一套完整性校验”，`verified_through` 随之退化为 `min(selected as_of)`，
+  不假装验证过。数据集证据的 `as_of` 由被选快照算出（整表 `min`、窗口 `max`），不是运行日；
+  陈旧闸门只看 run 的 `verified_through`：`today − verified_through > H=14 天` →
+  `source_refresh_overdue`，旧版本仍可读。`today` 用上海日期、由 `derived::run` 每次日更
+  只取一次。读路径与获取路径共用同一套失败码（`page_size_ignored`/`truncated`/
+  `unverified_zero`/`source_invalid`/`page_count_exceeds_bound`），存储缺口才是
+  `snapshot_incomplete`/`source_snapshot_not_found`。
+- **run 语义（R2b）**：刷新**单飞**（已有 `running` run 时新开始被拒，
+  `refresh_already_running` 并回带 `details.run_id`；`tail` 与 `full` 互斥，检查与插入同一
+  写事务），`full` **异步**（立即返回 `{run_id, status:"running"}`，抓取在本进程后台线程，
+  用 `{status_of: run_id}` 查询；客户端断开不影响），进程停止留下的 `running` 行由下次
+  `data_service` 启动按 `owner_instance` 回收为 `failed`（`process_restarted`，不推进
+  `verified_through`）。抓取过程 panic 由执行入口 `catch_unwind` 当场结题
+  （`refresh_panicked`），单飞闸门立刻释放；只有进程退出留下的行才依赖下一次启动回收。
+- **预算与 G2**：`tail` 同步，典型 28 个计划请求；探针触发整表时上限 549 个。G2 因此按表
+  计量（D-67）：未触发整表的 `tail` <300 s；触发后每张被触发的表（`szse_listing`、
+  `szse_short_name`）各自 <600 s、run 总量不设门禁，读
+  `source_refresh_run_sources.elapsed_ms`；`full` <60 min，读 run 的
+  `finished_at − started_at`。如何查询这些记录见
+  [来源刷新 runbook](source-refresh-runbook.md)。
+- **重放（R4）**：`source_store replay --scope exchange` 仍从清单重建索引；
+  `security_names`/`risk_warnings` 优先用 refresh run 的成员页，legacy 库没有 run 表时退回
+  “每请求指纹取最新 + 完整性校验”。`--verify-only` 只比内容，不因 `verified_through`
+  不同报 drift。
+- **PIT 字段（R5，XDM-157）**：深市简称/ST 行的 `known_at` = 首次包含该行的快照的
+  **入库日（上海日期）**：适配器在解析后按来源库清单的 `acquired_at` 取
+  `calendar::shanghai_date_of` 的日期、从旧到新读回冻结字节求出，日更读路径、采集与两个
+  replay scope 用同一个函数，不需要数据库；未知则 fail-closed。首份简称表登记于 UTC
+  `2026-10-31T18:43:40Z`，即上海日期 **2026-11-01**（Claude 审核裁定，D-66 Q4 原文的
+  2026-10-31 是 UTC 日期）。数据集证据与 [data-catalog](data-catalog.md) 按两句写 coverage
+  （有效时间历史从来源起点起可用；知识时间 PIT 从首次采集日（上海日期）2026-11-01 起
+  可用）；读面 `metadata.verified_through` 与导出 `research-snapshot.v4` 的
+  `derived[].verified_through` 带上“最旧来源的完整确认日”。
+- **fresh init**：新库没有任何 refresh run 记录，四个同源 item 在第一次 `full` 之前以
+  `source_snapshot_not_found` 失败（这是首次顺序问题，不是数据缺陷）；日更 Skill 在首次
+  日更前先跑 `full`，见 [daily-sync](daily-sync.md)「来源刷新」。
+
+参数、时间语义（`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
 [issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md) 与
 [generic-data-v9](contracts/generic-data-v9.md)。
 
@@ -340,7 +379,10 @@ PR-11 起 `derived:suspensions` 的 `confirmed` 分支由 `src/official_security
   该 item 失败、不写 `confirmed`（§10.1）。深市没有该来源，首期只有 `unresolved_gap`，
   可交易性 `unknown`。
 
-## 7. 本 PR 不含
+## 7. PR-2 当时的非目标（历史）
+
+以下保留 PR-2 的范围记录；后续 PR 与 XDM-149 的 R1–R5 已完成这些项（见上文与
+[v9 契约](contracts/generic-data-v9.md)）：
 
 - 其余具体来源的 parser 与写入器（PR-10/PR-11/PR-12；PR-3 只接入 A-1/A-2）；
 - 真实联网抓取（CI 全部使用夹具；真实抓取只在私有栈验收）；

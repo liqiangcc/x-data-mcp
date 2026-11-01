@@ -102,7 +102,7 @@
 
 ## 2. 部署与兼容
 
-- 代码能力修订 `generic-data-v9`；部署实例在 preview.41 前仍为 `generic-data-v8`，
+- 代码能力修订 `generic-data-v9`；部署实例（preview.41，2026-11-01）仍为 `generic-data-v8`，
   此时 `ops` 的 `tools/list` 没有本工具，16 只是代码 allowlist 计数。
 - schema 26 仍按 D-08 全新 init，不做原地迁移；旧二进制拒绝 26。
 - 回滚：回到 v8 二进制并保留旧库归档；schema 26 的 run 记录不参与 v8 的读写面。

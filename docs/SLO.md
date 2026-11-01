@@ -43,6 +43,17 @@
   **G2 在 R2 实现上线前不可测**，
   不参与当前判定；D-52 豁免保留。即使来源获取归零，本代 G1 仍约 609s（实体写入 551.8s +
   日历 44s + 启动 9.8s = 605.6s 下限），G1 转绿依赖实体路径优化，不因拆分而变绿。
+- **G2 的测量入口（runbook）**：G2 只读 schema 26 的 `source_refresh_runs` 与
+  `source_refresh_run_sources`，不另设计时器。`full` 与未触发整表的 `tail` 读
+  `source_refresh_runs.finished_at − started_at`；触发整表时读
+  `source_refresh_run_sources.elapsed_ms`（`source_id ∈ {szse_listing, szse_short_name}`
+  且该来源 `complete=1` 或 `snapshots>1` 的行，每行 <600000 ms，run 总量不设门禁）。
+  `requests` 是 `client.attempts()`、包含重试，不能用来判断触发。**门禁只用
+  `status='succeeded'` 的 run 判定**；`failed`/`process_restarted` 的 run 不参与门禁判定，
+  但测量记录必须逐条列出每个这类 run 的耗时与失败码，不得省略（`running` 尚无
+  `finished_at`，只记录状态与 `started_at`，且不推进 `verified_through`）。查询语句、
+  如何判断“触发”与失败分诊见[来源刷新 runbook](source-refresh-runbook.md)。**schema 25 的
+  生产库没有这三张表，部署 v9 前 G2 没有读数**。
 - 第 5 行口径已于 2026-10-26 定为**完整部署目录**（`/opt/x-data-mcp-preview` 全树，不含已移出的归档库与 `/tmp`），门禁 **≤8GiB**；上调原因：复权模型选方案 (c) 要物化一份前复权序列，并新增因子/日历/指数/导出元数据，M1 设计复核后目录口径从 4.2GiB 到**约 5.7GiB**（+约 1.5GB，[#383](https://github.com/liqiangcc/x-data-mcp/issues/383) §17 第 5 条）。同日先定的 6GiB 余量太薄（距估算值仅约 0.3GiB，一个代目录就超过），当天改为 8GiB；原 4GiB 为历史值（[DECISIONS](decisions.md) D-21）。导出文件落 `/root/x-data-exports/`，不计入本门禁。
 - **历史（2026-10-24，口径未定的时期；以下为原文）：** 第 5 行「部署体积」的测量边界此前未定义，已有记录也不一致：唯一的 PASS 证据 `docs/daily-sync.md:275`
   写的是「preview.28 部署包」（发布包口径），而 `docs/tasks/issue-259-final-storage-design.md:67` 写的是
