@@ -112,11 +112,15 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // `selection.scope` field (one enum value) to the shared `Selection`
     // schema, which three read tools carry, plus the
     // `market.industry_assignments` value M3 PR-7 put in the `Dataset` enum.
+    // R2b (issue-446 §5.6) adds no tool: it makes `mode` optional and adds
+    // `status_of` to `refresh_exchange_sources`, plus the `running` status and
+    // an optional `finished_at` in its output. Measured ops grew 29,814 ->
+    // 30,114 B (+300) and the ceiling follows the same rule: 30,500 + 300.
     // The research/ops budgets carry that documented surface growth; they are
     // not relaxed for any other reason.
     let budgets = [
         (EntryKind::Research, 5usize, 12_200usize),
-        (EntryKind::Ops, 16usize, 30_500usize),
+        (EntryKind::Ops, 16usize, 30_800usize),
         (
             EntryKind::Maint,
             if cfg!(target_os = "linux") { 9 } else { 8 },
