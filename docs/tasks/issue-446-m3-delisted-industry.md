@@ -1703,6 +1703,195 @@ item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其�
 - **文档**：`docs/exchange-source.md` §2 新增「出站 URL 编码与请求指纹」，并在指纹条目
   注明参数值是原始文本。
 
+### 14.12 preview.39 私有栈部署与 M3 首轮验收（2026-10-31，XDM-137）
+
+状态：**部署成功（`DEPLOYED`）；重建 17 个派生 item 中 16 个终态成功，`derived:risk_warnings`
+真实抓取失败并已归因为产品缺陷（XDM-144）；首采 338/338、年线 5,223/5,223 成功。**
+按 owner 指示未重试该 item、未回滚已成功的 `security_master`；PR-5 第二次日更读数与
+AC-M3-5 的场景③/④待 XDM-144 发布后补。
+
+**1. 版本、制品与部署点**
+
+| 项 | 值 |
+|---|---|
+| 代码 / tag | `8173991d6780032c43038bc1922bf6a042a4b904` / `v0.2.0-preview.39` |
+| 制品 | tarball sha256 `be214b97804b2b8e8b93449559d508472f709fd945c51035459c421ca5f386ec`，`smoke-report.json` PASS，manifest 13 个二进制 / glibc 2.39 / toolchain 1.99.1 |
+| 上一版 | `6ac5c963fdb6fb2e0f20b3963faf1fcfdf9bb3a5`（preview.38，schema 24） |
+| 当前 | `current -> releases/8173991d…`；`PRAGMA user_version=25`，`schema_migrations` 25 行 |
+| 部署报告 | `/opt/x-data-mcp-preview/reports/preview39-phaseg-deployment.json`（`status=DEPLOYED`，`failed_at=null`） |
+| 回滚点（归档库） | `/opt/x-data-mcp-preview/state/preview.sqlite.v24-archived-20261031T182806Z`（1,878,384,640 B，本窗口生成，未删） |
+| 来源库 | `/opt/x-data-mcp-preview/state/source-store`（0755；`blobs/` 有 owner 归档批次 + 交易所快照） |
+| drop-in | data：`source-store.conf`（`X_DATA_MCP_SOURCE_STORE`）；acquire：`acquire-market-db.conf`（`--market-db /opt/x-data-mcp-preview/state/preview.sqlite`，`ReadWritePaths` 加 `state`） |
+| 服务与读面 | data / acquire `active`；ops 15 / research 5 / maint 9 工具；acquire 10；`capability_revision=generic-data-v8` |
+| 启动日志 | `exchange source outbound request interval: 1000 ms (…)`、`source store: /opt/x-data-mcp-preview/state/source-store` |
+| 部署内 replay | `--scope all`：industry `ok` / `rebuilt` / `database=match`（entries 9，digest `a602003c…`，7 snapshots / 5,235 assignments / 7 boundaries）；其余 scope `store_empty`（当时尚未抓取），`problems=[]` |
+
+**2. fresh init 后的重建**
+
+| 步骤 | 结果 |
+|---|---|
+| catalog | `catalog-1793471419601619642`，5,225 个当前成员 |
+| 日线首采（v1 explicit，53 批 ≤100） | 受理 5,225 实体；**5,223 成功 + 2 失败**（`sh.688827`、`sz.001381`：`member absent … found 0`，源 generation 无 `.day` 成员，属预期 absent）；写循环 540.6 s，WAL 峰值 79,516,032 B |
+| 日更 plan | `target_day=2026-10-28`（`generation_latest`），eligible 6 / already_current 5,217 / absent 2 |
+| 日更 run | 23 item = 6 实体 + **17 派生**；22 成功、1 失败（`derived:risk_warnings`）；写循环 1,977.8 s |
+| `derived:security_master` | 170.7 s；`row_count=5,565`；`pending_sources=[]`；`exchange_source` 非空（SZSE 上市 146 页 / 退市 9 页 / nm 3 页；SSE 上市+退市各 2 页；`parser_version=exchange-a1a2-v4`）；迁移 confirmed 1；B 股跳过 23；`000020`/`200020` 同日重复各折叠 1 行 |
+| `derived:suspensions` | 1,388.1 s；A-3 1,296 个季度窗口快照；`confirmed` 20,420 行 / `unresolved_gap` 50,204 行；`missing_days=508,812`；`rows_read=31,350`；重复 2,035、盘中跳过 4,715、非 A 股 4,168；`not_observed` 仅 `2008-01-01..2008-03-31` |
+| `derived:security_names` | 375.9 s；7,344 行（源表 7,349 行），仅深市 1994-01-03..2026-10-29；沪/北 `NOT_AVAILABLE`；`known_at` 全 NULL（D-61） |
+| `derived:industry_snapshot` | 186 ms；登记第 7 个快照（`source_kind=generation`，`row_count=5,666`，`scope_member_count=5,231`，`dictionary_sha256=86f758…`）；assignment 5,235 行 |
+| 年线 | plan eligible 5,223 / absent 2；run **5,223/5,223 成功**，597.3 s；复 plan 后 eligible 0 / already_current 5,223 |
+| 首采 `sh_sz_a_listed_ever`（v2 scope） | 受理 **338** item，**338/338 成功**，写循环 49.0 s，WAL 峰值 53,914,352 B；复投返回 `resolved listed-ever selection is empty; nothing to collect`（`invalid_arguments` / `not_committed`，幂等） |
+| 库与表 | `market_series` 5,570（raw 5,570 / 前复权 5,561 / 年线 5,223）；`series_bars` 36,124,581；`trading_days` 8,796（1990-12-19..2026-10-28）；9 条指数序列；`tasks` 57（54 succeeded / 3 partially_failed：2 个首采批次各 1 个 absent 实体 + 日更的 risk_warnings） |
+
+**3. 预期值对账（清单 §13 / XDM-135 §5）**
+
+| 项 | 预期 | 实测 | 判定 |
+|---|---|---|---|
+| `security_master` 行 / 实体 | 5,565 / 5,564 | 5,565 / 5,564 | PASS |
+| `listing_source` | `exchange_list` 5,559 + `tdx_ssdate` 6 | 5,559 + 6 | PASS |
+| `delisting_source` | `exchange_list` 337 / `unknown` 5,228 / `tdx_arrangement` 0 | 337 / 5,228 / 0 | PASS |
+| 退市日 | 已退市行全有日期 | 337 行全部有 `delisting_date`；5,228 个未退市行为 NULL | PASS |
+| 冲突 | 上市冲突仅 `sh.600018` | 上市冲突 2 行（`sh.600018` 交易所 2000-07-19 vs `tdx_ssdate` 2006-10-26）；退市冲突 15 行（交易所比 TDX 侧晚 1–6 天，两侧值都留在 `delisting_date` / `delisting_date_tdx`） | PASS（与 §13 预期同类） |
+| 首采清单 | 338 | 338（338/338 成功） | PASS |
+| 目录成员 | — | 5,225；其中 2 个无 `.day`（`sh.688827`、`sz.001381`） | 记录 |
+| 别名/迁移 | — | 3 个主表代码无自身日线：`sh.601313`、`sz.000022`、`sz.000043`（序列在新代码下）；5,561 + 3 = 5,564 | 记录 |
+
+> 清单 §13 第 149 行的 `338 = 276 + 62（SSDATE='0'）` 算式**作废**：XDM-135 复核
+> `SSDATE='0'` 的 A 股代码是 74 个、其中 61 个进主表；本轮 338 实测来自
+> 「主表 ∩ active generation 的 `.day` 成员」，与旧算式无关。
+
+**4. `derived:risk_warnings` 失败：已知缺陷（XDM-144），本轮未通过**
+
+- 失败 item：`derived:risk_warnings`（task `task-4411ad308f647e93c0a013b0a06f0b00`，
+  `partially_failed`），`reason_code=OTHER`，错误前缀
+  `INVALID_MARKET_COMMAND: historical ST/risk-warning source: source_unavailable: …
+  source_transport_failed`；v2 读面按 240 字符截断（原始 6,089 字符），完整 traceback 在
+  `task_items.outcome_json`：`exchange_fetch.py:57 urllib.request.urlopen` → `http.client`
+  的 `request.encode('ascii')` 抛 `UnicodeEncodeError`（position 95-98）。
+- 根因（owner 已确认）：SSE 公告索引的 `TITLE=风险警示/特别处理` 是 UTF-8 非 ASCII，
+  `ExchangeRequest::display_url()` 未对 query 做百分号编码，helper 的 `urllib` 只接受 ASCII。
+- 修复：**XDM-144 / PR #482**，commit `5411662`（`encode_query_component` 按 RFC 3986 编码
+  query 的 name/value，空格 `%20`、`%` 只编码一次，`fingerprint()` 不变，CI 有
+  「`plans()` 全部出站 URL 为 ASCII」守卫），2026-10-31T19:46:26Z 合入 main。
+  **该修复不在 preview.39（`8173991`）内。**
+- 本轮影响（实测）：`risk_warning_intervals` **0 行**；`derived_dataset_versions` 无
+  `risk_warnings` 行，读面 `absent`。来源库已冻结 375 个深交所短名快照，
+  `replay --scope risk_warnings --verify-only` 能从字节重放出 **1,289** 个 ST 区间，
+  与库内 0 行比较为 `drift`——这条 drift 是该失败的直接证据，不是数据损坏。
+- 结论：**未通过，不算验收通过**。按 owner 指示不在 preview.39 上重试；换含 `5411662` 的
+  版本后只重跑该 item（`retry_task` 只重试失败项），不重建、不回滚 `security_master`。
+
+**5. A-3 出站请求间隔：未采到逐请求间隔，只有聚合值**
+
+- 启动日志的生效值 1,000 ms（见 §1）；`derived:suspensions` item 的 `elapsed_ms=1,388,107`，
+  该 item 发出 **1,296** 个 A-3 请求 → 平均 1,071 ms/请求。这是**含解析与写库时间的聚合均值**，
+  不能当成「相邻请求开始间隔」的线上证据。
+- **未采到** A-3 的逐请求间隔：本轮 `tcpdump` 只过滤了深交所地址
+  （`114.94.127.138`），A-3 走 `query.sse.com.cn`（`202.122.113.77`）不在抓包内；
+  深交所那批 SYN 间隔（519 个，中位数 1.002 s、25 个 <0.9 s）既不是 A-3 的流量，
+  SYN 时刻也在 DNS/connect 之后、晚于限速所在的请求开始点，**不作为 A-3 证据**。
+- 来源库 `sse_suspension` 快照的 `acquired_at` 是**批量 freeze 的时间戳**，不是请求时间，
+  **不拿来推算间隔**（此前一版草稿曾这样写，已作废）。
+- 因此 A-3 的 1 s 间隔目前只有：启动日志生效值、代码里的限速实现与 CI 单测、
+  以及上面这条聚合均值。逐请求间隔（≥20 个相邻、≥1 s）**未采到**，记为未完成项，
+  不用任何替代指标冒充。
+
+**6. 资源与回滚点**
+
+- 磁盘：窗口前可用 8.03 GB → 过程中最低 **5.39 GiB**（`df -k` 采样）→ 部署后 5.78 GB；
+  `/opt/x-data-mcp-preview` 5.4 GiB（≤8 GiB）；库 1,928,138,752 B；WAL 峰值 79.5 MB。
+- 内存：`MemAvailable` 最低 469 MB（>300 MB 停止线）；data 单元 `VmHWM` 峰值 370 MB
+  （< `MemoryHigh=384M`）。
+- 回滚：`current` 指回 `releases/6ac5c963…` + 归档库 `…v24-archived-20261031T182806Z`；
+  **必须同时移除 acquire 的 `acquire-market-db.conf`**（旧二进制不认 `--market-db`，脚本
+  回滚不认识新增 drop-in，§7A）；不依赖 superseded 代 `activate_generation`（§10 第 3 条）。
+
+**7. AC-M3 执行状态（私有栈，2026-10-31）**
+
+| AC | 状态 | 证据摘要 |
+|---|---|---|
+| AC-M3-1 | 已执行 | `market.security_master` + `universe` + `filter.as_of=2015-01-05`：2,595 个成员；`listing_source` exchange_list 2,590 / tdx_ssdate 5；`delisting_source` unknown 2,367 / exchange_list 228；flags 2579 空 / listing_conflict 1 / delisting_conflict 15；`issuer_resolution` code_date 2,594 / ambiguous 1；2015 年以来退市 256 个且全部有 bar；与当日目录差集：universe 不在目录 232（退市股）、目录不在 universe 2,862（2015 后上市）；`listing_date` unknown 0；逐条成员 TSV 在验收目录 |
+| AC-M3-2 | 已执行 | 2015–2025 逐年「有 bar 实体（`instrument_class=0`）vs 主表当年在册」：2812/2819、3034/3039、3466/3476、3569/3576、3767/3774、4155/4160、4620/4627、4948/4952、5142/5145、5171/5177、5212/5215，delta −3..−10；`bars_only=0`，`reg_only` 全部是「主表在册但当年整年无 bar」：3 个迁移别名（`sh.601313`、`sz.000022`、`sz.000043`，序列在新代码下）+ 24 个整年停牌代码（如 `sh.600485` 2017/2018/2021、`sz.000029` 2017–2019）。首版脚本把 9 条指数序列算进 bars 才出现 +8/+9，已修正。计数用 DB 只读统计，`research-snapshot.v3` 导出的交叉核对未跑 |
+| AC-M3-3 | 已执行 | `as_of=2015-01-05` → 3/3 `status=unknown, reason=before_coverage`；覆盖起点 2026-09-30；`as_of=2026-10-08`/`2026-10-28` → `assigned`（`X5001`，`name_status=unknown_dictionary`，grade A）；`known_at` 读面可用且 `unknown_known_at_rows=0`；5,235 行 assignment 全部 `unknown_dictionary`——归档快照未配 `incon.dat`（只有 generation 快照有），按 §5.6 不得用当前名称回填 |
+| AC-M3-5 | 部分 | P1（无 `--market-db`）`retire_gate_unconfigured`；P2（有来源库、缺证据）`source_store_evidence_missing`，字节未变，detail 无 replay 提示（§10 第 2 条实测形态）；③/④待 XDM-144 后的第一次跨代日更补 |
+| AC-M3-6 | 未执行 | 首轮 `derived:delisted_series_check` `checked=0`（主表在 plan 解析时为空，符合设计）；需要第二个 generation 的日更才有有效读数（PR-5 规定取第二次日更） |
+| AC-M3-7 | 已执行 | 主表 5,565 行；`listing_date` unknown 0；337 个已退市行全部有日期；上市冲突 2 行 / 退市冲突 15 行（两侧值见 §3）；`listing_source` / `delisting_source` 分布见 §3 |
+| AC-M3-9 | 部分 | 停机窗口内（data+acquire 都停，`/proc/locks` 无 flock 持有者）跑 `replay --scope all --verify-only`：industry `match`（entries 11，digest `bff8783d…`）、exchange `match`（entries 1,833，digest `4d3443b5…`）、security_names `match`（entries 375，digest `417838d1…`，7,344 行由字节重放）；`generation_facts` `drift`（6 facts，仅 2 个 `hsjday.zip|daily_series` 键，库 `652bbb84…` vs 重算 `5cab7f8d…`）、`risk_warnings` `drift`（库 0 行 vs 可重放 1,289 区间，XDM-144）；`replay --scope suspensions --verify-only`（不在 `all` 内）`drift`/`drift_cause=inputs_changed`（20,424 facts，`suspension_intervals` 70,624 行）；`verify --scope all` 完整性 `ok`（1,844 entries，digest `43d14fa4…`）。两处 drift 由时间线解释：suspensions/facts 早于 listed-ever 的 338 条（19:14–19:15）提交，`bar_days` 与 `daily_series` 摘要因此变化，下一轮日更重算即消；`risk_warnings` 的 drift 是 XDM-144 失败的直接证据。完整「清库重建」式断网重放本轮未做（见 §14.12 第 10 条） |
+| AC-M3-10 | 已执行 | SZSE 上市 146 页 / 退市 9 页 / nm 3 页（`tab2` 选中，`tab1` 0 行）；SSE 上市与退市各 2 页；A-3 按自然季度 1,296 个窗口、`2008Q1` 为 `not_observed`、`rows_read=31,350`；未把 0 行写成「无事件」 |
+
+**8. 待补（等含 XDM-144 的版本落地后一个窗口内完成）**
+
+1. 部署含 URL 编码修复（`5411662`）的版本，`retry_task` 只重跑 `derived:risk_warnings`
+   （不重建、不回滚主表），验 `risk_warning_intervals > 0` 与
+   `replay --scope risk_warnings --verify-only = match`（见 §14.12 的两条路径）。
+2. 同一次日更产出 PR-5 第二次日更读数（`derived:delisted_series_check` `checked>0`），
+   并补 AC-M3-5 的场景③/④。
+3. 用 `strace -f -e execve -tt` 采 ≥20 个 A-3 相邻请求间隔（≥1 s）落证。
+4. 下一轮日更会让 `generation_facts`（`daily_series`）与 `suspensions` 的
+   `replay_inputs_digest` 随 338 条 listed-ever 序列重算，重跑
+   `replay --scope all --verify-only` 应转 `match`（§14.12 第 10 条）。
+5. 更新 `docs/STATUS.md`、`docs/data-catalog.md:381` 的停牌口径与来源库批次（§17 文档收尾）。
+
+**9. 本轮新增的运维事实**
+
+- 部署脚本只清 `mcp.sock` 的 socket owner marker；多 socket 单元（research/maint）需要人工
+  删除 `research.sock.owner`/`maint.sock.owner`，否则 readiness 探活失败（本轮已手工清理）。
+- `get_task_progress` 的 `items` 仍为 null（v1/v2），逐 item 证据只能读 `task_items.outcome_json`
+  （§10 第 5 条再次实测）。
+- 归档快照（批 B）没有 `incon.dat`，所以由它们开启的行业区间只能是 `unknown_dictionary`；
+  只有 generation 快照开启的区间才有名称。这是 §5.6 的既定语义，不是回填缺失。
+- `/` 可用空间在重建期最低 5.39 GiB，距 5 GB 停止线很近；下一次全量重建前仍需先腾空间。
+- 离库验证必须同时停 `data` 与 `acquire`：acquire 的只读连接同样占住 DB 的 flock，只停 data 时
+  `replay --scope suspensions` 报 `database lease … lock acquisition failed`。停机窗口里 data
+  因与验证进程争 flock 出现过 restart 累计、`status=1` 退出和一次
+  `Start request repeated too quickly` 的限速循环；19:56:26 起稳定为单实例
+  （`/proc/locks` 只有该 PID 持 flock，`pgrep` 仅 1 个 `data_service`，之后无新 restart），
+  工具数 15/5/9/10 复核正常。
+
+**10. `source_store replay --scope all --verify-only` 实测（停机窗口内）**
+
+窗口：`data` 与 `acquire` 均 `inactive`（先只停 data 时 acquire 的只读连接会占住 flock，重放报
+`database lease … lock acquisition failed`；`/proc/locks` 无持有者后重跑即通过——这是新增的
+运维事实），随后 `verify --scope all`。
+
+| scope | 结果 | 证据 |
+|---|---|---|
+| industry | `ok` / `match` | entries 11，blobs 8，digest `bff8783d…`，7 snapshots / 5,235 assignments / 7 boundaries |
+| exchange | `ok` / `match` | entries 1,833，digest `4d3443b5…` |
+| security_names | `ok` / `match` | entries 375，digest `417838d1…`（7,344 行完全由字节重放） |
+| generation_facts | `drift` | 6 facts；仅 2 个键不同，都是 `hsjday.zip|daily_series`：库 `652bbb84…` vs 重算 `5cab7f8d…` |
+| risk_warnings | `drift` | 库 0 行 vs 可重放 1,289 区间（XDM-144 失败的直接证据） |
+| suspensions（不在 `all` 内，单独跑） | `drift`，`drift_cause=inputs_changed` | entries 1,296，facts 20,424，`inputs_match=false`，`suspension_intervals` 70,624 行 |
+| store 完整性 `verify --scope all` | `ok` | 1,844 entries，digest `43d14fa4…`，`problems=[]` |
+
+两处 drift 都能由时间线解释，不是数据损坏：`derived:suspensions`（19:12 前后提交）与
+`generation_facts` 的 `daily_series` 摘要都早于 listed-ever 首采（338 条，
+`task-d5c84ab4…` 的 capital/adjustment 版本写入时间 19:14–19:15）；338 条新序列改变了
+`bar_days` 与序列绑定摘要，于是重放的 inputs digest 与库内记录不同。下一轮日更会重算这两项，
+届时同一命令应转 `match`（列入 §8 待补）。风险提示：`risk_warnings` 的 drift 只能靠 XDM-144
+修复后重跑消除，重放本身不写库。
+
+**11. 补跑 risk_warnings：需要 preview.40，以及最小步骤**
+
+- **需要新版本**：`5411662` 不在 preview.39；读面 `risk_warnings` 只有重放、没有写入路径，
+  不可能在不换二进制的情况下补出 `risk_warning_intervals`。
+- 两条路径（请 owner 选，我不自行扩大重启范围）：
+  - **A（推荐，最小）**：schema 未变（25），做二进制替换。bump `0.2.0-preview.40`（只改
+    `Cargo.toml` / `Cargo.lock` / `check_current_facts.py`）→ 合 main → tag → `build_release.sh`
+    + smoke → 解包到新 release 目录 → 停 data → `current` 指到新目录 → 起 data →
+    确认 15/5/9 工具与启动日志 → `retry_task`。**不重新 init**，保留本轮 5,565/5,564/338/5,223
+    与来源库；停机约 1 分钟。此路径与 §7B 回滚同形（切 `current`），需 owner 认可「非
+    `deploy_phase_g.sh` 常规管线」。
+  - **B（标准管线）**：`deploy_phase_g.sh v0.2.0-preview.40` 按 #259 全新 init（旧库改名归档），
+    之后必须重跑全部重建（catalog + 5,225 日线 + 17 派生 + 年线 + listed-ever）。按本轮实测约
+    60–70 分钟（A-3 1,388 s、日更 1,978 s、年线 597 s、首采 540 s、listed-ever 49 s），
+    成本高，只在 schema 变化时值得。
+- 补跑最小步骤（A 路径）：①bump PR 合入 → ②tag + Release 构建/smoke → ③停 data、切
+  `current`、起 data → ④`retry_task(task-4411ad308f647e93c0a013b0a06f0b00)`（只重试失败的
+  `derived:risk_warnings`）→ ⑤验 `risk_warning_intervals > 0`、`derived_dataset_versions` 有
+  `risk_warnings` 行、`replay --scope risk_warnings --verify-only = match` → ⑥同次日更顺带取
+  PR-5 第二次日更读数（`derived:delisted_series_check` `checked>0`）与 AC-M3-5 ③/④。
+- 不随 preview.40 做：不改 schema、不迁移数据、不重建主表、不扩大服务重启范围。
+
 ## 15. 本机与 CI 验证方式
 
 - 本机**禁止** `cargo build/test/check/clippy/nextest/run`；只允许 `cargo fmt`。本文档 PR 只跑仓库自带的文档门禁（见下一条），不使用仓库外的本机私有工具。
