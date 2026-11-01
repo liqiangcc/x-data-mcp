@@ -49,6 +49,7 @@ pub mod fetch;
 pub mod freeze;
 pub mod index;
 pub mod request;
+pub mod reuse;
 pub mod transport;
 pub mod validate;
 
@@ -67,6 +68,10 @@ pub use index::{Rebuild, RebuildProblem, SnapshotRow, rebuild, summary};
 pub use request::{
     BULLETIN_ARCHIVE_START, DateFormat, ExchangeRequest, MAX_SEGMENT_DAYS, PagingFormat,
     RequestError, Segment, quarter_segments,
+};
+pub use reuse::{
+    Enabled, MAX_AGE_DAYS, REFRESH_PERIOD_DAYS, ReuseClass, ReuseEvidence, ReusePolicy,
+    ReusePolicyTable, SelectedBy, SelectedPage, SnapshotSelection, TAIL_CLOSED_QUARTERS, TailScope,
 };
 pub use transport::{
     Client, Helper, HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError,
