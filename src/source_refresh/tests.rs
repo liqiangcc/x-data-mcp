@@ -394,11 +394,10 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         "eight cheap-table/probe-triggered pages + four bulletin pages; a quiet \
          suspension window selects no page"
     );
-    assert!(
-        members
-            .iter()
-            .all(|member| member.request_fingerprint.len() == 64)
-    );
+    assert!(members.iter().all(|member| {
+        member.request_fingerprint.starts_with('{')
+            && member.request_fingerprint.contains("\"source_id\"")
+    }));
 
     let second = run_refresh(
         &fixture,

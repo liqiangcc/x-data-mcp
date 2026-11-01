@@ -402,6 +402,7 @@ fn write_tools_are_explicit_and_never_reach_the_research_entry() {
             "run_market_update",
             "verify_publication_result",
             "verify_stopped_writes",
+            "refresh_exchange_sources",
         ]),
         "ops is the automatic orchestration surface"
     );
