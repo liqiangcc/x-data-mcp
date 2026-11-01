@@ -75,13 +75,43 @@ fn hex_text(bytes: Vec<u8>) -> Result<String, Error> {
 
 /// Every stored row, ordered by the primary key (deterministic summary input).
 pub(crate) fn read(c: &Connection) -> Result<Vec<SnapshotRow>, Error> {
-    let mut statement = c
-        .prepare(&format!(
-            "SELECT {COLUMNS} FROM exchange_source_snapshots ORDER BY snapshot_id"
-        ))
-        .map_err(storage)?;
+    let params: [&dyn rusqlite::ToSql; 0] = [];
+    query(
+        c,
+        &format!("SELECT {COLUMNS} FROM exchange_source_snapshots ORDER BY snapshot_id"),
+        &params,
+    )
+}
+
+/// The rows of one canonical request, ordered by the reuse selection key
+/// `(fetched_at, snapshot_id)` (design §5.2). The uniqueness of
+/// `(source_id, request_fingerprint, snapshot_id)` serves the lookup, so a
+/// read-through decision does not scan the whole index.
+pub(crate) fn read_for_fingerprint(
+    c: &Connection,
+    source_id: &str,
+    request_fingerprint: &str,
+) -> Result<Vec<SnapshotRow>, Error> {
+    let params: [&dyn rusqlite::ToSql; 2] = [&source_id, &request_fingerprint];
+    query(
+        c,
+        &format!(
+            "SELECT {COLUMNS} FROM exchange_source_snapshots \
+             WHERE source_id = ?1 AND request_fingerprint = ?2 \
+             ORDER BY fetched_at, snapshot_id"
+        ),
+        &params,
+    )
+}
+
+fn query(
+    c: &Connection,
+    sql: &str,
+    params: &[&dyn rusqlite::ToSql],
+) -> Result<Vec<SnapshotRow>, Error> {
+    let mut statement = c.prepare(sql).map_err(storage)?;
     let rows = statement
-        .query_map([], |r| {
+        .query_map(params, |r| {
             // Explicit column types: the tuple alias alone is too far away for
             // inference to be obvious at a glance.
             Ok((

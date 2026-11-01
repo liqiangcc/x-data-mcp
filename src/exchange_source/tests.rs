@@ -1183,3 +1183,199 @@ fn basis_status_ordering_is_the_admission_order() {
         Some(PagingFormat::SsePageHelp)
     );
 }
+
+/// One index row, for the pure selection/evidence tests. Everything a reuse
+/// decision reads is a function of these columns.
+fn snapshot_row(
+    source: SourceId,
+    fingerprint: &str,
+    snapshot_id: &str,
+    fetched_at: &str,
+) -> SnapshotRow {
+    SnapshotRow {
+        snapshot_id: snapshot_id.to_string(),
+        store_sha256: snapshot_id.to_string(),
+        store_kind: "http_fetch".to_string(),
+        source_id: source.as_str().to_string(),
+        url: "https://example.invalid/page".to_string(),
+        request_fingerprint: fingerprint.to_string(),
+        fetched_at: fetched_at.to_string(),
+        http_etag: None,
+        http_last_modified: None,
+        as_of: fetched_at.get(..10).unwrap().to_string(),
+        size_bytes: 1,
+        row_count: 1,
+        page_count: Some(1),
+        parser_version: SSE_PARSER_VERSION.to_string(),
+        basis_status: BasisStatus::ApprovedSource.as_str().to_string(),
+        notes: None,
+    }
+}
+
+/// §5.1's table is declarative: every source has exactly one row, and R1 ships
+/// every row disabled, so the entry's behaviour is unchanged by default.
+#[test]
+fn every_source_has_one_disabled_reuse_rule() {
+    let table = ReusePolicyTable::declared();
+    assert_eq!(
+        REFRESH_PERIOD_DAYS, 7,
+        "P is one week (§5.1 Q2 owner ruling)"
+    );
+    assert_eq!(
+        MAX_AGE_DAYS,
+        2 * REFRESH_PERIOD_DAYS,
+        "H = 2P (§5.1 Q2 owner ruling)"
+    );
+    assert_eq!(TAIL_CLOSED_QUARTERS, 1, "L is one natural quarter");
+    for source in SourceId::ALL {
+        let policy = table.for_source(source);
+        assert_eq!(policy.source_id, source);
+        assert_eq!(policy.enabled, Enabled::No, "{} ships off", source.as_str());
+        assert!(!table.enabled(source));
+        assert_eq!(policy.refresh_period_days, REFRESH_PERIOD_DAYS);
+        assert_eq!(policy.max_age_days, MAX_AGE_DAYS);
+        let (class, tail) = match source {
+            SourceId::SseSuspension | SourceId::SseBulletin => {
+                (ReuseClass::Window, TailScope::OpenWindowPlusPreviousQuarter)
+            }
+            SourceId::SseListing | SourceId::SseDelisting | SourceId::SzseDelisting => {
+                (ReuseClass::Table, TailScope::WholeTable)
+            }
+            SourceId::SzseListing | SourceId::SzseShortName => {
+                (ReuseClass::Table, TailScope::FirstPageProbe)
+            }
+        };
+        assert_eq!(policy.class, class, "{}", source.as_str());
+        assert_eq!(policy.tail, tail, "{}", source.as_str());
+    }
+    assert_eq!(
+        table.for_source(SourceId::SseSuspension).class.as_str(),
+        "window"
+    );
+    assert_eq!(
+        table.for_source(SourceId::SzseShortName).tail.as_str(),
+        "first_page_probe"
+    );
+}
+
+#[test]
+fn one_rule_can_be_enabled_without_moving_the_others() {
+    let enabled = ReusePolicyTable::declared().with_enabled(SourceId::SzseListing, Enabled::Yes);
+    assert_eq!(
+        enabled.for_source(SourceId::SzseListing).enabled,
+        Enabled::Yes
+    );
+    for source in SourceId::ALL {
+        assert_eq!(
+            enabled.enabled(source),
+            source == SourceId::SzseListing,
+            "{}",
+            source.as_str()
+        );
+    }
+    let all = ReusePolicyTable::declared().with_all_enabled();
+    for source in SourceId::ALL {
+        assert!(all.enabled(source), "{}", source.as_str());
+    }
+    assert_eq!(
+        ReusePolicyTable::default()
+            .for_source(SourceId::SseBulletin)
+            .enabled,
+        Enabled::No
+    );
+}
+
+/// §5.2's selection key: a revised answer (same fingerprint, new sha) wins, and
+/// two observations in the same second still pick deterministically.
+#[test]
+fn the_latest_snapshot_of_a_fingerprint_wins_by_fetched_at_then_id() {
+    let source = SourceId::SzseListing;
+    let fingerprint = "fingerprint";
+    let rows = vec![
+        snapshot_row(source, fingerprint, "sha-a", "2026-10-30T02:00:00Z"),
+        snapshot_row(source, fingerprint, "sha-c", "2026-10-31T02:00:00Z"),
+        snapshot_row(source, fingerprint, "sha-b", "2026-10-31T02:00:00Z"),
+        snapshot_row(source, "other", "sha-z", "2026-11-01T02:00:00Z"),
+        snapshot_row(
+            SourceId::SzseDelisting,
+            fingerprint,
+            "sha-y",
+            "2026-11-02T02:00:00Z",
+        ),
+    ];
+    let selected = reuse::latest_candidate(&rows, source, fingerprint).unwrap();
+    assert_eq!(selected.snapshot_id, "sha-c", "same second: larger id");
+    assert_eq!(reuse::latest_candidate(&rows, source, "missing"), None);
+    assert_eq!(
+        reuse::latest_candidate(&rows[..1], source, fingerprint)
+            .unwrap()
+            .snapshot_id,
+        "sha-a"
+    );
+}
+
+#[test]
+fn an_as_of_age_is_the_day_distance_from_today() {
+    let today = NaiveDate::from_ymd_opt(2026, 11, 14).unwrap();
+    assert_eq!(reuse::age_days("2026-10-31", today), Some(14));
+    assert_eq!(reuse::age_days("2026-11-15", today), Some(-1));
+    assert_eq!(reuse::age_days("not-a-date", today), None);
+}
+
+/// §5.3's date rule: a windowed dataset is as new as its newest page, a table
+/// as old as its oldest, and `verified_through` falls back to the oldest
+/// selected observation (never to the run's date).
+#[test]
+fn reuse_evidence_uses_the_design_date_rule() {
+    let pages = vec![
+        SelectedPage {
+            snapshot_id: "sha-old".to_string(),
+            as_of: "2026-10-01".to_string(),
+            selected_by: SelectedBy::Reuse,
+        },
+        SelectedPage {
+            snapshot_id: "sha-new".to_string(),
+            as_of: "2026-10-31".to_string(),
+            selected_by: SelectedBy::Fetch,
+        },
+    ];
+    let window = ReusePolicyTable::declared().for_source(SourceId::SseSuspension);
+    let evidence = ReuseEvidence::from_pages(window, &pages);
+    assert_eq!((evidence.reused, evidence.fetched), (1, 1));
+    assert_eq!(evidence.as_of.as_deref(), Some("2026-10-31"));
+    assert_eq!(evidence.verified_through.as_deref(), Some("2026-10-01"));
+    assert_eq!(evidence.selected_by.len(), 2);
+    assert_eq!(evidence.selected_by[0].selected_by, SelectedBy::Reuse);
+    assert_eq!(evidence.selected_by[1].selected_by, SelectedBy::Fetch);
+    assert_eq!(evidence.policy.source_id, SourceId::SseSuspension);
+
+    let table = ReusePolicyTable::declared().for_source(SourceId::SzseShortName);
+    assert_eq!(
+        ReuseEvidence::from_pages(table, &pages).as_of.as_deref(),
+        Some("2026-10-01"),
+        "a whole table is as old as its oldest page"
+    );
+    assert_eq!(
+        ReuseEvidence::from_pages(table, &[pages[1].clone()])
+            .as_of
+            .as_deref(),
+        Some("2026-10-31")
+    );
+
+    let empty = ReuseEvidence::empty(table);
+    assert_eq!((empty.reused, empty.fetched), (0, 0));
+    assert_eq!(empty.as_of, None);
+    assert_eq!(empty.verified_through, None);
+
+    let merged = ReuseEvidence::merged(
+        window,
+        &[
+            ReuseEvidence::from_pages(window, &pages[..1]),
+            ReuseEvidence::from_pages(window, &pages[1..]),
+        ],
+    );
+    assert_eq!((merged.reused, merged.fetched), (1, 1));
+    assert_eq!(merged.as_of.as_deref(), Some("2026-10-31"));
+    assert_eq!(merged.verified_through.as_deref(), Some("2026-10-01"));
+    assert_eq!(merged.selected_by.len(), 2);
+}
