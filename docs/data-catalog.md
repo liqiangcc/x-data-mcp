@@ -591,7 +591,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
   `sh_sz_a_listed_ever`，与 `catalog_version` 互斥，且不传时行为不变。
 - `query_data` 是纯读：不触发采集、修复或换源（`src/data_supply/registry.rs:139`）。
 - 工具清单、参数与返回形状用 `get_data_capabilities` 查（`registry.rs` 的 `entries()`），本文不复述；
-  data 侧当前部署三个入口（单进程三 socket）：`ops` 16 个 data 工具、`research`（只读研究面）
+  data 侧当前部署三个入口（单进程三 socket）：`ops` 15 个 data 工具、`research`（只读研究面）
   与 `maint`（本机运维）各 5 / 9，数量以 [STATUS](STATUS.md) 的「服务」表为权威。
 
 ### 5.2 过渡期直读（#373 分析脚本）

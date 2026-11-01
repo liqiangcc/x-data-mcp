@@ -14,12 +14,23 @@ spec.loader.exec_module(cf)
 ALLOWED = {"31"}
 
 
-def claims(text: str, deployed: str = "generic-data-v6") -> list[str]:
+def claims(
+    text: str,
+    deployed: str = "generic-data-v6",
+    data_tools: int = 21,
+    code_data_tools: int | None = None,
+    code_revision: str | None = None,
+) -> list[str]:
     # Default mirrors this branch's deployed-revision constant (post-switch).
     return [
         kind
         for _, kind, _ in cf.stale_deployment_claims(
-            text, ALLOWED, 21, deployed
+            text,
+            ALLOWED,
+            data_tools,
+            deployed,
+            code_data_tools=code_data_tools,
+            code_revision=code_revision,
         )
     ]
 
@@ -116,10 +127,12 @@ class RealDocs(unittest.TestCase):
 REGION_SCHEMA = 24
 REGION_REVISION = "generic-data-v8"
 # Current regions and STATUS state DEPLOYED facts; the registry may be ahead
-# (the v8 minimal switch deploys the ops entry's 16 tools while the code
-# registers 25 across three entries; the extra tool is R2's code-only entry).
-REGION_DATA_TOOLS = 16
+# (preview.41 serves the ops entry's 15 tools while the code registers 25 across
+# three entries; R2's refresh tool is code-only until the v9 switch).
+REGION_DATA_TOOLS = 15
+REGION_DEPLOYED_ENTRY_TOOLS = {"ops": 15, "research": 5, "maint": 9}
 REGION_CODE_DATA_TOOLS = 25
+REGION_CODE_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 REGION_ACQUIRE_TOOLS = 10
 
 
@@ -188,18 +201,18 @@ class StaleCurrentRegions(unittest.TestCase):
         # design.md:69 before the P1-1 correction said 21 data tools (item 7d #2).
         old = "| MCP | data socket 21 data tools、acquisition socket 10 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(old)), ["data-tool-count"])
-        good = "| MCP | data socket 16 data tools、acquisition socket 10 acquisition tools | x |\n"
+        good = "| MCP | data socket 15 data tools、acquisition socket 10 acquisition tools | x |\n"
         self.assertEqual(region_claims(good), [])
-        bad_acquire = "| MCP | data socket 16 data tools、acquisition socket 8 acquisition tools | x |\n"
+        bad_acquire = "| MCP | data socket 15 data tools、acquisition socket 8 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(bad_acquire)), ["acquire-tool-count"])
 
     def test_code_tool_count_may_be_ahead_of_the_deployed_one(self):
         # The code registers 25 data tools across three entries while the
-        # deployed ops entry serves 16: a sentence explicitly marked as the
+        # deployed ops entry serves 15: a sentence explicitly marked as the
         # code fact is checked against the registry, and the deployed count
         # stays valid.
         self.assertEqual(
-            region_claims("已部署实例仍为 16 data tools。\n"), []
+            region_claims("已部署实例仍为 15 data tools。\n"), []
         )
         self.assertEqual(
             region_claims("代码（main）为 25 data tools（未部署）。\n"), []
@@ -210,7 +223,7 @@ class StaleCurrentRegions(unittest.TestCase):
     def test_bare_tool_count_must_be_one_of_the_registries(self):
         # The v6 switch checklist header said "21 tools" (stale current fact).
         self.assertEqual(rules(region_claims("对齐到 preview.31 / 21 tools / v5。\n")), ["tool-count"])
-        self.assertEqual(region_claims("双 server 共 16 tools。\n"), [])
+        self.assertEqual(region_claims("双 server 共 15 tools。\n"), [])
 
     def test_data_history_word_is_not_a_history_marker(self):
         # verified-reads.md before the P1-1 correction (item 7d #5): "某个历史版本" is a data
@@ -437,7 +450,7 @@ STATUS_OK = """# 当前状态（STATUS）
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 16 | capability `generic-data-v8` |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 15 | capability `generic-data-v8` |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | — |
 
 ## 数据
@@ -446,9 +459,9 @@ STATUS_OK = """# 当前状态（STATUS）
 |---|---|---|
 | 热 generation | **5/6**：1 active + 4 superseded；下一次 acquire 可直接受理 | acquire.sqlite |
 
-preview.36 部署后 capability 仍为 `generic-data-v8`，16/10 工具不变。
+preview.36 部署后 capability 仍为 `generic-data-v8`，15/10 工具不变。
 
-工具数与能力版本为 live 只读复核：data socket `tools/list` 返回 16 个工具、
+工具数与能力版本为 live 只读复核：data socket `tools/list` 返回 15 个工具、
 acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.version` 均为 `0.2.0-preview.36`。
 """
 
@@ -511,7 +524,7 @@ class StatusConsistency(unittest.TestCase):
 
     def test_service_table_tool_count_is_checked(self):
         text = STATUS_OK.replace(
-            "| `run/mcp.sock` | 16 |", "| `run/mcp.sock` | 21 |"
+            "| `run/mcp.sock` | 15 |", "| `run/mcp.sock` | 21 |"
         )
         self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
 
@@ -519,39 +532,80 @@ class StatusConsistency(unittest.TestCase):
         # v8 phase 2: one data unit, several sockets/entries. Each `--entry k`
         # in the 入口 cell is checked against entry k's source allowlist.
         multi = STATUS_OK.replace(
-            "| `run/mcp.sock` | 16 |",
+            "| `run/mcp.sock` | 15 |",
             "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
             "（`--entry research`）、`run/maint.sock`（`--entry maint`） "
-            "| 16 / 5 / 9 |",
+            "| 15 / 5 / 9 |",
         )
         self.assertEqual(status_claims(multi), [])
-        wrong = multi.replace("| 16 / 5 / 9 |", "| 16 / 6 / 9 |")
+        wrong = multi.replace("| 15 / 5 / 9 |", "| 15 / 6 / 9 |")
         self.assertEqual(rules(status_claims(wrong)), ["status-service-tool-count"])
         unknown = multi.replace("`--entry maint`", "`--entry devops`")
         self.assertEqual(rules(status_claims(unknown)), ["status-service-entry"])
 
     def test_multi_entry_row_count_length_must_match_entries(self):
         text = STATUS_OK.replace(
-            "| `run/mcp.sock` | 16 |",
+            "| `run/mcp.sock` | 15 |",
             "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
-            "（`--entry research`） | 16 |",
+            "（`--entry research`） | 15 |",
         )
         self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
 
     def test_prose_tool_count_is_checked(self):
         text = STATUS_OK.replace(
-            "data socket `tools/list` 返回 16 个工具",
+            "data socket `tools/list` 返回 15 个工具",
             "data socket `tools/list` 返回 21 个工具",
         )
         self.assertEqual(rules(status_claims(text)), ["status-tool-count"])
 
     def test_code_tool_count_in_status_may_be_ahead(self):
         text = STATUS_OK + (
-            "\n代码（main）为 25 data tools（未部署）；已部署实例仍为 16 data tools。\n"
+            "\n代码（main）为 25 data tools（未部署）；已部署实例仍为 15 data tools。\n"
         )
         self.assertEqual(status_claims(text), [])
         wrong = STATUS_OK + "\n代码（main）为 26 data tools（未部署）。\n"
         self.assertEqual(rules(status_claims(wrong)), ["status-data-tool-count"])
+
+    def test_deployed_and_code_entry_counts_are_separate(self):
+        self.assertEqual(
+            cf.EXPECTED_DEPLOYED_ENTRY_TOOLS, REGION_DEPLOYED_ENTRY_TOOLS
+        )
+        self.assertEqual(cf.EXPECTED_CODE_ENTRY_TOOLS, REGION_CODE_ENTRY_TOOLS)
+        self.assertNotEqual(
+            cf.EXPECTED_DEPLOYED_ENTRY_TOOLS, cf.EXPECTED_CODE_ENTRY_TOOLS
+        )
+
+    def test_service_table_checks_deployed_not_code_counts(self):
+        multi = STATUS_OK.replace(
+            "| `run/mcp.sock` | 15 |",
+            "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
+            "（`--entry research`）、`run/maint.sock`（`--entry maint`） "
+            "| 15 / 5 / 9 |",
+        )
+        self.assertEqual(status_claims(multi), [])
+        # 16 is the R2 code allowlist, not the preview.41 instance.
+        wrong = multi.replace("| 15 / 5 / 9 |", "| 16 / 5 / 9 |")
+        self.assertEqual(rules(status_claims(wrong)), ["status-service-tool-count"])
+
+    def test_code_revision_may_be_ahead_in_a_code_sentence(self):
+        self.assertEqual(
+            claims(
+                "代码（main）25 data tools / `generic-data-v9`（未部署）。\n",
+                data_tools=15,
+                code_data_tools=25,
+                code_revision="generic-data-v9",
+            ),
+            [],
+        )
+        self.assertIn(
+            "generic-data-v9",
+            claims(
+                "已部署实例 15 data tools / `generic-data-v9`。\n",
+                data_tools=15,
+                code_data_tools=25,
+                code_revision="generic-data-v9",
+            )[0],
+        )
 
     def test_tool_pair_is_checked(self):
         text = STATUS_OK + "\npreview.34 与 preview.35 都是二进制热切换，21/10 工具不变。\n"

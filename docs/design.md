@@ -74,7 +74,7 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 | 能力 | 基线事实 | 目标 / 依赖 |
 |---|---|---|
-| MCP | 双 server：data socket 单进程三入口——`ops` 16 data tools（编排）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道仍指 `ops` 的 `mcp.sock` | 稳定契约与真实客户端验收 |
+| MCP | 双 server：data socket 单进程三入口——`ops` 15 data tools（部署；代码 allowlist 16，未部署）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道仍指 `ops` 的 `mcp.sock` | 稳定契约与真实客户端验收 |
 | 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
 | 行情 | SQLite fresh compact schema 25（代码 schema 26，未部署）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
 | 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |

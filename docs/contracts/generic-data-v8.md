@@ -1,7 +1,7 @@
 # generic-data-v8 契约（入口拆分、列式 v2、任务面 v2）
 
 **状态**：已部署（2026-10-27，v8 最小切换；2026-10-28 preview.38 起单进程服务三个 socket）。
-当前部署为 `generic-data-v8` / 16 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
+当前部署为 `generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
 入口（只读研究面）与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 25
 （见 [STATUS](../STATUS.md)）。
 M2 的 6 个解析事实数据集（§4.6 矩阵，`market.security_master` 等）已随 preview.37
@@ -19,8 +19,8 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 | 项 | v7（历史：preview.33–35） | v8（已部署：preview.36 起；preview.37 起含 M2 数据集） | 兼容性 |
 |---|---|---|---|
 | `capability_revision` | `generic-data-v7` | `generic-data-v8`（2026-10-27 部署日翻） | 客户端按 revision 握手，不匹配即停 |
-| data 工具数 | 23 | 代码 25（+ 只读 `list_catalog_facets`、`refresh_exchange_sources`）；`ops` 入口 16 | 旧工具名全部保留，无重命名、无删除 |
-| 入口 | 1 个 data socket（23 工具） | **3 个入口**：research 5 / ops 16 / maint 9（`src/data_supply/registry.rs:43,51,70`） | `mcp.sock` 变成编排入口；旧单元不带 `--entry` 时默认 `ops`（`src/bin/data_service.rs:44`） |
+| data 工具数 | 23 | 部署 `ops` 15（代码 25：+ 只读 `list_catalog_facets`、`refresh_exchange_sources`；代码 `ops` 16，未部署） | 旧工具名全部保留，无重命名、无删除 |
+| 入口 | 1 个 data socket（23 工具） | **3 个入口**：research 5 / ops 15（部署；代码 16，未部署） / maint 9（`src/data_supply/registry.rs:43,51,70`） | `mcp.sock` 变成编排入口；旧单元不带 `--entry` 时默认 `ops`（`src/bin/data_service.rs:44`） |
 | `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支；写面只有 `market.daily` 的 `start_collection` v2 scope；读面有 `universe.scope`，§5.2） | 缺省仍是 `v1`；v1 字节不变 |
 | `tools/list` | 含 `outputSchema` | **不含** `outputSchema`，描述 ≤240 B | 客户端失去内联校验；schema 从 capabilities 按需取 |
 | 入参 | 结构体实体、严格日期、必填契约版本 | 别名归一化 + 缺省值（§6） | 旧写法继续可用 |
@@ -45,7 +45,7 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 | 入口 | `--entry` | socket | 工具数 | 隧道暴露 |
 |---|---|---|---|---|
 | 研究 | `research` | `run/research.sock`（新增） | 5 | **是（唯一）** |
-| 编排 | `ops` | `run/mcp.sock`（沿用） | 16 | 否 |
+| 编排 | `ops` | `run/mcp.sock`（沿用） | 15（部署；代码 16，未部署） | 否 |
 | 运维/取证 | `maint` | `run/maint.sock`（新增） | 9 | 否 |
 | 来源接入 | — | `run/acquire.sock`（不变） | 10 | 否 |
 
@@ -53,7 +53,7 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
 
 - **research（5）**：`get_data_capabilities`、`query_data`、`get_data_availability`、
   `list_data_versions`、`list_catalog_facets`。
-- **ops（16）**：`get_data_capabilities`、`plan_market_update`、`run_market_update`、
+- **ops（15 部署；代码 16，未部署）**：`get_data_capabilities`、`plan_market_update`、`run_market_update`、
   `start_collection`、`update_data`、`get_task`、`get_task_progress`、`list_tasks`、
   `get_request`、`get_data_availability`、`query_data`、`list_data_versions`、
   `get_yearly_base_years`、`verify_publication_result`、`verify_stopped_writes`

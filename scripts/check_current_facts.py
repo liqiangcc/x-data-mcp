@@ -23,8 +23,12 @@ EXPECTED_DATA_TOOLS = 25
 # Since Ops-B (preview.38) one data_service process serves three sockets; the
 # prose fact "N data tools" still counts the orchestration entry `ops` on
 # mcp.sock (the only entry x and the daily Skill talk to). Per-entry counts
-# live in the STATUS 服务 table and are checked by entry_tool_counts().
-EXPECTED_DEPLOYED_DATA_TOOLS = 16
+# live in the STATUS 服务 table and are checked separately for the deployed
+# instance and for the current code allowlists.
+EXPECTED_DEPLOYED_DATA_TOOLS = 15
+EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 15, "research": 5, "maint": 9}
+EXPECTED_CODE_OPS_TOOLS = 16
+EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 EXPECTED_ACQUIRE_TOOLS = 10
 
 # --- deployed data entries (v8 phase 2, D-56) ------------------------------
@@ -260,11 +264,19 @@ def deployed_preview_numbers(status_text: str | None, package_version: str) -> s
 
 
 def stale_deployment_claims(
-    region: str, allowed_previews: set[str], data_tools: int, revision: str
+    region: str,
+    allowed_previews: set[str],
+    data_tools: int,
+    revision: str,
+    code_data_tools: int | None = None,
+    code_revision: str | None = None,
 ) -> list[tuple[int, str, str]]:
-    """Returns (line number in region, kind, line) for each stale claim."""
+    """Returns (line number in region, kind, line) for each stale claim.
+
+    A line that labels the count/revision as the code fact (代码/未部署) is
+    checked against the code constants, mirroring the STATUS convention.
+    """
     lines = region.splitlines()
-    wanted_revision = revision.rsplit("-v", 1)[-1]
     found: list[tuple[int, str, str]] = []
     paragraph: list[int] = []
     hist_level: int | None = None  # heading level of the open historical heading
@@ -277,12 +289,21 @@ def stale_deployment_claims(
         ):
             for i in paragraph:
                 line = lines[i]
+                expected_tools = expected_data_tools(line, data_tools, code_data_tools)
                 for m in DATA_TOOLS_CLAIM.finditer(line):
-                    if int(m.group(1)) != data_tools:
-                        found.append((i + 1, f"{m.group(0)} (expected {data_tools})", line))
+                    if int(m.group(1)) != expected_tools:
+                        found.append(
+                            (i + 1, f"{m.group(0)} (expected {expected_tools})", line)
+                        )
+                wanted = (
+                    code_revision
+                    if code_revision is not None
+                    and any(marker in line for marker in CODE_FACT_MARKERS)
+                    else revision
+                ).rsplit("-v", 1)[-1]
                 for m in REVISION_CLAIM.finditer(line):
-                    if m.group(1) != wanted_revision:
-                        found.append((i + 1, f"{m.group(0)} (expected {revision})", line))
+                    if m.group(1) != wanted:
+                        found.append((i + 1, f"{m.group(0)} (expected {wanted})", line))
                 for m in PREVIEW_CLAIM.finditer(line):
                     if m.group(1) not in allowed_previews:
                         found.append(
@@ -538,7 +559,7 @@ def status_consistency_errors(
     and a row without `--entry` keeps the old aggregate check against
     `data_tools` (the deployed surface).
     """
-    counts = entry_counts if entry_counts is not None else entry_tool_counts()
+    counts = entry_counts if entry_counts is not None else EXPECTED_DEPLOYED_ENTRY_TOOLS
     found: list[tuple[int, str, str]] = []
     hot = cap = None
     hot_line = 0
@@ -852,6 +873,27 @@ def main() -> int:
     allowlists = rust_entry_allowlists(registry)
     entry_counts = {entry: len(names) for entry, names in allowlists.items()}
     check(
+        "deployed entry count constant covers the deployed entries",
+        set(EXPECTED_DEPLOYED_ENTRY_TOOLS) == set(DEPLOYED_DATA_ENTRIES),
+        f"{sorted(EXPECTED_DEPLOYED_ENTRY_TOOLS)} vs {sorted(DEPLOYED_DATA_ENTRIES)}",
+    )
+    check(
+        "code entry count constant covers the registry entries",
+        set(EXPECTED_CODE_ENTRY_TOOLS) == set(allowlists),
+        f"{sorted(EXPECTED_CODE_ENTRY_TOOLS)} vs {sorted(allowlists)}",
+    )
+    check(
+        "deployed entry counts match the deployed ops count",
+        EXPECTED_DEPLOYED_ENTRY_TOOLS["ops"] == EXPECTED_DEPLOYED_DATA_TOOLS,
+        f"ops {EXPECTED_DEPLOYED_ENTRY_TOOLS['ops']}, prose "
+        f"{EXPECTED_DEPLOYED_DATA_TOOLS}",
+    )
+    check(
+        "deployed and code entry counts are kept separate",
+        EXPECTED_DEPLOYED_ENTRY_TOOLS != EXPECTED_CODE_ENTRY_TOOLS,
+        "the R2 allowlist must be visible as a code-only difference",
+    )
+    check(
         "registry declares every entry allowlist",
         set(allowlists) == set(ENTRY_ALLOWLIST_CONST),
         f"parsed {sorted(allowlists)}",
@@ -864,9 +906,9 @@ def main() -> int:
     if len(DEPLOYED_DATA_ENTRIES) == 1:
         only = DEPLOYED_DATA_ENTRIES[0]
         check(
-            "EXPECTED_DEPLOYED_DATA_TOOLS matches the deployed entry allowlist",
-            EXPECTED_DEPLOYED_DATA_TOOLS == entry_counts.get(only),
-            f"constant {EXPECTED_DEPLOYED_DATA_TOOLS}, {only} allowlist "
+            "EXPECTED_CODE_OPS_TOOLS matches the ops entry allowlist",
+            EXPECTED_CODE_OPS_TOOLS == entry_counts.get(only),
+            f"constant {EXPECTED_CODE_OPS_TOOLS}, {only} allowlist "
             f"{entry_counts.get(only)}",
         )
     else:
@@ -875,10 +917,9 @@ def main() -> int:
         # registry either. The per-entry counts are checked in the STATUS 服务
         # table below and by check_deploy_facts.check_deployed_entries().
         check(
-            "EXPECTED_DEPLOYED_DATA_TOOLS matches the ops entry allowlist",
-            EXPECTED_DEPLOYED_DATA_TOOLS == entry_counts.get("ops"),
-            f"constant {EXPECTED_DEPLOYED_DATA_TOOLS}, ops allowlist "
-            f"{entry_counts.get('ops')}",
+            "EXPECTED_CODE_ENTRY_TOOLS matches the code entry allowlists",
+            entry_counts == EXPECTED_CODE_ENTRY_TOOLS,
+            f"constants {EXPECTED_CODE_ENTRY_TOOLS}, registry {entry_counts}",
         )
 
     acquire = (ROOT / "src/acquire/mcp.rs").read_text(encoding="utf-8")
@@ -995,6 +1036,8 @@ def main() -> int:
             allowed_previews,
             EXPECTED_DEPLOYED_DATA_TOOLS,
             EXPECTED_SKILL_CAPABILITY_REVISION,
+            code_data_tools=len(data_names),
+            code_revision=EXPECTED_DATA_CAPABILITY_REVISION,
         ):
             check(
                 f"{rel} current region line {lineno} states a stale deployment fact",
@@ -1074,7 +1117,7 @@ def main() -> int:
                 EXPECTED_DEPLOYED_DATA_TOOLS,
                 registry_acquire_tools,
                 code_data_tools=registry_data_tools,
-                entry_counts=entry_counts,
+                entry_counts=EXPECTED_DEPLOYED_ENTRY_TOOLS,
             ),
         )
 
@@ -1086,7 +1129,9 @@ def main() -> int:
         f"current-facts OK: {EXPECTED_PACKAGE_VERSION}, fresh compact schema "
         f"{EXPECTED_COMPACT_SCHEMA} (deployed {deployed_schema}; legacy upgrade "
         f"source schema {EXPECTED_LEGACY_SCHEMA}), {EXPECTED_DATA_TOOLS} data tools "
-        f"(deployed entries {', '.join(f'{e}={entry_counts[e]}' for e in DEPLOYED_DATA_ENTRIES)}), "
+        f"(deployed entries "
+        f"{', '.join(f'{e}={EXPECTED_DEPLOYED_ENTRY_TOOLS[e]}' for e in DEPLOYED_DATA_ENTRIES)}; "
+        f"code {', '.join(f'{e}={entry_counts[e]}' for e in DEPLOYED_DATA_ENTRIES)}), "
         f"{EXPECTED_ACQUIRE_TOOLS} acquisition tools, "
         f"{len(CURRENT_DOCS)} current docs + {len(CURRENT_REGIONS)} current "
         f"regions + "
