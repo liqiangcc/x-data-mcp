@@ -386,17 +386,20 @@ fn refresh_source(
                                 // A quiet window is not absence (BR-M3-10): the
                                 // count is evidence R3 must see even when the
                                 // source's zero policy stores positive facts
-                                // only and therefore returns no error.
+                                // only and therefore returns no error. The page
+                                // is still in the source store, but it selects
+                                // no row, so it is not a run member.
                                 stats.unobserved += 1;
+                            } else {
+                                record_outcome(
+                                    accumulator,
+                                    stats,
+                                    previous,
+                                    source.source_id,
+                                    Some((window.start(), window.end())),
+                                    &outcome,
+                                );
                             }
-                            record_outcome(
-                                accumulator,
-                                stats,
-                                previous,
-                                source.source_id,
-                                Some((window.start(), window.end())),
-                                &outcome,
-                            )
                         }
                         Err(AcquireError::Invalid {
                             code: "unverified_zero",
