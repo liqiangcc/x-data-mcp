@@ -449,6 +449,14 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         12,
         "run membership is durable across a process restart"
     );
+    assert_eq!(
+        reopened
+            .latest_complete_verified_through("sse_listing")
+            .unwrap()
+            .as_deref(),
+        Some("2026-11-02"),
+        "a complete source's verified date survives the restart"
+    );
 }
 
 #[test]
