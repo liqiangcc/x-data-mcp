@@ -446,6 +446,20 @@ impl MarketBackend {
     ) -> Result<Vec<crate::exchange_source::SnapshotRow>, Error> {
         self.read(super::exchange_source::read)
     }
+
+    /// The index rows of one canonical request (`source_id` + request
+    /// fingerprint), ordered by `(fetched_at, snapshot_id)`. This is what a
+    /// read-through reuse decision reads (design §5.2); filtering in SQL keeps
+    /// the decision from scanning the whole index once per page.
+    pub(crate) fn read_exchange_snapshots_for_fingerprint(
+        &self,
+        source_id: &str,
+        request_fingerprint: &str,
+    ) -> Result<Vec<crate::exchange_source::SnapshotRow>, Error> {
+        self.read(|c| {
+            super::exchange_source::read_for_fingerprint(c, source_id, request_fingerprint)
+        })
+    }
 }
 
 impl crate::market_storage::MarketRepository for MarketBackend {

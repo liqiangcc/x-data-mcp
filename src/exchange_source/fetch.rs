@@ -30,11 +30,14 @@ use chrono::{NaiveDate, Utc};
 
 use super::bind::{self, SnapshotBinding};
 use super::freeze::{FrozenBytes, FrozenSnapshot, freeze_bytes, record_snapshots};
+use super::index::SnapshotRow;
 use super::request::{DateFormat, ExchangeRequest, PagingFormat, Segment};
+use super::reuse::{self, ReuseEvidence, ReusePolicyTable, SelectedBy, SelectedPage};
 use super::transport::{Client, HttpRequest};
 use super::validate::{self, EmptyPolicy, FailureClass, PageEnvelope, PageSet, ZeroPolicy};
 use super::{BasisStatus, SourceId, default_headers};
-use crate::source_store::SourceStore;
+use crate::market_storage::Error as StorageError;
+use crate::source_store::{SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
 
 /// Hard bound on pages per window (§6.3 "bounded"): a runaway `pageCount` is a
@@ -45,6 +48,29 @@ pub const MAX_PAGES: u32 = 500;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CachedPage {
     frozen: FrozenBytes,
+    envelope: PageEnvelope,
+}
+
+/// Where one page of a window came from (design §5.2).
+///
+/// A fetched page still has to be indexed; a reused page is already in the
+/// index and the store, so it is never written again.
+#[derive(Debug, Clone)]
+enum PageState {
+    Fetched {
+        bytes: FrozenBytes,
+        /// The page came from this run's cache, not from this call's request.
+        cached: bool,
+    },
+    /// Same request fingerprint, bytes already frozen by an earlier run.
+    Reused { row: SnapshotRow },
+}
+
+/// One selected page of a window: its state plus the envelope the validation
+/// rules see. A reused page's envelope is parsed again from the verified bytes.
+#[derive(Debug, Clone)]
+struct PageEntry {
+    state: PageState,
     envelope: PageEnvelope,
 }
 
@@ -213,6 +239,9 @@ pub struct AcquisitionOutcome {
     pub binding: SnapshotBinding,
     /// Snapshots this run re-used instead of adding (same fingerprint + bytes).
     pub reused: usize,
+    /// Reuse evidence of this window (design §5.2/§5.3): the rule in force, the
+    /// reused/fetched counts, the selected snapshots and the dates they imply.
+    pub evidence: ReuseEvidence,
 }
 
 /// One succeeded window of a multi-window run.
@@ -222,6 +251,9 @@ pub struct WindowResult {
     pub snapshots: Vec<FrozenSnapshot>,
     pub row_count: usize,
     pub page_count: u32,
+    /// Whether this window's pages were fetched or read through, and the date
+    /// rule of §5.3 over them.
+    pub evidence: ReuseEvidence,
 }
 
 /// One failed window of a multi-window run.
@@ -242,6 +274,8 @@ pub struct WindowOutcome {
     pub row_count: usize,
     pub binding: SnapshotBinding,
     pub reused: usize,
+    /// The merged evidence of every succeeded window, in window/page order.
+    pub evidence: ReuseEvidence,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -252,6 +286,11 @@ pub enum AcquireError {
     Invalid { code: &'static str, detail: String },
     #[error("source_not_admitted: {detail}")]
     NotAdmitted { detail: String },
+    /// The hard age bound `H` passed and no refresh run has confirmed the
+    /// bytes since: fail closed instead of publishing stale source facts
+    /// (design §5.1).
+    #[error("source_refresh_overdue: {detail}")]
+    RefreshOverdue { detail: String },
     #[error(
         "partially_failed: {failed} of {windows} window(s) failed; frozen snapshots of the \
          other windows are kept and the failed windows produce no rows"
@@ -266,6 +305,14 @@ pub enum AcquireError {
     Freeze(#[from] super::freeze::FreezeError),
     #[error(transparent)]
     Bind(#[from] bind::BindError),
+    /// Reading the bytes of a reused snapshot back through the source store:
+    /// a missing or tampered blob is `source_store_corrupt`, never a silent
+    /// fallback (design §5.2).
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// The index lookup a reuse decision needs failed.
+    #[error(transparent)]
+    Index(#[from] StorageError),
 }
 
 impl AcquireError {
@@ -274,9 +321,12 @@ impl AcquireError {
             Self::Unavailable { .. } => "source_unavailable",
             Self::Invalid { code, .. } => code,
             Self::NotAdmitted { .. } => "source_not_admitted",
+            Self::RefreshOverdue { .. } => "source_refresh_overdue",
             Self::PartiallyFailed { .. } => "partially_failed",
             Self::Freeze(error) => error.code(),
             Self::Bind(error) => error.code(),
+            Self::Store(error) => error.code(),
+            Self::Index(_) => "source_index_unavailable",
         }
     }
 
@@ -284,8 +334,13 @@ impl AcquireError {
         match self {
             Self::Unavailable { .. } => FailureClass::SourceUnavailable,
             Self::PartiallyFailed { .. } => FailureClass::PartiallyFailed,
-            Self::Invalid { .. } | Self::NotAdmitted { .. } => FailureClass::SourceInvalid,
+            Self::Invalid { .. } | Self::NotAdmitted { .. } | Self::RefreshOverdue { .. } => {
+                FailureClass::SourceInvalid
+            }
             Self::Freeze(_) | Self::Bind(_) => FailureClass::SourceInvalid,
+            // The bytes could not be read back locally: nothing usable arrived
+            // for this window, the same class `bind` gives a store fault.
+            Self::Store(_) | Self::Index(_) => FailureClass::SourceUnavailable,
         }
     }
 }
@@ -297,6 +352,10 @@ pub struct Entry<'a> {
     client: &'a Client,
     today: NaiveDate,
     cache: Option<Arc<RunCache>>,
+    /// The declarative refresh rules (§5.1). The default table has every rule
+    /// registered and every rule off, so an `Entry` that is not told otherwise
+    /// fetches exactly as before.
+    reuse: ReusePolicyTable,
 }
 
 impl<'a> Entry<'a> {
@@ -307,6 +366,7 @@ impl<'a> Entry<'a> {
             client,
             today: Utc::now().date_naive(),
             cache: None,
+            reuse: ReusePolicyTable::declared(),
         }
     }
 
@@ -314,6 +374,14 @@ impl<'a> Entry<'a> {
     /// same run already fetched and froze are not downloaded twice.
     pub fn with_cache(mut self, cache: Arc<RunCache>) -> Self {
         self.cache = Some(cache);
+        self
+    }
+
+    /// Use a table other than the shipped one. R2/R3 pass a table with the
+    /// sources they refresh enabled; the R1 acceptance tests use it to exercise
+    /// read-through reuse without changing the default.
+    pub fn with_reuse_policies(mut self, reuse: ReusePolicyTable) -> Self {
+        self.reuse = reuse;
         self
     }
 
@@ -326,8 +394,8 @@ impl<'a> Entry<'a> {
 
     /// Acquire one unpaginated window (or the source's whole current page set).
     pub fn acquire(&self, plan: &AcquisitionPlan) -> Result<AcquisitionOutcome, AcquireError> {
-        let (pages, snapshots) = self.acquire_pages(plan, None, "", "")?;
-        self.finish(plan, pages, snapshots)
+        let (pages, snapshots, selected) = self.acquire_pages(plan, None, "", "")?;
+        self.finish(plan, pages, snapshots, selected)
     }
 
     /// Acquire one date window; `from_param`/`to_param` are the source's
@@ -339,8 +407,9 @@ impl<'a> Entry<'a> {
         from_param: &str,
         to_param: &str,
     ) -> Result<AcquisitionOutcome, AcquireError> {
-        let (pages, snapshots) = self.acquire_pages(plan, Some(window), from_param, to_param)?;
-        self.finish(plan, pages, snapshots)
+        let (pages, snapshots, selected) =
+            self.acquire_pages(plan, Some(window), from_param, to_param)?;
+        self.finish(plan, pages, snapshots, selected)
     }
 
     /// Acquire a set of windows (e.g. `quarter_segments`) with per-window
@@ -367,6 +436,7 @@ impl<'a> Entry<'a> {
                     snapshots: outcome.snapshots,
                     row_count: outcome.row_count,
                     page_count: outcome.page_count,
+                    evidence: outcome.evidence,
                 }),
                 Err(error) => failures.push(WindowFailure {
                     window: *window,
@@ -393,6 +463,13 @@ impl<'a> Entry<'a> {
             .filter(|snapshot| snapshot.reused())
             .count();
         let binding = bind::bind(self.backend, plan.source_id, plan.required_basis)?;
+        let evidence = ReuseEvidence::merged(
+            self.reuse.for_source(plan.source_id),
+            &succeeded
+                .iter()
+                .map(|result| result.evidence.clone())
+                .collect::<Vec<_>>(),
+        );
         Ok(WindowOutcome {
             source_id: plan.source_id.as_str(),
             results: succeeded,
@@ -400,6 +477,7 @@ impl<'a> Entry<'a> {
             row_count,
             binding,
             reused,
+            evidence,
         })
     }
 
@@ -417,7 +495,7 @@ impl<'a> Entry<'a> {
         window: Option<Segment>,
         from_param: &str,
         to_param: &str,
-    ) -> Result<(PageSet, Vec<FrozenSnapshot>), AcquireError> {
+    ) -> Result<(PageSet, Vec<FrozenSnapshot>, Vec<SelectedPage>), AcquireError> {
         if !plan.basis_status.admits(plan.required_basis) {
             return Err(AcquireError::NotAdmitted {
                 detail: format!(
@@ -429,8 +507,8 @@ impl<'a> Entry<'a> {
             });
         }
         let fetched_at = super::freeze::now();
-        let policy = EmptyPolicy::for_window(window, self.today);
-        let mut pages: Vec<(FrozenBytes, PageEnvelope)> = Vec::new();
+        let empty_policy = EmptyPolicy::for_window(window, self.today);
+        let mut entries: Vec<PageEntry> = Vec::new();
         let mut page = plan.format.first_page();
         let mut page_count: Option<u32> = None;
         let mut failure: Option<AcquireError> = None;
@@ -441,65 +519,78 @@ impl<'a> Entry<'a> {
                 .cache
                 .as_ref()
                 .and_then(|cache| cache.get(&fingerprint));
-            let from_cache = cached.is_some();
-            let page_state = match cached {
-                Some(hit) => hit,
-                None => {
-                    let http = HttpRequest {
-                        url: request.display_url(),
-                        headers: default_headers(plan.source_id),
-                    };
-                    let response = match self.client.get(&http) {
-                        Ok(response) => response,
-                        Err(error) => {
-                            failure = Some(AcquireError::Unavailable {
-                                detail: format!("{}: {error}", error.code()),
-                            });
-                            break;
-                        }
-                    };
-                    if let Err(error) = validate::require_status(response.status) {
-                        failure = Some(AcquireError::Invalid {
-                            code: error.code(),
-                            detail: error.to_string(),
-                        });
-                        break;
-                    }
-                    // Frozen before parsing: a parse failure keeps the bytes
-                    // (§6.3). A failed parse never reaches the cache.
-                    let bytes = freeze_bytes(
-                        self.store,
-                        &request,
-                        &response,
-                        plan.format.parser_version(),
-                        plan.basis_status,
-                        &fetched_at,
-                    )?;
-                    let envelope = match validate::parse_page(
-                        plan.format,
-                        validate::declared_tabkey(&plan.params),
-                        &response.body,
-                    ) {
-                        Ok(envelope) => envelope,
-                        Err(error) => {
+            let (state, envelope) = match cached {
+                Some(hit) => (
+                    PageState::Fetched {
+                        bytes: hit.frozen.clone(),
+                        cached: true,
+                    },
+                    hit.envelope.clone(),
+                ),
+                None => match self.reuse_page(plan, &fingerprint)? {
+                    Some((state, envelope)) => (state, envelope),
+                    None => {
+                        let http = HttpRequest {
+                            url: request.display_url(),
+                            headers: default_headers(plan.source_id),
+                        };
+                        let response = match self.client.get(&http) {
+                            Ok(response) => response,
+                            Err(error) => {
+                                failure = Some(AcquireError::Unavailable {
+                                    detail: format!("{}: {error}", error.code()),
+                                });
+                                break;
+                            }
+                        };
+                        if let Err(error) = validate::require_status(response.status) {
                             failure = Some(AcquireError::Invalid {
                                 code: error.code(),
                                 detail: error.to_string(),
                             });
                             break;
                         }
-                    };
-                    let page_state = Arc::new(CachedPage {
-                        frozen: bytes,
-                        envelope,
-                    });
-                    if let Some(cache) = &self.cache {
-                        cache.insert(fingerprint, page_state.clone());
+                        // Frozen before parsing: a parse failure keeps the bytes
+                        // (§6.3). A failed parse never reaches the cache.
+                        let bytes = freeze_bytes(
+                            self.store,
+                            &request,
+                            &response,
+                            plan.format.parser_version(),
+                            plan.basis_status,
+                            &fetched_at,
+                        )?;
+                        let envelope = match validate::parse_page(
+                            plan.format,
+                            validate::declared_tabkey(&plan.params),
+                            &response.body,
+                        ) {
+                            Ok(envelope) => envelope,
+                            Err(error) => {
+                                failure = Some(AcquireError::Invalid {
+                                    code: error.code(),
+                                    detail: error.to_string(),
+                                });
+                                break;
+                            }
+                        };
+                        let page_state = Arc::new(CachedPage {
+                            frozen: bytes.clone(),
+                            envelope: envelope.clone(),
+                        });
+                        if let Some(cache) = &self.cache {
+                            cache.insert(fingerprint, page_state);
+                        }
+                        (
+                            PageState::Fetched {
+                                bytes,
+                                cached: false,
+                            },
+                            envelope,
+                        )
                     }
-                    page_state
-                }
+                },
             };
-            let envelope = page_state.envelope.clone();
             if envelope.page != page {
                 failure = Some(AcquireError::Invalid {
                     code: "source_invalid",
@@ -526,11 +617,7 @@ impl<'a> Entry<'a> {
                      longer returns the whole list",
                     envelope.rows, envelope.page_count,
                 );
-                let mut frozen_page = page_state.frozen.clone();
-                if from_cache {
-                    frozen_page.appended_manifest_line = false;
-                }
-                pages.push((frozen_page, envelope));
+                entries.push(PageEntry { state, envelope });
                 failure = Some(AcquireError::Invalid {
                     code: "page_size_ignored",
                     detail,
@@ -563,13 +650,7 @@ impl<'a> Entry<'a> {
                 }
                 Some(_) => {}
             }
-            let mut frozen_page = page_state.frozen.clone();
-            if from_cache {
-                // This call appended nothing: the line came from the call that
-                // populated the cache, so the snapshot is a re-use.
-                frozen_page.appended_manifest_line = false;
-            }
-            pages.push((frozen_page, envelope));
+            entries.push(PageEntry { state, envelope });
             if page >= page_count.unwrap_or(0) {
                 break;
             }
@@ -578,24 +659,166 @@ impl<'a> Entry<'a> {
         // Index first, decide second: the rows are facts about the store, and
         // replay must reproduce exactly these pages even when the window fails
         // (`empty data` and `truncated` are window verdicts, not index state).
-        let snapshots = if pages.is_empty() {
-            Vec::new()
-        } else {
-            record_snapshots(self.backend, &pages)?
-        };
+        let (snapshots, selected) = self.index_pages(&entries)?;
         if let Some(failure) = failure {
             return Err(failure);
         }
         let envelopes: Vec<PageEnvelope> =
-            pages.into_iter().map(|(_, envelope)| envelope).collect();
-        let set =
-            validate::validate_pages(&envelopes, policy, plan.zero_policy).map_err(|error| {
-                AcquireError::Invalid {
-                    code: error.code(),
-                    detail: error.to_string(),
+            entries.into_iter().map(|entry| entry.envelope).collect();
+        let set = validate::validate_pages(&envelopes, empty_policy, plan.zero_policy).map_err(
+            |error| AcquireError::Invalid {
+                code: error.code(),
+                detail: error.to_string(),
+            },
+        )?;
+        Ok((set, snapshots, selected))
+    }
+
+    /// Write the index rows of the pages this call downloaded and describe every
+    /// selected page for the evidence (`selected_by`, `as_of`).
+    ///
+    /// A reused page is already indexed: it contributes no write, and its row
+    /// keeps the fetch date it was first observed with (reuse never advances
+    /// `fetched_at`/`as_of`, design §5.3).
+    fn index_pages(
+        &self,
+        entries: &[PageEntry],
+    ) -> Result<(Vec<FrozenSnapshot>, Vec<SelectedPage>), AcquireError> {
+        let fetched: Vec<(FrozenBytes, PageEnvelope)> = entries
+            .iter()
+            .filter_map(|entry| match &entry.state {
+                PageState::Fetched { bytes, .. } => Some((bytes.clone(), entry.envelope.clone())),
+                PageState::Reused { .. } => None,
+            })
+            .collect();
+        let recorded = if fetched.is_empty() {
+            Vec::new()
+        } else {
+            record_snapshots(self.backend, &fetched)?
+        };
+        let mut snapshots = Vec::with_capacity(entries.len());
+        let mut selected = Vec::with_capacity(entries.len());
+        let mut next_recorded = recorded.into_iter();
+        for entry in entries {
+            let (snapshot, selected_by) = match &entry.state {
+                PageState::Reused { row } => (
+                    FrozenSnapshot {
+                        row: row.clone(),
+                        appended_manifest_line: false,
+                        inserted_index_row: false,
+                    },
+                    SelectedBy::Reuse,
+                ),
+                PageState::Fetched { cached, .. } => {
+                    let mut snapshot = next_recorded
+                        .next()
+                        .expect("one indexed row per fetched page");
+                    // A cache hit appended nothing: the line came from the call
+                    // that populated the cache, so the snapshot is a re-use.
+                    if *cached {
+                        snapshot.appended_manifest_line = false;
+                    }
+                    let selected_by = if *cached {
+                        SelectedBy::RunCache
+                    } else {
+                        SelectedBy::Fetch
+                    };
+                    (snapshot, selected_by)
                 }
-            })?;
-        Ok((set, snapshots))
+            };
+            selected.push(SelectedPage {
+                snapshot_id: snapshot.row.snapshot_id.clone(),
+                as_of: snapshot.row.as_of.clone(),
+                selected_by,
+            });
+            snapshots.push(snapshot);
+        }
+        Ok((snapshots, selected))
+    }
+
+    /// Read-through reuse of one page (design §5.2).
+    ///
+    /// Returns `None` when the rule is off or the fingerprint was never seen:
+    /// the caller then fetches. When the index holds a snapshot for this exact
+    /// request, its bytes are read back with `read_verified` (a missing or
+    /// tampered blob is `source_store_corrupt`) and parsed again — the index row
+    /// is never used as the parsed result. A selected snapshot older than the
+    /// rule's `H` fails closed with `source_refresh_overdue` instead of serving
+    /// increasingly stale bytes (§5.1).
+    fn reuse_page(
+        &self,
+        plan: &AcquisitionPlan,
+        fingerprint: &str,
+    ) -> Result<Option<(PageState, PageEnvelope)>, AcquireError> {
+        let policy = self.reuse.for_source(plan.source_id);
+        if !policy.enabled.is_enabled() {
+            return Ok(None);
+        }
+        let rows = self
+            .backend
+            .read_exchange_snapshots_for_fingerprint(plan.source_id.as_str(), fingerprint)?;
+        let Some(row) = reuse::latest_candidate(&rows, plan.source_id, fingerprint) else {
+            return Ok(None);
+        };
+        let Some(age) = reuse::age_days(&row.as_of, self.today) else {
+            return Err(AcquireError::Invalid {
+                code: "source_store_corrupt",
+                detail: format!(
+                    "indexed snapshot {} has an unparseable as_of {:?}",
+                    row.snapshot_id, row.as_of
+                ),
+            });
+        };
+        if age > i64::from(policy.max_age_days) {
+            return Err(AcquireError::RefreshOverdue {
+                detail: format!(
+                    "{} request fingerprint {} was last observed on {} ({age} day(s) ago), beyond \
+                     H={} days; run refresh_exchange_sources full before deriving from it",
+                    plan.source_id.as_str(),
+                    fingerprint,
+                    row.as_of,
+                    policy.max_age_days
+                ),
+            });
+        }
+        let bytes = self.store.read_verified(&row.snapshot_id)?;
+        let Some(format) = PagingFormat::from_parser_version(&row.parser_version) else {
+            return Err(AcquireError::Invalid {
+                code: "unknown_parser",
+                detail: format!(
+                    "indexed snapshot {} records parser version {:?}",
+                    row.snapshot_id, row.parser_version
+                ),
+            });
+        };
+        let envelope =
+            validate::parse_page(format, validate::declared_tabkey(&plan.params), &bytes).map_err(
+                |error| AcquireError::Invalid {
+                    code: error.code(),
+                    detail: format!(
+                        "indexed snapshot {} no longer parses: {error}",
+                        row.snapshot_id
+                    ),
+                },
+            )?;
+        // The row's counts are a rebuild of these bytes; a disagreement means
+        // the index (or the bytes) was altered behind the store's back.
+        let expected_pages = row.page_count.unwrap_or(envelope.page_count);
+        if envelope.rows != row.row_count || envelope.page_count != expected_pages {
+            return Err(AcquireError::Invalid {
+                code: "source_store_corrupt",
+                detail: format!(
+                    "indexed snapshot {} reports {} row(s) over {} page(s) but its verified bytes \
+                     parse to {} row(s) over {}",
+                    row.snapshot_id,
+                    row.row_count,
+                    expected_pages,
+                    envelope.rows,
+                    envelope.page_count
+                ),
+            });
+        }
+        Ok(Some((PageState::Reused { row: row.clone() }, envelope)))
     }
 
     fn finish(
@@ -603,6 +826,7 @@ impl<'a> Entry<'a> {
         plan: &AcquisitionPlan,
         pages: PageSet,
         snapshots: Vec<FrozenSnapshot>,
+        selected: Vec<SelectedPage>,
     ) -> Result<AcquisitionOutcome, AcquireError> {
         // The binding is the source's, not this window's: `bind` reads every
         // frozen snapshot of `source_id` from the index (§6.3 "bind"), so two
@@ -612,6 +836,7 @@ impl<'a> Entry<'a> {
             .iter()
             .filter(|snapshot| snapshot.reused())
             .count();
+        let evidence = ReuseEvidence::from_pages(self.reuse.for_source(plan.source_id), &selected);
         Ok(AcquisitionOutcome {
             source_id: plan.source_id.as_str(),
             snapshots,
@@ -619,6 +844,7 @@ impl<'a> Entry<'a> {
             page_count: pages.page_count,
             binding,
             reused,
+            evidence,
         })
     }
 }

@@ -13,13 +13,14 @@ use std::sync::Mutex;
 
 use chrono::NaiveDate;
 use x_data_mcp::exchange_source::request::{
-    SSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V2,
+    SSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION, SZSE_PARSER_VERSION_V1, SZSE_PARSER_VERSION_V2,
 };
 use x_data_mcp::exchange_source::transport::{HttpRequest, HttpResponse};
 use x_data_mcp::exchange_source::validate::parse_page;
 use x_data_mcp::exchange_source::{
-    AcquireError, AcquisitionPlan, BasisStatus, Client, Entry, ExchangeRequest, PagingFormat,
-    RetryPolicy, RunCache, Segment, SourceId, Transport, TransportError, bind, freeze_page,
+    AcquireError, AcquisitionPlan, BasisStatus, Client, Enabled, Entry, ExchangeRequest,
+    PagingFormat, RetryPolicy, ReusePolicyTable, RunCache, Segment, SelectedBy, SourceId,
+    Transport, TransportError, bind, freeze_page,
 };
 use x_data_mcp::source_store::SourceStore;
 use x_data_mcp::sqlite_market::backend::MarketBackend;
@@ -732,4 +733,356 @@ fn one_failed_window_makes_the_run_partially_failed() {
     let backend = open(&db);
     let binding = bind::bind(&backend, SourceId::SseBulletin, BasisStatus::ApprovedSource).unwrap();
     assert_eq!(binding.snapshots.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// R1 (XDM-153): reuse policy registration and read-through reuse
+// (`docs/tasks/issue-446-exchange-refresh.md` §5.1, §5.2, §5.3, §8 R1).
+// Every test is a fixture: the fake transport counts requests, so "no request"
+// is a number, not a claim.
+// ---------------------------------------------------------------------------
+
+/// The declared table with only one source turned on, the way R2/R3 will pass
+/// it once the refresh run exists.
+fn reuse_on(source: SourceId) -> ReusePolicyTable {
+    ReusePolicyTable::declared().with_enabled(source, Enabled::Yes)
+}
+
+fn day(text: &str) -> NaiveDate {
+    NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap()
+}
+
+/// Freeze one SZSE page at a fixed observation time, so the age gates are
+/// deterministic instead of depending on the wall clock.
+fn freeze_szse_page(
+    store: &SourceStore,
+    backend: &MarketBackend,
+    page: u32,
+    fetched_at: &str,
+    etag: &str,
+) -> String {
+    let request = ExchangeRequest::new(SourceId::SzseListing, "https://example.invalid/szse-list")
+        .paged(PagingFormat::SzseMetadata, page);
+    let response = ok(szse_body(page, 1, 1, 1), etag);
+    let envelope = parse_page(PagingFormat::SzseMetadata, None, &response.body).unwrap();
+    freeze_page(
+        store,
+        backend,
+        &request,
+        &response,
+        &envelope,
+        SZSE_PARSER_VERSION,
+        BasisStatus::ApprovedSource,
+        fetched_at,
+    )
+    .unwrap()
+    .snapshot_id()
+    .to_string()
+}
+
+/// The shipped table keeps every rule off: a second run fetches again and only
+/// de-duplicates the same bytes, exactly as before R1.
+#[test]
+fn a_disabled_reuse_rule_keeps_fetching_page_by_page() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
+    ]);
+    let client = client(&fixture);
+    {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client);
+        let first = entry.acquire(&szse_plan()).unwrap();
+        assert_eq!(first.reused, 0);
+        assert_eq!(first.evidence.policy.enabled, Enabled::No);
+        assert_eq!(first.evidence.fetched, 2);
+        assert_eq!(first.evidence.reused, 0);
+        let second = entry.acquire(&szse_plan()).unwrap();
+        // The old "same fingerprint + same bytes" de-duplication still happens
+        // (two snapshots), but both pages were downloaded again.
+        assert_eq!(second.reused, 2);
+        assert_eq!(second.evidence.fetched, 2);
+        assert_eq!(second.evidence.reused, 0);
+        assert!(
+            second
+                .evidence
+                .selected_by
+                .iter()
+                .all(|selection| selection.selected_by == SelectedBy::Fetch)
+        );
+    }
+    assert_eq!(
+        fixture.calls(),
+        4,
+        "the disabled rule sends both runs' requests"
+    );
+}
+
+/// §5.2's acceptance: the first run sends `N` requests, the second sends none
+/// and returns the very same snapshots; reuse advances neither `fetched_at`
+/// nor `as_of` and writes neither a manifest line nor an index row.
+#[test]
+fn an_enabled_reuse_rule_reads_the_same_snapshots_without_a_request() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![
+        Ok(ok(szse_body(1, 2, 3, 2), "page-1")),
+        Ok(ok(szse_body(2, 2, 3, 1), "page-2")),
+    ]);
+    let client = client(&fixture);
+    let first = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client);
+        entry.acquire(&szse_plan()).unwrap()
+    };
+    assert_eq!(fixture.calls(), 2, "the first run fetches both pages");
+    assert_eq!(store.records().unwrap().len(), 2);
+
+    let second = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client)
+            .with_reuse_policies(reuse_on(SourceId::SzseListing));
+        entry.acquire(&szse_plan()).unwrap()
+    };
+    assert_eq!(fixture.calls(), 2, "the second run sends no request at all");
+    assert_eq!(second.row_count, 3);
+    assert_eq!(second.page_count, 2);
+    assert_eq!(second.evidence.fetched, 0);
+    assert_eq!(second.evidence.reused, 2);
+    assert_eq!(second.evidence.policy.enabled, Enabled::Yes);
+    assert_eq!(second.evidence.policy.source_id, SourceId::SzseListing);
+    assert_eq!(
+        second
+            .evidence
+            .selected_by
+            .iter()
+            .map(|selection| selection.selected_by)
+            .collect::<Vec<_>>(),
+        vec![SelectedBy::Reuse, SelectedBy::Reuse]
+    );
+
+    let first_ids: Vec<&str> = first.snapshots.iter().map(|s| s.snapshot_id()).collect();
+    let second_ids: Vec<&str> = second.snapshots.iter().map(|s| s.snapshot_id()).collect();
+    assert_eq!(first_ids, second_ids, "the same snapshots, not new ones");
+    for (before, after) in first.snapshots.iter().zip(&second.snapshots) {
+        assert_eq!(
+            before.row.fetched_at, after.row.fetched_at,
+            "reuse does not re-date bytes"
+        );
+        assert_eq!(
+            before.row.as_of, after.row.as_of,
+            "reuse does not advance as_of"
+        );
+        assert!(!after.appended_manifest_line && !after.inserted_index_row);
+    }
+    assert_eq!(second.evidence.as_of, first.evidence.as_of);
+    assert_eq!(
+        second.evidence.verified_through, first.evidence.verified_through,
+        "without a refresh run the fallback is the selected as_of"
+    );
+
+    // Reuse is read-only: no blob, no manifest line, no index row.
+    assert_eq!(store.records().unwrap().len(), 2);
+    assert_eq!(snapshot_count(&db, SourceId::SzseListing), 2);
+
+    // The replayed index still matches, so reuse did not fork the evidence.
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 2);
+}
+
+/// §5.1's `H = 14` gate: exactly `H` days is still reusable, one day more
+/// fails closed with `source_refresh_overdue` and sends no request.
+#[test]
+fn reuse_beyond_the_hard_age_bound_fails_closed() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![]);
+    let client = client(&fixture);
+    {
+        let backend = open(&db);
+        freeze_szse_page(&store, &backend, 1, "2026-10-31T02:00:00Z", "old-page");
+    }
+
+    let boundary = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-14"))
+            .with_reuse_policies(reuse_on(SourceId::SzseListing));
+        entry.acquire(&szse_plan()).unwrap()
+    };
+    assert_eq!(boundary.evidence.reused, 1, "14 days is still within H");
+    assert_eq!(
+        boundary.evidence.verified_through.as_deref(),
+        Some("2026-10-31")
+    );
+
+    let error = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-15"))
+            .with_reuse_policies(reuse_on(SourceId::SzseListing));
+        entry.acquire(&szse_plan()).unwrap_err()
+    };
+    assert_eq!(error.code(), "source_refresh_overdue");
+    assert!(
+        error.to_string().contains("2026-10-31"),
+        "the failure names the stale observation: {error}"
+    );
+    assert_eq!(
+        fixture.calls(),
+        0,
+        "an overdue snapshot is not refetched here"
+    );
+    assert_eq!(store.records().unwrap().len(), 1);
+    assert_eq!(snapshot_count(&db, SourceId::SzseListing), 1);
+}
+
+/// §5.2: bytes are read back with `read_verified` before reuse, so a tampered
+/// blob is `source_store_corrupt` instead of a silent fallback.
+#[test]
+fn a_tampered_blob_fails_closed_on_reuse() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![]);
+    let client = client(&fixture);
+    let snapshot_id = {
+        let backend = open(&db);
+        freeze_szse_page(&store, &backend, 1, "2026-11-01T02:00:00Z", "page-1")
+    };
+    std::fs::write(store.blob_path(&snapshot_id), b"tampered").unwrap();
+
+    let error = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-02"))
+            .with_reuse_policies(reuse_on(SourceId::SzseListing));
+        entry.acquire(&szse_plan()).unwrap_err()
+    };
+    assert_eq!(error.code(), "source_store_corrupt");
+    assert_eq!(fixture.calls(), 0);
+}
+
+/// §5.2's selection: when the same request fingerprint was answered with a new
+/// sha (a revision), the newest observation is the one reused.
+#[test]
+fn a_revised_answer_for_the_same_fingerprint_is_the_one_reused() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![]);
+    let client = client(&fixture);
+    let (old_sha, new_sha) = {
+        let backend = open(&db);
+        let old = freeze_szse_page(&store, &backend, 1, "2026-10-30T02:00:00Z", "old-page");
+        // A revision of the same request: different bytes, later observation.
+        let request =
+            ExchangeRequest::new(SourceId::SzseListing, "https://example.invalid/szse-list")
+                .paged(PagingFormat::SzseMetadata, 1);
+        let response = ok(szse_body(1, 1, 2, 2), "new-page");
+        let envelope = parse_page(PagingFormat::SzseMetadata, None, &response.body).unwrap();
+        let new = freeze_page(
+            &store,
+            &backend,
+            &request,
+            &response,
+            &envelope,
+            SZSE_PARSER_VERSION,
+            BasisStatus::ApprovedSource,
+            "2026-10-31T02:00:00Z",
+        )
+        .unwrap()
+        .snapshot_id()
+        .to_string();
+        (old, new)
+    };
+    assert_eq!(
+        snapshot_count(&db, SourceId::SzseListing),
+        2,
+        "two shas, one fingerprint"
+    );
+
+    let outcome = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-01"))
+            .with_reuse_policies(reuse_on(SourceId::SzseListing));
+        entry.acquire(&szse_plan()).unwrap()
+    };
+    assert_eq!(fixture.calls(), 0);
+    assert_eq!(outcome.snapshots.len(), 1);
+    assert_eq!(outcome.snapshots[0].snapshot_id(), new_sha);
+    assert_ne!(outcome.snapshots[0].snapshot_id(), old_sha);
+    assert_eq!(
+        outcome.row_count, 2,
+        "the revised bytes are the derived input"
+    );
+    assert_eq!(outcome.evidence.as_of.as_deref(), Some("2026-10-31"));
+    assert_eq!(outcome.evidence.reused, 1);
+}
+
+/// A multi-window run merges the per-window evidence in window order and keeps
+/// §5.3's windowed `as_of` rule (newest window).
+#[test]
+fn a_multi_window_run_reuses_every_quarter_and_merges_the_evidence() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![
+        Ok(ok(sse_body(1, 1, 1, 1), "q1")),
+        Ok(ok(sse_body(1, 1, 2, 2), "q2")),
+    ]);
+    let client = client(&fixture);
+    let first = Segment::parse("2000-01-01", "2000-03-31").unwrap();
+    let second = Segment::parse("2000-04-01", "2000-06-30").unwrap();
+    let plan = plan(SourceId::SseBulletin, "https://example.invalid/bulletin");
+    {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client);
+        let outcome = entry
+            .acquire_windows(&plan, &[first, second], "beginDate", "endDate")
+            .unwrap();
+        assert_eq!(outcome.results.len(), 2);
+        assert_eq!(outcome.evidence.fetched, 2);
+    }
+    assert_eq!(fixture.calls(), 2);
+
+    let reused = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client)
+            .with_reuse_policies(reuse_on(SourceId::SseBulletin));
+        entry
+            .acquire_windows(&plan, &[first, second], "beginDate", "endDate")
+            .unwrap()
+    };
+    assert_eq!(
+        fixture.calls(),
+        2,
+        "both quarters come from the source store"
+    );
+    assert_eq!(reused.results.len(), 2);
+    assert_eq!(reused.evidence.reused, 2);
+    assert_eq!(reused.evidence.fetched, 0);
+    assert_eq!(reused.evidence.selected_by.len(), 2);
+    assert!(
+        reused
+            .evidence
+            .selected_by
+            .iter()
+            .all(|selection| selection.selected_by == SelectedBy::Reuse)
+    );
+    for result in &reused.results {
+        assert_eq!(result.evidence.reused, 1);
+        assert_eq!(result.evidence.fetched, 0);
+    }
+    assert_eq!(reused.evidence.policy.class.as_str(), "window");
+    assert_eq!(store.records().unwrap().len(), 2);
 }
