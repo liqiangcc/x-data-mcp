@@ -116,7 +116,7 @@ pub fn run(
                 // A source-level fault (store/index/window helper) still leaves
                 // a failed run row: the record must explain why the run did not
                 // complete instead of looking like it never started.
-                stats.failed = true;
+                stats.failed += 1;
                 stats.complete = false;
                 accumulator.failures.push(RefreshFailure {
                     source_id: source.source_id.as_str().to_string(),
