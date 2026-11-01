@@ -71,9 +71,11 @@ pub struct SourceReport {
     pub planned_units: usize,
     /// Planned windows (0 for a table class).
     pub planned_windows: usize,
-    /// True only when this run observed every fingerprint of the source. A
-    /// tail of a windowed source is never complete; a probe without a change
-    /// is never complete; a failed table is never complete.
+    /// True only when this run completed every planned request of the source.
+    /// A tail of a windowed source is never complete; a probe without a change
+    /// is never complete; a failed table is never complete. Observed empty
+    /// windows are counted in `unobserved_windows` (coverage gaps), not as
+    /// failures, and do not by themselves make a full run incomplete.
     pub complete: bool,
     pub requests: u64,
     pub snapshots: usize,
@@ -84,9 +86,9 @@ pub struct SourceReport {
     pub changed: usize,
     pub unobserved_windows: usize,
     pub failed_windows: usize,
-    /// The date this source's complete fingerprint set was last confirmed by a
-    /// successful run, when this run itself completed it. `None` for a tail
-    /// that only looked at two windows or one probe page.
+    /// The date this source's complete planned request set was last confirmed
+    /// by a successful run, when this run itself completed it. `None` for a
+    /// tail that only looked at two windows or one probe page.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified_through: Option<String>,
 }

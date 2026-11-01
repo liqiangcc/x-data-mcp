@@ -17,9 +17,10 @@
 --    `source_refresh_run_members`: the durable refresh record. A task result
 --    JSON cannot carry `verified_through` because the task retention period is
 --    undecided (§5.6). `source_refresh_run_sources.complete` says whether the
---    run observed *every* fingerprint of that source (full set) — only a
---    complete, successful run advances the source's `verified_through`, so a
---    daily tail cannot silently satisfy the H=14-day gate that exists to
+--    run completed *every* planned request of that source; an observed empty
+--    window is counted in `unobserved_windows` (a coverage gap), not as a
+--    failure. Only a complete, successful source advances `verified_through`,
+--    so a daily tail cannot silently satisfy the H=14-day gate that exists to
 --    force the weekly full (§5.1/§5.3).
 --
 --    Members list every page this run froze or confirmed, keyed by

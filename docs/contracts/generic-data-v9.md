@@ -27,9 +27,10 @@
 
 - `source_refresh_runs`：一次运行的 mode/status/scope/起止时间/计数器/
   `verified_through`/task_id/detail，进程重启后仍可查。
-- `source_refresh_run_sources`：每个来源的 `complete`（是否覆盖该来源全部指纹）、
-  请求/变更/未观测/失败计数与该来源的 `verified_through`。只有成功且 `complete=1`
-  的来源才推进日期；tail 的两窗口、未触发的探针都不推进。
+- `source_refresh_run_sources`：每个来源的 `complete`（计划的全部请求是否完成，含已观测
+  的 0 行窗口）、请求/变更/未观测/失败计数与该来源的 `verified_through`。已知空窗口计入
+  `unobserved_windows`，作为覆盖 gap 交给 R3，不算失败也不阻塞 `complete`；只有成功且
+  `complete=1` 的来源才推进日期。tail 的两窗口、未触发的探针都不推进。
 - `source_refresh_run_members`：`(run_id, source_id, request_fingerprint) → snapshot_id`，
   外加页数、行数、`as_of`、`fetched_at`、是否变更、窗口。R3 的重放选择按 run 成员
   取页；探针页与失败的表尝试不是被选中的页，不写入成员。

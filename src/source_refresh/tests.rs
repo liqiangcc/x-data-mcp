@@ -28,6 +28,7 @@ struct State {
     short_before: String,
     short_after: String,
     bulletin_revision: u64,
+    bulletin_zero: bool,
     delisting_pages: u32,
     fail_page_two: bool,
     bump_on_page_two: bool,
@@ -44,6 +45,7 @@ impl Default for State {
             short_before: "深安达A".to_string(),
             short_after: "深安达B".to_string(),
             bulletin_revision: 0,
+            bulletin_zero: false,
             delisting_pages: 1,
             fail_page_two: false,
             bump_on_page_two: false,
@@ -79,6 +81,10 @@ impl RefreshFixture {
         self.state.lock().unwrap().bulletin_revision = value;
     }
 
+    fn set_bulletin_zero(&self) {
+        self.state.lock().unwrap().bulletin_zero = true;
+    }
+
     fn set_delisting_pages(&self, pages: u32) {
         self.state.lock().unwrap().delisting_pages = pages;
     }
@@ -103,7 +109,21 @@ impl RefreshFixture {
             );
         }
         if url.contains("queryCompanyBulletinNew") {
-            let revision = self.state.lock().unwrap().bulletin_revision;
+            let state = self.state.lock().unwrap();
+            if state.bulletin_zero {
+                return Ok(serde_json::json!({
+                    "pageHelp": {
+                        "beginPage": 1,
+                        "pageNo": 1,
+                        "pageSize": 100,
+                        "pageCount": 0,
+                        "total": 0,
+                        "data": []
+                    }
+                })
+                .to_string()
+                .into_bytes());
+            }
             return Ok(serde_json::json!({
                 "pageHelp": {
                     "beginPage": 1,
@@ -111,7 +131,7 @@ impl RefreshFixture {
                     "pageSize": 100,
                     "pageCount": 1,
                     "total": 1,
-                    "data": [{"TITLE": "风险警示", "revision": revision}]
+                    "data": [{"TITLE": "风险警示", "revision": state.bulletin_revision}]
                 }
             })
             .to_string()
@@ -370,8 +390,9 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
     let members = backend.read_source_refresh_run_members(&run_id).unwrap();
     assert_eq!(
         members.len(),
-        8,
-        "six cheap-table pages + two first-observation probes' full tables"
+        14,
+        "six cheap-table pages + four bulletin pages + two quiet suspension windows + \
+         two probe-triggered tables"
     );
     assert!(
         members
@@ -404,7 +425,12 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
     let second_members = backend
         .read_source_refresh_run_members(&second.run_id.clone().unwrap())
         .unwrap();
-    assert_eq!(second_members.len(), 6);
+    assert_eq!(
+        second_members.len(),
+        12,
+        "six cheap-table pages + four bulletin pages + two quiet suspension windows; \
+         probes select nothing"
+    );
     assert!(
         second_members
             .iter()
@@ -420,7 +446,7 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
             .read_source_refresh_run_members(&run_id)
             .unwrap()
             .len(),
-        8,
+        14,
         "run membership is durable across a process restart"
     );
 }
@@ -455,6 +481,54 @@ fn full_run_observes_every_source() {
     let run_id = report.run_id.unwrap();
     let source_rows = backend.read_source_refresh_run_sources(&run_id).unwrap();
     assert!(source_rows.iter().all(|row| row.complete));
+    assert_eq!(
+        backend
+            .latest_complete_verified_through("sse_bulletin")
+            .unwrap()
+            .as_deref(),
+        Some("2026-11-02")
+    );
+}
+
+#[test]
+fn a_quiet_bulletin_full_is_unobserved_but_complete() {
+    let fixture = RefreshFixture::new();
+    fixture.set_bulletin_zero();
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    let report = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client,
+        RefreshMode::Full,
+        &["sse_bulletin"],
+    );
+    assert_eq!(report.status, RefreshStatus::Succeeded);
+    assert_eq!(
+        report.requests, 216,
+        "two title filters per bulletin quarter, including the empty ones"
+    );
+    assert_eq!(report.sources.len(), 1);
+    let source = &report.sources[0];
+    assert_eq!(source.unobserved_windows, 216);
+    assert!(source.complete, "an observed empty window is not a failure");
+    assert_eq!(source.verified_through.as_deref(), Some("2026-11-02"));
+    assert_eq!(report.changed, 0);
+    let run_id = report.run_id.unwrap();
+    assert!(
+        backend
+            .read_source_refresh_run_members(&run_id)
+            .unwrap()
+            .is_empty(),
+        "a pageCount=0 window selects no page"
+    );
+    let source_rows = backend.read_source_refresh_run_sources(&run_id).unwrap();
+    assert_eq!(source_rows.len(), 1);
+    assert_eq!(source_rows[0].unobserved_windows, 216);
+    assert!(source_rows[0].complete);
     assert_eq!(
         backend
             .latest_complete_verified_through("sse_bulletin")

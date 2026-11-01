@@ -30,7 +30,8 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 
 - 指纹是请求本身的规范 JSON：`version` + `source_id` + URL + 排序后的参数（含分页与
   分段参数，值为**原始文本**，不含出站百分号编码，见下）。相同指纹 + 相同响应 sha256
-  只登记一次（§6.3）。
+  只登记一次（§6.3）；schema 26 起索引行身份是 `(snapshot_id, request_fingerprint)`，
+  相同字节的不同请求各占一行，供不同窗口各自复用。
 - 分页方言按**端点**固定，不能按「交易所」固定（XDM-151）：
   - 沪名单（A-1/A-2，`commonQuery.do`）用 `pageHelp.pageNo` + `pageHelp.pageSize=2000`。
     名单端点不再发 `beginPage`/`endPage`：2026-10-30 实测两种写法都只回第 1 页同一批 50 行
@@ -134,13 +135,14 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 （`Entry::with_cache`），不共享时行为与无缓存一致。校验仍在窗口结束时整体执行，
 缓存不会绕过 `truncated`/`unverified_zero` 判断。
 
-### 跨日复用与刷新周期（XDM-149，设计待裁决）
+### 跨日复用与刷新周期（XDM-149）
 
-现状：每次日更由四个派生 item 在 item 内全量获取（`RunCache` 只覆盖单次运行，不跨日复用）。
-设计中（owner 2026-11-01 已裁决、未实现）：跨日的“窗口复用 / 每周全量 / 陈旧闸门”由独立刷新任务
-`refresh_exchange_sources` 负责（tail 每日、full 每周），日更的四个派生 item 改为只读来源库。
-参数、时间语义（`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
-[issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md)。
+R1 的跨日复用读路径与 R2 的刷新任务（`refresh_exchange_sources` 的 tail/full、run 成员与
+页 1 守卫）已在代码中，随 `generic-data-v9`/schema 26 未部署；日更的四个派生 item 仍在内联
+获取。R3 的陈旧闸门与按 run 成员重放、R5 的 `known_at`/coverage 尚未实现。参数、时间语义
+（`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
+[issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md) 与
+[generic-data-v9](contracts/generic-data-v9.md)。
 
 ## 3. 冻结顺序与失败语义
 

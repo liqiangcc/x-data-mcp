@@ -3,9 +3,10 @@
 //! The refresh record is deliberately in SQLite rather than only in a task
 //! result: the task retention period is undecided, while `verified_through`
 //! must survive both process restarts and task expiry. The run row says what a
-//! run did; `source_refresh_run_sources` says whether the run observed the
-//! whole fingerprint set of one source (only then may `verified_through`
-//! advance); `source_refresh_run_members` names the snapshot selected for each
+//! run did; `source_refresh_run_sources` says whether the run completed the
+//! whole planned request set of one source (an observed empty window is an
+//! unobserved gap, not a failure; only a complete source advances
+//! `verified_through`); `source_refresh_run_members` names the snapshot selected for each
 //! request, which is what R3's replay selection consumes.
 //!
 //! Layer position: this module persists neutral records only. Source names,

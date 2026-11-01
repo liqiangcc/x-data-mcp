@@ -21,11 +21,11 @@ use chrono::NaiveDate;
 
 use crate::exchange_source::{
     AcquireError, AcquisitionOutcome, Client, Entry, FrozenSnapshot, SnapshotRow, SourceId,
-    SourceStore, TransportError, validate,
+    TransportError, validate,
 };
 use crate::market_storage::Error as StorageError;
 use crate::security_master::risk_warnings::SzNameChange;
-use crate::source_store::{StoreError, Unconfigured};
+use crate::source_store::{SourceStore, StoreError, Unconfigured};
 use crate::sqlite_market::backend::MarketBackend;
 use crate::sqlite_market::refresh_runs::{RunFinish, RunMemberRow, RunSourceRow, RunStart};
 
@@ -151,7 +151,7 @@ pub fn run(
         .map(|source| {
             let plan = plans
                 .iter()
-                .find(|plan| plan.source_id.as_str() == source.source_id)
+                .find(|plan| plan.source_id.as_str() == source.source_id.as_str())
                 .expect("one plan per source report");
             RunSourceRow {
                 run_id: run_id.clone(),
@@ -393,11 +393,12 @@ fn refresh_source(
                             code: "unverified_zero",
                             ..
                         }) => {
-                            // A quiet window is not absence (BR-M3-10); it is a
-                            // gap R3 must see, and this source's fingerprint set
-                            // is not complete: no selected page covers it.
+                            // A quiet window is not absence (BR-M3-10): count
+                            // it as an unobserved gap for R3. It is still an
+                            // observed empty response, not a failed request, so
+                            // a full run may complete and advance
+                            // verified_through; the gap travels separately.
                             stats.unobserved += 1;
-                            stats.complete = false;
                         }
                         Err(error) => {
                             stats.failed += 1;
@@ -440,7 +441,7 @@ fn refresh_source(
                 // The probe is evidence of change detection, not a selected
                 // page: no member, no revision, and the source stays
                 // incomplete so the weekly full remains mandatory.
-                stats.reused += usize::from(snapshot.reused());
+                stats.reused += if snapshot.reused() { 1 } else { 0 };
                 return Ok(());
             }
             match acquire_guarded_table(entry, store, plan) {
