@@ -193,12 +193,12 @@ impl Pacer for NoSleepPacer {
     fn sleep(&self, _: Duration) {}
 }
 
-/// The fake transport [`Client::helper`] hands out inside [`with_helper_transport`].
-///
-/// Thread-local on purpose: a `#[test]` and the code it drives share one
-/// thread, so one test's fake never serves another test's daily run.
+// The fake transport `Client::helper` hands out inside `with_helper_transport`.
+// Thread-local on purpose: a `#[test]` and the code it drives share one thread,
+// so one test's fake never serves another test's daily run.
 #[cfg(test)]
 thread_local! {
+    /// Installed by [`with_helper_transport`]; `None` in every other test.
     static HELPER_TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
 }
