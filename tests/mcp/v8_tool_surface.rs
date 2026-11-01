@@ -145,7 +145,24 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
             budget,
         ));
     }
-    println!("tools/list measured bytes (entry, bytes, budget): {measured:?}");
+    // `main` before this branch has one fewer ops tool. The diff from the base
+    // contains no other registry/tool-schema edit, so removing that one tool
+    // reconstructs main's payload exactly (same order, same serialization).
+    let (ops_api, _dir) = api(EntryKind::Ops);
+    let ops_tools = ops_api.tools();
+    let main_tools: Vec<Value> = ops_tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|tool| tool["name"].as_str() != Some("refresh_exchange_sources"))
+        .cloned()
+        .collect();
+    assert_eq!(main_tools.len(), 15, "main ops tool count");
+    let main_bytes = serde_json::to_vec(&main_tools).unwrap().len();
+    println!(
+        "tools/list measured bytes (entry, bytes, budget): {measured:?}; \
+         main-equivalent ops: {main_bytes} B (15 tools)"
+    );
     if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
         use std::io::Write as _;
         if let Ok(mut summary) = std::fs::OpenOptions::new()
@@ -164,6 +181,11 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
                     bytes.div_ceil(4)
                 );
             }
+            let _ = writeln!(
+                summary,
+                "| ops (main-equivalent, 15 tools) | {main_bytes} | 29,300 | {} |",
+                main_bytes.div_ceil(4)
+            );
         }
     }
     let over: Vec<_> = measured
