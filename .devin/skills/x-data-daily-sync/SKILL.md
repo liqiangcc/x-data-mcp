@@ -16,6 +16,7 @@ allowed-tools:
   - mcp__x-data-mcp__start_collection
   - mcp__x-data-mcp__plan_market_update
   - mcp__x-data-mcp__run_market_update
+  - mcp__x-data-mcp__refresh_exchange_sources
   - mcp__x-data-mcp__update_data
   - mcp__x-data-mcp__get_task
   - mcp__x-data-mcp__get_request
@@ -45,7 +46,8 @@ allowed-tools:
 当前能力边界：data capability 的 `max_batch_entities=100` 是**每次调用**上限——
 单次 `start_collection`/`update_data` 超过 100 个证券或 item 会整体拒绝，服务端不会自动分页。
 v7 起全市场日更由 `plan_market_update`/`run_market_update` 在服务器侧解析与执行，编排方
-不再自行把全市场切成 ≤100 item 调用；只有**补漏**（§3.3/§3.6）与首采（§3.7）仍按
+不再自行把全市场切成 ≤100 item 调用；v9 起四个同源派生 item 的输入改由 §3.0 的
+`refresh_exchange_sources` 提供（日更前 `tail`、每周 `full`）；只有**补漏**（§3.3/§3.6）与首采（§3.7）仍按
 ≤100 item 的显式契约提交，每个 chunk 使用独立唯一 `request_id`、**串行提交**（服务端单 worker）。
 plan/run 大任务的进度按 `get_task_progress` 的 `unfinished` keyset 分页读取（调用参数规则见 §3.2）。
 
@@ -141,6 +143,38 @@ pending 就必须停止。
 `selection:{"kind":"batch","entities":[…]}`；不接受 `catalog` 或 `default` selection。
 `catalog` selection 只能用于 `dataset:"securities.catalog"`。全市场更新由
 `plan_market_update` 在服务器侧解析，编排方不再自行切 ≤100 显式批次刷全市场。
+
+### 3.0 来源刷新（v9：`refresh_exchange_sources`）
+
+v9 起同源的四个派生 item（`derived:security_master`、`derived:security_names`、
+`derived:risk_warnings`、`derived:suspensions`）不再自己发请求：它们只读
+`X_DATA_MCP_SOURCE_STORE` 里由 `refresh_exchange_sources` 冻结的快照，并要求最近一次完整
+刷新距今不超过 `H=14` 天。顺序属于 Skill：**先刷新来源，再 plan/run 日更**。
+
+- 每次日更前：`refresh_exchange_sources({"mode":"tail"})`（开窗 + 上一自然季度；整表类重读
+  整表，深市上市/简称先探页 1）。`tail` **同步返回** `RefreshReport`（无 task ref，不必轮询），
+  按其中的 `status`、`requests`、`failed_windows`、`unobserved_windows`、`revisions` 复核；
+  `dry_run:true` 只列计划、不发请求。
+- 每周一次：`refresh_exchange_sources({"mode":"full"})`（低峰，周末候选）。`full` **异步**：
+  调用立刻返回 `{"status":"running","run_id":…}`，抓取在本进程后台线程；用
+  `refresh_exchange_sources({"status_of":<run_id>})` 轮询到 `succeeded` 或 `failed` 再继续。
+  `running` 期间的计数是 0，不是进度（进度看 `status` 而不是计数）。`tail` 只覆盖开窗与
+  上一自然季度，不能单独让 `H` 闸门长期通过。
+- 返回 `refresh_already_running`（已有运行中的刷新，含别的日更或 operator 起的）：读
+  `details.run_id`，轮询**那个** run 到终态，不要再起新 run；`tail`/`full` 互斥，也不要在
+  `full` 未结束时插 `tail`。
+- 全新数据库（fresh init）：首次日更前必须已跑一次 `full`；否则四个同源 item 以
+  `source_snapshot_not_found` 失败。
+- 若某次 refresh 的 `status` 不是 `succeeded`，或 `failed_windows > 0`：照常 plan/run，
+  但把失败项连同 `run_id` 作为**来源刷新失败**报告；不要用 `update_data` 补来源数据。
+- 日更终态里四个同源 item 的 `source_refresh_overdue` / `source_snapshot_not_found` /
+  `snapshot_incomplete` → 跑一次 `full`（若返回 `refresh_already_running` 就轮询那个 run），
+  再重新 plan/run；`full` 重跑后仍失败才按缺陷报 owner。不要对这四个 item 单独
+  `retry_task`，也不要把它们当成实体补漏项。
+- v8 运行时的 `ops` 入口没有该工具（item 内联获取）：本步跳过，其余步骤不变。v9 运行时
+  该工具缺失即 `SKILL_CONTRACT_MISMATCH`。刷新任务不发布数据集，1 req/s 不变；预算为
+  `tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设门禁）、
+  `full` <60min。
 
 ### 3.1 日线 plan
 

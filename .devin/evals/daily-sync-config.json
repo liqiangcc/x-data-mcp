@@ -14,6 +14,7 @@
       "mcp__x-data-mcp__start_collection",
       "mcp__x-data-mcp__plan_market_update",
       "mcp__x-data-mcp__run_market_update",
+      "mcp__x-data-mcp__refresh_exchange_sources",
       "mcp__x-data-mcp__update_data",
       "mcp__x-data-mcp__get_task",
       "mcp__x-data-mcp__get_request",

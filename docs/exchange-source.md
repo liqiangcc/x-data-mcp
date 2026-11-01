@@ -108,9 +108,9 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 没有旁路。
 
 - 状态每个 `Client` 一份（`Mutex<Option<Instant>>`），不是全局静态锁：测试与不同使用方互不
-  影响，每个 client 的第一次请求不等待。今天每个派生 item 在 `run_source` 里各建一个
-  `Client::helper()`，所以 item 内部的连续请求受控；item 之间本来就串行，跨 item 的第一次
-  请求不受上一个 client 约束。
+  影响，每个 client 的第一次请求不等待。R3 起派生 item 不再发请求（只读来源库，零探针），出站请求
+  来自 `refresh_exchange_sources`：一个刷新 run 用一个 `Client`，run 内连续请求受控；
+  item/run 之间本来就串行，跨 run 的第一次请求不受上一个 client 约束。
 - 默认值 1,000 ms；环境变量 `X_DATA_MCP_MIN_REQUEST_INTERVAL_MS`（整毫秒）。`0` 关闭间隔，
   **仅限测试/离线**，部署单元不得设置。非法值 fail-closed：`data_service` 启动即拒绝，库内
   `Client::helper()` 以 `source_transport_unavailable` 失败该 item；两种路径都不会静默换成
@@ -137,9 +137,11 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 
 ### 跨日复用与刷新周期（XDM-149）
 
-R1 的跨日复用读路径与 R2 的刷新任务（`refresh_exchange_sources` 的 tail/full、run 成员与
-页 1 守卫）已在代码中，随 `generic-data-v9`/schema 26 未部署；日更的四个派生 item 仍在内联
-获取。R2b 把运行语义补齐：刷新**单飞**（已有 `running` run 时新开始被拒，
+R1 的跨日复用读路径、R2 的刷新任务（`refresh_exchange_sources` 的 tail/full、run 成员与
+页 1 守卫）与 R3 的只读日更路径（`exchange_source::select`：整表源取最新完整 run 的成员页，
+窗口源按窗口取最新完整页集，`today − verified_through > H=14d` 即 `source_refresh_overdue`
+fail-closed；`today` 是上海日期、每次日更只取一次）已在代码中，随 `generic-data-v9`/schema 26 未部署；日更的四个派生 item 不再
+内联获取，改动在部署后生效。R2b 把运行语义补齐：刷新**单飞**（已有 `running` run 时新开始被拒，
 `refresh_already_running` 并回带 run_id；tail 与 full 互斥，检查与插入同一写事务），
 `full` **异步**（立即返回 `running`，抓取在本进程后台线程，用 `{status_of: run_id}` 查询；
 客户端断开不影响），进程停止留下的 `running` 行由下次 `data_service` 启动按
@@ -148,8 +150,7 @@ R1 的跨日复用读路径与 R2 的刷新任务（`refresh_exchange_sources` �
 释放；只有进程退出留下的行才依赖下一次启动回收。
 `tail` 保持同步：28 个计划请求，探针触发整表时上限 549 个（约 13 min）；G2 因此按表计量
 （D-67：未触发整表的 tail <300 s，触发后每张被触发的表各自 <600 s、run 总量不设门禁，
-读 `source_refresh_run_sources.elapsed_ms`）。R3 的陈旧闸门与
-按 run 成员重放、R5 的 `known_at`/coverage 尚未实现。参数、时间语义
+读 `source_refresh_run_sources.elapsed_ms`）。R5 的 `known_at`/coverage 尚未实现。参数、时间语义
 （`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
 [issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md) 与
 [generic-data-v9](contracts/generic-data-v9.md)。

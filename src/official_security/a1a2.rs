@@ -70,9 +70,10 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use serde_json::{Value, json};
 
+use crate::exchange_source::select::{self, Freshness, Reader};
 use crate::exchange_source::validate;
 use crate::exchange_source::{
-    AcquisitionPlan, Client, Entry, PagingFormat, RunCache, SnapshotBinding, SourceId,
+    AcquisitionPlan, BindError, Client, Entry, PagingFormat, RunCache, SnapshotBinding, SourceId,
     TransportError,
 };
 use crate::security_master::assembly::{
@@ -270,6 +271,11 @@ pub fn candidate_migrations() -> Vec<CodeMigrationFact> {
 pub enum A1A2Error {
     #[error(transparent)]
     Acquire(#[from] crate::exchange_source::AcquireError),
+    /// The read path (§5.1): a missing, incomplete or overdue frozen set.
+    #[error(transparent)]
+    Select(#[from] select::SelectError),
+    #[error(transparent)]
+    Bind(#[from] BindError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -282,6 +288,8 @@ impl A1A2Error {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Acquire(error) => error.code(),
+            Self::Select(error) => error.code(),
+            Self::Bind(error) => error.code(),
             Self::Store(error) => error.code(),
             Self::Transport(error) => error.code(),
             Self::Invalid { code, .. } => code,
@@ -399,6 +407,10 @@ pub struct Admitted {
     pub suppressed_listing_targets: Vec<String>,
     /// Per SZSE plan: which block the pages were read from (#446 D1).
     pub block_selection: BTreeMap<&'static str, BlockSelectionEvidence>,
+    /// §5.3 freshness of the selected snapshot set: `as_of` is the oldest
+    /// selected page (this item merges four tables), `verified_through` and
+    /// `staleness_days` are the refresh run's, not the run day's.
+    pub freshness: Freshness,
 }
 
 impl Admitted {
@@ -414,6 +426,7 @@ impl Admitted {
             "adapter": "A-1/A-2",
             "parser_version": PARSER_VERSION,
             "as_of": self.snapshot.as_of.format("%Y-%m-%d").to_string(),
+            "freshness": self.freshness.json(),
             "source_bindings": self.bindings,
             "snapshot_ids": self.snapshot_ids,
             "b_shares_skipped": self.b_shares_skipped,
@@ -429,23 +442,36 @@ impl Admitted {
 
 /// The daily item's answer: an admitted snapshot, or the reason the branch is
 /// still `pending_source`.
+// One item reads one source per run: the enum is not hot, so the large
+// `Admitted` payload stays inline (as `PublishOutcome` does).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunSource {
     Admitted(Admitted),
     Pending(PendingSource),
 }
 
-/// Resolve the deployment's source store and fetch client, then acquire.
+/// Resolve the deployment's source store, then read the frozen snapshot set.
 ///
 /// Under [`Policy::Optional`] (stdio, tests, non-ops and legacy entries) not
-/// configured is *not* a fetch failure: the security-master item keeps the
+/// configured is *not* a read failure: the security-master item keeps the
 /// TDX-only result and records `pending_source`, so an environment that has not
 /// enabled A-1/A-2 does not fail its daily run. Under [`Policy::Required`] (the
 /// ops entry of `data_service` on a compact backend) a missing or unreadable
 /// store fails the item with the stable code `source_store_unconfigured`
-/// instead of writing a zero-exchange master. A configured store whose fetch
-/// fails is a real failure and reaches the item as such either way.
-pub fn run_source(market: &MarketBackend, policy: Policy) -> Result<RunSource, A1A2Error> {
+/// instead of writing a zero-exchange master. A configured store without a
+/// complete, recent frozen set is a real failure and reaches the item as such
+/// either way.
+///
+/// The daily item sends no request (R3, issue-446 §5.1): the bytes come from a
+/// `refresh_exchange_sources` run, so a stale or missing set fails closed with
+/// `source_refresh_overdue` / `source_snapshot_not_found` and the previously
+/// published master stays readable.
+pub fn run_source(
+    market: &MarketBackend,
+    today: NaiveDate,
+    policy: Policy,
+) -> Result<RunSource, A1A2Error> {
     let Some(store) =
         crate::source_store::configured(policy).map_err(|error| A1A2Error::Invalid {
             code: error.code(),
@@ -459,94 +485,210 @@ pub fn run_source(market: &MarketBackend, policy: Policy) -> Result<RunSource, A
                      (X_DATA_MCP_SOURCE_STORE); A-1/A-2 stay pending_source",
         }));
     };
-    let client = Client::helper()?;
-    Ok(RunSource::Admitted(acquire(&store, market, &client)?))
+    Ok(RunSource::Admitted(read(&store, market, today)?))
 }
 
 /// Acquire, parse and merge every plan (§7.1). One shared run cache serves all
-/// seven requests (§10.1).
+/// seven requests (§10.1). This is the refresh/repair path; the daily item uses
+/// [`read`] and never reaches it.
 pub fn acquire(
     store: &SourceStore,
     market: &MarketBackend,
     client: &Client,
 ) -> Result<Admitted, A1A2Error> {
     let entry = Entry::new(store, market, client).with_cache(Arc::new(RunCache::new()));
-    let mut listing = Vec::new();
-    let mut delisting = Vec::new();
-    let mut b_shares_skipped = 0usize;
-    let mut delisting_rows_without_date = 0usize;
-    let mut snapshot_ids: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut pages = Pages::default();
     let mut bindings: BTreeMap<String, SnapshotBinding> = BTreeMap::new();
-    let mut block_selection: BTreeMap<&'static str, BlockSelectionEvidence> = BTreeMap::new();
-    let mut as_of: Option<String> = None;
     for (kind, plan) in plans() {
         let outcome = entry.acquire(&plan)?;
         bindings.insert(outcome.source_id.to_string(), outcome.binding.clone());
         // The block selection follows the request's own declaration (#446 D1);
         // the same value is what replay reads back from the fingerprint.
         let declared = validate::declared_tabkey(&plan.params);
-        let mut ids = Vec::new();
         for snapshot in &outcome.snapshots {
-            let bytes = store.read_verified(snapshot.snapshot_id())?;
-            let page = parse_page(kind, declared, &bytes)?;
-            if let Some(selection) = &page.block_selection {
-                block_selection
-                    .entry(kind.label())
-                    .or_default()
-                    .add(selection);
-            }
-            listing.extend(page.listing);
-            delisting.extend(page.delisting);
-            b_shares_skipped += page.b_shares_skipped;
-            delisting_rows_without_date += page.delisting_rows_without_date;
-            ids.push(snapshot.snapshot_id().to_string());
-            let candidate = snapshot.row.as_of.clone();
-            as_of = Some(match as_of.take() {
-                Some(current) => current.min(candidate),
-                None => candidate,
-            });
+            pages.add(
+                store,
+                kind,
+                declared,
+                snapshot.snapshot_id(),
+                &snapshot.row.as_of,
+            )?;
         }
-        snapshot_ids.insert(kind.label(), ids);
     }
-    let Some(as_of) = as_of.and_then(|text| parse_day(&text)) else {
-        return Err(A1A2Error::invalid(
-            "no exchange page was frozen, so the snapshot has no as_of",
-        ));
-    };
+    let freshness = pages.freshness();
+    pages.finish(bindings, freshness)
+}
 
-    let migrations = confirmed_migrations();
-    // The exchange's A-share listing day for a migration target is the code's
-    // inherited subject-level day, not the new code's interval start (#396
-    // finding 2, D-46). The migration row defines the start instead.
-    let targets: BTreeSet<(Exchange, String)> = migrations
-        .iter()
-        .map(|migration| (migration.to_exchange, migration.to_code.clone()))
-        .collect();
-    let mut suppressed_listing_targets = Vec::new();
-    listing.retain(|fact| {
-        if targets.contains(&(fact.exchange, fact.code.clone())) {
-            suppressed_listing_targets.push(entity(fact.exchange, &fact.code));
-            false
-        } else {
-            true
+/// Read the frozen set the daily item derives from (§5.1): no request, no new
+/// snapshot, no manifest line. Every source's pages come from
+/// [`select::Reader`], which fails closed on an incomplete set or an overdue
+/// confirmation.
+pub fn read(
+    store: &SourceStore,
+    market: &MarketBackend,
+    today: NaiveDate,
+) -> Result<Admitted, A1A2Error> {
+    let reader = Reader::new(store, market).with_today(today);
+    let planned = plans();
+    let mut pages = Pages::default();
+    let mut bindings: BTreeMap<String, SnapshotBinding> = BTreeMap::new();
+    let mut freshness = Vec::new();
+    for source in [
+        SourceId::SseListing,
+        SourceId::SseDelisting,
+        SourceId::SzseListing,
+        SourceId::SzseDelisting,
+    ] {
+        let source_plans: Vec<AcquisitionPlan> = planned
+            .iter()
+            .filter(|(_, plan)| plan.source_id == source)
+            .map(|(_, plan)| plan.clone())
+            .collect();
+        let read = reader.table(source, &source_plans)?;
+        bindings.insert(
+            source.as_str().to_string(),
+            crate::exchange_source::bind::bind(
+                market,
+                source,
+                crate::exchange_source::BasisStatus::ApprovedSource,
+            )?,
+        );
+        freshness.push(read.freshness.clone());
+        for (kind, plan) in planned.iter().filter(|(_, plan)| plan.source_id == source) {
+            let selected = read.series_for(plan, "", "");
+            if selected.is_empty() {
+                return Err(A1A2Error::Select(select::SelectError::Incomplete {
+                    detail: format!(
+                        "{}: the frozen set has no page for the {} acquisition",
+                        source.as_str(),
+                        kind.label()
+                    ),
+                }));
+            }
+            let declared = validate::declared_tabkey(&plan.params);
+            for page in selected {
+                pages.add(store, *kind, declared, &page.snapshot_id, &page.as_of)?;
+            }
         }
-    });
-    let listing = merge_listing(listing)?;
-    let delisting = merge_delisting(delisting)?;
-    Ok(Admitted {
-        snapshot: ExchangeSnapshot {
-            as_of,
-            listing,
+    }
+    let freshness =
+        Freshness::combined(&freshness.iter().collect::<Vec<_>>(), select::AsOf::Oldest);
+    pages.finish(bindings, freshness)
+}
+
+/// The rows, counts and evidence labels of every parsed page, shared by the
+/// fetch path and the read path so both produce the same snapshot from the same
+/// bytes.
+#[derive(Default)]
+struct Pages {
+    listing: Vec<ExchangeListingFact>,
+    delisting: Vec<ExchangeDelistingFact>,
+    b_shares_skipped: usize,
+    delisting_rows_without_date: usize,
+    snapshot_ids: BTreeMap<&'static str, Vec<String>>,
+    block_selection: BTreeMap<&'static str, BlockSelectionEvidence>,
+    as_of: Option<String>,
+}
+
+impl Pages {
+    fn add(
+        &mut self,
+        store: &SourceStore,
+        kind: ListKind,
+        declared: Option<&str>,
+        snapshot_id: &str,
+        as_of: &str,
+    ) -> Result<(), A1A2Error> {
+        let bytes = store.read_verified(snapshot_id)?;
+        let page = parse_page(kind, declared, &bytes)?;
+        if let Some(selection) = &page.block_selection {
+            self.block_selection
+                .entry(kind.label())
+                .or_default()
+                .add(selection);
+        }
+        self.listing.extend(page.listing);
+        self.delisting.extend(page.delisting);
+        self.b_shares_skipped += page.b_shares_skipped;
+        self.delisting_rows_without_date += page.delisting_rows_without_date;
+        self.snapshot_ids
+            .entry(kind.label())
+            .or_default()
+            .push(snapshot_id.to_string());
+        self.as_of = Some(match self.as_of.take() {
+            Some(current) => current.min(as_of.to_string()),
+            None => as_of.to_string(),
+        });
+        Ok(())
+    }
+
+    /// The acquisition-date answer over every page (the fallback freshness of a
+    /// store with no run record).
+    fn freshness(&self) -> Freshness {
+        Freshness {
+            as_of: self.as_of.clone(),
+            verified_through: self.as_of.clone(),
+            staleness_days: None,
+            run_ids: Vec::new(),
+            selected_by: "fetch",
+        }
+    }
+
+    fn finish(
+        self,
+        bindings: BTreeMap<String, SnapshotBinding>,
+        freshness: Freshness,
+    ) -> Result<Admitted, A1A2Error> {
+        let Some(as_of) = freshness.as_of.as_deref().and_then(parse_day) else {
+            return Err(A1A2Error::invalid(
+                "no exchange page was selected, so the snapshot has no as_of",
+            ));
+        };
+        let Pages {
+            mut listing,
             delisting,
-            migrations,
-        },
-        bindings: bindings.into_values().collect(),
-        snapshot_ids,
-        b_shares_skipped,
-        delisting_rows_without_date,
-        suppressed_listing_targets,
-        block_selection,
-    })
+            b_shares_skipped,
+            delisting_rows_without_date,
+            snapshot_ids,
+            block_selection,
+            ..
+        } = self;
+
+        let migrations = confirmed_migrations();
+        // The exchange's A-share listing day for a migration target is the
+        // code's inherited subject-level day, not the new code's interval start
+        // (#396 finding 2, D-46). The migration row defines the start instead.
+        let targets: BTreeSet<(Exchange, String)> = migrations
+            .iter()
+            .map(|migration| (migration.to_exchange, migration.to_code.clone()))
+            .collect();
+        let mut suppressed_listing_targets = Vec::new();
+        listing.retain(|fact| {
+            if targets.contains(&(fact.exchange, fact.code.clone())) {
+                suppressed_listing_targets.push(entity(fact.exchange, &fact.code));
+                false
+            } else {
+                true
+            }
+        });
+        let listing = merge_listing(listing)?;
+        let delisting = merge_delisting(delisting)?;
+        Ok(Admitted {
+            snapshot: ExchangeSnapshot {
+                as_of,
+                listing,
+                delisting,
+                migrations,
+            },
+            bindings: bindings.into_values().collect(),
+            snapshot_ids,
+            b_shares_skipped,
+            delisting_rows_without_date,
+            suppressed_listing_targets,
+            block_selection,
+            freshness,
+        })
+    }
 }
 
 /// Facts of one page. A page never carries both lists, but keeping them apart

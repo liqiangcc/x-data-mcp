@@ -23,10 +23,12 @@
 //!   recomputed summary with the stored rows (`match` / `drift`).
 //! - `risk_warnings` (M3 PR-10): the frozen SZSE short-name table and SSE
 //!   bulletin pages are re-parsed and `risk_warning_intervals` is replaced.
-//!   Selection follows the live item (XDM-154, §5.5): one snapshot per request
-//!   fingerprint, the newest acquisition, so a revised window's older page
-//!   cannot contribute events the live run no longer has. The SZSE whole-table
-//!   snapshot must be a complete page set (§5.4), otherwise the scope is
+//!   Selection follows the live item (XDM-154, §5.5; R4 ruling): one snapshot
+//!   per request fingerprint, the newest acquisition, so a revised window's
+//!   older page cannot contribute events the live run no longer has — and for
+//!   the SZSE whole table, with `--db`, the member pages of the newest complete
+//!   refresh run (R3), because a table's page set is only complete *as one
+//!   acquisition*. The page set must be complete (§5.4), otherwise the scope is
 //!   `snapshot_incomplete` and nothing is written.
 //! - `security_names` (M3 PR-12): the frozen SZSE `SSGSGMXX`/`tab2` table is
 //!   re-parsed (from the newest answer per page request, and only when those
@@ -844,6 +846,65 @@ where
     latest.into_values().collect()
 }
 
+/// The member page set of the source's newest complete refresh run, mapped back
+/// to manifest records, when a database is available and the run exists.
+///
+/// A whole-table page set is only complete *as one acquisition*: the manifest
+/// cannot say which page 1 belongs with which page 2, while
+/// `source_refresh_run_members` names exactly the pages one run validated
+/// (§5.4, R4 ruling). `Ok(None)` means "no database or no complete run": the
+/// caller then falls back to the newest answer per request fingerprint, which
+/// is the pre-R2 selection the daily item still uses for a store nobody has
+/// refreshed with R2 yet.
+fn member_records<'a>(
+    backend: Option<&MarketBackend>,
+    source_id: &str,
+    records: &[&'a ManifestRecord],
+) -> Result<Option<Vec<&'a ManifestRecord>>, String> {
+    let Some(backend) = backend else {
+        return Ok(None);
+    };
+    if matches!(
+        backend,
+        crate::sqlite_market::backend::MarketBackend::Legacy(_)
+    ) {
+        // A legacy database predates the refresh-run tables (§026 is compact
+        // only), so no run ever recorded a whole-table set: fall back.
+        return Ok(None);
+    }
+    let Some(run) = backend
+        .read_latest_complete_refresh_run(source_id)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(None);
+    };
+    let index: BTreeMap<(&str, &str), &ManifestRecord> = records
+        .iter()
+        .map(|record| ((record.sha256.as_str(), record.origin.as_str()), *record))
+        .collect();
+    let mut selected = Vec::new();
+    for member in run.members.iter().filter(|m| m.source_id == source_id) {
+        let Some(record) = index.get(&(
+            member.snapshot_id.as_str(),
+            member.request_fingerprint.as_str(),
+        )) else {
+            return Err(format!(
+                "refresh run {} selected snapshot {} for request {} but the store manifest \
+                 holds no such record; the store and the index disagree",
+                run.run_id, member.snapshot_id, member.request_fingerprint
+            ));
+        };
+        selected.push(*record);
+    }
+    if selected.is_empty() {
+        return Err(format!(
+            "refresh run {} claims a complete {source_id} refresh but recorded no page",
+            run.run_id
+        ));
+    }
+    Ok(Some(selected))
+}
+
 /// One frozen SZSE short-name page plus the §5.4 completeness inputs of its
 /// envelope.
 struct ShortNamePage<'a> {
@@ -879,12 +940,14 @@ enum ShortNameTable<'a> {
 ///
 /// The manifest cannot name an acquisition: re-downloading an unchanged page is
 /// deduplicated by `(sha256, source_id, origin)`, so a whole fetch does not leave
-/// one group under one `acquired_at`. "The newest complete page set" is therefore
-/// assembled per request fingerprint, and the completeness conditions are what
-/// detect a fetch that stopped early. They cannot detect a set whose pages come
-/// from two different tables while still adding up (page 1 revised, page 2 not
-/// yet re-fetched); that identity belongs to the refresh run (XDM-446 §5.4),
-/// which validates the fetch it made before publishing it.
+/// one group under one `acquired_at`. Without a refresh run record (a store
+/// filled before R2, or a fresh init) "the newest complete page set" is
+/// therefore assembled per request fingerprint, and the completeness conditions
+/// are what detect a fetch that stopped early. They cannot detect a set whose
+/// pages come from two different tables while still adding up (page 1 revised,
+/// page 2 not yet re-fetched); that identity belongs to the refresh run
+/// (XDM-446 §5.4), which validates the fetch it made before publishing it, and
+/// [`member_records`] prefers it whenever a database is replayed.
 ///
 /// The inputs come from the envelope dialect the domain row parser reads (the
 /// block the request declared), not from the parser version a page was frozen
@@ -1031,11 +1094,34 @@ fn rebuild_risk_warnings(
             .copied()
             .filter(|record| record.source_id == "sse_bulletin"),
     );
+    let backend = match database {
+        Some(path) => Some(open_database(path)?),
+        None => None,
+    };
     let short_name_records: Vec<&ManifestRecord> = records
         .iter()
         .copied()
         .filter(|record| record.source_id == SZSE_SHORT_NAME_SOURCE_ID)
         .collect();
+    // R4 ruling: with a refresh run record the table is exactly the page set
+    // that run validated; without one the newest answer per fingerprint is the
+    // only identity the manifest carries.
+    let short_name_records = match member_records(
+        backend.as_ref(),
+        SZSE_SHORT_NAME_SOURCE_ID,
+        &short_name_records,
+    ) {
+        Ok(Some(members)) => members,
+        Ok(None) => short_name_records,
+        Err(detail) => {
+            return Ok(ExchangeOutcome::not_built(
+                SNAPSHOT_INCOMPLETE,
+                SZSE_SHORT_NAME_SOURCE_ID,
+                "the SZSE short-name page set a complete refresh run validated",
+                detail,
+            ));
+        }
+    };
     let short_names = match select_short_name_table(store, &short_name_records)? {
         ShortNameTable::Complete(pages) => pages,
         ShortNameTable::Incomplete(detail) => {
@@ -1059,17 +1145,6 @@ fn rebuild_risk_warnings(
             .map_err(|error| error.to_string())?;
         pages.push((record.source_id.as_str(), record.sha256.clone(), bytes));
     }
-
-    let backend =
-        match database {
-            Some(path) => {
-                let tasks = crate::sqlite_tasks::SqliteTasks::new(path);
-                Some(MarketBackend::open(&tasks).map_err(|error| {
-                    format!("database_unavailable: {}: {error}", path.display())
-                })?)
-            }
-            None => None,
-        };
 
     let mut coverage = Vec::new();
     if let Some(backend) = &backend
@@ -1341,12 +1416,24 @@ fn rebuild_security_names(
     verify_only: bool,
     database: Option<&Path>,
 ) -> Result<SecurityNamesOutcome, String> {
-    let selected: Vec<&ManifestRecord> = records
+    let backend = match database {
+        Some(path) => Some(open_database(path)?),
+        None => None,
+    };
+    let candidates: Vec<&ManifestRecord> = records
         .iter()
         .copied()
         .filter(|record| record.source_id == SZSE_SHORT_NAME_SOURCE_ID)
         .collect();
-    let selected = match select_short_name_table(store, &selected)? {
+    // R4 ruling: the run record owns the identity of a whole-table page set;
+    // the manifest alone can only offer "newest answer per page request".
+    let candidates = match member_records(backend.as_ref(), SZSE_SHORT_NAME_SOURCE_ID, &candidates)
+    {
+        Ok(Some(members)) => members,
+        Ok(None) => candidates,
+        Err(detail) => return Ok(SecurityNamesOutcome::snapshot_incomplete(detail)),
+    };
+    let selected = match select_short_name_table(store, &candidates)? {
         ShortNameTable::Complete(pages) => pages,
         ShortNameTable::Incomplete(detail) => {
             return Ok(SecurityNamesOutcome::snapshot_incomplete(detail));
@@ -1379,10 +1466,9 @@ fn rebuild_security_names(
         as_of,
         problems: Vec::new(),
     };
-    let Some(database) = database else {
+    let Some(backend) = backend else {
         return Ok(outcome);
     };
-    let backend = open_database(database)?;
     if verify_only {
         let (stored_rows, stored_coverage) = stored_security_names(&backend)?;
         let stored_rows = stored_intervals(&stored_rows)?;

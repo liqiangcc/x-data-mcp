@@ -317,6 +317,15 @@ for each plan (source_id, window/table):
   `as_of`；复用之后两者会分叉，`--verify-only` 会把“时钟”误报成 drift。这是 A 的第一个必改点。
 - `verified_through` 只在**成功的 refresh run** 里推进，并记进 refresh-run 记录（§5.6）。fresh-init
   后没有记录时，退化为 `min(selected as_of)`（保守），不假装验证过。
+- **Claude 审核裁定（2026-11-01，PR #497）**：
+  - 混合 class 的 item（`risk_warnings` = SZSE 简称整表 + SSE 公告窗口）的 `as_of` 取两者的
+    **`min`**（“一组事实和它最旧的那张表一样旧”），不按主源或窗口取 `max`。
+  - item 级 `verified_through` 取各输入来源的 **`min`**（最弱的确认日），`staleness_days`
+    取 **`max`**；整项只和它最不新鲜的输入一样新鲜。
+  - `today` 用**上海日期**，每次日更只取一次（`crate::calendar::shanghai_today()`，由
+    `derived::run` 传给四个 item），读路径不再出现 `Utc::now().date_naive()`：refresh 用
+    上海日期写 `verified_through`，UTC 在北京时间 00:00–08:00 落后一天，`H` 闸门会多放一天，
+    窗口规划也会和 refresh 不一致。
 - `known_at`：深市简称/ST 行目前是 `NULL`（D-61：表只有变更日期，没有发布时间）。日更时滞后
   ≤1 天还可接受；改成每周全量后，**必须**把 `known_at` 填成“首次包含该行的快照入库日”，否则
   PIT 读取会一直排除这些行（有 `known_at` 过滤时 NULL 行被排除）。coverage 口径写成两句：
@@ -337,7 +346,9 @@ for each plan (source_id, window/table):
   `page_count == metadata.pagecount`、`sum(row_count) == recordcount`、页码连续；不满足 →
   `snapshot_incomplete`，**不发布**，保留上一完整组。另加“末页后再读 p1”的一致性守卫（+1 请求）：
   p1 sha/recordcount 变了 → 说明抓取期间表被改，`window_changed_mid_fetch`，重试一次后放弃。
-- **0 行窗口**：仍按 `not_observed`/`unverified_zero`，绝不当“无事件”。
+- **0 行窗口**：仍按 `not_observed`/`unverified_zero`，绝不当“无事件”。**Claude 审核裁定
+  （2026-11-01，PR #497）**：整表源的 0 行页集判 `unverified_zero`，与获取路径
+  `ZeroPolicy::FailClosed` 同判，不回退成“空表”；上面这条 0 行口径只覆盖窗口源。
 
 ### 5.5 AC-M3-9：重放与选择必须同源
 
@@ -351,7 +362,8 @@ for each plan (source_id, window/table):
 
 另外，重放要能回答“这组快照是完整全量还是 tail 后的混合集”：把 refresh-run 的
 `run_id`/`scope`/`finished_at`/`verified_through` 写进数据集证据；`--verify-only` 只比内容，
-不因 `verified_through` 不同而报 drift。
+不因 `verified_through` 不同而报 drift。**Claude 审核裁定（2026-11-01，PR #497）**：证据里的
+run 标识用数组 `refresh_run_ids`（多源 item 会合并多个 run 的 id），不用单数 `refresh_run_id`。
 
 ### 5.6 刷新任务与状态
 

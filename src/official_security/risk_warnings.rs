@@ -51,15 +51,20 @@
 //! them into a failed item, so the previous version remains readable.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 
+use crate::exchange_source::select::{self, Freshness, FrozenPage, Reader};
 use crate::exchange_source::{
-    AcquireError, AcquisitionPlan, Client, Entry, PagingFormat, RequestError, RunCache,
+    AcquireError, AcquisitionPlan, BasisStatus, BindError, PagingFormat, RequestError, Segment,
     SnapshotBinding, SourceId, TransportError, quarter_segments, validate,
 };
+
+// The *acquiring* form of this adapter is the read path's test oracle (R3: the
+// daily item never sends a request), so only the test build compiles it.
+#[cfg(test)]
+use crate::exchange_source::{Client, Entry, RunCache};
 use crate::security_master::assembly::PendingSource;
 use crate::security_master::risk_warnings::{
     self, CoverageWindow, RiskWarningAction, RiskWarningSet, RiskWarningStatusEvent, SzNameChange,
@@ -67,6 +72,8 @@ use crate::security_master::risk_warnings::{
 use crate::security_master::{Exchange, RiskStatus};
 use crate::source_store::{Policy, SourceStore, StoreError};
 use crate::sqlite_market::backend::MarketBackend;
+#[cfg(test)]
+use std::sync::Arc;
 
 /// Business-field parser version of this adapter. It is registered on the
 /// derived item's outcome evidence, not in PR-2's envelope manifest. v1 → v2:
@@ -165,6 +172,11 @@ pub fn plans() -> Vec<(Kind, AcquisitionPlan)> {
 pub enum Error {
     #[error(transparent)]
     Acquire(#[from] AcquireError),
+    /// The read path (§5.1): a missing, incomplete or overdue frozen set.
+    #[error(transparent)]
+    Select(#[from] select::SelectError),
+    #[error(transparent)]
+    Bind(#[from] BindError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -181,6 +193,8 @@ impl Error {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Acquire(error) => error.code(),
+            Self::Select(error) => error.code(),
+            Self::Bind(error) => error.code(),
             Self::Store(error) => error.code(),
             Self::Transport(error) => error.code(),
             Self::Request(error) => error.code(),
@@ -216,6 +230,10 @@ pub struct Admitted {
     pub sh_multi_doc_bulletins: usize,
     /// Largest document count of one announcement.
     pub sh_max_docs_per_bulletin: usize,
+    /// §5.3 freshness of the selected set: `as_of` is the oldest of the two
+    /// sources (SZ table, SH window set), `verified_through` is the older
+    /// refresh confirmation and `staleness_days` the larger of the two.
+    pub freshness: Freshness,
 }
 
 impl Admitted {
@@ -223,6 +241,7 @@ impl Admitted {
         json!({
             "adapter": "historical ST/risk warnings (D-58)",
             "parser_version": PARSER_VERSION,
+            "freshness": self.freshness.json(),
             "source_bindings": self.bindings,
             "snapshot_ids": self.snapshot_ids,
             "sz_name_change_rows": self.sz_rows,
@@ -267,24 +286,29 @@ impl Admitted {
 
 /// The daily item's answer: an admitted set, or the reason the source is
 /// pending.
+// One item reads one source per run: the enum is not hot, so the large
+// `Admitted` payload stays inline (as `PublishOutcome` does).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunSource {
     Admitted(Admitted),
     Pending(PendingSource),
 }
 
-/// Resolve the source store and fetch client, then acquire.
+/// Resolve the source store, then read the frozen set.
 ///
-/// Under [`Policy::Optional`] not configured is not a fetch failure: the item
+/// Under [`Policy::Optional`] not configured is not a read failure: the item
 /// records `pending_source` and writes zero rows. Under [`Policy::Required`]
 /// (ops entry on a compact backend) a missing or unreadable store fails the item
 /// with `source_store_unconfigured` instead of a silent zero-row success. A
-/// configured store whose fetch fails is a real failure. `cache` is the run-level download
-/// cache (§10.1): the SZSE table is shared with `derived:security_names`
-/// (PR-12), which asks for the same request in the same run.
+/// configured store without a complete, recent frozen set is a real failure.
+///
+/// The daily item sends no request (R3, issue-446 §5.1): the SZ table and the
+/// SH bulletin windows come from `refresh_exchange_sources` runs, and a stale
+/// confirmation fails closed so the previous version stays readable.
 pub fn run_source(
     market: &MarketBackend,
-    cache: Arc<RunCache>,
+    today: NaiveDate,
     policy: Policy,
 ) -> Result<RunSource, Error> {
     let Some(store) = crate::source_store::configured(policy).map_err(|error| Error::Invalid {
@@ -299,14 +323,7 @@ pub fn run_source(
                      (X_DATA_MCP_SOURCE_STORE); historical ST stays pending_source",
         }));
     };
-    let client = Client::helper()?;
-    Ok(RunSource::Admitted(acquire_today(
-        &store,
-        market,
-        &client,
-        Utc::now().date_naive(),
-        cache,
-    )?))
+    Ok(RunSource::Admitted(read_set(&store, market, today)?))
 }
 
 /// One frozen SZSE short-name table: the dated change rows both derived
@@ -318,7 +335,6 @@ pub(crate) struct SzShortNameTable {
     pub snapshot_ids: Vec<String>,
     pub rows: usize,
     pub skipped_codes: usize,
-    pub binding: SnapshotBinding,
 }
 
 /// The `TABKEY` the static `SSGSGMXX` plan declares, read back from the plan
@@ -332,46 +348,309 @@ pub(crate) fn szse_declared_tabkey() -> Option<String> {
         .and_then(|(_, plan)| validate::declared_tabkey(&plan.params).map(str::to_string))
 }
 
+/// The static SZSE plan of the dated name source.
+pub(crate) fn szse_short_name_plan() -> AcquisitionPlan {
+    plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == Kind::SzseShortName)
+        .expect("the SZSE plan is static")
+        .1
+}
+
 /// Acquire, freeze and parse the SZSE `SSGSGMXX`/`tab2` table through PR-2's
 /// entry. This is the only acquisition of the dated name source; a second
 /// consumer must call it rather than open its own request or parser.
 ///
 /// An empty A-share change set is not an answer: the table is a whole-market
 /// snapshot, so the caller decides (both consumers fail closed).
+#[cfg(test)]
 pub(crate) fn acquire_sz_short_name_table(
     entry: &Entry<'_>,
     store: &SourceStore,
+) -> Result<(SnapshotBinding, SzShortNameTable), Error> {
+    let plan = szse_short_name_plan();
+    let outcome = entry.acquire(&plan)?;
+    let ids: Vec<String> = outcome
+        .snapshots
+        .iter()
+        .map(|snapshot| snapshot.snapshot_id().to_string())
+        .collect();
+    let table = parse_sz_table(store, &plan, &ids)?;
+    Ok((outcome.binding, table))
+}
+
+/// Parse the SZSE short-name pages of a selected set (§5.1 read path) with the
+/// same parser the acquisition uses.
+pub(crate) fn read_sz_short_name_table(
+    store: &SourceStore,
+    pages: &[&FrozenPage],
 ) -> Result<SzShortNameTable, Error> {
-    let (_, plan) = plans()
-        .into_iter()
-        .find(|(kind, _)| *kind == Kind::SzseShortName)
-        .expect("the SZSE plan is static");
+    let plan = szse_short_name_plan();
+    let ids: Vec<String> = pages.iter().map(|page| page.snapshot_id.clone()).collect();
+    parse_sz_table(store, &plan, &ids)
+}
+
+fn parse_sz_table(
+    store: &SourceStore,
+    plan: &AcquisitionPlan,
+    snapshot_ids: &[String],
+) -> Result<SzShortNameTable, Error> {
     // The declared tab travels with the request into the parser: a page whose
     // `tab1` is an empty tab must not be read as an empty table.
     let declared_tabkey = validate::declared_tabkey(&plan.params).map(str::to_string);
-    let outcome = entry.acquire(&plan)?;
     let mut changes = Vec::new();
     let mut rows = 0usize;
     let mut skipped_codes = 0usize;
-    let mut snapshot_ids = Vec::new();
-    for snapshot in &outcome.snapshots {
-        let bytes = store.read_verified(snapshot.snapshot_id())?;
+    let mut ids = Vec::new();
+    for snapshot_id in snapshot_ids {
+        let bytes = store.read_verified(snapshot_id)?;
         let (mut parsed, page_rows, page_skipped) =
-            parse_sz_page(&bytes, snapshot.snapshot_id(), declared_tabkey.as_deref())?;
+            parse_sz_page(&bytes, snapshot_id, declared_tabkey.as_deref())?;
         rows += page_rows;
         skipped_codes += page_skipped;
         changes.append(&mut parsed);
-        snapshot_ids.push(snapshot.snapshot_id().to_string());
+        ids.push(snapshot_id.clone());
     }
     Ok(SzShortNameTable {
         changes,
-        snapshot_ids,
+        snapshot_ids: ids,
         rows,
         skipped_codes,
-        binding: outcome.binding,
     })
 }
 
+/// The SH bulletin windows: `2000-01-01` through **today**, quarter aligned.
+/// The window end is a coverage decision, not a clock reading: the whole table
+/// is rebuilt from the selected pages, and each window's own bounds are part of
+/// its fingerprint.
+fn bulletin_windows(today: NaiveDate) -> Result<Vec<Segment>, Error> {
+    let archive_start = NaiveDate::from_ymd_opt(2000, 1, 1).expect("2000-01-01 is valid");
+    quarter_segments(archive_start, today).map_err(Error::Request)
+}
+
+/// Bulletin accumulation shared by the acquisition and the read path: one
+/// parser, one de-duplication rule, one coverage rule.
+#[derive(Debug, Default)]
+struct ShState {
+    rows: usize,
+    ignored: usize,
+    events: Vec<RiskWarningStatusEvent>,
+    // De-duplication is by `(bulletin id, event)`, not by bulletin id alone: a
+    // bulletin may carry more than one event document, and the same bulletin
+    // legitimately matches both title filters (XDM-151 §7).
+    seen_events: BTreeSet<ShEventKey>,
+    // `id → documents`, merged across pages and both title filters; the max of
+    // one id is what says "body + attachments".
+    docs_per_bulletin: BTreeMap<String, usize>,
+    quarter_rows: BTreeMap<(NaiveDate, NaiveDate), usize>,
+    quarter_observed: BTreeSet<(NaiveDate, NaiveDate)>,
+    quarter_failures: BTreeMap<(NaiveDate, NaiveDate), String>,
+    snapshot_ids: BTreeMap<&'static str, Vec<String>>,
+}
+
+impl ShState {
+    fn observed(&mut self, key: (NaiveDate, NaiveDate)) {
+        self.quarter_observed.insert(key);
+    }
+
+    fn unobserved(&mut self, key: (NaiveDate, NaiveDate), reason: &str) {
+        self.quarter_failures.insert(key, reason.to_string());
+    }
+
+    /// Read one frozen page of one title filter in one window.
+    fn add_page(
+        &mut self,
+        label: &'static str,
+        window: Segment,
+        window_bulletins: &mut BTreeSet<String>,
+        snapshot_id: &str,
+        bytes: &[u8],
+    ) -> Result<(), Error> {
+        let key = (window.start(), window.end());
+        let page = parse_sh_page(bytes, snapshot_id)?;
+        // Bulletins already read in *this* window and title filter. The
+        // bulletin index that ignored `beginPage` answered page 1 again with
+        // the page number echoed; when that repeated page also made
+        // `total = rows × pageCount` the count check cannot see it, so a
+        // repeated announcement is the evidence that page N was not page N
+        // (XDM-151 §2/§3).
+        if let Some(repeated) = page
+            .docs_per_bulletin
+            .keys()
+            .find(|id| window_bulletins.contains(*id))
+        {
+            return Err(Error::Invalid {
+                code: "truncated",
+                detail: format!(
+                    "{} window {}..{}: snapshot {snapshot_id} repeats bulletin {repeated} \
+                     already read in this window; the endpoint answered a repeated page \
+                     instead of the requested page",
+                    label,
+                    window.start(),
+                    window.end()
+                ),
+            });
+        }
+        window_bulletins.extend(page.docs_per_bulletin.keys().cloned());
+        self.rows += page.documents;
+        self.ignored += page.ignored;
+        for (id, documents) in &page.docs_per_bulletin {
+            let seen = self.docs_per_bulletin.entry(id.clone()).or_default();
+            *seen = (*seen).max(*documents);
+        }
+        for event in &page.events {
+            if self.seen_events.insert(sh_event_key(event)) {
+                self.events.push(event.clone());
+            }
+        }
+        self.quarter_rows
+            .entry(key)
+            .and_modify(|count| *count += page.events.len())
+            .or_insert(page.events.len());
+        self.snapshot_ids
+            .entry(label)
+            .or_default()
+            .push(snapshot_id.to_string());
+        Ok(())
+    }
+
+    /// One coverage window per planned quarter plus the quarters no title
+    /// filter observed (the gaps every open SH interval is cut at).
+    fn coverage(&self, windows: &[Segment]) -> (Vec<CoverageWindow>, Vec<(NaiveDate, NaiveDate)>) {
+        let mut coverage = Vec::with_capacity(windows.len());
+        let mut gaps = Vec::new();
+        for window in windows {
+            let key = (window.start(), window.end());
+            let observed = self.quarter_observed.contains(&key);
+            let rows = self.quarter_rows.get(&key).copied().unwrap_or(0);
+            if !observed {
+                gaps.push(key);
+            }
+            coverage.push(CoverageWindow {
+                source_kind: "exchange_announcement".into(),
+                exchange: Exchange::Sh,
+                from: window.start(),
+                to: window.end(),
+                observed,
+                rows,
+                reason: if observed {
+                    "at least one title filter returned an indexed window".into()
+                } else {
+                    format!(
+                        "not_observed: {}; no row is read as 'no risk warning'",
+                        self.quarter_failures
+                            .get(&key)
+                            .map_or("no indexed announcement", String::as_str)
+                    )
+                },
+            });
+        }
+        (coverage, gaps)
+    }
+}
+
+fn sz_coverage(changes: &[SzNameChange]) -> Result<Vec<CoverageWindow>, Error> {
+    let (Some(from), Some(to)) = (
+        changes.iter().map(|change| change.day).min(),
+        changes.iter().map(|change| change.day).max(),
+    ) else {
+        return Err(Error::invalid(
+            "the frozen SZSE short-name table has no A-share row",
+        ));
+    };
+    Ok(vec![CoverageWindow {
+        source_kind: "szse_name_history".into(),
+        exchange: Exchange::Sz,
+        from,
+        to,
+        observed: true,
+        rows: changes.len(),
+        reason: "the frozen short-name table is non-empty".into(),
+    }])
+}
+
+/// The domain answer of both paths: SZ intervals plus SH status intervals over
+/// one coverage set. Replay calls this too, so a re-derivation cannot drift
+/// from the daily item.
+fn merge_sets(
+    changes: &[SzNameChange],
+    sz_coverage: Vec<CoverageWindow>,
+    sh_events: Vec<RiskWarningStatusEvent>,
+    sh_coverage: Vec<CoverageWindow>,
+    gaps: &[(NaiveDate, NaiveDate)],
+) -> Result<RiskWarningSet, Error> {
+    let mut set = risk_warnings::assemble_sz(changes, sz_coverage)?;
+    let sh = risk_warnings::assemble_sh(&sh_events, gaps, sh_coverage)?;
+    set.rows.extend(sh.rows);
+    set.coverage.extend(sh.coverage);
+    set.pending_sources.extend(sh.pending_sources);
+    Ok(set)
+}
+
+/// Binding of both sources, sorted by `source_id`. A bulletin source with no
+/// frozen page at all is only acceptable when every window was unobserved: the
+/// item then has no SH evidence to bind and must not claim one.
+fn source_bindings(
+    market: &MarketBackend,
+    sh_events: usize,
+) -> Result<Vec<SnapshotBinding>, Error> {
+    let mut bindings = Vec::new();
+    for source in [SourceId::SzseShortName, SourceId::SseBulletin] {
+        match crate::exchange_source::bind::bind(market, source, BasisStatus::ApprovedSource) {
+            Ok(binding) => bindings.push(binding),
+            Err(BindError::NotFound { .. })
+                if source == SourceId::SseBulletin && sh_events == 0 => {}
+            Err(BindError::NotFound { .. }) if source == SourceId::SseBulletin => {
+                return Err(Error::invalid(
+                    "the SSE bulletin source produced no frozen snapshot; the ST event set \
+                     cannot be bound",
+                ));
+            }
+            Err(error) => return Err(Error::Bind(error)),
+        }
+    }
+    bindings.sort_by(|left, right| left.source_id.cmp(&right.source_id));
+    Ok(bindings)
+}
+
+/// Assemble the daily item's answer from the two parsed halves.
+fn admitted(
+    sz: SzShortNameTable,
+    sh: ShState,
+    windows: &[Segment],
+    market: &MarketBackend,
+    freshness: Freshness,
+) -> Result<Admitted, Error> {
+    let sz_coverage = sz_coverage(&sz.changes)?;
+    let (sh_coverage, gaps) = sh.coverage(windows);
+    let sh_events = sh.events.len();
+    let set = merge_sets(&sz.changes, sz_coverage, sh.events, sh_coverage, &gaps)?;
+    let mut snapshot_ids = sh.snapshot_ids;
+    snapshot_ids.insert("szse_short_name", sz.snapshot_ids);
+    let multi_document_bulletins = sh
+        .docs_per_bulletin
+        .values()
+        .filter(|documents| **documents > 1)
+        .count();
+    let max_docs_per_bulletin = sh.docs_per_bulletin.values().copied().max().unwrap_or(0);
+    let docs_per_bulletin = sh.docs_per_bulletin.len();
+    Ok(Admitted {
+        set,
+        bindings: source_bindings(market, sh_events)?,
+        snapshot_ids,
+        sz_rows: sz.rows,
+        sz_skipped_codes: sz.skipped_codes,
+        sh_rows: sh.rows,
+        sh_events,
+        sh_ignored_rows: sh.ignored,
+        sh_bulletins: docs_per_bulletin,
+        sh_multi_doc_bulletins: multi_document_bulletins,
+        sh_max_docs_per_bulletin: max_docs_per_bulletin,
+        freshness,
+    })
+}
+
+#[cfg(test)]
 fn acquire_today(
     store: &SourceStore,
     market: &MarketBackend,
@@ -382,103 +661,25 @@ fn acquire_today(
     let entry = Entry::new(store, market, client)
         .with_cache(cache)
         .with_today(today);
-    let mut snapshot_ids: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
-    let (sz_kind, _) = plans()
-        .into_iter()
-        .find(|(kind, _)| *kind == Kind::SzseShortName)
-        .expect("the SZSE plan is static");
-    let sz = acquire_sz_short_name_table(&entry, store)?;
-    let sz_changes = sz.changes;
-    let sz_skipped = sz.skipped_codes;
-    let sz_snapshot_rows = sz.rows;
-    snapshot_ids.insert(sz_kind.label(), sz.snapshot_ids);
-    let sz_days: Vec<NaiveDate> = sz_changes.iter().map(|change| change.day).collect();
-    let sz_coverage = match (sz_days.iter().min(), sz_days.iter().max()) {
-        (Some(from), Some(to)) => vec![CoverageWindow {
-            source_kind: "szse_name_history".into(),
-            exchange: Exchange::Sz,
-            from: *from,
-            to: *to,
-            observed: true,
-            rows: sz_changes.len(),
-            reason: "the frozen short-name table is non-empty".into(),
-        }],
-        _ => {
-            return Err(Error::invalid(
-                "the frozen SZSE short-name table has no A-share row",
-            ));
-        }
-    };
-
-    let mut sh_rows = 0usize;
-    let mut sh_ignored = 0usize;
-    let mut sh_events = Vec::new();
-    // De-duplication is by `(bulletin id, event)`, not by bulletin id alone: a
-    // bulletin may carry more than one event document, and the same bulletin
-    // legitimately matches both title filters (XDM-151 §7).
-    let mut seen_events: BTreeSet<ShEventKey> = BTreeSet::new();
-    // `id → documents`, merged across pages and both title filters; the max of
-    // one id is what says "body + attachments".
-    let mut docs_per_bulletin: BTreeMap<String, usize> = BTreeMap::new();
-    let mut quarter_rows: BTreeMap<(NaiveDate, NaiveDate), usize> = BTreeMap::new();
-    let mut quarter_observed: BTreeSet<(NaiveDate, NaiveDate)> = BTreeSet::new();
-    let mut quarter_failures: BTreeMap<(NaiveDate, NaiveDate), String> = BTreeMap::new();
-    let archive_start = NaiveDate::from_ymd_opt(2000, 1, 1).expect("2000-01-01 is valid");
-    let windows = quarter_segments(archive_start, today)?;
+    let (_, sz) = acquire_sz_short_name_table(&entry, store)?;
+    let windows = bulletin_windows(today)?;
+    let mut sh = ShState::default();
     for (kind, plan) in plans().into_iter().filter(|(kind, _)| kind.sse()) {
         for window in &windows {
             let key = (window.start(), window.end());
-            // Bulletins already read in *this* window and title filter. The
-            // bulletin index that ignored `beginPage` answered page 1 again
-            // with the page number echoed; when that repeated page also made
-            // `total = rows × pageCount` the count check cannot see it, so a
-            // repeated announcement is the evidence that page N was not page N
-            // (XDM-151 §2/§3).
             let mut window_bulletins = BTreeSet::new();
             match entry.acquire_window(&plan, *window, "START_DATE", "END_DATE") {
                 Ok(outcome) => {
-                    quarter_observed.insert(key);
+                    sh.observed(key);
                     for snapshot in &outcome.snapshots {
                         let bytes = store.read_verified(snapshot.snapshot_id())?;
-                        let page = parse_sh_page(&bytes, snapshot.snapshot_id())?;
-                        if let Some(repeated) = page
-                            .docs_per_bulletin
-                            .keys()
-                            .find(|id| window_bulletins.contains(*id))
-                        {
-                            return Err(Error::Invalid {
-                                code: "truncated",
-                                detail: format!(
-                                    "{} window {}..{}: snapshot {} repeats bulletin {repeated} \
-                                     already read in this window; the endpoint answered a \
-                                     repeated page instead of the requested page",
-                                    kind.label(),
-                                    window.start(),
-                                    window.end(),
-                                    snapshot.snapshot_id()
-                                ),
-                            });
-                        }
-                        window_bulletins.extend(page.docs_per_bulletin.keys().cloned());
-                        sh_rows += page.documents;
-                        sh_ignored += page.ignored;
-                        for (id, documents) in &page.docs_per_bulletin {
-                            let seen = docs_per_bulletin.entry(id.clone()).or_default();
-                            *seen = (*seen).max(*documents);
-                        }
-                        for event in &page.events {
-                            if seen_events.insert(sh_event_key(event)) {
-                                sh_events.push(event.clone());
-                            }
-                        }
-                        quarter_rows
-                            .entry(key)
-                            .and_modify(|count| *count += page.events.len())
-                            .or_insert(page.events.len());
-                        snapshot_ids
-                            .entry(kind.label())
-                            .or_default()
-                            .push(snapshot.snapshot_id().to_string());
+                        sh.add_page(
+                            kind.label(),
+                            *window,
+                            &mut window_bulletins,
+                            snapshot.snapshot_id(),
+                            &bytes,
+                        )?;
                     }
                 }
                 Err(AcquireError::Invalid {
@@ -491,87 +692,93 @@ fn acquire_today(
                     // source states it as `pageCount=0` with `data: []`
                     // (2000Q1, #446 §5), and PR-2 reports that with the same
                     // `unverified_zero` as a `pageCount=1` empty page.
-                    quarter_failures.insert(key, "unverified_zero".into());
+                    sh.unobserved(key, "unverified_zero");
                 }
                 Err(error) => return Err(Error::Acquire(error)),
             }
         }
     }
-    let mut sh_coverage = Vec::with_capacity(windows.len());
-    let mut gaps = Vec::new();
+    admitted(sz, sh, &windows, market, Freshness::fetched(today))
+}
+
+/// Read the frozen set the daily item derives from (§5.1): no request, no new
+/// snapshot, no manifest line. Both sources come from [`Reader`], which fails
+/// closed on an incomplete set or an overdue confirmation.
+pub(crate) fn read_set(
+    store: &SourceStore,
+    market: &MarketBackend,
+    today: NaiveDate,
+) -> Result<Admitted, Error> {
+    let reader = Reader::new(store, market).with_today(today);
+    let sz_read = reader.table(
+        SourceId::SzseShortName,
+        std::slice::from_ref(&szse_short_name_plan()),
+    )?;
+    let sz = read_sz_short_name_table(store, &sz_read.series_for(&szse_short_name_plan(), "", ""))?;
+    let windows = bulletin_windows(today)?;
+    let sh_plans: Vec<AcquisitionPlan> = plans()
+        .into_iter()
+        .filter(|(kind, _)| kind.sse())
+        .map(|(_, plan)| plan)
+        .collect();
+    let sh_read = reader.windows(
+        SourceId::SseBulletin,
+        &sh_plans,
+        &windows,
+        "START_DATE",
+        "END_DATE",
+    )?;
+    let mut sh = ShState::default();
+    for (kind, plan) in plans().into_iter().filter(|(kind, _)| kind.sse()) {
+        let mut by_window: BTreeMap<(NaiveDate, NaiveDate), Vec<&FrozenPage>> = BTreeMap::new();
+        for page in sh_read.series_for(&plan, "START_DATE", "END_DATE") {
+            let Some(window) = page.segment(SourceId::SseBulletin)? else {
+                continue;
+            };
+            by_window
+                .entry((window.start(), window.end()))
+                .or_default()
+                .push(page);
+        }
+        for ((start, end), pages) in &by_window {
+            let window =
+                Segment::new(*start, *end).map_err(|error| Error::invalid(error.to_string()))?;
+            let mut window_bulletins = BTreeSet::new();
+            for page in pages {
+                let bytes = store.read_verified(&page.snapshot_id)?;
+                sh.add_page(
+                    kind.label(),
+                    window,
+                    &mut window_bulletins,
+                    &page.snapshot_id,
+                    &bytes,
+                )?;
+            }
+            // A quarter the source answered with 0 rows is `not_observed`, not
+            // "no warning": the acquisition learns that from
+            // `AcquireError::Invalid { code: "unverified_zero" }`, the read
+            // path only sees the frozen 0-row page and must agree with it.
+            if pages.iter().map(|page| page.envelope.rows).sum::<usize>() == 0 {
+                sh.unobserved((*start, *end), "unverified_zero");
+            } else {
+                sh.observed((*start, *end));
+            }
+        }
+    }
+    // A quarter no title filter has a frozen page for is unobserved, exactly
+    // like the acquisition's `unverified_zero`: no row is read as "no warning".
+    // A quiet quarter that *was* read keeps its `unverified_zero` reason.
     for window in &windows {
         let key = (window.start(), window.end());
-        let observed = quarter_observed.contains(&key);
-        let rows = quarter_rows.get(&key).copied().unwrap_or(0);
-        if !observed {
-            gaps.push(key);
-        }
-        sh_coverage.push(CoverageWindow {
-            source_kind: "exchange_announcement".into(),
-            exchange: Exchange::Sh,
-            from: window.start(),
-            to: window.end(),
-            observed,
-            rows,
-            reason: if observed {
-                "at least one title filter returned an indexed window".into()
-            } else {
-                format!(
-                    "not_observed: {}; no row is read as 'no risk warning'",
-                    quarter_failures
-                        .get(&key)
-                        .map_or("no indexed announcement", String::as_str)
-                )
-            },
-        });
-    }
-    let mut set = risk_warnings::assemble_sz(&sz_changes, sz_coverage)?;
-    let sh = risk_warnings::assemble_sh(&sh_events, &gaps, sh_coverage)?;
-    set.rows.extend(sh.rows);
-    set.coverage.extend(sh.coverage);
-    set.pending_sources.extend(sh.pending_sources);
-
-    let mut bindings = Vec::new();
-    for source in [SourceId::SzseShortName, SourceId::SseBulletin] {
-        // The SH source may have no frozen page only if every window was
-        // unobserved; in that case there is no binding to register and the
-        // item must not claim an admitted set.
-        match crate::exchange_source::bind::bind(
-            market,
-            source,
-            crate::exchange_source::BasisStatus::ApprovedSource,
-        ) {
-            Ok(binding) => bindings.push(binding),
-            Err(crate::exchange_source::BindError::NotFound { .. })
-                if source == SourceId::SseBulletin && sh_events.is_empty() =>
-            {
-                return Err(Error::invalid(
-                    "the SSE bulletin source produced no frozen snapshot; the ST event set \
-                     cannot be bound",
-                ));
-            }
-            Err(error) => return Err(Error::Acquire(AcquireError::Bind(error))),
+        if !sh.quarter_rows.contains_key(&key) {
+            sh.unobserved(key, "no frozen page");
         }
     }
-    bindings.sort_by(|left, right| left.source_id.cmp(&right.source_id));
-    let multi_document_bulletins = docs_per_bulletin
-        .values()
-        .filter(|documents| **documents > 1)
-        .count();
-    let max_docs_per_bulletin = docs_per_bulletin.values().copied().max().unwrap_or(0);
-    Ok(Admitted {
-        set,
-        bindings,
-        snapshot_ids,
-        sz_rows: sz_snapshot_rows,
-        sz_skipped_codes: sz_skipped,
-        sh_rows,
-        sh_events: sh_events.len(),
-        sh_ignored_rows: sh_ignored,
-        sh_bulletins: docs_per_bulletin.len(),
-        sh_multi_doc_bulletins: multi_document_bulletins,
-        sh_max_docs_per_bulletin: max_docs_per_bulletin,
-    })
+    let freshness = Freshness::combined(
+        &[&sz_read.freshness, &sh_read.freshness],
+        select::AsOf::Oldest,
+    );
+    admitted(sz, sh, &windows, market, freshness)
 }
 
 /// Parse one SZSE page: `(changes, rows_read, skipped_non_a_codes)`.
@@ -949,11 +1156,7 @@ pub fn replay(
             sh_coverage.push(window);
         }
     }
-    let mut set = risk_warnings::assemble_sz(&sz_changes, sz_coverage)?;
-    let sh = risk_warnings::assemble_sh(&sh_events, gaps, sh_coverage)?;
-    set.rows.extend(sh.rows);
-    set.coverage.extend(sh.coverage);
-    Ok(set)
+    merge_sets(&sz_changes, sz_coverage, sh_events, sh_coverage, gaps)
 }
 
 #[cfg(test)]
@@ -1284,12 +1487,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let _env = crate::source_store::PolicyEnv::set(None, false);
         let (_dir, market) = crate::official_security::compact_market_fixture();
-        let error = run_source(
-            &market,
-            std::sync::Arc::new(RunCache::new()),
-            Policy::Required,
-        )
-        .unwrap_err();
+        let error = run_source(&market, day(2026, 11, 1), Policy::Required).unwrap_err();
         assert_eq!(error.code(), "source_store_unconfigured");
         assert!(
             error.to_string().starts_with("source_store_unconfigured: "),

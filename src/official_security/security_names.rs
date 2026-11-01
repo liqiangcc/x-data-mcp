@@ -8,13 +8,15 @@
 //! history.
 //!
 //! ```text
-//! plans() ──► exchange_source::Entry (PR-2) ──► frozen bytes (source store)
-//!                                                     │
-//!              parse (official_security::risk_warnings, one parser)
-//!                                                     ▼
-//!                        assemble_sz (domain rules, D-61)
-//!                                                     │
-//!                          NameSet ──► writer (PR-12)
+//! refresh_exchange_sources (R2) ──► frozen bytes (source store)
+//!                                          │
+//!   read (exchange_source::select, R3) ────┤ no request from the daily item
+//!                                          ▼
+//!         parse (official_security::risk_warnings, one parser)
+//!                                          ▼
+//!                 assemble_sz (domain rules, D-61)
+//!                                          │
+//!                   NameSet ──► writer (PR-12)
 //! ```
 //!
 //! ## Admission (D-61)
@@ -31,11 +33,10 @@
 //! ## Reuse, not a second parser
 //!
 //! The SZSE table, its pagination dialect and its row parser belong to PR-10
-//! (`risk_warnings::acquire_sz_short_name_table` / `parse_sz_page`). This
-//! adapter asks the same entry for the same plan and converts the resulting
-//! [`SzNameChange`](crate::security_master::risk_warnings::SzNameChange) rows;
-//! both derived items share the run-level download cache, so one run freezes
-//! the table once.
+//! (`risk_warnings::read_sz_short_name_table` / `parse_sz_page`). This adapter
+//! reads the same frozen table as the risk-warning item and converts the
+//! resulting [`SzNameChange`](crate::security_master::risk_warnings::SzNameChange)
+//! rows; both derived items derive from the one table a refresh run froze.
 //!
 //! ## 0 rows
 //!
@@ -63,14 +64,12 @@
 //! item.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 
-use crate::exchange_source::{
-    AcquireError, Client, Entry, RequestError, RunCache, SnapshotBinding, TransportError,
-};
+use crate::exchange_source::select::{self, Freshness, Reader};
+use crate::exchange_source::{BasisStatus, BindError, SnapshotBinding, SourceId};
 use crate::official_security::risk_warnings;
 use crate::security_master::Exchange;
 use crate::security_master::assembly::PendingSource;
@@ -107,6 +106,9 @@ pub struct Admitted {
     /// Rows read from the frozen SZSE pages (A-share rows plus skipped ones).
     pub sz_rows: usize,
     pub sz_skipped_codes: usize,
+    /// §5.3 freshness of the selected table: `as_of` is the oldest selected
+    /// page, `verified_through` is the refresh run's confirmation date.
+    pub freshness: Freshness,
 }
 
 impl Admitted {
@@ -114,6 +116,7 @@ impl Admitted {
         json!({
             "adapter": "security name history (S-6, D-61)",
             "parser_version": PARSER_VERSION,
+            "freshness": self.freshness.json(),
             "source_binding": self.binding,
             "snapshot_ids": self.snapshot_ids,
             "sz_change_rows": self.sz_rows,
@@ -147,6 +150,9 @@ impl Admitted {
 
 /// The daily item's answer: an admitted set, or the reason the source is
 /// pending.
+// One item reads one source per run: the enum is not hot, so the large
+// `Admitted` payload stays inline (as `PublishOutcome` does).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunSource {
     Admitted(Admitted),
@@ -156,14 +162,13 @@ pub enum RunSource {
 /// Why the adapter could not produce a settled row set.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The read path (§5.1): a missing, incomplete or overdue frozen set.
     #[error(transparent)]
-    Acquire(#[from] AcquireError),
+    Select(#[from] select::SelectError),
+    #[error(transparent)]
+    Bind(#[from] BindError),
     #[error(transparent)]
     Store(#[from] StoreError),
-    #[error(transparent)]
-    Transport(#[from] TransportError),
-    #[error(transparent)]
-    Request(#[from] RequestError),
     #[error(transparent)]
     Domain(#[from] names::Error),
     /// A failure inside PR-10's frozen SZSE acquisition/parse entry.
@@ -176,10 +181,9 @@ pub enum Error {
 impl Error {
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Acquire(error) => error.code(),
+            Self::Select(error) => error.code(),
+            Self::Bind(error) => error.code(),
             Self::Store(error) => error.code(),
-            Self::Transport(error) => error.code(),
-            Self::Request(error) => error.code(),
             Self::Domain(_) => "source_invalid",
             Self::Szse(error) => error.code(),
             Self::Invalid { code, .. } => code,
@@ -187,17 +191,20 @@ impl Error {
     }
 }
 
-/// Resolve the source store and fetch client, then acquire.
+/// Resolve the source store, then read the frozen short-name table.
 ///
-/// Under `Policy::Optional` not configured is not a fetch failure: the item
+/// Under `Policy::Optional` not configured is not a read failure: the item
 /// records `pending_source` and writes zero rows. Under `Policy::Required` (ops
 /// entry on a compact backend) a missing or unreadable store fails the item with
 /// `source_store_unconfigured` instead of a silent zero-row success. A
-/// configured store whose fetch fails is a real failure. `cache` is the run-level download
-/// cache (§10.1): `derived:risk_warnings` asks for the same SZSE table.
+/// configured store without a complete, recent frozen set is a real failure.
+///
+/// The daily item sends no request (R3, issue-446 §5.1): the table comes from a
+/// `refresh_exchange_sources` run, so a missing page set or a confirmation older
+/// than `H` fails closed and the previous version stays readable.
 pub fn run_source(
     market: &MarketBackend,
-    cache: Arc<RunCache>,
+    today: NaiveDate,
     policy: crate::source_store::Policy,
 ) -> Result<RunSource, Error> {
     let Some(store) = crate::source_store::configured(policy).map_err(|error| Error::Invalid {
@@ -212,36 +219,34 @@ pub fn run_source(
                      (X_DATA_MCP_SOURCE_STORE); name history stays pending_source",
         }));
     };
-    let client = Client::helper()?;
-    Ok(RunSource::Admitted(acquire_today(
-        &store,
-        market,
-        &client,
-        Utc::now().date_naive(),
-        cache,
-    )?))
+    Ok(RunSource::Admitted(read_table(&store, market, today)?))
 }
 
-fn acquire_today(
+/// Read the frozen SZSE table and assemble the name set, without a request.
+pub(crate) fn read_table(
     store: &SourceStore,
     market: &MarketBackend,
-    client: &Client,
     today: NaiveDate,
-    cache: Arc<RunCache>,
 ) -> Result<Admitted, Error> {
-    let entry = Entry::new(store, market, client)
-        .with_cache(cache)
-        .with_today(today);
-    let table = risk_warnings::acquire_sz_short_name_table(&entry, store)?;
+    let plan = risk_warnings::szse_short_name_plan();
+    let read = Reader::new(store, market)
+        .with_today(today)
+        .table(SourceId::SzseShortName, std::slice::from_ref(&plan))?;
+    let table = risk_warnings::read_sz_short_name_table(store, &read.series_for(&plan, "", ""))?;
     let set = assemble_table(&table.changes)?;
     let mut snapshot_ids = BTreeMap::new();
     snapshot_ids.insert("szse_short_name", table.snapshot_ids);
     Ok(Admitted {
         set,
-        binding: table.binding,
+        binding: crate::exchange_source::bind::bind(
+            market,
+            SourceId::SzseShortName,
+            BasisStatus::ApprovedSource,
+        )?,
         snapshot_ids,
         sz_rows: table.rows,
         sz_skipped_codes: table.skipped_codes,
+        freshness: read.freshness,
     })
 }
 
@@ -487,7 +492,7 @@ mod tests {
         let (_dir, market) = crate::official_security::compact_market_fixture();
         let error = run_source(
             &market,
-            std::sync::Arc::new(RunCache::new()),
+            day(2026, 11, 1),
             crate::source_store::Policy::Required,
         )
         .unwrap_err();

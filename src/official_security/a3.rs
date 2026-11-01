@@ -73,15 +73,16 @@
 //! it is named in the evidence, and it never becomes an absence conclusion.
 //! Format, count and truncation failures still fail the whole run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use chrono::NaiveDate;
 use serde_json::{Value, json};
 
+use crate::exchange_source::select::{self, Freshness, Reader};
 use crate::exchange_source::{
-    AcquireError, AcquisitionPlan, Client, Entry, PagingFormat, RunCache, Segment, SnapshotBinding,
-    SnapshotRow, SourceId,
+    AcquireError, AcquisitionPlan, BasisStatus, BindError, Client, Entry, PagingFormat, RunCache,
+    Segment, SnapshotBinding, SnapshotRow, SourceId,
 };
 use crate::security_master::assembly::PendingSource;
 use crate::security_master::suspensions::{
@@ -142,6 +143,11 @@ const STOP_TIME_INTRADAY: [&str; 3] = ["AM", "PM", "930"];
 pub enum A3Error {
     #[error(transparent)]
     Acquire(#[from] AcquireError),
+    /// The read path (§5.1): a missing, incomplete or overdue frozen set.
+    #[error(transparent)]
+    Select(#[from] select::SelectError),
+    #[error(transparent)]
+    Bind(#[from] BindError),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -154,6 +160,8 @@ impl A3Error {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Acquire(error) => error.code(),
+            Self::Select(error) => error.code(),
+            Self::Bind(error) => error.code(),
             Self::Store(error) => error.code(),
             Self::Transport(error) => error.code(),
             Self::Invalid { code, .. } => code,
@@ -265,17 +273,23 @@ pub struct Admitted {
     /// Intervals the source left open (`endStopDate` empty), resolved to this
     /// run's window end.
     pub unclosed_rows: usize,
+    /// §5.3 freshness of the selected set: `as_of` is the newest selected page
+    /// (a window set is as new as its newest window), `verified_through` and
+    /// `staleness_days` are the refresh run's, never the run day's.
+    pub freshness: Freshness,
 }
 
 impl Admitted {
+    #[allow(clippy::too_many_arguments)]
     fn new(
-        today: NaiveDate,
+        as_of: NaiveDate,
         members: &[SecurityLifecycleFact],
         events: Vec<ParsedEvent>,
         mut counters: Counters,
         not_observed_windows: Vec<String>,
         bindings: Vec<SnapshotBinding>,
         snapshot_ids: Vec<String>,
+        freshness: Freshness,
     ) -> Self {
         let (events, unclosed_rows) = merge_overlaps(events, &mut counters);
         let Confirmed {
@@ -291,16 +305,14 @@ impl Admitted {
         counters.outside_window_dropped = outside_window_dropped;
         let windows = counters.windows;
         Self {
-            snapshot: ConfirmedSuspensionSnapshot {
-                as_of: today,
-                facts,
-            },
+            snapshot: ConfirmedSuspensionSnapshot { as_of, facts },
             bindings,
             snapshot_ids,
             not_observed_windows,
             unclosed_rows,
             counters,
             windows,
+            freshness,
         }
     }
 
@@ -316,6 +328,7 @@ impl Admitted {
             "parser_version": PARSER_VERSION,
             "sql_id": SQL_ID,
             "as_of": self.snapshot.as_of.format("%Y-%m-%d").to_string(),
+            "freshness": self.freshness.json(),
             "source_bindings": self.bindings,
             "snapshot_ids": self.snapshot_ids,
             "windows": self.windows,
@@ -339,20 +352,28 @@ impl Admitted {
 
 /// The daily item's answer: an admitted snapshot, or the reason the branch is
 /// still `pending_source`.
+// One item reads one source per run: the enum is not hot, so the large
+// `Admitted` payload stays inline (as `PublishOutcome` does).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunSource {
     Admitted(Admitted),
     Pending(PendingSource),
 }
 
-/// Resolve the deployment's source store and fetch client, then acquire.
+/// Resolve the deployment's source store, then read the frozen window set.
 ///
-/// Under [`Policy::Optional`] not configured is *not* a fetch failure: the item
+/// Under [`Policy::Optional`] not configured is *not* a read failure: the item
 /// keeps the gap-only result and records `pending_source`. Under
 /// [`Policy::Required`] (ops entry on a compact backend) a missing or unreadable
 /// store fails the item with `source_store_unconfigured` instead of leaving a
-/// silent gap-only success. A configured store whose fetch fails is a real
-/// failure and reaches the item as such (§10.1).
+/// silent gap-only success. A configured store without a complete, recent
+/// frozen set is a real failure and reaches the item as such (§10.1).
+///
+/// The daily item sends no request (R3, issue-446 §5.1): the bytes come from a
+/// `refresh_exchange_sources` run. A window missing from the store or a
+/// confirmation older than `H` fails closed, so no `confirmed` row is written
+/// and the previous dataset stays readable.
 pub fn run_source(
     market: &crate::sqlite_market::backend::MarketBackend,
     facts: &[SecurityLifecycleFact],
@@ -373,10 +394,105 @@ pub fn run_source(
                      missing bar stays an unresolved_gap",
         }));
     };
-    let client = Client::helper()?;
-    Ok(RunSource::Admitted(acquire(
-        &store, market, &client, facts, today,
-    )?))
+    Ok(RunSource::Admitted(read(&store, market, facts, today)?))
+}
+
+/// Read the frozen window set of every needed quarter and assemble the same
+/// snapshot [`acquire`] produces, without a request.
+pub fn read(
+    store: &SourceStore,
+    market: &crate::sqlite_market::backend::MarketBackend,
+    facts: &[SecurityLifecycleFact],
+    today: NaiveDate,
+) -> Result<Admitted, A3Error> {
+    let windows = windows(today)?;
+    let reader = Reader::new(store, market).with_today(today);
+    let read = reader.windows(
+        SourceId::SseSuspension,
+        std::slice::from_ref(&plan()),
+        &windows,
+        FROM_PARAM,
+        TO_PARAM,
+    )?;
+    let mut by_window: BTreeMap<(NaiveDate, NaiveDate), Vec<&select::FrozenPage>> = BTreeMap::new();
+    for page in &read.pages {
+        let Some(window) = page.segment(SourceId::SseSuspension)? else {
+            return Err(A3Error::invalid(format!(
+                "{}: the frozen page names no window",
+                page.snapshot_id
+            )));
+        };
+        by_window
+            .entry((window.start(), window.end()))
+            .or_default()
+            .push(page);
+    }
+    // Every quarter the item needs must carry frozen pages. A window nobody
+    // fetched is missing evidence, not "no suspension" (BR-M3-10): the read
+    // fails closed instead of deriving an empty window set from it.
+    let present: BTreeSet<NaiveDate> = by_window.keys().map(|(start, _)| *start).collect();
+    let missing: Vec<String> = windows
+        .iter()
+        .filter(|window| !present.contains(&window.start()))
+        .map(|window| window_label(*window))
+        .collect();
+    if !missing.is_empty() {
+        return Err(A3Error::Select(select::SelectError::Incomplete {
+            detail: format!(
+                "A-3: the source store has no frozen page for {} of {} windows ({}); run \
+                 refresh_exchange_sources full first",
+                missing.len(),
+                windows.len(),
+                missing.join(", ")
+            ),
+        }));
+    }
+    let mut events = Vec::new();
+    let mut counters = Counters::default();
+    let mut not_observed_windows = Vec::new();
+    let mut snapshot_ids = Vec::new();
+    for ((start, end), pages) in &by_window {
+        let window =
+            Segment::new(*start, *end).map_err(|error| A3Error::invalid(error.to_string()))?;
+        if pages.iter().all(|page| page.envelope.rows == 0) {
+            not_observed_windows.push(window_label(window));
+        }
+        for page in pages {
+            let bytes = store.read_verified(&page.snapshot_id)?;
+            let parsed = parse_page(&bytes, window, &page.snapshot_id)?;
+            counters.rows_read += parsed.rows_read;
+            counters.non_a_share_skipped += parsed.non_a_share_skipped;
+            counters.intraday_skipped += parsed.intraday_skipped;
+            counters.unclassified_skipped += parsed.unclassified_skipped;
+            events.extend(parsed.events);
+            snapshot_ids.push(page.snapshot_id.clone());
+        }
+    }
+    counters.windows = by_window.len();
+    let Some(as_of) = read
+        .freshness
+        .as_of
+        .as_deref()
+        .and_then(|text| NaiveDate::parse_from_str(text, "%Y-%m-%d").ok())
+    else {
+        return Err(A3Error::invalid(
+            "the selected suspension set carries no as_of",
+        ));
+    };
+    Ok(Admitted::new(
+        as_of,
+        facts,
+        events,
+        counters,
+        not_observed_windows,
+        vec![crate::exchange_source::bind::bind(
+            market,
+            SourceId::SseSuspension,
+            BasisStatus::ApprovedSource,
+        )?],
+        snapshot_ids,
+        read.freshness,
+    ))
 }
 
 /// Acquire every window, parse every page and assemble the snapshot.
@@ -420,6 +536,7 @@ pub fn acquire(
         not_observed_windows,
         vec![outcome.binding],
         snapshot_ids,
+        Freshness::fetched(today),
     ))
 }
 
@@ -447,6 +564,7 @@ pub fn reparse(
         pages.not_observed_windows,
         Vec::new(),
         pages.snapshot_ids,
+        Freshness::fetched(today),
     ))
 }
 

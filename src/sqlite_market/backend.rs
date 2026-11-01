@@ -572,6 +572,16 @@ impl MarketBackend {
     ) -> Result<Option<String>, Error> {
         self.read(|c| super::refresh_runs::latest_complete_verified_through(c, source_id))
     }
+
+    /// The newest complete successful run of one source plus the pages it
+    /// selected. R3's read path takes a whole-table set from here; a table
+    /// whose pages were split across runs is `snapshot_incomplete`.
+    pub(crate) fn read_latest_complete_refresh_run(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<super::refresh_runs::CompleteRun>, Error> {
+        self.read(|c| super::refresh_runs::latest_complete(c, source_id))
+    }
 }
 
 impl crate::market_storage::MarketRepository for MarketBackend {

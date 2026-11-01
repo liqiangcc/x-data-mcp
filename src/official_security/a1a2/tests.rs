@@ -1203,7 +1203,7 @@ fn an_unconfigured_source_store_keeps_the_branch_pending() {
     if std::env::var_os(SOURCE_STORE_ENV).is_some() {
         return;
     }
-    let run = run_source(&fixture.market, Policy::Optional).unwrap();
+    let run = run_source(&fixture.market, day(2026, 11, 1), Policy::Optional).unwrap();
     match run {
         RunSource::Pending(pending) => {
             assert_eq!(pending.dataset, DATASET_KIND);
@@ -1235,7 +1235,7 @@ fn a_strict_run_without_a_source_store_fails_and_keeps_the_previous_master() {
     let before = read_security_master(&connection).unwrap();
     assert!(!before.is_empty());
 
-    let error = run_source(&fixture.market, Policy::Required).unwrap_err();
+    let error = run_source(&fixture.market, day(2026, 11, 1), Policy::Required).unwrap_err();
     assert_eq!(error.code(), "source_store_unconfigured");
     assert!(
         error.to_string().starts_with("source_store_unconfigured: "),
