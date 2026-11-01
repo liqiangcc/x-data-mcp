@@ -2508,3 +2508,61 @@ fn universe_scope_is_rejected_where_the_design_says_so() {
         error.message
     );
 }
+
+#[test]
+fn refresh_status_of_is_a_read_and_rejects_combined_arguments() {
+    let f = fixture();
+    // `status_of` never starts a run, so it must not silently ignore a mode.
+    let error = f
+        .api
+        .call(
+            "refresh_exchange_sources",
+            json!({"status_of": "refresh-full-1", "mode": "tail"}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error.message.contains("status_of cannot be combined"),
+        "{}",
+        error.message
+    );
+    let error = f
+        .api
+        .call(
+            "refresh_exchange_sources",
+            json!({"status_of": "refresh-full-1"}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "refresh_run_not_found");
+    assert_eq!(
+        error.details.as_deref(),
+        Some(&json!({"run_id": "refresh-full-1"}))
+    );
+    // A start without a mode is refused before touching the store.
+    let error = f
+        .api
+        .call("refresh_exchange_sources", json!({}))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error.message.contains("mode is required"),
+        "{}",
+        error.message
+    );
+
+    // The dry run needs neither a source store nor a run record.
+    let reply = f
+        .api
+        .call(
+            "refresh_exchange_sources",
+            json!({"mode": "full", "dry_run": true}),
+        )
+        .unwrap();
+    assert_eq!(reply["status"], json!("planned"));
+    assert!(reply["run_id"].is_null());
+    assert!(reply["finished_at"].is_string());
+    // The plan count follows the run's date (bulletin quarters), so only that
+    // a full-mode plan was listed is asserted here.
+    assert!(!reply["planned"].as_array().unwrap().is_empty());
+    assert!(f.backend.read_source_refresh_runs().unwrap().is_empty());
+}

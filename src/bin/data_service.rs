@@ -172,6 +172,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // that write (v8 §3.4); research/maint start without touching task state.
     if has_ops {
         backend.tasks().reconcile_plan_run(&run_id)?;
+        // Refresh R2b (issue-446 §5.6): a refresh run left `running` by a
+        // previous process instance can never finish, so it is closed `failed`
+        // (reason `process_restarted`) here, before any socket serves a new
+        // run. Attribution is the owner instance id recorded with the run, not
+        // elapsed time, and `verified_through` is not advanced: an interrupted
+        // run verified nothing. Without this, the single-flight guard would
+        // refuse every later start until someone edited the database.
+        let reclaimed = x_data_mcp::source_refresh::reclaim_abandoned(&backend, &run_id)?;
+        if !reclaimed.is_empty() {
+            eprintln!(
+                "reclaimed {} interrupted refresh run(s) as failed: {}",
+                reclaimed.len(),
+                reclaimed.join(",")
+            );
+        }
     }
     // The accept path only checks in-flight tasks; terminal history is
     // verified here, once per start. Any finding refuses to start.

@@ -3,10 +3,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const DESCRIPTION: &str = "Refresh HTTP exchange sources: `tail` covers the open/previous \
-    quarter, cheap whole tables and page-1 probes; `full` covers every fingerprint. \
-    Records the selected snapshots for replay; never publishes data. `dry_run` only \
-    lists the plan.";
+pub const DESCRIPTION: &str = "Refresh exchange sources from HTTP. `tail` is synchronous \
+    (28 requests); `full` returns `running` at once and continues in the background. One run at \
+    a time; `status_of` reads a run record; `dry_run` lists the plan.";
 
 /// `tail` refreshes the open + previous natural quarter of window sources, the
 /// cheap whole tables, and probes the two large tables; `full` observes every
@@ -30,7 +29,10 @@ impl RefreshMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshRequest {
-    pub mode: RefreshMode,
+    /// Required unless `status_of` is set. `tail` is synchronous and bounded;
+    /// `full` returns `running` at once and continues in the background.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<RefreshMode>,
     /// Empty/absent means every HTTP exchange source. Names are the stable
     /// source ids (`sse_listing`, `szse_short_name`, ...).
     #[serde(default)]
@@ -38,12 +40,26 @@ pub struct RefreshRequest {
     /// List the plan and touch nothing: no HTTP, no store write, no run row.
     #[serde(default)]
     pub dry_run: bool,
+    /// Read one durable run record instead of starting a run; not combined
+    /// with `mode`, `sources` or `dry_run`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_of: Option<String>,
+}
+
+impl RefreshRequest {
+    /// The mode of a request that starts a run.
+    pub fn require_mode(&self) -> Result<RefreshMode, String> {
+        self.mode
+            .ok_or_else(|| "mode is required unless status_of is set".to_string())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum RefreshStatus {
     Planned,
+    /// The durable row is open; a `full` continues in the background.
+    Running,
     Succeeded,
     Failed,
 }
@@ -131,7 +147,9 @@ pub struct RefreshReport {
     pub status: RefreshStatus,
     pub dry_run: bool,
     pub started_at: String,
-    pub finished_at: String,
+    /// Absent while `status` is `running`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
     pub scope: Vec<String>,
     pub requests: u64,
     pub reused: usize,

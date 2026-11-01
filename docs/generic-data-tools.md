@@ -46,7 +46,7 @@ readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capab
 | update_data | 刷新已有数据 | 同上 | WriteAcceptance |
 | plan_market_update | 解析全市场更新计划（v7 起已实现，preview.36 起部署；见 [generic-data-v8](contracts/generic-data-v8.md)） | dataset（market.daily/market.yearly）、contract_version、可选 end_date（缺省为 active generation 内最新交易日，不晚于当日）、end_date? | PlanView（plan_id + 分类计数） |
 | run_market_update | 按 plan 受理单一大任务（v7：已实现，未部署；重算比对 digest，失配 fail-closed） | dataset、contract_version、request_id、target_day、plan_id | PlanRunAcceptance |
-| refresh_exchange_sources | 刷新交易所来源库（v9 代码，未部署；`tail`/`full`，不发布数据集；见 [v9](contracts/generic-data-v9.md)） | mode、可选 sources、可选 dry_run | RefreshReport（run_id、请求/变更/失败计数、revision、run 成员） |
+| refresh_exchange_sources | 刷新交易所来源库（v9 代码，未部署；`tail`/`full`，不发布数据集；见 [v9](contracts/generic-data-v9.md)） | mode（`status_of` 时可省）、可选 sources、可选 dry_run、可选 status_of | `tail`：同步 RefreshReport（run_id、请求/变更/失败计数、revision）；`full`：立即返回 `{run_id,status:"running"}`，用 `{status_of}` 查 run 记录 |
 | backfill_data | 补指定历史范围 | 同上，加类型化 range | WriteAcceptance |
 | republish_data | 授权重发固定基线（#247 纯 enrichment：仅填未晋升字段或新增日期，已知值改/丢 fail-closed；仅显式 items，无 default selection） | 同 update_data | WriteAcceptance |
 | query_data | 读取已发布数据 | dataset、contract_version、selection、filter、version_id?、page_size?、cursor? | DataPage |
