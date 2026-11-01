@@ -88,9 +88,9 @@
 它与行的 `as_of`/`known_at` 是三个字段：`as_of` 说事实/字节到哪一天、`known_at` 说我们
 何时知道、`verified_through` 说这组指纹被确认没变到哪一天。它只为四个 R3 只读 item 的
 数据集定义（`security_master`/`security_names`/`risk_warnings`/`suspensions`）；一个来源没有
-完整 run（fresh init）时**整个字段缺省**，不用页面的 `as_of` 猜。`market.security_names` 的
-读取面目前仍按“没有读取实现”回答 `absent`（`src/sqlite_supply/m2.rs`），所以实际能看到该字段
-的是 `security_master`/`risk_warnings`/`suspensions`。事实只存在于 run 记录
+完整 run（fresh init）时**整个字段缺省**，不用页面的 `as_of` 猜。四个数据集的读取面都已实现
+（`market.security_names` 自 XDM-163 起读取 `security_name_history` 区间，未登记版本仍回答
+`absent`/0 行），所以 `metadata.verified_through` 在四个数据集上都可见。事实只存在于 run 记录
 （§1.2），所以重放或整表重写不会让它消失。
 
 ### 1.4 整表一致性

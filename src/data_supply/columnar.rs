@@ -250,6 +250,7 @@ const METADATA_KEYS: &[&str] = &[
     "adjustment",
     "lineage",
     "index",
+    "verified_through",
 ];
 
 fn metadata_value(metadata: &Metadata, key: &str) -> Value {
@@ -279,6 +280,12 @@ fn metadata_value(metadata: &Metadata, key: &str) -> Value {
             .as_ref()
             .map(|value| serde_json::to_value(value).unwrap())
             .unwrap_or(Value::Null),
+        // Dataset-level confirmation day (XDM-157): a `YYYY-MM-DD` string, the
+        // same spelling as `as_of`/`known_at`, or absent when no complete
+        // refresh run has confirmed the dataset's sources yet.
+        "verified_through" => metadata
+            .verified_through
+            .map_or(Value::Null, |day| json!(day.to_string())),
         _ => Value::Null,
     }
 }
