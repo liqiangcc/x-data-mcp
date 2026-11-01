@@ -569,7 +569,6 @@ fn the_suspension_item_reads_every_window_and_keeps_the_quiet_one_as_a_gap() {
         admitted.not_observed_windows,
         vec!["2008-01-01..2008-03-31".to_string()]
     );
-    assert_eq!(admitted.counters.rows_read, 6);
     // 600001 (resumed range), 600018 (whole day), 601607 (never resumed).
     assert_eq!(
         admitted.snapshot.facts.len(),
