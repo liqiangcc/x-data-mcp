@@ -640,10 +640,14 @@ fn probe_changed(
         // table, not pretending nothing changed.
         return Ok(true);
     };
+    // The comparison page belongs to the same request fingerprint, so the
+    // current plan's declared TABKEY is the selector the old page was read
+    // with. Do not fall back to the short-name table's TABKEY for every SZSE
+    // source: a listing page has no TABKEY and would be misread as corrupt.
     let previous_declared = match previous_format {
         crate::exchange_source::PagingFormat::SzseMetadata
         | crate::exchange_source::PagingFormat::SzseMetadataV2 => {
-            crate::official_security::risk_warnings::szse_declared_tabkey()
+            validate::declared_tabkey(&plan.params).map(str::to_string)
         }
         _ => None,
     };
