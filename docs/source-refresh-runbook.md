@@ -89,7 +89,7 @@ for row in con.execute("""
 | `full`（succeeded） | `source_refresh_runs` 的 `finished_at − started_at` | <60 min |
 
 - **怎么判断“触发”**：只看 `source_refresh_run_sources` 的 `complete` 与 `snapshots`。安静探针
-  是 `complete=0`、`snapshots=1`（不写成员）；触发并成功的整表是 `complete=1`（页集通常也
+  是 `complete=0`、`snapshots=0`（探针页不写成员）；触发并成功的整表是 `complete=1`（页集通常也
   `snapshots>1`）。
   **不要用 `requests`**：它是 `client.attempts()`，包含重试，没触发的探针重试一次也会是 2，
   会被误判成触发。触发但失败时该来源仍 `complete=0`，由 run 的失败列表（或该来源
