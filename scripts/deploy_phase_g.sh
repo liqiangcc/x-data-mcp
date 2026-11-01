@@ -30,8 +30,18 @@
 #     status FAILED_AT_<step>.
 #
 # Socket/db/generation paths are parsed from the installed units'
-# ExecStart lines — the script does not invent a layout. Missing units
-# fail with the required unit bodies printed for one-time ops install.
+# *effective* ExecStart (`systemctl show -p ExecStart --value`, with a
+# `systemctl cat` fallback that replays the drop-in override rule) — the
+# script does not invent a layout. Reading the base unit's first ExecStart=
+# missed the three-socket `exec-start.conf` drop-in (preview.41, XDM-160).
+# Missing units fail with the required unit bodies printed for one-time ops
+# install.
+#
+# Maintenance-window order: stop tunnel -> acquire -> data, start data ->
+# acquire -> tunnel, and confirm each unit's state. The tunnel unit has
+# `Wants=`/`After=x-data-mcp-data.service` plus `Restart=always`
+# (`RestartSec=10`), so a window that stops only data/acquire is undone when
+# systemd restarts the tunnel and pulls data back up ~10s later (XDM-159).
 #
 # The tunnel drop-in that gates tunnel startup on the same readiness probe
 # is carried in the repo as a template (`tunnel_dropin_template()`, printed
@@ -120,6 +130,9 @@ rollback() {
     local outcome="not_needed"
     if [[ "$MUTATING" == "1" ]]; then
         outcome="failed"
+        # Tunnel first: it Wants/After the data unit and Restart=always, so
+        # leaving it up lets its restart start data again ~10s into the window.
+        systemctl stop "$TUNNEL_SERVICE" 2>/dev/null || true
         systemctl stop "$ACQ_SERVICE" 2>/dev/null || true
         systemctl stop "$DATA_SERVICE" 2>/dev/null || true
         if [[ -n "$current_before" ]]; then
@@ -132,7 +145,8 @@ rollback() {
             mv "$DB_ARCHIVED" "$DB" || true
         fi
         if systemctl start "$DATA_SERVICE" 2>/dev/null && systemctl is-active --quiet "$DATA_SERVICE" \
-           && systemctl start "$ACQ_SERVICE" 2>/dev/null && systemctl is-active --quiet "$ACQ_SERVICE"; then
+           && systemctl start "$ACQ_SERVICE" 2>/dev/null && systemctl is-active --quiet "$ACQ_SERVICE" \
+           && systemctl start "$TUNNEL_SERVICE" 2>/dev/null && systemctl is-active --quiet "$TUNNEL_SERVICE"; then
             outcome="restored_previous_release_and_archived_db"
         else
             outcome="failed_services_not_restored"
@@ -153,10 +167,11 @@ fail() {
     exit 1
 }
 
-# `|| true`: a missing unit makes `systemctl cat` exit non-zero, and with
-# pipefail that used to abort the script before the "missing systemd unit(s)"
-# branch below could print the required unit bodies and the tunnel template.
-unit_exec_start() { systemctl cat "$1" 2>/dev/null | sed -nE 's/^ExecStart=//p' | head -1 || true; }
+# Effective ExecStart: `systemctl show` has already merged the drop-ins and
+# applied an `ExecStart=` reset; scripts/systemd_exec_start.py replays the
+# override rule on `systemctl cat` only when `show` is unavailable. Empty when
+# the unit is missing (the branch below then prints the required unit bodies).
+unit_exec_start() { python3 "$SCRIPTS_DIR/systemd_exec_start.py" --unit "$1" 2>/dev/null || true; }
 
 required_units() {
     # Generated multi-socket body (v8 phase 2 §3). The tail keeps the
@@ -301,10 +316,10 @@ DRY-RUN phase-g deploy $TAG
   acquire socket:  $SOCK_ACQ
   plan: fetch+verify tarball -> stage release dir -> archive existing db
         aside (never migrated/deleted) -> task_sqlite init21 fresh db ->
-        stop both services -> switch current -> start both -> readiness
-        probe per data socket + acquire socket -> schema + tools smoke ->
-        report; failures after mutation restore previous release + archived
-        db + old services
+        stop tunnel, acquire then data -> switch current -> start data, acquire
+        then tunnel -> readiness probe per data socket + acquire socket ->
+        schema + tools smoke -> report; failures after mutation restore
+        previous release + archived db + old services
 EOF
     exit 0
 fi
@@ -361,8 +376,14 @@ EXPECTED_SCHEMA=${XDM_EXPECTED_SCHEMA:-$(git -C "$REPO" show "$SHA:src/sqlite_ta
 # --- 3. mutation: archive old db, fresh init21, switch, start -----------------
 step=schema_fresh
 MUTATING=1
+# Tunnel first: it Wants/After the data unit and Restart=always, so a window
+# that stops only data/acquire would see data started again ~10s later.
+systemctl stop "$TUNNEL_SERVICE" || fail "stop $TUNNEL_SERVICE"
 systemctl stop "$ACQ_SERVICE" || fail "stop $ACQ_SERVICE"
 systemctl stop "$DATA_SERVICE" || fail "stop $DATA_SERVICE"
+for unit in "$TUNNEL_SERVICE" "$ACQ_SERVICE" "$DATA_SERVICE"; do
+    if systemctl is-active --quiet "$unit"; then fail "$unit is still active after the stop"; fi
+done
 if [[ -f "$DB" ]]; then
     DB_ARCHIVED="${DB}.v${schema_before}-archived-$(date -u +%Y%m%dT%H%M%SZ)"
     mv "$DB" "$DB_ARCHIVED" || fail "archive existing market db"
@@ -420,6 +441,10 @@ python3 "$SCRIPTS_DIR/wait_service_ready.py" "$SOCK_ACQ" --timeout "$READY_TIMEO
     --expect-tool acquire_generation || fail "acquire socket did not become ready"
 systemctl is-active --quiet "$DATA_SERVICE" || fail "$DATA_SERVICE not active"
 systemctl is-active --quiet "$ACQ_SERVICE" || fail "$ACQ_SERVICE not active"
+# The tunnel goes last, after the data plane answers, so its own readiness gate
+# does not race the cold start; then all three units are confirmed active.
+systemctl start "$TUNNEL_SERVICE" || fail "start $TUNNEL_SERVICE"
+systemctl is-active --quiet "$TUNNEL_SERVICE" || fail "$TUNNEL_SERVICE not active"
 
 # --- 4. smoke: every socket answers MCP tools/list ---------------------------
 step=smoke

@@ -230,7 +230,12 @@ source_store register-generation-member --store <dir> \
 - 该代没有 `tdxhy.cfg` → `generation_has_no_industry_member`，退出码 1（不报 `ok`）。
 - 输出单个 JSON：`origin`（`generation:<sha>`）与每个成员的
   `role`/`source_id`/`member`/`sha256`/`size_bytes`/`added`/`blob_reused`。
-- 只写来源库、不写市场库；仍需停 `data_service`/`acquire`（它们持有来源库读锁）。
+- 只写来源库、不写市场库；仍需把 `x-data-mcp-tunnel`、`x-data-mcp-acquire`、
+  `x-data-mcp-data` 都停掉（data/acquire 持有来源库与市场库的锁）。停的顺序是
+  **tunnel → acquire → data**，起服务反过来 **data → acquire → tunnel**：tunnel 单元带
+  `Wants=`/`After=x-data-mcp-data.service` 和 `Restart=always`（`RestartSec=10`），只停
+  data+acquire 时它会在 10 s 后重启并把 data 拉起来（2026-11-01T10:22Z 实测，正在跑的
+  replay 报 `database service already active`）。停完确认三者 `inactive`，再动手写库。
 
 补登记后跑 `source_store replay --scope generation_facts --db <market db>`，再用
 `source_store exempt` 覆盖该代确未写入的行情派生事实（理由写 `source_bindings=0`）；
