@@ -2,7 +2,7 @@
 
 **状态**：已部署（2026-10-27，v8 最小切换；2026-10-28 preview.38 起单进程服务三个 socket）。
 当前部署为 `generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
-入口（只读研究面）与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 24
+入口（只读研究面）与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 25
 （见 [STATUS](../STATUS.md)）。
 M2 的 6 个解析事实数据集（§4.6 矩阵，`market.security_master` 等）已随 preview.37
 （历史：2026-10-27 部署窗口）在**同一 `capability_revision`** 下上线：M2 不加工具、不升

@@ -9,8 +9,8 @@
 `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，文本模式 `full`，
 market 单版本序列：version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口
 （只读研究面，工具数 5），`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
-acquire socket 注册 10 acquisition tools；隧道仍指 `mcp.sock`。已部署实例为 compact schema 24，代码（main）同为 schema 24
-（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024），注册 24 data tools（三个入口）。部署版本、
+acquire socket 注册 10 acquisition tools；隧道仍指 `mcp.sock`。已部署实例为 compact schema 25，代码（main）同为 schema 25
+（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025），注册 24 data tools（三个入口）。部署版本、
 generation 与数据量等机器事实只在 [STATUS](STATUS.md) 维护，本文不复述。通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据

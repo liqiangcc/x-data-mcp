@@ -53,15 +53,19 @@
 M2 的 6 个解析事实数据集（`market.security_master`、`security_names`、`capital_events`、
 `risk_warnings`、`suspensions`、`price_limit_rules`）随 preview.37 **已部署**（v8 的
 `contract_version:"v2"` 面上可读）。其中 `security_master`/`capital_events`/`suspensions`
-有写入路径；交易所名单与 A 股总股本仍待准入，历史 ST（#308）与简称历史（D-61）写入器
-已实现（代码已合并，未部署），停复牌公告（PR-11）写入器也已实现（代码已合并，未部署），
+有写入路径；交易所名单（A-1/A-2）与 A 股总股本已准入，历史 ST（#308）与简称历史（D-61）
+写入器已随 preview.39 部署（简称 7,344 行；历史 ST 因空季度 `pageCount=0` 失败、仍 0 行），
+停复牌公告（PR-11）写入器同样已部署（`confirmed` 20,420 段），
 涨跌停规则原文已按 D-59 裁决准入；默认/非 ops 形态下来源未接入或未配置的部分在 item
 结果里按 `pending_source` 记录，生产形态（ops + compact）缺 `X_DATA_MCP_SOURCE_STORE`
 时四个同源 item 以稳定码 `source_store_unconfigured` 失败（见 §3.2）。未登记版本返回
 `absent` 与 0 行（见 §3.1「M2 部署状态」）。
-数据库 compact schema：**生产仍是 24，代码是 25（未部署）**。代码里的 schema 25（M3 PR-1，
+数据库 compact schema：**已部署 25（与代码同值，preview.39 的 fresh init 上线）**。schema 25（M3 PR-1，
 [#446](tasks/issue-446-m3-delisted-industry.md) §9）加 5 张来源库索引表与
-`price_limit_rules.min_band_ticks` 可空列。5 张索引表目前为空、无写入路径；`min_band_ticks`
+`price_limit_rules.min_band_ticks` 可空列。5 张索引表已由日更的派生 item 与 `--scope` 重放写入
+（2026-11-01 只读实测：`industry_snapshots` 7 行、`industry_assignments` 5,235 行、
+`exchange_source_snapshots` 1,834 行、`generation_facts` 12 行、`retire_exemptions` 0 行，见
+[STATUS](STATUS.md)「数据」表）；`min_band_ticks`
 已由 `limit-v1` 与规则书写入（见 §4 序号 12），导出 `price_limit_rules` 也因此多一列
 （旧 parquet 无此列为 null）。
 
@@ -340,19 +344,22 @@ T 日股票池 `universe(as_of=T)`。
 范围：退市股行情收录（含未来新增）、ETF 收录（作为 `market.daily` 的证券类型、按序列记价格精度，见 [DECISIONS](decisions.md) D-28）、历史行业（从今天起逐代积累 + 替代来源评估）、停牌完整性、
 首期验收。
 
-**M3 代码状态（main，2026-10-30）**：PR-1a…PR-9 已合并，**均未部署**。已合并的能力：
+**M3 代码状态（main，2026-10-30）**：PR-1a…PR-9 已合并，**均已随 preview.39 部署**
+（2026-10-31 phase-g fresh init；2026-11-01 日更后的库内实测见 [STATUS](STATUS.md)「数据」段）。
+已部署的能力：
 来源库与重放框架（PR-1a）、schema 25 的 5 张索引表（PR-1）、交易所来源共用入口
 （PR-2）、A-1/A-2 上市/终止上市适配器与主表合并（PR-3）、`sh_sz_a_listed_ever`
-首采 scope（PR-4）、日更尾巴与 `derived:delisted_series_check` 不消失检查（PR-5）、
+首采 scope（PR-4，已首采 338 条序列）、日更尾巴与 `derived:delisted_series_check` 不消失检查
+（PR-5）、
 行业快照落库/区间计算/来源库重放（PR-6）、`market.industry_assignments` 行业区间读面
 （PR-7）、退役门禁（PR-8）、`research-snapshot.v3` 导出（PR-9）。落地记录见
 [来源库](source-store.md)、[交易所来源入口](exchange-source.md)、[日更](daily-sync.md)
 与 §5.3；设计拆分见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §14。
-生产实例仍在 schema 24，未做退市股首采、未导入 owner 归档、未配置
-`X_DATA_MCP_SOURCE_STORE`，所以这些能力现在都不提供数据：缺口表状态写
-「已提供（代码已合并，未部署）」或「部分提供（代码已合并，未部署）」。PR-10/11/12
-（历史 ST、停复牌、简称写入器）、私有栈验收与部署不在本批：这三个来源对应的数据集仍写 0 行
-并记 `pending_source`。
+生产实例已是 schema 25，退市股首采已完成，`X_DATA_MCP_SOURCE_STORE` 已配置
+（`source-store.conf`），owner 归档的行业历史也已导入并由 `--scope industry` 重放。
+PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称 7,344 行、停牌 `confirmed`
+20,420 段；只有历史 ST 因空季度 `pageCount=0` 失败、仍 0 行（修复 #485 未部署）。
+下表「未部署」字样保留为编写时的状态，当前事实以 [STATUS](STATUS.md) 为准。
 
 `#446` 侧的 AC-M3-1…10 与本节下面的 AC-M3-1…4 不是同一套：本文件这 4 条是目录视角的
 验收建议；#446 的 10 条实现验收与部署前的私有栈证据清单见 M3 设计 §14.3（每条状态
@@ -588,7 +595,7 @@ T 日股票池 `universe(as_of=T)`。
 - 脚本只读、无写，不是服务/MCP/契约的一部分，也没有稳定性承诺。
 - 需要可复现结论时，必须自己记录 `market_series.version_id` 与目录版本（§5.3 的清单形状）。
 
-### 5.3 研究快照导出（preview.36 起部署，preview.37 起 `research-snapshot.v2`；v3 未部署）
+### 5.3 研究快照导出（preview.36 起部署，preview.37 起 `research-snapshot.v2`，M3 的 `v3` 已上线）
 
 - **随发布包部署**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
   它；`scripts/build_release.sh` 自 #413 固定 `--features export` 并在打包后断言该命令存在），
@@ -597,7 +604,7 @@ T 日股票池 `universe(as_of=T)`。
 - **MCP 仍没有 `export_data`**：v8 只设计、不实现（D-39）；工具数与 `capability_revision` 不因此变化。
 - **只读**：连接用 `SQLITE_OPEN_READ_ONLY` + `PRAGMA query_only=1`，并要求库的 `user_version` 等于
   代码的 `COMPACT_SCHEMA_VERSION`（当前代码 25，即 D-08 的全新 init；`src/research/read.rs:69-78`）。
-- **导出范围**（`research-snapshot.v3`，代码已实现、**未部署**；已部署的仍是 v2）：M1 的 5 个文件
+- **导出范围**（`research-snapshot.v3`，代码已实现并随 M3 部署）：M1 的 5 个文件
   （日线 `daily_raw`/`daily_qfq` + 因子 `factors` + 日历 `calendar` + 指数 `index_daily`）加 M2 的
   7 个文件（`security_master`、`security_names`、`capital_events`、`risk_warnings`、`suspensions`、
   `price_limit_rules`、`universe_intervals`），v3 再加 M3 的 2 个（`industry_assignments`、

@@ -8,8 +8,8 @@ routine update（见[每日同步说明](daily-sync.md)）；MCP 拓扑已在本
 单版本序列：version_id=内容 hex，latest-only）、`research.sock` 的 `research` 入口
 （只读研究面，工具数 5）、`maint.sock` 的 `maint` 入口（仅本机运维使用，不经隧道，工具数 9）；
 acquire socket 提供 10 acquisition tools；隧道仍指 `mcp.sock`。
-已部署实例为 compact schema 24，代码（main）同为 schema 24
-（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024），注册 24 data tools（三个入口）；部署版本、generation
+已部署实例为 compact schema 25，代码（main）同为 schema 25
+（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025），注册 24 data tools（三个入口）；部署版本、generation
 与数据量等机器事实只在 [STATUS](STATUS.md)
 维护，本文不复述。历史记录（preview.29 时期）：2026-09-30 operator-path 曾激活
 generation `2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，

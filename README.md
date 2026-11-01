@@ -49,8 +49,8 @@ latest-only。另有
 `x-data-mcp-acquire`（10 acquisition tools）。隧道仍指 `mcp.sock`（改指 `research.sock` 未做）。
 部署版本、socket 路径、generation 与数据量见
 [docs/STATUS.md](docs/STATUS.md)。
-已部署实例为 fresh compact schema 24；代码（main）同为 schema 24（M1 的 schema 22 +
-M2 PR-1 的 023 + M2 PR-2 的 024），三个入口合计注册 24 个工具（
+已部署实例为 fresh compact schema 25；代码（main）同为 schema 25（M1 的 schema 22 +
+M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025），三个入口合计注册 24 个工具（
 research 5 / ops 15 / maint 9），显式 `task_sqlite init` 的新库按代码的 schema 建立；
 工具数量不是稳定契约，客户端仍须以运行实例 `tools/list` 与
 `get_data_capabilities` 为准。
@@ -61,7 +61,8 @@ M2 已上线：6 个解析事实数据集（`market.security_master`、
 日更 run 的内部 item 维护其中四个全市场数据集；交易所名单、历史 ST（#308）、
 停复牌公告与涨跌停规则原文未接入时按 `pending_source` 记录，读取结果按
 `absent`/0 行如实返回（详见 [STATUS](docs/STATUS.md)「数据」段的 M2 数据集行）。
-同一部署带上 `research-snapshot.v2` 研究快照导出。
+同一部署带上 `research-snapshot.v3` 研究快照导出（M3 的 `industry_assignments`、
+`code_migrations` 两个文件与 `coverage.delisted_series`/`industry_coverage_start` 已可用）。
 
 已实现并在真实 generation 上执行过：immutable generation 生命周期
 （acquire → byte verify → consistency verify → 条件 activate）、
@@ -99,8 +100,8 @@ unsupported-metadata fallback 仍按
 external distribution is not authorized；它不是“服务未运行”的同义词。
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
-（既有库显式 upgrade 的来源版本），已部署实例为 compact schema 21，代码的
-`COMPACT_SCHEMA_VERSION` 为 24（未部署）。Issue/Epic 中的“v15”是交付规划标签，
+（既有库显式 upgrade 的来源版本），已部署实例为 compact schema 25，代码的
+`COMPACT_SCHEMA_VERSION` 也是 25（代码与已部署实例一致，不再领先）。Issue/Epic 中的“v15”是交付规划标签，
 不是 schema 编号。
 
 **历史（2026-09 来源收敛口径，已被 [D-20](docs/decisions.md) 修订）：** 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →
