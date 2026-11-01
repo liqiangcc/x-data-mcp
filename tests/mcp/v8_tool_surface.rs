@@ -145,6 +145,27 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
             budget,
         ));
     }
+    println!("tools/list measured bytes (entry, bytes, budget): {measured:?}");
+    if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
+        use std::io::Write as _;
+        if let Ok(mut summary) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(
+                summary,
+                "\n### tools/list bytes\n\n| entry | bytes | budget | est. tokens (4 B/token) |\n|---|---|---|---|"
+            );
+            for (entry, bytes, budget) in &measured {
+                let _ = writeln!(
+                    summary,
+                    "| {entry} | {bytes} | {budget} | {} |",
+                    bytes.div_ceil(4)
+                );
+            }
+        }
+    }
     let over: Vec<_> = measured
         .iter()
         .filter(|(_, bytes, budget)| bytes > budget)
