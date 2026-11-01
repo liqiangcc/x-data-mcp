@@ -136,10 +136,11 @@ pub fn run_once(
                     runner.run_item(&candidate.task.task_id, &item.spec.item_id)?;
                 }
             }
-            // M3 PR-8: register the market-derived facts this generation now
-            // has (daily series, capital/adjustment events), so the retirement
-            // gate does not depend on a replay having run.
-            market.register_derived_generation_facts(source.manifest_sha256())?;
+            // M3 PR-8 / XDM-161: refresh every generation's market-derived
+            // facts (daily series, capital/adjustment events). This commit may
+            // have re-pointed older generations' rows to this binding, so the
+            // retirement gate's index must follow, not just this generation.
+            market.refresh_derived_generation_facts()?;
             return Ok(Some(control.read_task(&candidate.task.task_id)?));
         }
         return Ok(control.run_selected(candidate, &crate::official_files::BlockedSource)?);
@@ -308,11 +309,11 @@ pub fn run_once(
             &derived,
         )?;
     }
-    // M3 PR-8: same registration as the first-establishment path; an
-    // unchanged-input update still re-registers the same digest.
-    if let Some(session) = session.as_ref() {
-        market.register_derived_generation_facts(session.source().manifest_sha256())?;
-    }
+    // M3 PR-8 / XDM-161: same refresh as the first-establishment path. It
+    // covers every generation, so older summaries shrink when this run moves
+    // their rows to the current binding; an unchanged-input update still
+    // re-registers the same digests (idempotent upsert).
+    market.refresh_derived_generation_facts()?;
     Ok(Some(control.read_task(&candidate.task.task_id)?))
 }
 

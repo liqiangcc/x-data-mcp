@@ -267,20 +267,18 @@ impl MarketBackend {
         }
     }
 
-    /// Register the market-derived facts of one generation from the derived
-    /// tables (the daily run's post-commit hook).
-    pub fn register_derived_generation_facts(&self, generation: &str) -> Result<usize, Error> {
-        let facts = match self {
-            Self::Compact(m) => m.derived_generation_facts(generation)?,
+    /// Recompute and upsert every generation's market-derived facts after a
+    /// successful commit (XDM-161, `#446` §8.2/§8.3). The daily run's writes
+    /// can re-point older generations' rows to the new binding, so refreshing
+    /// only the committed generation would leave stale summaries; the retire
+    /// gate still reads the source store first and this table second.
+    pub fn refresh_derived_generation_facts(&self) -> Result<usize, Error> {
+        match self {
+            Self::Compact(m) => m.refresh_derived_generation_facts(),
             // Legacy (schema 18) has no M3 tables at all, and its daily path
-            // predates the retirement gate; there is nothing to register.
-            Self::Legacy(_) => return Ok(0),
-        };
-        if facts.is_empty() {
-            return Ok(0);
+            // predates the retirement gate; there is nothing to refresh.
+            Self::Legacy(_) => Ok(0),
         }
-        self.record_generation_facts(&facts)?;
-        Ok(facts.len())
     }
 
     /// Replace the whole `generation_facts` index (`replay --scope

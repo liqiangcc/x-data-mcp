@@ -1054,6 +1054,8 @@ maint replay_source_store --scope industry|exchange|generation_facts|risk_warnin
 
 PR-8 的重放实现：`--scope generation_facts` 从清单里 `store_kind=generation_member` 的行业成员重建 `base.zip → industry_snapshot`/`industry_dictionary` 与 `gbbq.zip → industry_dictionary` 三类行（按 manifest sha 选每类最新登记，逐 sha 读回）；给了 `--db` 时再叠加 `source_bindings` 已绑定的 `capital_events`/`adjustment_events`/`daily_series` 派生摘要，没有绑定就不造行。`--verify-only` 重算摘要与库内行比较，`drift` 列出前 20 条 `(generation, role, kind)`。登记时（`generation_facts` 不可再生行）也先按 sha 读回，避免写入无法解释的 `evidence_sha256`。摘要不含 `registered_at`，所以清空表后重放得到同一 `summary`。
 
+XDM-161（方案 A）：`fact_digest` 的语义是「这一代在库里当前仍被引用的派生内容」。旧代的行被日更改挂到新代后，写入侧在每次成功提交后用 `refresh_derived_generation_facts()` 重算并 upsert **所有代**的派生摘要（不只刚提交的那一代）；binding 全部改挂走的代保留事实行、摘要改为空集摘要，重放按同一规则计算，所以提交后无需人工修复，门禁与重放口径不变。详见 [来源库说明](../source-store.md) §4.4。
+
 #### 9.4.4 一次性导入（owner 私有归档）
 
 ```text
