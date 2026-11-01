@@ -799,23 +799,30 @@ impl<'a> Entry<'a> {
         let Some(row) = reuse::latest_candidate(&rows, plan.source_id, fingerprint) else {
             return Ok(None);
         };
-        let Some(age) = reuse::age_days(&row.as_of, self.today) else {
+        // A complete refresh of the source is the only thing that confirms the
+        // fingerprint set has not changed; the selected page's own `as_of` is
+        // only the fallback when no run recorded one.
+        let confirmed = match self.complete_refresh_date(plan.source_id)? {
+            Some(verified_through) => verified_through,
+            None => row.as_of.clone(),
+        };
+        let Some(age) = reuse::age_days(&confirmed, self.today) else {
             return Err(AcquireError::Invalid {
                 code: "source_store_corrupt",
                 detail: format!(
-                    "indexed snapshot {} has an unparseable as_of {:?}",
-                    row.snapshot_id, row.as_of
+                    "{} request fingerprint {} is confirmed through {:?}, which is not a date",
+                    plan.source_id.as_str(),
+                    fingerprint,
+                    confirmed
                 ),
             });
         };
         if age > i64::from(policy.max_age_days) {
             return Err(AcquireError::RefreshOverdue {
                 detail: format!(
-                    "{} request fingerprint {} was last observed on {} ({age} day(s) ago), beyond \
+                    "{} was last completely verified on {confirmed} ({age} day(s) ago), beyond \
                      H={} days; run refresh_exchange_sources full before deriving from it",
                     plan.source_id.as_str(),
-                    fingerprint,
-                    row.as_of,
                     policy.max_age_days
                 ),
             });
@@ -891,10 +898,11 @@ impl<'a> Entry<'a> {
             .count();
         let mut evidence =
             ReuseEvidence::from_pages(self.reuse.for_source(plan.source_id), &selected);
-        // A successful refresh run that observed the source's whole
-        // fingerprint set is the only honest "verified through" date. A
-        // probe/tail run is deliberately not consulted here: otherwise a daily
-        // tail would keep stale whole-table bytes inside H forever (§5.1).
+        // The evidence records the date the `H` gate measured: the newest
+        // complete run's `verified_through` when one exists, and the pages'
+        // own `as_of` fallback otherwise. A page keeps its first observation
+        // date forever, so its date alone cannot say the set was re-confirmed
+        // (XDM-156 ③).
         if let Some(verified) = self.complete_refresh_date(plan.source_id)? {
             evidence.verified_through = Some(verified);
         }

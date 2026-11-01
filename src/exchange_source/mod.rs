@@ -50,6 +50,7 @@ pub mod freeze;
 pub mod index;
 pub mod request;
 pub mod reuse;
+pub mod select;
 pub mod transport;
 pub mod validate;
 
@@ -73,6 +74,7 @@ pub use reuse::{
     Enabled, MAX_AGE_DAYS, REFRESH_PERIOD_DAYS, ReuseClass, ReuseEvidence, ReusePolicy,
     ReusePolicyTable, SelectedBy, SelectedPage, SnapshotSelection, TAIL_CLOSED_QUARTERS, TailScope,
 };
+pub use select::{AsOf, Freshness, FrozenPage, Reader, SelectError, SourceRead};
 pub use transport::{
     Client, Helper, HttpRequest, HttpResponse, RetryPolicy, Transport, TransportError,
 };

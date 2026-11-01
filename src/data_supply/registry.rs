@@ -48,8 +48,8 @@ pub const RESEARCH_TOOLS: &[&str] = &[
     "list_data_versions",
     "list_catalog_facets",
 ];
-/// Ops entry: the daily-sync workflow surface. The strict Skill allowlist is a
-/// subset until the v9 deployment adds `refresh_exchange_sources` to it.
+/// Ops entry: the daily-sync workflow surface. v9 adds `refresh_exchange_sources`
+/// here and to the Skill's strict allowlist, so the two lists match again.
 pub const OPS_TOOLS: &[&str] = &[
     "get_data_capabilities",
     "plan_market_update",

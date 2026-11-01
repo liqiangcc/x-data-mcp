@@ -1261,4 +1261,95 @@ fn wait_for_run(backend: &MarketBackend, run_id: &str) -> super::wire::RefreshRe
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+/// R1's `H` gate reads the refresh run's confirmation date, not the selected
+/// page's own `as_of` (XDM-156 ③). A whole-table page keeps the date it was
+/// first observed with forever — `full` re-fetches identical bytes, so nothing
+/// is re-indexed — and only the run record says the fingerprint set was
+/// confirmed again. Measuring `H` against the page date would fail an item that
+/// a run verified yesterday.
+#[test]
+fn reuse_is_gated_by_the_run_confirmation_not_the_page_date() {
+    use crate::exchange_source::{Enabled, Entry, ReusePolicyTable, SourceId};
+
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+
+    // First full run: the SZSE short-name table is frozen, dated by the
+    // acquisition clock (the freeze date), not by this run's `today`.
+    let first = run(
+        &scenario.store(),
+        &scenario.open(),
+        &client,
+        day(2026, 10, 2),
+        &request(RefreshMode::Full, &["szse_short_name"]),
+        INSTANCE,
+    )
+    .unwrap();
+    assert_eq!(first.status, RefreshStatus::Succeeded);
+    let as_of = {
+        let backend = scenario.open();
+        backend.read_exchange_snapshots().unwrap()[0].as_of.clone()
+    };
+    let page_day = NaiveDate::parse_from_str(&as_of, "%Y-%m-%d").expect("as_of is a day");
+    let confirmed = page_day + chrono::Duration::days(30);
+    let confirmed_text = confirmed.to_string();
+
+    // Second full run, thirty days later: the bytes are unchanged, so the page
+    // keeps its first observation date and only the run is new.
+    let second = run(
+        &scenario.store(),
+        &scenario.open(),
+        &client,
+        confirmed,
+        &request(RefreshMode::Full, &["szse_short_name"]),
+        INSTANCE,
+    )
+    .unwrap();
+    assert_eq!(second.status, RefreshStatus::Succeeded);
+    {
+        let backend = scenario.open();
+        let rows = backend.read_exchange_snapshots().unwrap();
+        assert_eq!(rows.len(), 1, "an unchanged page is not re-indexed");
+        assert_eq!(rows[0].as_of, as_of, "the page keeps its own date");
+    }
+
+    let source_plan = crate::source_refresh::plan::build(
+        RefreshMode::Full,
+        confirmed,
+        &["szse_short_name".to_string()],
+    )
+    .unwrap()
+    .remove(0);
+    let plan = &source_plan.plans[0].1;
+    let reuse = ReusePolicyTable::declared().with_enabled(SourceId::SzseShortName, Enabled::Yes);
+    let calls = fixture.calls();
+    let store = scenario.store();
+
+    // Forty days after the page's own date, ten after the run: reusable. The
+    // page date alone would be beyond H and fail the item.
+    let read_day = confirmed + chrono::Duration::days(10);
+    let backend = scenario.open();
+    let outcome = Entry::new(&store, &backend, &client)
+        .with_today(read_day)
+        .with_reuse_policies(reuse)
+        .acquire(plan)
+        .expect("the run confirmed the table 10 days ago, so the page date does not gate");
+    assert_eq!(outcome.evidence.reused, 1);
+    assert_eq!(
+        outcome.evidence.verified_through.as_deref(),
+        Some(confirmed_text.as_str())
+    );
+    drop(backend);
+
+    // Twenty days after the run: overdue, and the failure names the run's date.
+    let backend = scenario.open();
+    let error = Entry::new(&store, &backend, &client)
+        .with_today(confirmed + chrono::Duration::days(20))
+        .with_reuse_policies(reuse)
+        .acquire(plan)
+        .unwrap_err();
+    assert_eq!(error.code(), "source_refresh_overdue");
+    assert!(error.to_string().contains(&confirmed_text), "{error}");
+    assert_eq!(fixture.calls(), calls, "an overdue page is not refetched");
 }

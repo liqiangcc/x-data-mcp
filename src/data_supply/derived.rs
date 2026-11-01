@@ -27,11 +27,9 @@ use chrono::Utc;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use crate::{
     data_supply::generation::SOURCE_GENERATION_KEY,
-    exchange_source::RunCache,
     index_registry,
     market_storage::{Error, MarketRepository},
     official_market::MaterializeSession,
@@ -159,10 +157,6 @@ pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
     // suspension binding both need the same member facts, so one worker turn
     // parses them at most once (issue-391 §12.1).
     let source_cache: RefCell<Option<DatasetSource>> = RefCell::new(None);
-    // One download cache per run (§10.1): `derived:risk_warnings` and
-    // `derived:security_names` both read the SZSE short-name table, so the
-    // second item re-uses the frozen page instead of fetching it again.
-    let run_cache: RefCell<Option<Arc<RunCache>>> = RefCell::new(None);
     for item in items {
         let Some(mut binding) = market.task_item_binding(task_id, &item.item_id)? else {
             continue;
@@ -208,8 +202,7 @@ pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
             check_delisted_series(market, spec)
         } else {
             match session {
-                Some(_) => execute(ctx, item, revision, &source_cache, &run_cache)
-                    .map_err(ItemFailure::Plain),
+                Some(_) => execute(ctx, item, revision, &source_cache).map_err(ItemFailure::Plain),
                 None => Err(ItemFailure::Plain(Error::Invalid(format!(
                     "{} needs a verified official source; none is installed for this run",
                     item.item_id
@@ -284,14 +277,6 @@ pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
     close(market, task_id, run_id)
 }
 
-/// The run-level download cache (`§10.1`), created on first use and shared by
-/// every item of this run.
-fn run_cache(cell: &RefCell<Option<Arc<RunCache>>>) -> Arc<RunCache> {
-    let mut slot = cell.borrow_mut();
-    slot.get_or_insert_with(|| Arc::new(RunCache::new()))
-        .clone()
-}
-
 /// Why an internal item ended without an outcome. A check item's failure *is* a
 /// finding, so it travels with the evidence of what was found; every other
 /// failure has only a message.
@@ -358,7 +343,6 @@ fn execute(
     item: &ItemSpec,
     expected_task_revision: u64,
     source_cache: &RefCell<Option<DatasetSource>>,
-    run_cache_cell: &RefCell<Option<Arc<RunCache>>>,
 ) -> Result<Value, Error> {
     let RunContext {
         market,
@@ -470,9 +454,10 @@ fn execute(
         // tests, non-ops) and fails with `source_store_unconfigured` under
         // `Policy::Required` (the ops entry of `data_service` on compact), so
         // the production form cannot silently write a zero-exchange master
-        // (`silent-path #446` §14.5). A configured source that cannot be
-        // fetched fails this item; the previously committed master version
-        // stays readable (§6.3) either way.
+        // (`silent-path #446` §14.5). A configured source store without a
+        // complete, recent frozen set fails this item with R3's stable code
+        // (`source_refresh_overdue` / `source_snapshot_not_found`); the
+        // previously committed master version stays readable (§6.3) either way.
         let (exchange, exchange_evidence) =
             match crate::official_security::a1a2::run_source(market, policy).map_err(|error| {
                 Error::Invalid(format!(
@@ -540,23 +525,20 @@ fn execute(
         let source = dataset_source(session, source_cache)?;
         // M3 PR-12 (D-61): the SZSE `SSGSGMXX`/`tab2` table is the only dated
         // name source; SH/BJ are `NOT_AVAILABLE` and write no row. The adapter
-        // shares PR-10's frozen entry and parse, so both items read one frozen
+        // shares PR-10's frozen table and parse, so both items read one frozen
         // table per run. Without the source store the item stays
         // `pending_source` (0 rows) under `Optional` and fails with
-        // `source_store_unconfigured` under `Required`; a configured store that
-        // cannot be fetched fails this item either way and leaves the previous
-        // version readable.
-        match crate::official_security::security_names::run_source(
-            market,
-            run_cache(run_cache_cell),
-            policy,
-        )
-        .map_err(|error| {
-            Error::Invalid(format!(
-                "security name-history source: {}: {error}",
-                error.code()
-            ))
-        })? {
+        // `source_store_unconfigured` under `Required`; a configured store with
+        // no complete, recent frozen table fails this item (R3) and leaves the
+        // previous version readable.
+        match crate::official_security::security_names::run_source(market, policy).map_err(
+            |error| {
+                Error::Invalid(format!(
+                    "security name-history source: {}: {error}",
+                    error.code()
+                ))
+            },
+        )? {
             crate::official_security::security_names::RunSource::Pending(pending) => {
                 let pending = vec![pending];
                 return Ok(json!({
@@ -597,17 +579,14 @@ fn execute(
     if item.item_id == task_control::derived::RISK_WARNINGS {
         let started = std::time::Instant::now();
         let source = dataset_source(session, source_cache)?;
-        match crate::official_security::risk_warnings::run_source(
-            market,
-            run_cache(run_cache_cell),
-            policy,
-        )
-        .map_err(|error| {
-            Error::Invalid(format!(
-                "historical ST/risk-warning source: {}: {error}",
-                error.code()
-            ))
-        })? {
+        match crate::official_security::risk_warnings::run_source(market, policy).map_err(
+            |error| {
+                Error::Invalid(format!(
+                    "historical ST/risk-warning source: {}: {error}",
+                    error.code()
+                ))
+            },
+        )? {
             crate::official_security::risk_warnings::RunSource::Pending(pending) => {
                 let pending = vec![pending];
                 return Ok(json!({
@@ -655,8 +634,8 @@ fn execute(
         // Without the source store the branch stays `pending_source` (gap-only,
         // the pre-PR-11 behaviour) under `Optional` and fails with
         // `source_store_unconfigured` under `Required`; a configured source
-        // that cannot be fetched fails this item so no `confirmed` row is
-        // written (§6.3/§10.1).
+        // store with no complete, recent frozen window set fails this item (R3)
+        // so no `confirmed` row is written (§6.3/§10.1).
         let (seam, exchange_evidence) = match crate::official_security::a3::run_source(
             market,
             &inputs.intervals,

@@ -54,6 +54,87 @@ pub(crate) fn compact_market_fixture() -> (
     (dir, market)
 }
 
+/// Record a complete refresh run over the pages a test has frozen (R3,
+/// issue-446 §5.4): the run record is what a whole-table page set belongs to
+/// and what `verified_through` comes from.
+#[cfg(test)]
+pub(crate) fn record_test_refresh_run(
+    market: &crate::sqlite_market::backend::MarketBackend,
+    source: crate::exchange_source::SourceId,
+    verified_through: &str,
+    finished_at: &str,
+) -> String {
+    use crate::sqlite_market::refresh_runs::{RunFinish, RunMemberRow, RunSourceRow, RunStart};
+
+    let run_id = format!(
+        "refresh-test-{}-{}",
+        source.as_str(),
+        crate::exchange_source::freeze::now()
+    );
+    let members: Vec<RunMemberRow> = market
+        .read_exchange_snapshots()
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.source_id == source.as_str())
+        .map(|row| RunMemberRow {
+            run_id: run_id.clone(),
+            source_id: row.source_id.clone(),
+            request_fingerprint: row.request_fingerprint.clone(),
+            snapshot_id: row.snapshot_id.clone(),
+            page_count: row.page_count,
+            row_count: row.row_count,
+            as_of: row.as_of.clone(),
+            fetched_at: row.fetched_at.clone(),
+            changed: false,
+            window_start: None,
+            window_end: None,
+        })
+        .collect();
+    market
+        .begin_source_refresh_run(&RunStart {
+            run_id: run_id.clone(),
+            mode: "full".to_string(),
+            scope: source.as_str().to_string(),
+            started_at: finished_at.to_string(),
+            task_id: None,
+        })
+        .unwrap();
+    market
+        .finish_source_refresh_run(
+            &run_id,
+            &RunFinish {
+                status: "succeeded".to_string(),
+                finished_at: finished_at.to_string(),
+                requests: members.len() as u64,
+                reused: 0,
+                changed: 0,
+                failed_windows: 0,
+                unobserved_windows: 0,
+                verified_through: Some(verified_through.to_string()),
+                detail: None,
+            },
+            &[RunSourceRow {
+                run_id: run_id.clone(),
+                source_id: source.as_str().to_string(),
+                class: crate::exchange_source::ReusePolicyTable::declared()
+                    .for_source(source)
+                    .class
+                    .as_str()
+                    .to_string(),
+                complete: true,
+                requests: members.len() as u64,
+                snapshots: members.len() as u64,
+                changed: 0,
+                unobserved_windows: 0,
+                failed_windows: 0,
+                verified_through: Some(verified_through.to_string()),
+            }],
+            &members,
+        )
+        .unwrap();
+    run_id
+}
+
 /// One anchored field: name, dBase type byte, length, decimals (#399 A-5).
 #[derive(Debug, Clone, Copy)]
 struct FieldAnchor {
@@ -1042,5 +1123,7 @@ fn event_day(date_raw: u32) -> Option<NaiveDate> {
     )
 }
 
+#[cfg(test)]
+mod read_tests;
 #[cfg(test)]
 mod tests;

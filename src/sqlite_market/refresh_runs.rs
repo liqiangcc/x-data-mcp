@@ -428,48 +428,64 @@ pub(crate) fn read_members(c: &Connection, run_id: &str) -> Result<Vec<RunMember
         )
         .map_err(storage)?;
     let rows = statement
-        .query_map(params![run_id], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, Option<i64>>(4)?,
-                r.get::<_, i64>(5)?,
-                r.get::<_, String>(6)?,
-                r.get::<_, String>(7)?,
-                r.get::<_, i64>(8)?,
-                r.get::<_, Option<String>>(9)?,
-                r.get::<_, Option<String>>(10)?,
-            ))
-        })
+        .query_map(params![run_id], member_row)
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;
-    rows.into_iter()
-        .map(|raw| {
-            Ok(RunMemberRow {
-                run_id: raw.0,
-                source_id: raw.1,
-                request_fingerprint: raw.2,
-                snapshot_id: raw.3,
-                page_count: match raw.4 {
-                    Some(page_count) => Some(u32::try_from(page_count).map_err(|_| {
-                        integrity(format!("refresh member page_count {page_count} is invalid"))
-                    })?),
-                    None => None,
-                },
-                row_count: usize::try_from(raw.5).map_err(|_| {
-                    integrity(format!("refresh member row_count {} is invalid", raw.5))
-                })?,
-                as_of: raw.6,
-                fetched_at: raw.7,
-                changed: raw.8 != 0,
-                window_start: raw.9,
-                window_end: raw.10,
-            })
-        })
-        .collect()
+    rows.into_iter().map(member_from_raw).collect()
+}
+
+/// Raw column tuple of one `source_refresh_run_members` row.
+type RawMember = (
+    String,
+    String,
+    String,
+    String,
+    Option<i64>,
+    i64,
+    String,
+    String,
+    i64,
+    Option<String>,
+    Option<String>,
+);
+
+fn member_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawMember> {
+    Ok((
+        r.get(0)?,
+        r.get(1)?,
+        r.get(2)?,
+        r.get(3)?,
+        r.get(4)?,
+        r.get(5)?,
+        r.get(6)?,
+        r.get(7)?,
+        r.get(8)?,
+        r.get(9)?,
+        r.get(10)?,
+    ))
+}
+
+fn member_from_raw(raw: RawMember) -> Result<RunMemberRow, Error> {
+    Ok(RunMemberRow {
+        run_id: raw.0,
+        source_id: raw.1,
+        request_fingerprint: raw.2,
+        snapshot_id: raw.3,
+        page_count: match raw.4 {
+            Some(page_count) => Some(u32::try_from(page_count).map_err(|_| {
+                integrity(format!("refresh member page_count {page_count} is invalid"))
+            })?),
+            None => None,
+        },
+        row_count: usize::try_from(raw.5)
+            .map_err(|_| integrity(format!("refresh member row_count {} is invalid", raw.5)))?,
+        as_of: raw.6,
+        fetched_at: raw.7,
+        changed: raw.8 != 0,
+        window_start: raw.9,
+        window_end: raw.10,
+    })
 }
 
 /// The newest date through which a *complete* successful run has confirmed
@@ -480,18 +496,72 @@ pub(crate) fn latest_complete_verified_through(
     c: &Connection,
     source_id: &str,
 ) -> Result<Option<String>, Error> {
-    c.query_row(
-        "SELECT s.verified_through \
-         FROM source_refresh_run_sources s \
-         JOIN source_refresh_runs r ON r.run_id = s.run_id \
-         WHERE s.source_id=?1 AND s.complete=1 AND r.status='succeeded' \
-           AND s.verified_through IS NOT NULL \
-         ORDER BY r.finished_at DESC, r.run_id DESC LIMIT 1",
-        params![source_id],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(storage)
+    Ok(latest_complete(c, source_id)?.map(|run| run.verified_through))
+}
+
+/// One complete successful refresh of one source: the run identity R3 puts in a
+/// derived item's evidence, the date the H gate compares, and the member pages
+/// the run validated as one set (issue-446 §5.4/§5.5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompleteRun {
+    pub run_id: String,
+    pub verified_through: String,
+    pub members: Vec<RunMemberRow>,
+}
+
+/// The newest complete successful run of `source_id`, with the snapshot pages
+/// it selected.
+///
+/// A whole-table set is only complete as *one acquisition*: the index cannot
+/// say which page 1 belongs with which page 2, so the run record is the owner
+/// of that identity (§5.4). Rows are returned in the run's own order.
+pub(crate) fn latest_complete(
+    c: &Connection,
+    source_id: &str,
+) -> Result<Option<CompleteRun>, Error> {
+    let run = c
+        .query_row(
+            "SELECT r.run_id, s.verified_through \
+             FROM source_refresh_run_sources s \
+             JOIN source_refresh_runs r ON r.run_id = s.run_id \
+             WHERE s.source_id=?1 AND s.complete=1 AND r.status='succeeded' \
+               AND s.verified_through IS NOT NULL \
+             ORDER BY r.finished_at DESC, r.run_id DESC LIMIT 1",
+            params![source_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(storage)?;
+    let Some((run_id, verified_through)) = run else {
+        return Ok(None);
+    };
+    let members = read_members_for_source(c, &run_id, source_id)?;
+    Ok(Some(CompleteRun {
+        run_id,
+        verified_through,
+        members,
+    }))
+}
+
+pub(crate) fn read_members_for_source(
+    c: &Connection,
+    run_id: &str,
+    source_id: &str,
+) -> Result<Vec<RunMemberRow>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT run_id,source_id,request_fingerprint,snapshot_id,page_count,\
+                    row_count,as_of,fetched_at,changed,window_start,window_end \
+             FROM source_refresh_run_members WHERE run_id=?1 AND source_id=?2 \
+             ORDER BY request_fingerprint",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(params![run_id, source_id], member_row)
+        .map_err(storage)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(storage)?;
+    rows.into_iter().map(member_from_raw).collect()
 }
 
 fn i64(value: u64) -> Result<i64, Error> {
