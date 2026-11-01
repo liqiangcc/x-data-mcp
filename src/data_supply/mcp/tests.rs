@@ -2481,7 +2481,7 @@ fn security_names_read_face_serves_intervals_and_filters_known_at() {
 
     let page = query_security_names(&f, None);
     assert_eq!(page["layout"], "table");
-    assert_eq!(page["row_count"], 3);
+    assert_eq!(page["row_count"], 3, "{page}");
     assert_eq!(
         page["entities"],
         json!(["sz.000001", "sz.000001", "sz.000002"])
