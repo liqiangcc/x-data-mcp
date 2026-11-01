@@ -71,6 +71,11 @@ jobs:
         run: cargo nextest run --locked --no-fail-fast
         env:
           TMPDIR: /dev/shm
+      - name: tools/list measured bytes (printed, not only on failure)
+        if: steps.scope.outputs.rust == 'true'
+        run: cargo test --locked --test mcp v8_tool_surface::tools_list_stays_within_entry_budgets_without_output_schema -- --nocapture
+        env:
+          TMPDIR: /dev/shm
       - name: Doc tests (nextest does not run them)
         if: steps.scope.outputs.rust == 'true'
         run: cargo test --doc --locked

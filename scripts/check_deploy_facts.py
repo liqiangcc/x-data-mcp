@@ -17,11 +17,9 @@ checks:
    set is imported from check_current_facts.py so the two linters cannot
    drift apart.
 4. The STATUS 服务 table must declare the deployed data entry set and each
-   entry's tool count. The deployed set is the deployment fact from
-   check_current_facts.DEPLOYED_DATA_ENTRIES (`ops` until the Ops-B deploy-day
-   commit, v8 phase 2 §9.6); the per-entry counts come from the source
-   allowlists, so one unit with several sockets/entries can be stated without
-   duplicating numbers in this linter.
+   entry's deployed tool count. The deployed set and counts are deployment
+   facts from check_current_facts.DEPLOYED_DATA_ENTRIES /
+   EXPECTED_DEPLOYED_ENTRY_TOOLS, kept separate from the code allowlists.
 
 Exit 0 with only warnings; exit 1 on errors.
 """
@@ -33,8 +31,8 @@ from pathlib import Path
 from check_current_facts import (
     CURRENT_DOCS,
     DEPLOYED_DATA_ENTRIES,
+    EXPECTED_DEPLOYED_ENTRY_TOOLS,
     SERVICE_ENTRY_SPEC,
-    entry_tool_counts,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -153,7 +151,7 @@ def check_deployed_entries(
     the pre-phase-2 single socket and therefore the implicit `ops` entry.
     """
     errors: list[str] = []
-    counts = counts if counts is not None else entry_tool_counts()
+    counts = counts if counts is not None else EXPECTED_DEPLOYED_ENTRY_TOOLS
     rows: list[tuple[int, list[str], list[int]]] = []
     for lineno, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()

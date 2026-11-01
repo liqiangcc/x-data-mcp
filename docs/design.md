@@ -74,9 +74,9 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 | 能力 | 基线事实 | 目标 / 依赖 |
 |---|---|---|
-| MCP | 双 server：data socket 单进程三入口——`ops` 15 data tools（编排）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道仍指 `ops` 的 `mcp.sock` | 稳定契约与真实客户端验收 |
+| MCP | 双 server：data socket 单进程三入口——`ops` 15 data tools（部署；代码 allowlist 16，未部署）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道仍指 `ops` 的 `mcp.sock` | 稳定契约与真实客户端验收 |
 | 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
-| 行情 | SQLite fresh compact schema 24（代码与生产实例一致）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
+| 行情 | SQLite fresh compact schema 25（代码 schema 26，未部署）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
 | 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |
 | QFQ / GBBQ | #54 契约实现并经 Final Gate 验收 | 新 generation 重审计 |
 | 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |
@@ -236,10 +236,10 @@ SQLite 原子受理、发布及文件先落盘规则由专项设计定义。一�
 `run_worker_once` 仅为 operator/debug 能力，并通过同一 WorkerGate 与后台执行互斥，正常 AI 编排不得调用。
 
 **工具面按使用者分入口（v8，未部署）**：同一份读取核心上有三个入口——研究（只读 5 个工具）、
-编排（日更 15 个工具）、运维/取证（9 个工具），各自一个本机 socket；隧道只暴露研究入口，
+编排（日更：部署 15 个、代码 16 个工具）、运维/取证（9 个工具），各自一个本机 socket；隧道只暴露研究入口，
 `mcp.sock` 保留为编排入口。入口是 Adapter 的过滤，不是权限系统，也不拥有业务规则：同一工具在
 不同入口的输出逐字节相同；入口外工具报“未知工具”而不是“禁止”，不泄露存在性。
-契约与部署边界见 [generic-data-v8](contracts/generic-data-v8.md)、[切换清单](contracts/v8-switch-checklist.md)。
+契约与部署边界见 [generic-data-v8](contracts/generic-data-v8.md)、[v9 增量](contracts/generic-data-v9.md)、[切换清单](contracts/v8-switch-checklist.md)。
 
 旧 stdio 原型仍是同步逐行、EOF 结束的开发入口；耗时手动 worker 调用会阻塞同连接，
 不能依靠同连接 cancel 实现并发取消。当前受保护本机 IPC 长期服务不等于远程认证已交付；若使用远程 MCP，

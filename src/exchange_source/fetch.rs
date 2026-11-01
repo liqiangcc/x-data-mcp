@@ -394,7 +394,7 @@ impl<'a> Entry<'a> {
 
     /// Acquire one unpaginated window (or the source's whole current page set).
     pub fn acquire(&self, plan: &AcquisitionPlan) -> Result<AcquisitionOutcome, AcquireError> {
-        let (pages, snapshots, selected) = self.acquire_pages(plan, None, "", "")?;
+        let (pages, snapshots, selected) = self.acquire_pages(plan, None, "", "", None)?;
         self.finish(plan, pages, snapshots, selected)
     }
 
@@ -408,7 +408,19 @@ impl<'a> Entry<'a> {
         to_param: &str,
     ) -> Result<AcquisitionOutcome, AcquireError> {
         let (pages, snapshots, selected) =
-            self.acquire_pages(plan, Some(window), from_param, to_param)?;
+            self.acquire_pages(plan, Some(window), from_param, to_param, None)?;
+        self.finish(plan, pages, snapshots, selected)
+    }
+
+    /// Fetch exactly page 1 of a whole-table plan (the daily change probe,
+    /// §5.1 table class). It freezes and indexes the page like any other
+    /// acquisition but does not require the rest of the table to arrive: the
+    /// caller decides whether the probe changed and a full acquisition follows.
+    pub fn probe_first_page(
+        &self,
+        plan: &AcquisitionPlan,
+    ) -> Result<AcquisitionOutcome, AcquireError> {
+        let (pages, snapshots, selected) = self.acquire_pages(plan, None, "", "", Some(1))?;
         self.finish(plan, pages, snapshots, selected)
     }
 
@@ -463,13 +475,16 @@ impl<'a> Entry<'a> {
             .filter(|snapshot| snapshot.reused())
             .count();
         let binding = bind::bind(self.backend, plan.source_id, plan.required_basis)?;
-        let evidence = ReuseEvidence::merged(
+        let mut evidence = ReuseEvidence::merged(
             self.reuse.for_source(plan.source_id),
             &succeeded
                 .iter()
                 .map(|result| result.evidence.clone())
                 .collect::<Vec<_>>(),
         );
+        if let Some(verified) = self.complete_refresh_date(plan.source_id)? {
+            evidence.verified_through = Some(verified);
+        }
         Ok(WindowOutcome {
             source_id: plan.source_id.as_str(),
             results: succeeded,
@@ -495,6 +510,7 @@ impl<'a> Entry<'a> {
         window: Option<Segment>,
         from_param: &str,
         to_param: &str,
+        only_page: Option<u32>,
     ) -> Result<(PageSet, Vec<FrozenSnapshot>, Vec<SelectedPage>), AcquireError> {
         if !plan.basis_status.admits(plan.required_basis) {
             return Err(AcquireError::NotAdmitted {
@@ -651,7 +667,7 @@ impl<'a> Entry<'a> {
                 Some(_) => {}
             }
             entries.push(PageEntry { state, envelope });
-            if page >= page_count.unwrap_or(0) {
+            if only_page.is_some() || page >= page_count.unwrap_or(0) {
                 break;
             }
             page += 1;
@@ -665,6 +681,29 @@ impl<'a> Entry<'a> {
         }
         let envelopes: Vec<PageEnvelope> =
             entries.into_iter().map(|entry| entry.envelope).collect();
+        if only_page.is_some() {
+            // A probe sees only page 1. The page's envelope still names the
+            // table's page count; validating it as a complete set would reject
+            // every multi-page table, which is exactly what a probe must not
+            // do. Row/page coherence is checked by the caller against the
+            // frozen bytes it selected.
+            let first = envelopes
+                .first()
+                .cloned()
+                .ok_or_else(|| AcquireError::Invalid {
+                    code: "source_invalid",
+                    detail: "the probe produced no page".to_string(),
+                })?;
+            return Ok((
+                PageSet {
+                    pages: envelopes,
+                    row_count: first.rows,
+                    page_count: first.page_count,
+                },
+                snapshots,
+                selected,
+            ));
+        }
         let set = validate::validate_pages(&envelopes, empty_policy, plan.zero_policy).map_err(
             |error| AcquireError::Invalid {
                 code: error.code(),
@@ -821,6 +860,20 @@ impl<'a> Entry<'a> {
         Ok(Some((PageState::Reused { row: row.clone() }, envelope)))
     }
 
+    /// Latest complete successful refresh date for `plan`'s source, if reuse
+    /// is on for it. With reuse off the R1 fallback (`oldest as_of`) stays.
+    fn complete_refresh_date(
+        &self,
+        source_id: crate::exchange_source::SourceId,
+    ) -> Result<Option<String>, AcquireError> {
+        if !self.reuse.for_source(source_id).enabled.is_enabled() {
+            return Ok(None);
+        }
+        Ok(self
+            .backend
+            .latest_complete_verified_through(source_id.as_str())?)
+    }
+
     fn finish(
         &self,
         plan: &AcquisitionPlan,
@@ -836,7 +889,15 @@ impl<'a> Entry<'a> {
             .iter()
             .filter(|snapshot| snapshot.reused())
             .count();
-        let evidence = ReuseEvidence::from_pages(self.reuse.for_source(plan.source_id), &selected);
+        let mut evidence =
+            ReuseEvidence::from_pages(self.reuse.for_source(plan.source_id), &selected);
+        // A successful refresh run that observed the source's whole
+        // fingerprint set is the only honest "verified through" date. A
+        // probe/tail run is deliberately not consulted here: otherwise a daily
+        // tail would keep stale whole-table bytes inside H forever (§5.1).
+        if let Some(verified) = self.complete_refresh_date(plan.source_id)? {
+            evidence.verified_through = Some(verified);
+        }
         Ok(AcquisitionOutcome {
             source_id: plan.source_id.as_str(),
             snapshots,

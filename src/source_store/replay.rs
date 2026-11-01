@@ -9,7 +9,8 @@
 //!   the envelope parser version the manifest recorded, and
 //!   `exchange_source_snapshots` is replaced from the store without any HTTP
 //!   request. `--verify-only` recomputes the same summary and compares it with
-//!   the stored rows (`match` / `drift` + the first 20 differing snapshot ids).
+//!   the stored rows (`match` / `drift` + the first 20 differing
+//!   `(snapshot id, request fingerprint)` pairs).
 //! - `industry` (M3 PR-6): `tdxhy.cfg` snapshots and their `incon.dat`
 //!   dictionary are re-parsed with the parser version the manifest recorded,
 //!   and the intervals are recomputed (§5.1/§5.2, deterministic); the table set

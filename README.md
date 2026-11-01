@@ -49,11 +49,11 @@ latest-only。另有
 `x-data-mcp-acquire`（10 acquisition tools）。隧道仍指 `mcp.sock`（改指 `research.sock` 未做）。
 部署版本、socket 路径、generation 与数据量见
 [docs/STATUS.md](docs/STATUS.md)。
-已部署实例为 fresh compact schema 25；代码（main）同为 schema 25（M1 的 schema 22 +
-M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025），三个入口合计注册 24 个工具（
-research 5 / ops 15 / maint 9），显式 `task_sqlite init` 的新库按代码的 schema 建立；
-工具数量不是稳定契约，客户端仍须以运行实例 `tools/list` 与
-`get_data_capabilities` 为准。
+代码（main）为 schema 26（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 +
+M3 PR-1 的 025 + R2 的 026，未部署），能力修订 `generic-data-v9` 也未部署。代码注册
+去重后 25 项 data 工具（`research` 5 / `ops` 16 / `maint` 9，入口之和大于去重总数）；
+显式 `task_sqlite init` 的新库按代码的 schema 建立；工具数量不是稳定契约，客户端仍须以运行
+实例 `tools/list` 与 `get_data_capabilities` 为准。
 
 M2 已上线：6 个解析事实数据集（`market.security_master`、
 `market.capital_events`、`market.suspensions`、`market.risk_warnings`、
@@ -101,7 +101,7 @@ external distribution is not authorized；它不是“服务未运行”的同�
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
 （既有库显式 upgrade 的来源版本），已部署实例为 compact schema 25，代码的
-`COMPACT_SCHEMA_VERSION` 也是 25（代码与已部署实例一致，不再领先）。Issue/Epic 中的“v15”是交付规划标签，
+`COMPACT_SCHEMA_VERSION` 是 26（R2 刷新 run 记录，未部署，部署前不领先生产）。Issue/Epic 中的“v15”是交付规划标签，
 不是 schema 编号。
 
 **历史（2026-09 来源收敛口径，已被 [D-20](docs/decisions.md) 修订）：** 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →

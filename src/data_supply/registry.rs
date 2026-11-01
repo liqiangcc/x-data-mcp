@@ -27,6 +27,7 @@ pub enum Handler {
     VerifyGap,
     PlanMarketUpdate,
     RunMarketUpdate,
+    RefreshExchangeSources,
     Facets,
 }
 /// Which socket serves a tool (v8 design §3.1). The three deployed entries are
@@ -47,7 +48,8 @@ pub const RESEARCH_TOOLS: &[&str] = &[
     "list_data_versions",
     "list_catalog_facets",
 ];
-/// Ops entry: exactly the daily-sync Skill's data-side allowlist.
+/// Ops entry: the daily-sync workflow surface. The strict Skill allowlist is a
+/// subset until the v9 deployment adds `refresh_exchange_sources` to it.
 pub const OPS_TOOLS: &[&str] = &[
     "get_data_capabilities",
     "plan_market_update",
@@ -64,6 +66,7 @@ pub const OPS_TOOLS: &[&str] = &[
     "get_yearly_base_years",
     "verify_publication_result",
     "verify_stopped_writes",
+    "refresh_exchange_sources",
 ];
 /// Maintenance/forensics entry: operator-only retries, cancellation and
 /// evidence checks stay off the research and ops sockets.
@@ -178,6 +181,7 @@ impl Entry {
                 | Handler::InspectVerification
                 | Handler::VerifyGap
                 | Handler::RunMarketUpdate
+                | Handler::RefreshExchangeSources
         )
     }
     /// State-changing tools: task acceptance/retry/cancellation, bounded data
@@ -198,6 +202,7 @@ impl Entry {
                 | Handler::VerifyPublication
                 | Handler::VerifyGap
                 | Handler::RunMarketUpdate
+                | Handler::RefreshExchangeSources
         )
     }
     /// Datasets this tool advertises in get_data_capabilities. `None` is a
@@ -376,6 +381,7 @@ fn entry<I: JsonSchema, O: JsonSchema>(
             | Handler::Worker
             | Handler::PlanMarketUpdate
             | Handler::RunMarketUpdate
+            | Handler::RefreshExchangeSources
     ) {
         super::wire::strip_additional_properties(&mut input);
     }
@@ -542,6 +548,15 @@ pub fn entries() -> Vec<Entry> {
             Handler::RunMarketUpdate,
             RUN_DESCRIPTION,
             json!({"dataset":"market.daily","contract_version":"v1","request_id":"example-plan-run","target_day":"2026-01-30","plan_id":"0000000000000000000000000000000000000000000000000000000000000000"}),
+        ),
+        entry::<
+            crate::source_refresh::wire::RefreshRequest,
+            crate::source_refresh::wire::RefreshReport,
+        >(
+            "refresh_exchange_sources",
+            Handler::RefreshExchangeSources,
+            crate::source_refresh::wire::DESCRIPTION,
+            json!({"mode":"tail","dry_run":true}),
         ),
     ];
     for e in &mut entries {

@@ -186,7 +186,7 @@ XDM-59 实测（研究侧，单进程）：冷启动 4.449/4.958/4.424 s、热�
 | 入口 | `--entry` | socket | 工具数 | 隧道暴露 |
 |---|---|---|---|---|
 | 研究 | `research` | `run/research.sock`（新增） | 5 | **是（唯一）** |
-| 编排 | `ops` | `run/mcp.sock`（沿用） | 15 | 否 |
+| 编排 | `ops` | `run/mcp.sock`（沿用） | 15（部署；代码 16，未部署） | 否 |
 | 运维/取证 | `maint` | `run/maint.sock`（新增） | 9 | 否 |
 | 来源接入 | — | `run/acquire.sock`（不变，独立单元 `x-data-mcp-acquire`） | 10 | 否 |
 

@@ -14,12 +14,23 @@ spec.loader.exec_module(cf)
 ALLOWED = {"31"}
 
 
-def claims(text: str, deployed: str = "generic-data-v6") -> list[str]:
+def claims(
+    text: str,
+    deployed: str = "generic-data-v6",
+    data_tools: int = 21,
+    code_data_tools: int | None = None,
+    code_revision: str | None = None,
+) -> list[str]:
     # Default mirrors this branch's deployed-revision constant (post-switch).
     return [
         kind
         for _, kind, _ in cf.stale_deployment_claims(
-            text, ALLOWED, 21, deployed
+            text,
+            ALLOWED,
+            data_tools,
+            deployed,
+            code_data_tools=code_data_tools,
+            code_revision=code_revision,
         )
     ]
 
@@ -116,10 +127,12 @@ class RealDocs(unittest.TestCase):
 REGION_SCHEMA = 24
 REGION_REVISION = "generic-data-v8"
 # Current regions and STATUS state DEPLOYED facts; the registry may be ahead
-# (the v8 minimal switch deploys the ops entry's 15 tools while the code
-# registers 24 across three entries).
+# (preview.41 serves the ops entry's 15 tools while the code registers 25 across
+# three entries; R2's refresh tool is code-only until the v9 switch).
 REGION_DATA_TOOLS = 15
-REGION_CODE_DATA_TOOLS = 24
+REGION_DEPLOYED_ENTRY_TOOLS = {"ops": 15, "research": 5, "maint": 9}
+REGION_CODE_DATA_TOOLS = 25
+REGION_CODE_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 REGION_ACQUIRE_TOOLS = 10
 
 
@@ -194,7 +207,7 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual(rules(region_claims(bad_acquire)), ["acquire-tool-count"])
 
     def test_code_tool_count_may_be_ahead_of_the_deployed_one(self):
-        # The code registers 24 data tools across three entries while the
+        # The code registers 25 data tools across three entries while the
         # deployed ops entry serves 15: a sentence explicitly marked as the
         # code fact is checked against the registry, and the deployed count
         # stays valid.
@@ -202,9 +215,9 @@ class StaleCurrentRegions(unittest.TestCase):
             region_claims("已部署实例仍为 15 data tools。\n"), []
         )
         self.assertEqual(
-            region_claims("代码（main）为 24 data tools（未部署）。\n"), []
+            region_claims("代码（main）为 25 data tools（未部署）。\n"), []
         )
-        found = region_claims("代码（main）为 25 data tools（未部署）。\n")
+        found = region_claims("代码（main）为 26 data tools（未部署）。\n")
         self.assertEqual(rules(found), ["data-tool-count"], found)
 
     def test_bare_tool_count_must_be_one_of_the_registries(self):
@@ -547,11 +560,52 @@ class StatusConsistency(unittest.TestCase):
 
     def test_code_tool_count_in_status_may_be_ahead(self):
         text = STATUS_OK + (
-            "\n代码（main）为 24 data tools（未部署）；已部署实例仍为 15 data tools。\n"
+            "\n代码（main）为 25 data tools（未部署）；已部署实例仍为 15 data tools。\n"
         )
         self.assertEqual(status_claims(text), [])
-        wrong = STATUS_OK + "\n代码（main）为 25 data tools（未部署）。\n"
+        wrong = STATUS_OK + "\n代码（main）为 26 data tools（未部署）。\n"
         self.assertEqual(rules(status_claims(wrong)), ["status-data-tool-count"])
+
+    def test_deployed_and_code_entry_counts_are_separate(self):
+        self.assertEqual(
+            cf.EXPECTED_DEPLOYED_ENTRY_TOOLS, REGION_DEPLOYED_ENTRY_TOOLS
+        )
+        self.assertEqual(cf.EXPECTED_CODE_ENTRY_TOOLS, REGION_CODE_ENTRY_TOOLS)
+        self.assertNotEqual(
+            cf.EXPECTED_DEPLOYED_ENTRY_TOOLS, cf.EXPECTED_CODE_ENTRY_TOOLS
+        )
+
+    def test_service_table_checks_deployed_not_code_counts(self):
+        multi = STATUS_OK.replace(
+            "| `run/mcp.sock` | 15 |",
+            "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
+            "（`--entry research`）、`run/maint.sock`（`--entry maint`） "
+            "| 15 / 5 / 9 |",
+        )
+        self.assertEqual(status_claims(multi), [])
+        # 16 is the R2 code allowlist, not the preview.41 instance.
+        wrong = multi.replace("| 15 / 5 / 9 |", "| 16 / 5 / 9 |")
+        self.assertEqual(rules(status_claims(wrong)), ["status-service-tool-count"])
+
+    def test_code_revision_may_be_ahead_in_a_code_sentence(self):
+        self.assertEqual(
+            claims(
+                "代码（main）25 data tools / `generic-data-v9`（未部署）。\n",
+                data_tools=15,
+                code_data_tools=25,
+                code_revision="generic-data-v9",
+            ),
+            [],
+        )
+        self.assertIn(
+            "generic-data-v9",
+            claims(
+                "已部署实例 15 data tools / `generic-data-v9`。\n",
+                data_tools=15,
+                code_data_tools=25,
+                code_revision="generic-data-v9",
+            )[0],
+        )
 
     def test_tool_pair_is_checked(self):
         text = STATUS_OK + "\npreview.34 与 preview.35 都是二进制热切换，21/10 工具不变。\n"

@@ -24,6 +24,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// User-Agent every exchange request sends (§6.3).
@@ -203,6 +204,10 @@ pub struct Client {
     pacer: Box<dyn Pacer>,
     min_interval: Duration,
     last_request_start: Mutex<Option<Instant>>,
+    /// Outbound attempts this client actually made (including retries). A
+    /// refresh report counts the real cost instead of inferring it from page
+    /// counts; tests compare it with the fake transport's call count.
+    attempts: AtomicU64,
 }
 
 impl Client {
@@ -216,6 +221,7 @@ impl Client {
             pacer: Box::new(SystemPacer),
             min_interval: DEFAULT_MIN_REQUEST_INTERVAL,
             last_request_start: Mutex::new(None),
+            attempts: AtomicU64::new(0),
         }
     }
 
@@ -265,6 +271,11 @@ impl Client {
         self.min_interval
     }
 
+    /// Outbound attempts made so far, retries included.
+    pub fn attempts(&self) -> u64 {
+        self.attempts.load(Ordering::Relaxed)
+    }
+
     /// One GET with bounded retries and the minimum request spacing. A non-200
     /// status is *returned*, not retried into an error: the caller classifies it
     /// as `source_unavailable` (§6.3 failure classes).
@@ -272,6 +283,7 @@ impl Client {
         let mut attempt = 1;
         loop {
             self.wait_for_start_slot();
+            self.attempts.fetch_add(1, Ordering::Relaxed);
             let outcome = self.transport.get(request);
             let retry = match &outcome {
                 Ok(response) => retryable_status(response.status),

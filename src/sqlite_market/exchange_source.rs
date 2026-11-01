@@ -78,7 +78,10 @@ pub(crate) fn read(c: &Connection) -> Result<Vec<SnapshotRow>, Error> {
     let params: [&dyn rusqlite::ToSql; 0] = [];
     query(
         c,
-        &format!("SELECT {COLUMNS} FROM exchange_source_snapshots ORDER BY snapshot_id"),
+        &format!(
+            "SELECT {COLUMNS} FROM exchange_source_snapshots \
+             ORDER BY snapshot_id, request_fingerprint"
+        ),
         &params,
     )
 }
@@ -139,8 +142,11 @@ fn query(
     rows.into_iter().map(to_row).collect()
 }
 
-/// Insert one row unless its snapshot id is already stored. Returns whether a
-/// row was inserted; a duplicate is a no-op (§6.3 "同指纹同 sha 不新增").
+/// Insert one row unless its (snapshot id, request fingerprint) pair is
+/// already stored. Returns whether a row was inserted; a duplicate is a no-op
+/// (§6.3 "同指纹同 sha 不新增"). Identical bytes under a *different* request
+/// fingerprint are a new row (schema 26): otherwise that window could never be
+/// reused.
 pub(crate) fn insert(c: &Connection, row: &SnapshotRow) -> Result<bool, Error> {
     let changed = c
         .execute(

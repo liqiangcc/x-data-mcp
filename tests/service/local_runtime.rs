@@ -225,8 +225,8 @@ fn real_service_proxy_disconnect_keeps_accepted_sqlite_task_and_source_refusal()
         .as_array()
         .unwrap()
         .clone();
-    // data_service defaults to the ops entry (v8 §3.4): 15 tools.
-    assert_eq!(tools.len(), 15);
+    // data_service defaults to the ops entry (v8 §3.4): 16 tools after R2.
+    assert_eq!(tools.len(), 16);
     let caps = session.call("get_data_capabilities", json!({}), false);
     assert_eq!(caps["production_ready"], false);
     let names: std::collections::BTreeSet<_> =

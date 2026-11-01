@@ -118,6 +118,13 @@ pub fn bind_from_rows(
         (left.as_of.as_str(), left.snapshot_id.as_str())
             .cmp(&(right.as_of.as_str(), right.snapshot_id.as_str()))
     });
+    // Schema 26 keeps one index row per (byte identity, request identity), so
+    // several windows may legitimately name the same frozen bytes. A binding
+    // names snapshots, not requests: the same blob is one bound snapshot.
+    // The sort above is by (as_of, snapshot_id), so equal snapshot ids are not
+    // guaranteed to be adjacent; retain the first (oldest as_of) of each.
+    let mut seen = std::collections::BTreeSet::new();
+    selected.retain(|row| seen.insert(row.snapshot_id.clone()));
     for row in &selected {
         let basis = BasisStatus::parse(&row.basis_status).unwrap_or(BasisStatus::NotAvailable);
         if !basis.admits(required) {

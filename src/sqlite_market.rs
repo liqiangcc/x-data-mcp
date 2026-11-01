@@ -1119,6 +1119,12 @@ pub(crate) mod industry;
 #[allow(dead_code)]
 pub(crate) mod index;
 pub(crate) mod manifest;
+// Refresh-run record (R2): survives task expiry and process restarts, and is
+// the only source of `verified_through` (issue-446 §5.6). The read side is
+// used by acceptance checks now and by R3's replay selection next; the write
+// side is live in this PR.
+#[allow(dead_code)]
+pub(crate) mod refresh_runs;
 #[allow(dead_code)]
 pub(crate) mod security;
 pub(crate) mod security_names;

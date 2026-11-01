@@ -165,10 +165,10 @@ pub fn record_snapshots(
         .collect();
     // Read the key set *before* the insert: the difference is what this call
     // added, and the measurement must not be taken from its own write.
-    let existing: std::collections::BTreeSet<String> = backend
+    let existing: std::collections::BTreeSet<(String, String)> = backend
         .read_exchange_snapshots()?
         .into_iter()
-        .map(|row| row.snapshot_id)
+        .map(|row| (row.snapshot_id, row.request_fingerprint))
         .collect();
     backend.write_exchange_snapshots(&rows)?;
     let mut snapshots = Vec::new();
@@ -176,9 +176,12 @@ pub fn record_snapshots(
         snapshots.push(FrozenSnapshot {
             row: row.clone(),
             appended_manifest_line: bytes.appended_manifest_line,
-            // A snapshot id already present before this call is one row, not
-            // two: the table is keyed by the response byte identity (§9.2).
-            inserted_index_row: !existing.contains(&row.snapshot_id),
+            // A (snapshot id, request fingerprint) pair already present
+            // before this call is one row, not two: the table is keyed by the
+            // response byte identity *and* the request identity (§9.2,
+            // schema 26).
+            inserted_index_row: !existing
+                .contains(&(row.snapshot_id.clone(), row.request_fingerprint.clone())),
         });
     }
     Ok(snapshots)

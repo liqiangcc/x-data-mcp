@@ -65,11 +65,13 @@ M2 的 6 个解析事实数据集（`market.security_master`、`security_names`�
 结果里按 `pending_source` 记录，生产形态（ops + compact）缺 `X_DATA_MCP_SOURCE_STORE`
 时四个同源 item 以稳定码 `source_store_unconfigured` 失败（见 §3.2）。未登记版本返回
 `absent` 与 0 行（见 §3.1「M2 部署状态」）。
-数据库 compact schema：**已部署 25（与代码同值，preview.39 的 fresh init 上线）**。schema 25（M3 PR-1，
+数据库 compact schema：**已部署 25（preview.39 的 fresh init 上线）；代码 26（R2 刷新 run 记录，未部署）**。schema 25（M3 PR-1，
 [#446](tasks/issue-446-m3-delisted-industry.md) §9）加 5 张来源库索引表与
 `price_limit_rules.min_band_ticks` 可空列。5 张索引表已由日更的派生 item 与 `--scope` 重放写入
 （2026-11-01 只读实测：`industry_snapshots` 7 行、`industry_assignments` 5,235 行、
-`exchange_source_snapshots` 1,834 行、`generation_facts` 12 行、`retire_exemptions` 0 行，见
+`exchange_source_snapshots` 1,834 行、`generation_facts` 12 行、`retire_exemptions` 0 行；代码 26 另加
+`source_refresh_runs`/`source_refresh_run_sources`/`source_refresh_run_members` 三表并把快照索引主键改为
+`(snapshot_id, request_fingerprint)`，见
 [STATUS](STATUS.md)「数据」表）；`min_band_ticks`
 已由 `limit-v1` 与规则书写入（见 §4 序号 12），导出 `price_limit_rules` 也因此多一列
 （旧 parquet 无此列为 null）。

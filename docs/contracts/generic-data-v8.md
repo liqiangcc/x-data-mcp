@@ -19,13 +19,13 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 | 项 | v7（历史：preview.33–35） | v8（已部署：preview.36 起；preview.37 起含 M2 数据集） | 兼容性 |
 |---|---|---|---|
 | `capability_revision` | `generic-data-v7` | `generic-data-v8`（2026-10-27 部署日翻） | 客户端按 revision 握手，不匹配即停 |
-| data 工具数 | 23 | 代码 24（+ 只读 `list_catalog_facets`）；最小切换部署的 `ops` 入口 15 | 旧工具名全部保留，无重命名、无删除 |
-| 入口 | 1 个 data socket（23 工具） | **3 个入口**：research 5 / ops 15 / maint 9（`src/data_supply/registry.rs:43,51,70`） | `mcp.sock` 变成编排入口；旧单元不带 `--entry` 时默认 `ops`（`src/bin/data_service.rs:44`） |
+| data 工具数 | 23 | 部署 `ops` 15（代码 25：+ 只读 `list_catalog_facets`、`refresh_exchange_sources`；代码 `ops` 16，未部署） | 旧工具名全部保留，无重命名、无删除 |
+| 入口 | 1 个 data socket（23 工具） | **3 个入口**：research 5 / ops 15（部署；代码 16，未部署） / maint 9（`src/data_supply/registry.rs:43,51,70`） | `mcp.sock` 变成编排入口；旧单元不带 `--entry` 时默认 `ops`（`src/bin/data_service.rs:44`） |
 | `contract_version` | `v1` | `v1` + **`v2`**（读取面与任务面，逐工具独立分支；写面只有 `market.daily` 的 `start_collection` v2 scope；读面有 `universe.scope`，§5.2） | 缺省仍是 `v1`；v1 字节不变 |
 | `tools/list` | 含 `outputSchema` | **不含** `outputSchema`，描述 ≤240 B | 客户端失去内联校验；schema 从 capabilities 按需取 |
 | 入参 | 结构体实体、严格日期、必填契约版本 | 别名归一化 + 缺省值（§6） | 旧写法继续可用 |
 | 时点参数 | 无 | `as_of`/`known_at` 只在 `temporal` 声明为 `true` 的 dataset 上接受（M2 的 6 个数据集，见 §4.6 矩阵）；其他 dataset/工具仍以 `unsupported_for_dataset:` 拒绝 | 声明式放宽，未声明的面仍是新增错误而不是新语义 |
-| schema | 21（v7 部署时） | v8 自身**不改 schema**（§10）；随 M1/M2 走到的代码 schema 是 24 | 部署按 D-08 全新 init，不做原地迁移 |
+| schema | 21（v7 部署时） | v8 自身**不改 schema**（§10）；随 M1/M2 走到的代码 schema 是 26 | 部署按 D-08 全新 init，不做原地迁移 |
 | acquire server | 10 工具 | 不变 | — |
 
 不变量（v8 只改形状，不改语义）：
@@ -45,7 +45,7 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 | 入口 | `--entry` | socket | 工具数 | 隧道暴露 |
 |---|---|---|---|---|
 | 研究 | `research` | `run/research.sock`（新增） | 5 | **是（唯一）** |
-| 编排 | `ops` | `run/mcp.sock`（沿用） | 15 | 否 |
+| 编排 | `ops` | `run/mcp.sock`（沿用） | 15（部署；代码 16，未部署） | 否 |
 | 运维/取证 | `maint` | `run/maint.sock`（新增） | 9 | 否 |
 | 来源接入 | — | `run/acquire.sock`（不变） | 10 | 否 |
 
@@ -53,7 +53,7 @@ allowlist 是静态常量（`src/data_supply/registry.rs:43-80`）：
 
 - **research（5）**：`get_data_capabilities`、`query_data`、`get_data_availability`、
   `list_data_versions`、`list_catalog_facets`。
-- **ops（15）**：`get_data_capabilities`、`plan_market_update`、`run_market_update`、
+- **ops（15 部署；代码 16，未部署）**：`get_data_capabilities`、`plan_market_update`、`run_market_update`、
   `start_collection`、`update_data`、`get_task`、`get_task_progress`、`list_tasks`、
   `get_request`、`get_data_availability`、`query_data`、`list_data_versions`、
   `get_yearly_base_years`、`verify_publication_result`、`verify_stopped_writes`

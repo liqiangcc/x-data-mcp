@@ -116,7 +116,7 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // not relaxed for any other reason.
     let budgets = [
         (EntryKind::Research, 5usize, 12_200usize),
-        (EntryKind::Ops, 15usize, 29_300usize),
+        (EntryKind::Ops, 16usize, 30_500usize),
         (
             EntryKind::Maint,
             if cfg!(target_os = "linux") { 9 } else { 8 },
@@ -144,6 +144,49 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
             serde_json::to_vec(&tools).unwrap().len(),
             budget,
         ));
+    }
+    // `main` before this branch has one fewer ops tool. The diff from the base
+    // contains no other registry/tool-schema edit, so removing that one tool
+    // reconstructs main's payload exactly (same order, same serialization).
+    let (ops_api, _dir) = api(EntryKind::Ops);
+    let ops_tools = ops_api.tools();
+    let main_tools: Vec<Value> = ops_tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|tool| tool["name"].as_str() != Some("refresh_exchange_sources"))
+        .cloned()
+        .collect();
+    assert_eq!(main_tools.len(), 15, "main ops tool count");
+    let main_bytes = serde_json::to_vec(&main_tools).unwrap().len();
+    println!(
+        "tools/list measured bytes (entry, bytes, budget): {measured:?}; \
+         main-equivalent ops: {main_bytes} B (15 tools)"
+    );
+    if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
+        use std::io::Write as _;
+        if let Ok(mut summary) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(
+                summary,
+                "\n### tools/list bytes\n\n| entry | bytes | budget | est. tokens (4 B/token) |\n|---|---|---|---|"
+            );
+            for (entry, bytes, budget) in &measured {
+                let _ = writeln!(
+                    summary,
+                    "| {entry} | {bytes} | {budget} | {} |",
+                    bytes.div_ceil(4)
+                );
+            }
+            let _ = writeln!(
+                summary,
+                "| ops (main-equivalent, 15 tools) | {main_bytes} | 29,300 | {} |",
+                main_bytes.div_ceil(4)
+            );
+        }
     }
     let over: Vec<_> = measured
         .iter()
@@ -381,6 +424,7 @@ fn write_tools_are_explicit_and_never_reach_the_research_entry() {
             "run_market_update",
             "verify_publication_result",
             "verify_stopped_writes",
+            "refresh_exchange_sources",
         ]),
         "ops is the automatic orchestration surface"
     );
