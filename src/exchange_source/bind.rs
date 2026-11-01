@@ -118,6 +118,10 @@ pub fn bind_from_rows(
         (left.as_of.as_str(), left.snapshot_id.as_str())
             .cmp(&(right.as_of.as_str(), right.snapshot_id.as_str()))
     });
+    // Schema 26 keeps one index row per (byte identity, request identity), so
+    // several windows may legitimately name the same frozen bytes. A binding
+    // names snapshots, not requests: the same blob is one bound snapshot.
+    selected.dedup_by(|left, right| left.snapshot_id == right.snapshot_id);
     for row in &selected {
         let basis = BasisStatus::parse(&row.basis_status).unwrap_or(BasisStatus::NotAvailable);
         if !basis.admits(required) {

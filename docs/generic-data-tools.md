@@ -5,12 +5,12 @@
 2026-09-12 用户要求现在考虑扩展，并授权按“工具按业务动作稳定、数据类别通过类型化参数扩展”
 开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署：一个 `data_service`
 进程服务三个 socket——`mcp.sock` 的
-`ops` 入口注册 15 data tools（capability revision `generic-data-v8`，含只读
+`ops` 入口注册 16 data tools（capability revision `generic-data-v8`，含只读
 `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，文本模式 `full`，
 market 单版本序列：version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口
 （只读研究面，工具数 5），`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
-acquire socket 注册 10 acquisition tools；隧道仍指 `mcp.sock`。已部署实例为 compact schema 25，代码（main）同为 schema 25
-（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025），注册 24 data tools（三个入口）。部署版本、
+acquire socket 注册 10 acquisition tools；隧道仍指 `mcp.sock`。已部署实例为 compact schema 25，代码（main）为 schema 26（未部署）
+（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025），注册 25 data tools（三个入口）。部署版本、
 generation 与数据量等机器事实只在 [STATUS](STATUS.md) 维护，本文不复述。通用查询、任务、
 availability、compute、capability 和 generation-bound 数据路径已实现，全市场
 collection/update 已通过分批 MCP 编排取得真实 generation 证据
@@ -31,7 +31,7 @@ readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capab
 
 数据业务规则仍来自 #3/#4/#5/#6。本设计调整入口和内部扩展契约，不扩大首期数据范围，
 不批准新来源，不取消查询、更新、补采、核实、恢复等能力。
-新增 dataset 通常只扩展已有工具的 schema 分支与处理器；真正不同的业务动作才新增工具。
+新增 dataset 通常只扩展已有工具的 schema 分支与处理器；真正不同的业务动作才新增工具。来源刷新是独立运维动作，因此按 D-66 Q5 新增 `refresh_exchange_sources`（v9）。
 
 本设计的 AI 数据供给扩展见末节：新增 get_data_availability、list_tasks，批量读取和目录筛选复用 query_data；帮助返回采用两级目录/详情。
 
@@ -44,6 +44,7 @@ readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capab
 | update_data | 刷新已有数据 | 同上 | WriteAcceptance |
 | plan_market_update | 解析全市场更新计划（v7 起已实现，preview.36 起部署；见 [generic-data-v8](contracts/generic-data-v8.md)） | dataset（market.daily/market.yearly）、contract_version、可选 end_date（缺省为 active generation 内最新交易日，不晚于当日）、end_date? | PlanView（plan_id + 分类计数） |
 | run_market_update | 按 plan 受理单一大任务（v7：已实现，未部署；重算比对 digest，失配 fail-closed） | dataset、contract_version、request_id、target_day、plan_id | PlanRunAcceptance |
+| refresh_exchange_sources | 刷新交易所来源库（v9 代码，未部署；`tail`/`full`，不发布数据集；见 [v9](contracts/generic-data-v9.md)） | mode、可选 sources、可选 dry_run | RefreshReport（run_id、请求/变更/失败计数、revision、run 成员） |
 | backfill_data | 补指定历史范围 | 同上，加类型化 range | WriteAcceptance |
 | republish_data | 授权重发固定基线（#247 纯 enrichment：仅填未晋升字段或新增日期，已知值改/丢 fail-closed；仅显式 items，无 default selection） | 同 update_data | WriteAcceptance |
 | query_data | 读取已发布数据 | dataset、contract_version、selection、filter、version_id?、page_size?、cursor? | DataPage |

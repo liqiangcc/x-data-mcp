@@ -460,6 +460,72 @@ impl MarketBackend {
             super::exchange_source::read_for_fingerprint(c, source_id, request_fingerprint)
         })
     }
+
+    /// Open a refresh run before its first request, so a process that dies
+    /// mid-run leaves a visible `running` record instead of no evidence.
+    pub(crate) fn begin_source_refresh_run(
+        &self,
+        start: &super::refresh_runs::RunStart,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Compact(m) => m.tx(|c| super::refresh_runs::begin(c, start)),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "source_refresh_runs requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Record the members and per-source summary and close the run in one
+    /// transaction. A failed refresh still records the members of the windows
+    /// it did select; only a complete successful source advances
+    /// `verified_through`.
+    pub(crate) fn finish_source_refresh_run(
+        &self,
+        run_id: &str,
+        finish: &super::refresh_runs::RunFinish,
+        sources: &[super::refresh_runs::RunSourceRow],
+        members: &[super::refresh_runs::RunMemberRow],
+    ) -> Result<usize, Error> {
+        match self {
+            Self::Compact(m) => {
+                m.tx(|c| super::refresh_runs::finish(c, run_id, finish, sources, members))
+            }
+            Self::Legacy(_) => Err(Error::Invalid(
+                "source_refresh_runs requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Durable refresh-run history, for acceptance checks and operators.
+    pub(crate) fn read_source_refresh_runs(
+        &self,
+    ) -> Result<Vec<super::refresh_runs::RunRow>, Error> {
+        self.read(super::refresh_runs::read_runs)
+    }
+
+    pub(crate) fn read_source_refresh_run_sources(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<super::refresh_runs::RunSourceRow>, Error> {
+        self.read(|c| super::refresh_runs::read_sources(c, run_id))
+    }
+
+    pub(crate) fn read_source_refresh_run_members(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<super::refresh_runs::RunMemberRow>, Error> {
+        self.read(|c| super::refresh_runs::read_members(c, run_id))
+    }
+
+    /// Latest complete, successful refresh date for one source. Reuse evidence
+    /// reports this instead of a selected snapshot's `as_of`, so a daily tail
+    /// cannot make stale whole-table bytes look freshly verified.
+    pub(crate) fn latest_complete_verified_through(
+        &self,
+        source_id: &str,
+    ) -> Result<Option<String>, Error> {
+        self.read(|c| super::refresh_runs::latest_complete_verified_through(c, source_id))
+    }
 }
 
 impl crate::market_storage::MarketRepository for MarketBackend {

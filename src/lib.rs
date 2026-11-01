@@ -88,6 +88,11 @@ pub mod source_store;
 /// PRs; this module deliberately contains no source-specific parser.
 pub mod exchange_source;
 
+/// Exchange-source refresh runs (`refresh_exchange_sources`, R2 of issue-446
+/// §5.5/§5.6): plan tail/full, probe whole tables, record run membership and
+/// `verified_through`. It never publishes a derived dataset.
+pub mod source_refresh;
+
 pub mod acquire;
 
 /// Generation retirement gate (M3 PR-8, issue `#446` §8.3/§9.4.3): the

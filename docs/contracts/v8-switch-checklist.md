@@ -1,7 +1,7 @@
 # generic-data-v8 部署日切换清单
 
 **状态**：已执行（2026-10-27，最小切换；2026-10-28 preview.38 起单进程三 socket，见 §9.7）。
-当前部署为 `generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
+当前部署为 `generic-data-v8` / 16 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
 入口与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 25（见 [STATUS](../STATUS.md)）；
 隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），结论见 §2.3。
 契约本身见 [generic-data-v8](generic-data-v8.md)。
@@ -186,7 +186,7 @@ XDM-59 实测（研究侧，单进程）：冷启动 4.449/4.958/4.424 s、热�
 | 入口 | `--entry` | socket | 工具数 | 隧道暴露 |
 |---|---|---|---|---|
 | 研究 | `research` | `run/research.sock`（新增） | 5 | **是（唯一）** |
-| 编排 | `ops` | `run/mcp.sock`（沿用） | 15 | 否 |
+| 编排 | `ops` | `run/mcp.sock`（沿用） | 16 | 否 |
 | 运维/取证 | `maint` | `run/maint.sock`（新增） | 9 | 否 |
 | 来源接入 | — | `run/acquire.sock`（不变，独立单元 `x-data-mcp-acquire`） | 10 | 否 |
 

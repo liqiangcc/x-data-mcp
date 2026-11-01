@@ -10,7 +10,7 @@
 
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
 - `x-data-mcp`：任务、版本、发布、查询、核实和计算。一个 `data_service` 进程服务三个
-  socket：`mcp.sock` 的 `ops` 入口（编排入口，15 data tools，含只读
+  socket：`mcp.sock` 的 `ops` 入口（编排入口，16 data tools，含只读
   `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，x 与日更 Skill
   的连接不变）、`research.sock` 的 `research` 入口（只读研究面，工具数 5）、
   `maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；capability revision

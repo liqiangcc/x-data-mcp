@@ -1,10 +1,13 @@
 //! `exchange_source_snapshots` as an index over the source store (design §9.2,
 //! §9.4.2).
 //!
-//! One row per frozen response byte identity (`snapshot_id` = response sha256).
-//! The store's blob + manifest line is the authority; this row is rebuilt from
-//! it by [`rebuild`] without any HTTP request, so "clear the DB, replay the
-//! store, compare the summary" is a real check (AC-M3-9) instead of a claim.
+//! One row per (response byte identity, canonical request fingerprint) pair
+//! (`snapshot_id` = response sha256). The store's blob + manifest line is the
+//! authority; this row is rebuilt from it by [`rebuild`] without any HTTP
+//! request, so "clear the DB, replay the store, compare the summary" is a real
+//! check (AC-M3-9) instead of a claim. Two requests that returned the same
+//! bytes keep two rows (schema 26): identical bytes are one blob, not one
+//! reusable window.
 //!
 //! Rebuild inputs come only from the manifest (`source_id`, `origin` =
 //! canonical request fingerprint, `acquired_at`, `publisher_last_modified`,
@@ -76,19 +79,19 @@ pub fn summary(rows: &[SnapshotRow]) -> String {
 /// Primary keys whose expected and stored rows disagree, capped at `limit`
 /// (first 20 required by §9.4.2).
 pub fn drift(expected: &[SnapshotRow], stored: &[SnapshotRow], limit: usize) -> Vec<String> {
-    let expected: BTreeMap<&str, &SnapshotRow> = expected
-        .iter()
-        .map(|row| (row.snapshot_id.as_str(), row))
-        .collect();
-    let stored: BTreeMap<&str, &SnapshotRow> = stored
-        .iter()
-        .map(|row| (row.snapshot_id.as_str(), row))
-        .collect();
+    // The row identity is the (byte, request) pair (schema 26): two windows
+    // may legitimately share one response sha, so `snapshot_id` alone would
+    // collapse them and hide a real difference.
+    let key = |row: &SnapshotRow| (row.snapshot_id.as_str(), row.request_fingerprint.as_str());
+    let expected: BTreeMap<(&str, &str), &SnapshotRow> =
+        expected.iter().map(|row| (key(row), row)).collect();
+    let stored: BTreeMap<(&str, &str), &SnapshotRow> =
+        stored.iter().map(|row| (key(row), row)).collect();
     let mut keys: Vec<String> = expected
         .keys()
         .chain(stored.keys())
         .filter(|key| expected.get(*key) != stored.get(*key))
-        .map(|key| (*key).to_string())
+        .map(|(snapshot, fingerprint)| format!("{snapshot} {fingerprint}"))
         .collect();
     keys.sort();
     keys.dedup();
@@ -127,26 +130,28 @@ impl Rebuild {
 /// stay frozen.
 pub fn rebuild(store: &SourceStore, records: &[&ManifestRecord]) -> Result<Rebuild, StoreError> {
     let mut problems = Vec::new();
-    // One response byte identity is one row even when several registrations
-    // (different origins) point at it; pick the earliest acquisition and, for
-    // ties, the smallest origin so the choice is deterministic.
-    let mut chosen: BTreeMap<String, &ManifestRecord> = BTreeMap::new();
+    // One (response byte identity, request identity) pair is one row. Several
+    // registrations of the same pair (the same request fetched twice) keep the
+    // earliest acquisition; a different request that returned the same bytes
+    // keeps its own row (schema 26).
+    let mut chosen: BTreeMap<(String, String), &ManifestRecord> = BTreeMap::new();
     for record in records {
-        match chosen.get(&record.sha256) {
+        let key = (record.sha256.clone(), record.origin.clone());
+        match chosen.get(&key) {
             None => {
-                chosen.insert(record.sha256.clone(), record);
+                chosen.insert(key, record);
             }
             Some(previous) => {
                 let candidate = (record.acquired_at.as_str(), record.origin.as_str());
                 let current = (previous.acquired_at.as_str(), previous.origin.as_str());
                 if candidate < current {
-                    chosen.insert(record.sha256.clone(), record);
+                    chosen.insert(key, record);
                 }
             }
         }
     }
     let mut rows = Vec::new();
-    for (snapshot_id, record) in &chosen {
+    for ((snapshot_id, _), record) in &chosen {
         let Some(store_kind) = store_kind(record.store_kind) else {
             problems.push(problem(
                 snapshot_id,

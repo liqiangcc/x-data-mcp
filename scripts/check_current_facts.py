@@ -12,9 +12,10 @@ EXPECTED_LEGACY_SCHEMA = 18
 # deployment fact and is read from docs/STATUS.md (see DEPLOYED_SCHEMA_ROW):
 # the code constant may be ahead of it, e.g. schema 25 built by M3 PR-1 before
 # the preview.39 phase-g deployment; since preview.39 deployed == code == 25.
-EXPECTED_COMPACT_SCHEMA = 25
-# Registry/code fact (v8 PR-2 adds list_catalog_facets: 23 -> 24).
-EXPECTED_DATA_TOOLS = 24
+EXPECTED_COMPACT_SCHEMA = 26
+# Registry/code fact (v8 PR-2 added list_catalog_facets: 23 -> 24; refresh R2
+# adds refresh_exchange_sources: 24 -> 25).
+EXPECTED_DATA_TOOLS = 25
 # Documentation "current" regions describe deployment facts, so stale-claim
 # checks compare against the deployed constants, not the code constants. A
 # sentence that explicitly says it is stating the code fact (代码/未部署) is
@@ -23,7 +24,7 @@ EXPECTED_DATA_TOOLS = 24
 # prose fact "N data tools" still counts the orchestration entry `ops` on
 # mcp.sock (the only entry x and the daily Skill talk to). Per-entry counts
 # live in the STATUS 服务 table and are checked by entry_tool_counts().
-EXPECTED_DEPLOYED_DATA_TOOLS = 15
+EXPECTED_DEPLOYED_DATA_TOOLS = 16
 EXPECTED_ACQUIRE_TOOLS = 10
 
 # --- deployed data entries (v8 phase 2, D-56) ------------------------------
@@ -38,7 +39,10 @@ ENTRY_ALLOWLIST_CONST = {
     "ops": "OPS_TOOLS",
     "maint": "MAINT_TOOLS",
 }
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v8"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v9"
+# The revision the deployed docs/contracts/Skills describe. R2's tool is code
+# only until the next deployment; flip this with the Skills at that switch.
+EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v8"
 # The strict Skills describe the DEPLOYED contract (v8 after the minimal switch).
 # The same deployed revision keys the strict-Skill checks and the
 # stale-deployment-claim check below: the "current" regions describe the
@@ -1023,7 +1027,7 @@ def main() -> int:
                 stale_current_region_claims(
                     region,
                     deployed_schema,
-                    EXPECTED_DATA_CAPABILITY_REVISION,
+                    EXPECTED_DEPLOYED_CAPABILITY_REVISION,
                     EXPECTED_DEPLOYED_DATA_TOOLS,
                     registry_acquire_tools,
                     offset,
@@ -1046,7 +1050,7 @@ def main() -> int:
             contract_snapshot_claims(
                 path.read_text(encoding="utf-8"),
                 deployed_schema,
-                EXPECTED_DATA_CAPABILITY_REVISION,
+                EXPECTED_DEPLOYED_CAPABILITY_REVISION,
                 EXPECTED_DEPLOYED_DATA_TOOLS,
                 registry_acquire_tools,
                 code_data_tools=registry_data_tools,

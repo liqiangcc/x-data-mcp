@@ -55,7 +55,7 @@ preview.38 及更早的实测值保留为「历史」对照；本轮未重新测
 preview.37 的 `state/preview.sqlite`），`capability_revision` 仍是 `generic-data-v8`，工具面不变。
 那次变的是 data 单元的形状：**一个 `data_service` 进程服务三个 socket**——`run/mcp.sock`（`ops`，
 编排入口，x 与日更 Skill 的连接不变）、`run/research.sock`（`research`，只读研究面）、
-`run/maint.sock`（`maint`，仅本机 operator 用，不暴露隧道）。三入口的工具数为 ops 15、
+`run/maint.sock`（`maint`，仅本机 operator 用，不暴露隧道）。三入口的工具数为 ops 16（R2 的 allowlist；preview.40 运行实例的工具数为 15，preview.41 起为 16）、
 research 5、maint 9（权威值见「服务」表）。文本模式 `full`、`--poll-ms 1000`、
 `X_DATA_MCP_RUN_PREPARE_WORKERS=1` 都沿用；cgroup 上限
 `MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M` 按 XDM-84 的 w=1 独占测量设值
@@ -71,7 +71,7 @@ gate 加只读 `--market-db`），工具面、`capability_revision` 与三 socke
 `f2fd6fcb…`，数据量随该轮更新（见「数据」段）。
 
 v8 最小切换（preview.36，2026-10-27T12:15:43Z 部署完成；历史）：`x-data-mcp-data` 以 `--entry ops`
-运行 `mcp.sock` 的 15 个工具（live `tools/list`），文本模式 `X_DATA_MCP_TEXT_MODE=full`
+运行 `mcp.sock` 的 16 个工具（live `tools/list`），文本模式 `X_DATA_MCP_TEXT_MODE=full`
 （systemd drop-in），`capability_revision=generic-data-v8`（live `get_data_capabilities`）；
 库按 D-08 归档 schema 21 后全新 init 到 schema 24，并从 active generation `c184e9c4…`
 重建（数据量见「数据」段）。preview.37（2026-10-27 收盘后的部署窗口）在**同一个 `generic-data-v8`** 下上线 M2：
@@ -153,7 +153,7 @@ PR-6/8/10/12 与 A-1/A-2、A-3、S-6 已把大部分 `pending_source` 接上，�
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service`（单进程、三 socket） | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 15 / 5 / 9 | capability `generic-data-v8`（含只读 `get_yearly_base_years`）；6 个 drop-in 全列：`exec-start.conf`（三 socket `ExecStart`，尾部 `--poll-ms 1000`）、`generation.conf`（`X_DATA_MCP_GENERATION_ROOT=/opt/x-data-mcp-preview/generations`，并把该目录加进 `ReadWritePaths`）、`memory.conf`（`MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`，`systemctl show` 读回 402,653,184/671,088,640/536,870,912 B）、`prepare-workers.conf`（`X_DATA_MCP_RUN_PREPARE_WORKERS=1`，XDM-64/#429）、`source-store.conf`（`X_DATA_MCP_SOURCE_STORE=/opt/x-data-mcp-preview/state/source-store`，preview.39 起）、`text-mode.conf`（`X_DATA_MCP_TEXT_MODE=full`）；`poll-interval.conf` 已不存在（`--poll-ms 1000` 由 `exec-start.conf` 带到）；`maint` 只在本机使用、不经隧道 |
+| `x-data-mcp-data` | `data_service`（单进程、三 socket） | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 16 / 5 / 9 | capability `generic-data-v8`（含只读 `get_yearly_base_years`；16 为 R2 allowlist，preview.40 运行实例的工具数为 15）；6 个 drop-in 全列：`exec-start.conf`（三 socket `ExecStart`，尾部 `--poll-ms 1000`）、`generation.conf`（`X_DATA_MCP_GENERATION_ROOT=/opt/x-data-mcp-preview/generations`，并把该目录加进 `ReadWritePaths`）、`memory.conf`（`MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`，`systemctl show` 读回 402,653,184/671,088,640/536,870,912 B）、`prepare-workers.conf`（`X_DATA_MCP_RUN_PREPARE_WORKERS=1`，XDM-64/#429）、`source-store.conf`（`X_DATA_MCP_SOURCE_STORE=/opt/x-data-mcp-preview/state/source-store`，preview.39 起）、`text-mode.conf`（`X_DATA_MCP_TEXT_MODE=full`）；`poll-interval.conf` 已不存在（`--poll-ms 1000` 由 `exec-start.conf` 带到）；`maint` 只在本机使用、不经隧道 |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 单元级 `X_DATA_MCP_TDX_FETCH=/opt/x-data-mcp-preview/current/scripts/tdx_fetch.py`；drop-in `market-db.conf`（preview.39 起）把 `ExecStart` 换成追加 `--market-db /opt/x-data-mcp-preview/state/preview.sqlite`（退役 gate 只读连接）并把 `state` 加进 `ReadWritePaths`；回滚到 preview.38 前必须移除它 |
 | `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 历史（本轮未复核）：只转发 data server，不转发 acquire；`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 **120s**（2026-10-24T16:56:58Z 由 10s 改为 120s；但单元未设 `TimeoutStartSec`，systemd 默认 90s 也覆盖 `ExecStartPre`，所以实际生效上限是 **90s**），单元为 `Restart=always` / `RestartSec=10`；data 服务停止时隧道会因 stdio 子进程退出而自行退出 |
 
@@ -173,11 +173,11 @@ this interval)`（XDM-143 的出站最小间隔）。两个 systemd 单元本轮
 回滚步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9.7。
 
 工具数与能力版本的 live 只读复核：preview.40 切换窗口（2026-11-01T00:38Z）的逐 socket 探针
-`ops`→`plan_market_update`（15）、`research`→`query_data`（5）、`maint`→`compute_metrics`（9），
+`ops`→`plan_market_update`（工具数为 15，preview.40 实测）、`research`→`query_data`（5）、`maint`→`compute_metrics`（9），
 acquire socket 10；隧道仍连 `mcp.sock`。preview.37 窗口的 `get_data_capabilities`
 `capability_revision=generic-data-v8` 是本轮最近一次实测（preview.40 窗口的探针只记工具数与入口）。
 
-代码（main）注册 24 data tools：三个入口 `research`/`ops`/`maint` 由
+代码（main）注册 25 data tools：三个入口 `research`/`ops`/`maint` 由
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
 `outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
 隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），

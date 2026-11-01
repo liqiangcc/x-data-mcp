@@ -835,7 +835,7 @@ fn head_transition_refreshes_a_stale_held_head() {
 /// Schema-21 latest-only compact set (SPEC-LATEST-ONLY §1): the schema-19
 /// version-manifest/result tables below are replaced by `market_series` +
 /// `series_bars` + `yearly_series_lineage` + `market_events`.
-const COMPACT_TABLES: [&str; 25] = [
+const COMPACT_TABLES: [&str; 28] = [
     "evidence_bundles",
     "evidence_parts",
     "source_bindings",
@@ -863,12 +863,16 @@ const COMPACT_TABLES: [&str; 25] = [
     "price_limit_rules",
     "min_tick_rules",
     // Schema 25 (M3 PR-1, issue-446 §9.2): the five index tables over the
-    // source store, created empty; writers land in PR-2/PR-6/PR-8.
+    // source store; writers land in PR-2/PR-6/PR-8.
     "industry_snapshots",
     "industry_assignments",
     "exchange_source_snapshots",
     "generation_facts",
     "retire_exemptions",
+    // Schema 26 (refresh R2, issue-446 §5.6): the durable refresh-run record.
+    "source_refresh_runs",
+    "source_refresh_run_sources",
+    "source_refresh_run_members",
 ];
 /// Dropped by migration 021 — their absence is part of the v21 shape.
 const DROPPED_V19_TABLES: [&str; 12] = [
@@ -1233,8 +1237,8 @@ fn hex32(byte: u8) -> String {
 
 /// Schema 25 length/order assertion (issue-446 §9.1/§9.3): the fixed array
 /// length, the schema constant and the `schema_migrations` rows must agree, and
-/// the tail of the chain must be the M3 index-table step. 022/023/024 stay
-/// immutable.
+/// the tail of the chain must be the refresh-run step and the step before it
+/// the M3 index tables. 022/023/024 stay immutable.
 #[test]
 fn compact_migration_chain_matches_schema_version() {
     assert_eq!(
@@ -1244,21 +1248,29 @@ fn compact_migration_chain_matches_schema_version() {
     );
     let tail = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 1];
     assert!(
-        tail.contains("CREATE TABLE industry_snapshots(")
-            && tail.contains("CREATE TABLE industry_assignments(")
-            && tail.contains("CREATE TABLE exchange_source_snapshots(")
-            && tail.contains("CREATE TABLE generation_facts(")
-            && tail.contains("CREATE TABLE retire_exemptions(")
-            && tail.contains("ADD COLUMN min_band_ticks INTEGER"),
-        "the tail of the compact chain is not migration 025"
+        tail.contains("PRIMARY KEY(snapshot_id, request_fingerprint)")
+            && tail.contains("CREATE TABLE source_refresh_runs(")
+            && tail.contains("CREATE TABLE source_refresh_run_sources(")
+            && tail.contains("CREATE TABLE source_refresh_run_members("),
+        "the tail of the compact chain is not migration 026"
     );
     let previous = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 2];
     assert!(
-        previous.contains("CREATE TABLE capital_events_v24(")
-            && previous.contains("category IN (2,3,5,7,8,9,10)"),
+        previous.contains("CREATE TABLE industry_snapshots(")
+            && previous.contains("CREATE TABLE industry_assignments(")
+            && previous.contains("CREATE TABLE exchange_source_snapshots(")
+            && previous.contains("CREATE TABLE generation_facts(")
+            && previous.contains("CREATE TABLE retire_exemptions(")
+            && previous.contains("ADD COLUMN min_band_ticks INTEGER"),
+        "migration 025 was not kept immutable before 026"
+    );
+    let before_that = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 3];
+    assert!(
+        before_that.contains("CREATE TABLE capital_events_v24(")
+            && before_that.contains("category IN (2,3,5,7,8,9,10)"),
         "migration 024 was not kept immutable before 025"
     );
-    let earlier = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 3];
+    let earlier = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 4];
     assert!(
         earlier.contains("CREATE TABLE security_master(")
             && earlier.contains("CREATE TABLE price_limit_rules("),
@@ -1341,14 +1353,14 @@ fn schema24_builds_on_fresh_init_and_empty_upgrade() {
     }
 }
 
-/// M3 PR-1 (issue-446 §9.3): schema 25 builds on both init paths — the fresh
-/// compact init and the empty 18 -> compact upgrade — with `user_version=25`,
-/// the five index tables created empty, `price_limit_rules.min_band_ticks`
-/// present and NULL everywhere, and clean foreign keys. The "24 -> 25" step
-/// itself is fresh-init only (D-08); the separate refused-not-upgraded test
-/// covers what a schema-24 file gets.
+/// M3 PR-1 + refresh R2: schema 26 builds on both init paths — the fresh
+/// compact init and the empty 18 -> compact upgrade — with `user_version=26`,
+/// the five M3 index tables and the three refresh-run tables created empty,
+/// `price_limit_rules.min_band_ticks` present and NULL everywhere, and clean
+/// foreign keys. The chain is fresh-init only (D-08); the separate
+/// refused-not-upgraded test covers what a schema-24 file gets.
 #[test]
-fn schema25_builds_on_fresh_init_and_empty_upgrade() {
+fn schema26_builds_on_fresh_init_and_empty_upgrade() {
     for fresh in [true, false] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m3.db");
@@ -1363,7 +1375,7 @@ fn schema25_builds_on_fresh_init_and_empty_upgrade() {
         assert_eq!(
             raw_user_version(&path),
             COMPACT_SCHEMA_VERSION,
-            "user_version must be 25 (fresh={fresh})"
+            "user_version must be 26 (fresh={fresh})"
         );
         let c = Connection::open(&path).unwrap();
         for table in [
@@ -1372,6 +1384,9 @@ fn schema25_builds_on_fresh_init_and_empty_upgrade() {
             "exchange_source_snapshots",
             "generation_facts",
             "retire_exemptions",
+            "source_refresh_runs",
+            "source_refresh_run_sources",
+            "source_refresh_run_members",
         ] {
             let n: i64 = c
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
@@ -1399,7 +1414,7 @@ fn schema25_builds_on_fresh_init_and_empty_upgrade() {
             .exists([])
             .unwrap();
         assert!(!broken, "foreign key violations (fresh={fresh})");
-        for version in [24, 25] {
+        for version in [24, 25, 26] {
             let rows: i64 = c
                 .query_row(
                     "SELECT count(*) FROM schema_migrations WHERE version=?1",
@@ -1656,42 +1671,57 @@ fn schema25_constraints_reject_duplicates_and_bad_values() {
         ),
     );
 
-    // exchange_source_snapshots: snapshot_id (byte sha) is the primary key;
-    // the UNIQUE includes it, so re-freezing the same request with different
-    // bytes is allowed while a duplicate index row is not.
-    let exchange = |snapshot_id: &str, store_kind: &str, basis_status: &str| {
+    // exchange_source_snapshots (schema 26): the row identity is
+    // (byte sha, request fingerprint). Identical bytes under two different
+    // requests are two reusable windows; the same pair twice is one row.
+    let exchange = |snapshot_id: &str, fingerprint: &str, store_kind: &str, basis_status: &str| {
         format!(
             "INSERT INTO exchange_source_snapshots(snapshot_id,store_sha256,store_kind,\
              source_id,url,request_fingerprint,fetched_at,as_of,size_bytes,row_count,\
              parser_version,basis_status) \
              VALUES('{snapshot_id}',X'{store}','{store_kind}','sse_listing',\
-             'https://example.invalid/list','fp-1','2026-10-29T00:00:00Z',\
+             'https://example.invalid/list','{fingerprint}','2026-10-29T00:00:00Z',\
              '2026-10-29',100,10,'sse-listing-v1','{basis_status}')"
         )
     };
     let first = "a".repeat(64);
     let second = "b".repeat(64);
-    c.execute(&exchange(&first, "http_fetch", "approved_source"), [])
-        .unwrap();
-    rejected(
-        "duplicate exchange_source_snapshots snapshot_id",
-        c.execute(&exchange(&first, "http_fetch", "approved_source"), []),
-    );
     c.execute(
-        &exchange(&second, "archive_import", "owner_risk_accepted"),
+        &exchange(&first, "fp-1", "http_fetch", "approved_source"),
+        [],
+    )
+    .unwrap();
+    rejected(
+        "duplicate exchange_source_snapshots (snapshot, fingerprint)",
+        c.execute(
+            &exchange(&first, "fp-1", "http_fetch", "approved_source"),
+            [],
+        ),
+    );
+    // Same bytes, different request: the second window must remain reusable.
+    c.execute(
+        &exchange(&first, "fp-2", "http_fetch", "approved_source"),
+        [],
+    )
+    .unwrap();
+    c.execute(
+        &exchange(&second, "fp-1", "archive_import", "owner_risk_accepted"),
         [],
     )
     .unwrap();
     rejected(
         "unregistered exchange_source_snapshots store_kind",
         c.execute(
-            &exchange(&"c".repeat(64), "streamed", "approved_source"),
+            &exchange(&"c".repeat(64), "fp-1", "streamed", "approved_source"),
             [],
         ),
     );
     rejected(
         "unregistered exchange_source_snapshots basis_status",
-        c.execute(&exchange(&"d".repeat(64), "http_fetch", "pending"), []),
+        c.execute(
+            &exchange(&"d".repeat(64), "fp-1", "http_fetch", "pending"),
+            [],
+        ),
     );
 
     // generation_facts: one fact per (generation, role, kind).

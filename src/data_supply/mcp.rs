@@ -423,7 +423,7 @@ impl DataApi {
             production_blocking_reasons.push(self.source_block());
         }
         encode(Capabilities {
-            capability_revision: "generic-data-v8".into(),
+            capability_revision: "generic-data-v9".into(),
             items,
             max_batch_entities: 100,
             max_page_size: 1000,
@@ -1030,6 +1030,43 @@ impl DataApi {
                         .unwrap()
                     }),
                 })
+            }
+            Handler::RefreshExchangeSources => {
+                if self.access != Access::local() {
+                    return Err(ApiError::new(
+                        "forbidden",
+                        "refresh_exchange_sources requires local owner access",
+                    ));
+                }
+                let command: crate::source_refresh::wire::RefreshRequest = decode(input)?;
+                let today = crate::calendar::shanghai_today();
+                if command.dry_run {
+                    let report = crate::source_refresh::dry_run(today, &command)
+                        .map_err(|error| ApiError::new(error.code(), error.to_string()))?;
+                    return encode(report);
+                }
+                let store = crate::source_store::configured(self.source_store_policy)
+                    .map_err(|error| ApiError::new(error.code(), error.to_string()))?
+                    .ok_or_else(|| {
+                        ApiError::new(
+                            crate::source_store::UNCONFIGURED_CODE,
+                            format!(
+                                "{} is not configured; refresh needs a readable source store",
+                                crate::source_store::CONFIG_ENV
+                            ),
+                        )
+                    })?;
+                let client = crate::exchange_source::Client::helper()
+                    .map_err(|error| ApiError::new(error.code(), error.to_string()))?;
+                let report = crate::source_refresh::run(
+                    &store,
+                    &self.queries.repository.market,
+                    &client,
+                    today,
+                    &command,
+                )
+                .map_err(|error| ApiError::new(error.code(), error.to_string()))?;
+                encode(report)
             }
             Handler::Collection
             | Handler::Retry

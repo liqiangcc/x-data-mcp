@@ -116,10 +116,10 @@ class RealDocs(unittest.TestCase):
 REGION_SCHEMA = 24
 REGION_REVISION = "generic-data-v8"
 # Current regions and STATUS state DEPLOYED facts; the registry may be ahead
-# (the v8 minimal switch deploys the ops entry's 15 tools while the code
-# registers 24 across three entries).
-REGION_DATA_TOOLS = 15
-REGION_CODE_DATA_TOOLS = 24
+# (the v8 minimal switch deploys the ops entry's 16 tools while the code
+# registers 25 across three entries; the extra tool is R2's code-only entry).
+REGION_DATA_TOOLS = 16
+REGION_CODE_DATA_TOOLS = 25
 REGION_ACQUIRE_TOOLS = 10
 
 
@@ -188,29 +188,29 @@ class StaleCurrentRegions(unittest.TestCase):
         # design.md:69 before the P1-1 correction said 21 data tools (item 7d #2).
         old = "| MCP | data socket 21 data tools、acquisition socket 10 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(old)), ["data-tool-count"])
-        good = "| MCP | data socket 15 data tools、acquisition socket 10 acquisition tools | x |\n"
+        good = "| MCP | data socket 16 data tools、acquisition socket 10 acquisition tools | x |\n"
         self.assertEqual(region_claims(good), [])
-        bad_acquire = "| MCP | data socket 15 data tools、acquisition socket 8 acquisition tools | x |\n"
+        bad_acquire = "| MCP | data socket 16 data tools、acquisition socket 8 acquisition tools | x |\n"
         self.assertEqual(rules(region_claims(bad_acquire)), ["acquire-tool-count"])
 
     def test_code_tool_count_may_be_ahead_of_the_deployed_one(self):
-        # The code registers 24 data tools across three entries while the
-        # deployed ops entry serves 15: a sentence explicitly marked as the
+        # The code registers 25 data tools across three entries while the
+        # deployed ops entry serves 16: a sentence explicitly marked as the
         # code fact is checked against the registry, and the deployed count
         # stays valid.
         self.assertEqual(
-            region_claims("已部署实例仍为 15 data tools。\n"), []
+            region_claims("已部署实例仍为 16 data tools。\n"), []
         )
         self.assertEqual(
-            region_claims("代码（main）为 24 data tools（未部署）。\n"), []
+            region_claims("代码（main）为 25 data tools（未部署）。\n"), []
         )
-        found = region_claims("代码（main）为 25 data tools（未部署）。\n")
+        found = region_claims("代码（main）为 26 data tools（未部署）。\n")
         self.assertEqual(rules(found), ["data-tool-count"], found)
 
     def test_bare_tool_count_must_be_one_of_the_registries(self):
         # The v6 switch checklist header said "21 tools" (stale current fact).
         self.assertEqual(rules(region_claims("对齐到 preview.31 / 21 tools / v5。\n")), ["tool-count"])
-        self.assertEqual(region_claims("双 server 共 15 tools。\n"), [])
+        self.assertEqual(region_claims("双 server 共 16 tools。\n"), [])
 
     def test_data_history_word_is_not_a_history_marker(self):
         # verified-reads.md before the P1-1 correction (item 7d #5): "某个历史版本" is a data
@@ -437,7 +437,7 @@ STATUS_OK = """# 当前状态（STATUS）
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 15 | capability `generic-data-v8` |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock` | 16 | capability `generic-data-v8` |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | — |
 
 ## 数据
@@ -446,9 +446,9 @@ STATUS_OK = """# 当前状态（STATUS）
 |---|---|---|
 | 热 generation | **5/6**：1 active + 4 superseded；下一次 acquire 可直接受理 | acquire.sqlite |
 
-preview.36 部署后 capability 仍为 `generic-data-v8`，15/10 工具不变。
+preview.36 部署后 capability 仍为 `generic-data-v8`，16/10 工具不变。
 
-工具数与能力版本为 live 只读复核：data socket `tools/list` 返回 15 个工具、
+工具数与能力版本为 live 只读复核：data socket `tools/list` 返回 16 个工具、
 acquire socket `tools/list` 返回 10 个工具。两个 socket 的 `serverInfo.version` 均为 `0.2.0-preview.36`。
 """
 
@@ -511,7 +511,7 @@ class StatusConsistency(unittest.TestCase):
 
     def test_service_table_tool_count_is_checked(self):
         text = STATUS_OK.replace(
-            "| `run/mcp.sock` | 15 |", "| `run/mcp.sock` | 21 |"
+            "| `run/mcp.sock` | 16 |", "| `run/mcp.sock` | 21 |"
         )
         self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
 
@@ -519,38 +519,38 @@ class StatusConsistency(unittest.TestCase):
         # v8 phase 2: one data unit, several sockets/entries. Each `--entry k`
         # in the 入口 cell is checked against entry k's source allowlist.
         multi = STATUS_OK.replace(
-            "| `run/mcp.sock` | 15 |",
+            "| `run/mcp.sock` | 16 |",
             "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
             "（`--entry research`）、`run/maint.sock`（`--entry maint`） "
-            "| 15 / 5 / 9 |",
+            "| 16 / 5 / 9 |",
         )
         self.assertEqual(status_claims(multi), [])
-        wrong = multi.replace("| 15 / 5 / 9 |", "| 15 / 6 / 9 |")
+        wrong = multi.replace("| 16 / 5 / 9 |", "| 16 / 6 / 9 |")
         self.assertEqual(rules(status_claims(wrong)), ["status-service-tool-count"])
         unknown = multi.replace("`--entry maint`", "`--entry devops`")
         self.assertEqual(rules(status_claims(unknown)), ["status-service-entry"])
 
     def test_multi_entry_row_count_length_must_match_entries(self):
         text = STATUS_OK.replace(
-            "| `run/mcp.sock` | 15 |",
+            "| `run/mcp.sock` | 16 |",
             "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
-            "（`--entry research`） | 15 |",
+            "（`--entry research`） | 16 |",
         )
         self.assertEqual(rules(status_claims(text)), ["status-service-tool-count"])
 
     def test_prose_tool_count_is_checked(self):
         text = STATUS_OK.replace(
-            "data socket `tools/list` 返回 15 个工具",
+            "data socket `tools/list` 返回 16 个工具",
             "data socket `tools/list` 返回 21 个工具",
         )
         self.assertEqual(rules(status_claims(text)), ["status-tool-count"])
 
     def test_code_tool_count_in_status_may_be_ahead(self):
         text = STATUS_OK + (
-            "\n代码（main）为 24 data tools（未部署）；已部署实例仍为 15 data tools。\n"
+            "\n代码（main）为 25 data tools（未部署）；已部署实例仍为 16 data tools。\n"
         )
         self.assertEqual(status_claims(text), [])
-        wrong = STATUS_OK + "\n代码（main）为 25 data tools（未部署）。\n"
+        wrong = STATUS_OK + "\n代码（main）为 26 data tools（未部署）。\n"
         self.assertEqual(rules(status_claims(wrong)), ["status-data-tool-count"])
 
     def test_tool_pair_is_checked(self):

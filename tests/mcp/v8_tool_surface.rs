@@ -116,7 +116,7 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // not relaxed for any other reason.
     let budgets = [
         (EntryKind::Research, 5usize, 12_200usize),
-        (EntryKind::Ops, 15usize, 29_300usize),
+        (EntryKind::Ops, 16usize, 31_000usize),
         (
             EntryKind::Maint,
             if cfg!(target_os = "linux") { 9 } else { 8 },
