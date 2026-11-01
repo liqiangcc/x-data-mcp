@@ -108,7 +108,7 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 没有旁路。
 
 - 状态每个 `Client` 一份（`Mutex<Option<Instant>>`），不是全局静态锁：测试与不同使用方互不
-  影响，每个 client 的第一次请求不等待。R3 起派生 item 不再发请求（只读来源库），出站请求
+  影响，每个 client 的第一次请求不等待。R3 起派生 item 不再发请求（只读来源库，零探针），出站请求
   来自 `refresh_exchange_sources`：一个刷新 run 用一个 `Client`，run 内连续请求受控；
   item/run 之间本来就串行，跨 run 的第一次请求不受上一个 client 约束。
 - 默认值 1,000 ms；环境变量 `X_DATA_MCP_MIN_REQUEST_INTERVAL_MS`（整毫秒）。`0` 关闭间隔，

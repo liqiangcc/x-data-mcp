@@ -2,8 +2,8 @@
 //!
 //! The four source-derived items no longer acquire: they derive from the frozen
 //! set a `refresh_exchange_sources` run published. Every test here freezes pages
-//! directly (no transport exists in this module at all, which is the point) and
-//! then calls the read path:
+//! directly and then calls the read path; the one test that owns a transport
+//! owns a *counting fake* and asserts it stays at zero:
 //!
 //! - a missing snapshot, an incomplete page set or a confirmation older than
 //!   `H = 14` days fails closed with a stable code,
@@ -17,9 +17,11 @@ use chrono::NaiveDate;
 
 use super::{a1a2, a3, record_test_refresh_run, risk_warnings, security_names};
 use crate::exchange_source::request::quarter_segments;
+use crate::exchange_source::transport::with_helper_transport;
 use crate::exchange_source::validate::{declared_tabkey, parse_page};
 use crate::exchange_source::{
-    AcquisitionPlan, BasisStatus, HttpResponse, Segment, SourceId, freeze_page,
+    AcquisitionPlan, BasisStatus, Client, HttpRequest, HttpResponse, Segment, SourceId, Transport,
+    TransportError, freeze_page,
 };
 use crate::security_master::{
     DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
@@ -139,6 +141,131 @@ fn freeze(
         fetched_at,
     )
     .expect("the frozen page is admitted");
+}
+
+// ------------------------------------------------- daily items, no request ---
+
+/// A fake exchange transport that counts every attempt and refuses it. The
+/// daily items must never reach it (R3, `issue-446` §5.1); the acquiring form of
+/// the same adapter does, which is what keeps the zero below honest.
+#[derive(Default)]
+struct NoRequests {
+    calls: std::sync::Mutex<u64>,
+}
+
+impl NoRequests {
+    fn calls(&self) -> u64 {
+        *self
+            .calls
+            .lock()
+            .expect("the fake's counter is never poisoned")
+    }
+}
+
+impl Transport for NoRequests {
+    fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+        *self
+            .calls
+            .lock()
+            .expect("the fake's counter is never poisoned") += 1;
+        Err(TransportError::Unavailable(format!(
+            "the daily items must not send exchange requests; this one asked for {}",
+            request.url
+        )))
+    }
+}
+
+/// R2b's single-flight guard covers the refresh task only: a daily worker that
+/// still acquired would add its own stream on top of a running refresh and
+/// double the exchanges' 1 request/s budget. Every daily `run_source` therefore
+/// has to read the frozen set, and this test measures that instead of reading
+/// it: a fake transport counts the attempts, and the daily entry points are the
+/// same four calls `data_supply::derived` makes.
+#[test]
+fn the_daily_items_send_no_exchange_request() {
+    use crate::exchange_source::SourceId as Id;
+
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let scenario = Scenario::new();
+    // The wall clock is what the three `run_source`s without a `today` argument
+    // gate on, so the confirmation is "today" and the pages stay visibly older.
+    let now = chrono::Utc::now().date_naive();
+    let confirmed = now.format("%Y-%m-%d").to_string();
+    let run_at = format!("{confirmed}T03:00:00Z");
+    let suspensions_today = day(2024, 7, 1);
+
+    freeze_a1a2(&scenario, OBSERVED_AT);
+    record_a1a2_runs(&scenario, &confirmed);
+    freeze_sz_short_name(&scenario, OBSERVED_AT);
+    record_test_refresh_run(&scenario.market, Id::SzseShortName, &confirmed, &run_at);
+    freeze_bulletins(&scenario, now, OBSERVED_AT);
+    record_test_refresh_run(&scenario.market, Id::SseBulletin, &confirmed, &run_at);
+    freeze_a3_except(&scenario, suspensions_today, |_| true);
+
+    let members: Vec<SecurityLifecycleFact> = ["600001", "600018", "600849", "601607"]
+        .into_iter()
+        .map(sh_member)
+        .collect();
+
+    let _policy = scenario.policy();
+    let fake = std::sync::Arc::new(NoRequests::default());
+    let fake_for_hook = std::sync::Arc::clone(&fake);
+    let (admitted, daily_calls) = with_helper_transport(fake_for_hook, || {
+        let admitted = (
+            matches!(
+                a1a2::run_source(&scenario.market, Policy::Required)
+                    .expect("the security-master item reads its frozen set"),
+                a1a2::RunSource::Admitted(_)
+            ),
+            matches!(
+                security_names::run_source(&scenario.market, Policy::Required)
+                    .expect("the name-history item reads its frozen table"),
+                security_names::RunSource::Admitted(_)
+            ),
+            matches!(
+                risk_warnings::run_source(&scenario.market, Policy::Required)
+                    .expect("the risk-warning item reads its frozen tables"),
+                risk_warnings::RunSource::Admitted(_)
+            ),
+            matches!(
+                a3::run_source(
+                    &scenario.market,
+                    &members,
+                    suspensions_today,
+                    Policy::Required
+                )
+                .expect("the suspension item reads its frozen windows"),
+                a3::RunSource::Admitted(_)
+            ),
+        );
+        let daily_calls = fake.calls();
+
+        // The hook is live, not dead wire: the acquiring form of the same
+        // adapter does reach the fake, and `Client::attempts()` counts exactly
+        // those transport calls.
+        let client = Client::helper().expect("the installed fake serves helper()");
+        let error = a1a2::acquire(&scenario.store, &scenario.market, &client).unwrap_err();
+        assert_eq!(error.code(), "source_unavailable");
+        assert!(
+            fake.calls() > daily_calls,
+            "the fake counted nothing at all"
+        );
+        assert_eq!(client.attempts(), fake.calls());
+        (admitted, daily_calls)
+    });
+
+    assert_eq!(
+        admitted,
+        (true, true, true, true),
+        "every daily item read its frozen set instead of failing"
+    );
+    assert_eq!(
+        daily_calls, 0,
+        "the daily items sent {daily_calls} exchange request(s); acquisition belongs to \
+         refresh_exchange_sources (issue-446 §5.1)"
+    );
 }
 
 // ---------------------------------------------------------------- A-1/A-2 ---

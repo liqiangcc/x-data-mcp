@@ -90,15 +90,17 @@ pub(crate) fn record_test_refresh_run(
             window_end: None,
         })
         .collect();
-    market
-        .begin_source_refresh_run(&RunStart {
+    let claimed = market
+        .claim_source_refresh_run(&RunStart {
             run_id: run_id.clone(),
             mode: "full".to_string(),
             scope: source.as_str().to_string(),
             started_at: finished_at.to_string(),
             task_id: None,
+            owner_instance: "read-tests".to_string(),
         })
         .unwrap();
+    assert!(claimed.is_none(), "a test run must not meet an open run");
     market
         .finish_source_refresh_run(
             &run_id,
@@ -127,6 +129,9 @@ pub(crate) fn record_test_refresh_run(
                 changed: 0,
                 unobserved_windows: 0,
                 failed_windows: 0,
+                // A test records no acquisition wall clock; D-67's per-table
+                // gate reads this column from real runs only.
+                elapsed_ms: 0,
                 verified_through: Some(verified_through.to_string()),
             }],
             &members,

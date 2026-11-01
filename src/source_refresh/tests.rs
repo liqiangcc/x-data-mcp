@@ -1261,6 +1261,8 @@ fn wait_for_run(backend: &MarketBackend, run_id: &str) -> super::wire::RefreshRe
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
+}
+
 /// R1's `H` gate reads the refresh run's confirmation date, not the selected
 /// page's own `as_of` (XDM-156 ③). A whole-table page keeps the date it was
 /// first observed with forever — `full` re-fetches identical bytes, so nothing

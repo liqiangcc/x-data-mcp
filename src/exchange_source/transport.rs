@@ -23,6 +23,8 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+#[cfg(test)]
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -191,6 +193,52 @@ impl Pacer for NoSleepPacer {
     fn sleep(&self, _: Duration) {}
 }
 
+/// The fake transport [`Client::helper`] hands out inside [`with_helper_transport`].
+///
+/// Thread-local on purpose: a `#[test]` and the code it drives share one
+/// thread, so one test's fake never serves another test's daily run.
+#[cfg(test)]
+thread_local! {
+    static HELPER_TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn installed_helper_transport() -> Option<Arc<dyn Transport>> {
+    HELPER_TRANSPORT.with(|slot| slot.borrow().clone())
+}
+
+/// Run `drive` with every [`Client::helper`] call on this thread pointed at
+/// `transport`; the previous installation is restored afterwards, also when
+/// `drive` panics. The client a caller builds is a real [`Client`] with the real
+/// pacing bookkeeping, so its [`Client::attempts`] counts the fake's calls.
+#[cfg(test)]
+pub(crate) fn with_helper_transport<T>(
+    transport: Arc<dyn Transport>,
+    drive: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Arc<dyn Transport>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            HELPER_TRANSPORT.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = HELPER_TRANSPORT.with(|slot| slot.borrow_mut().replace(transport));
+    let _restore = Restore(previous);
+    drive()
+}
+
+/// A [`Transport`] shared with the test that installed it.
+#[cfg(test)]
+struct SharedTransport(Arc<dyn Transport>);
+
+#[cfg(test)]
+impl Transport for SharedTransport {
+    fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+        self.0.get(request)
+    }
+}
+
 /// Transport plus retry policy and the outbound request spacing.
 ///
 /// Every attempt (first try and each retry) waits until at least
@@ -229,6 +277,16 @@ impl Client {
     /// [`MIN_REQUEST_INTERVAL_ENV`] (default 1,000 ms). An invalid override is
     /// `source_transport_unavailable` (fail-closed), never a different limit.
     pub fn helper() -> Result<Self, TransportError> {
+        // The daily items never acquire (R3, issue-446 §5.1): a request from a
+        // daily worker on top of a refresh run would double the exchanges'
+        // 1 request/s budget, and R2b's single-flight guard cannot see a daily
+        // worker. [`with_helper_transport`] lets a test install a counting fake
+        // here, so "the daily run sent nothing" is an assertion rather than a
+        // reading of the code.
+        #[cfg(test)]
+        if let Some(transport) = installed_helper_transport() {
+            return Ok(Self::with_transport(SharedTransport(transport)).without_sleep());
+        }
         let interval =
             min_request_interval(std::env::var(MIN_REQUEST_INTERVAL_ENV).ok().as_deref())
                 .map_err(TransportError::Unavailable)?;
