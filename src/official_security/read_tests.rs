@@ -21,6 +21,10 @@ use crate::exchange_source::validate::{declared_tabkey, parse_page};
 use crate::exchange_source::{
     AcquisitionPlan, BasisStatus, HttpResponse, Segment, SourceId, freeze_page,
 };
+use crate::security_master::{
+    DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
+    SecurityLifecycleFact,
+};
 use crate::source_store::{Policy, PolicyEnv, SourceStore, TEST_ENV_LOCK};
 use crate::sqlite_market::backend::MarketBackend;
 use crate::sqlite_tasks::SqliteTasks;
@@ -472,6 +476,35 @@ fn the_risk_warning_item_reads_the_table_and_the_bulletin_quarters() {
 
 const A3_OBSERVED_AT: &str = "2008-04-14T02:00:00Z";
 
+/// One SSE A-share member, listed long before the fixture windows: A-3 clips
+/// every event to the member interval, so a read without members carries no
+/// fact at all.
+fn sh_member(code: &str) -> SecurityLifecycleFact {
+    let listing = day(1995, 1, 2);
+    SecurityLifecycleFact {
+        exchange: Exchange::Sh,
+        code: code.to_string(),
+        effective_from: listing,
+        effective_to: None,
+        instrument_class: 0,
+        issuer_key: None,
+        issuer_resolution: IssuerResolution::CodeDate,
+        listing_date: Some(listing),
+        listing_date_tdx: Some(listing),
+        listing_source: ListingSource::TdxSsdate,
+        b_listing_date: None,
+        delisting_date: None,
+        delisting_date_tdx: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        arrangement_start: None,
+        arrangement_end: None,
+        listing_conflict: false,
+        delisting_conflict: false,
+        known_at: None,
+    }
+}
+
 fn a3_windows(today: NaiveDate) -> Vec<Segment> {
     quarter_segments(day(2008, 1, 1), today).unwrap()
 }
@@ -525,12 +558,26 @@ fn the_suspension_item_reads_every_window_and_keeps_the_quiet_one_as_a_gap() {
     freeze_a3_except(&scenario, today, |_| true);
     let manifest = scenario.manifest_lines();
 
-    let admitted = a3::read(&scenario.store, &scenario.market, &[], today).unwrap();
+    let members: Vec<SecurityLifecycleFact> = ["600001", "600018", "600680", "600849", "601607"]
+        .into_iter()
+        .map(sh_member)
+        .collect();
+    let admitted = a3::read(&scenario.store, &scenario.market, &members, today).unwrap();
 
     assert_eq!(admitted.windows, 2);
-    assert_eq!(admitted.not_observed_windows.len(), 1);
-    assert!(admitted.not_observed_windows[0].contains("2008-01-01"));
-    assert!(!admitted.snapshot.facts.is_empty());
+    assert_eq!(
+        admitted.not_observed_windows,
+        vec!["2008-01-01..2008-03-31".to_string()]
+    );
+    assert_eq!(admitted.counters.rows_read, 6);
+    // 600001 (resumed range), 600018 (whole day), 601607 (never resumed).
+    assert_eq!(
+        admitted.snapshot.facts.len(),
+        3,
+        "{:#?}",
+        admitted.snapshot.facts
+    );
+    assert_eq!(admitted.unclosed_rows, 1);
     // §5.3: a window set is as new as its newest page.
     assert_eq!(admitted.snapshot.as_of, day(2008, 4, 14));
     assert_eq!(admitted.freshness.staleness_days, Some(1));
