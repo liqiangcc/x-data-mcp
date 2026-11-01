@@ -334,6 +334,9 @@ fn derived_entry(dataset: DerivedDataset, raw: RawDerived) -> Result<DerivedEntr
         digest_format: raw.5,
         algorithm_version: raw.6,
         source_binding_digest: digest_hex(raw.7)?,
+        // A factor set is per entity and comes from the published daily set,
+        // not from a refresh-run table.
+        verified_through: None,
     })
 }
 
@@ -399,6 +402,7 @@ pub(crate) fn calendar_version(c: &Connection) -> Result<DerivedEntry, Error> {
         digest_format: row.digest_format,
         algorithm_version: row.algorithm_version,
         source_binding_digest: hex(row.source_binding_digest.as_slice()),
+        verified_through: None,
     })
 }
 
@@ -424,6 +428,10 @@ pub(crate) fn panel_version(
         digest_format: row.digest_format,
         algorithm_version: row.algorithm_version,
         source_binding_digest: hex(row.source_binding_digest.as_slice()),
+        // §5.3: the dataset-level confirmation travels with the version it
+        // describes; the refresh-run record owns it, so a replay or a rewrite
+        // cannot lose it.
+        verified_through: crate::sqlite_market::refresh_runs::dataset_verified_through(c, kind)?,
     }))
 }
 

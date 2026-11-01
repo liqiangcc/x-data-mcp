@@ -17,6 +17,17 @@
 //!                               RiskWarningSet ──► writer (PR-10)
 //! ```
 //!
+//! ## Knowledge time (XDM-157)
+//!
+//! The SZ page carries the *change* day, never the day we first read it, so the
+//! adapter dates each admitted row after parsing: [`resolve_known_at`] walks the
+//! source store's `szse_short_name` registrations oldest first and takes the day
+//! of the earliest one that contains the row (`issue-446` §5.3, Q4). The domain
+//! only passes the day through and the writer only stores it, because the store
+//! is the only owner of "when did this byte first arrive". A row no registered
+//! snapshot contains fails closed rather than being written with a NULL, which
+//! a `known_at` filter would exclude forever.
+//!
 //! ## Admission tiers (D-58)
 //!
 //! - SZ: the dated `SSGSGMXX`/`tab2` short-name change table is
@@ -85,8 +96,11 @@ use std::sync::Arc;
 /// as well as the old flat rows, so a page is read document by document and
 /// events are de-duplicated by `(bulletin id, event)` instead of the first
 /// document of a bulletin winning (XDM-151 §4/§7). Flat v2 snapshots still
-/// parse: one object is one group.
-pub const PARSER_VERSION: &str = "risk-warnings-v3";
+/// parse: one object is one group. v3 → v4: an SZ change row carries its
+/// knowledge time — the day the first snapshot containing it was stored
+/// (§5.3/Q4) — so rows written before XDM-157 stay distinguishable from rows
+/// whose `known_at` is set on purpose.
+pub const PARSER_VERSION: &str = "risk-warnings-v4";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -234,10 +248,14 @@ pub struct Admitted {
     /// sources (SZ table, SH window set), `verified_through` is the older
     /// refresh confirmation and `staleness_days` the larger of the two.
     pub freshness: Freshness,
+    /// The **Shanghai** day the oldest registered short-name snapshot entered
+    /// the store: the start of the SZ rows' knowledge-time window (§5.3/Q4).
+    pub first_capture_day: Option<NaiveDate>,
 }
 
 impl Admitted {
     pub fn evidence(&self) -> Value {
+        let first_capture_day = self.first_capture_day;
         json!({
             "adapter": "historical ST/risk warnings (D-58)",
             "parser_version": PARSER_VERSION,
@@ -277,6 +295,24 @@ impl Admitted {
                 "sz": "source_change_date (APPROVED_SOURCE)",
                 "sh": "explicit title date when present, otherwise announcement day (OWNER_RISK_ACCEPTED)",
                 "sh_status": "owner_risk_accepted",
+            },
+            // §5.3/Q4: the two coverage sentences are separate claims. The
+            // effective-time history is the sources' own (SZ table from 1994,
+            // SSE announcements from 2000-01 — and 2000–2003 stays
+            // `not_observed`); the knowledge-time (PIT) window starts on the
+            // day we first stored a snapshot, because that is what `known_at`
+            // says.
+            "known_at_coverage": {
+                "known_at_policy": "SZSE change rows carry known_at = the Shanghai day on \
+                    which the first snapshot containing the row entered the source store \
+                    (acquired_at is a UTC instant); SSE event rows carry the announcement \
+                    day the source proves",
+                "effective_history": "effective-time ST state history is available from the \
+                    source start (SZSE short-name table 1994-01-03; SSE bulletin index \
+                    archive 2000-01, with every 2000-2003 quarter permanently not_observed)",
+                "known_at_pit": format!("knowledge-time PIT (known_at filtering) is \
+                    available from the first capture day, {}", first_capture_day
+                        .map_or_else(|| "not yet captured".to_string(), |day| day.to_string())),
             },
             "absence_policy": "not_observed is a coverage window, never a `normal` row; \
                 a missing interval remains unknown",
@@ -335,6 +371,10 @@ pub(crate) struct SzShortNameTable {
     pub snapshot_ids: Vec<String>,
     pub rows: usize,
     pub skipped_codes: usize,
+    /// The day the oldest registered short-name snapshot entered the store:
+    /// the start of the knowledge-time window the coverage sentence reports
+    /// (`issue-446` §5.3/Q4). `None` when no snapshot is registered.
+    pub first_capture_day: Option<NaiveDate>,
 }
 
 /// The `TABKEY` the static `SSGSGMXX` plan declares, read back from the plan
@@ -411,12 +451,111 @@ fn parse_sz_table(
         changes.append(&mut parsed);
         ids.push(snapshot_id.clone());
     }
+    // The page cannot date its own admission, so the store dates the row
+    // (§5.3). One resolver for the daily read path, the acquisition and both
+    // replay scopes.
+    let first_capture_day = resolve_known_at(store, &mut changes, declared_tabkey.as_deref())?;
     Ok(SzShortNameTable {
         changes,
         snapshot_ids: ids,
         rows,
         skipped_codes,
+        first_capture_day,
     })
+}
+
+/// Every registered SZSE short-name snapshot, oldest first: `(day, sha256)`.
+///
+/// `day` is the **Shanghai** day of the registration's own `acquired_at` (the
+/// day those bytes were first obtained here), not the day this call runs:
+/// re-reading the store never advances a fact's knowledge time. `acquired_at`
+/// is a UTC instant, so the conversion is `calendar::shanghai_date_of`, not
+/// `index::observation_date` (which names the exchange's UTC observation day);
+/// a snapshot stored at 18:43Z is already the next day in Beijing. The source
+/// store manifest is the owner of that fact, so the resolution also works for a
+/// replay that has a store but no market database — which is exactly the
+/// fresh-init deploy path. Re-registering identical bytes appends a line with a later
+/// `acquired_at`; the **minimum** per sha256 is the first arrival.
+fn short_name_arrival_days(store: &SourceStore) -> Result<Vec<(NaiveDate, String)>, Error> {
+    let mut days: BTreeMap<String, NaiveDate> = BTreeMap::new();
+    for record in store.records()? {
+        if record.source_id != SourceId::SzseShortName.as_str() {
+            continue;
+        }
+        let day = crate::calendar::shanghai_date_of(&record.acquired_at).ok_or_else(|| {
+            Error::invalid(format!(
+                "source store record for szse_short_name snapshot {} has acquired_at={:?}, \
+                 which is not a timestamp",
+                record.sha256, record.acquired_at
+            ))
+        })?;
+        days.entry(record.sha256)
+            .and_modify(|seen| *seen = (*seen).min(day))
+            .or_insert(day);
+    }
+    let mut ordered: Vec<(NaiveDate, String)> =
+        days.into_iter().map(|(sha, day)| (day, sha)).collect();
+    ordered.sort();
+    Ok(ordered)
+}
+
+/// Fill `known_at` from the store (`issue-446` §5.3, Q4 ruling): a change's
+/// knowledge time is the day of the **earliest registered snapshot that
+/// contains it**.
+///
+/// The page itself cannot answer this (it carries the change day, not the day
+/// we first read it), so the adapter decides it after parsing by reading the
+/// source store's `szse_short_name` registrations oldest first and stopping as
+/// soon as every wanted row is dated. That is also why an unchanged row keeps the
+/// first round's day while a row that only appears in a later snapshot takes
+/// that snapshot's day: the writer replaces the whole table, and the day must
+/// not move with the write.
+///
+/// A row no registered snapshot contains fails closed: writing it with a NULL
+/// knowledge time would hide it from every `known_at` filter, and guessing the
+/// write day would claim we knew it earlier than we did.
+///
+/// Cost: one verified re-read and parse per registered snapshot until every
+/// wanted row is dated. A row that only appears in the newest snapshot makes the
+/// loop walk the whole weekly history once, which the item's own timing budget
+/// absorbs (a few hundred milliseconds at the current table size); nothing is
+/// cached across runs, because the store registration is the only owner of the
+/// arrival day.
+pub(crate) fn resolve_known_at(
+    store: &SourceStore,
+    changes: &mut [SzNameChange],
+    declared_tabkey: Option<&str>,
+) -> Result<Option<NaiveDate>, Error> {
+    let days = short_name_arrival_days(store)?;
+    let first_capture = days.first().map(|(day, _)| *day);
+    let wanted: BTreeSet<String> = changes
+        .iter()
+        .map(|change| change.source_record_id.clone())
+        .collect();
+    let mut resolved: BTreeMap<String, NaiveDate> = BTreeMap::new();
+    for (day, snapshot_id) in &days {
+        if resolved.len() == wanted.len() {
+            break;
+        }
+        let bytes = store.read_verified(snapshot_id)?;
+        let (parsed, _, _) = parse_sz_page(&bytes, snapshot_id, declared_tabkey)?;
+        for change in parsed {
+            if wanted.contains(&change.source_record_id) {
+                resolved.entry(change.source_record_id).or_insert(*day);
+            }
+        }
+    }
+    for change in changes.iter_mut() {
+        change.known_at = resolved.get(&change.source_record_id).copied();
+    }
+    if let Some(missing) = changes.iter().find(|change| change.known_at.is_none()) {
+        return Err(Error::invalid(format!(
+            "no registered szse_short_name snapshot contains change {:?}; its knowledge \
+             time cannot be proven",
+            missing.source_record_id
+        )));
+    }
+    Ok(first_capture)
 }
 
 /// The SH bulletin windows: `2000-01-01` through **today**, quarter aligned.
@@ -640,6 +779,7 @@ fn admitted(
         snapshot_ids,
         sz_rows: sz.rows,
         sz_skipped_codes: sz.skipped_codes,
+        first_capture_day: sz.first_capture_day,
         sh_rows: sh.rows,
         sh_events,
         sh_ignored_rows: sh.ignored,
@@ -826,6 +966,10 @@ pub(crate) fn parse_sz_page(
             day,
             before_name: before,
             after_name: after,
+            // A page cannot date its own admission (§5.3): `resolve_known_at`
+            // fills this from the store right after parsing, one site for the
+            // daily read path, the acquisition and both replay scopes.
+            known_at: None,
         });
     }
     Ok((changes, total, skipped))
@@ -1117,7 +1261,13 @@ fn parse_day(text: &str, field: &str) -> Result<NaiveDate, Error> {
 /// document by document and de-duplicated by `(announcement id, event)`, like
 /// the live path; that de-duplication is keyed on the announcement, not the
 /// window, so this function cannot undo a revised window by itself.
+///
+/// `store` dates the SZ rows: `known_at` is the day the first registration
+/// containing the row entered the store (§5.3/Q4), exactly as the daily read
+/// path resolves it. The store manifest is the owner of arrival days, so a
+/// `--scope` replay without a database dates the rows too.
 pub fn replay(
+    store: &SourceStore,
     pages: &[(&str, String, Vec<u8>)],
     gaps: &[(NaiveDate, NaiveDate)],
     coverage: Vec<CoverageWindow>,
@@ -1147,6 +1297,11 @@ pub fn replay(
             _ => {}
         }
     }
+    // §5.3/Q4: the same store-derived knowledge time the daily item writes, so
+    // a replay is not "the same rows with a different `known_at`", and a fresh
+    // init (replay into an empty database) dates the rows the same way the
+    // first live write did.
+    let _ = resolve_known_at(store, &mut sz_changes, declared_tabkey.as_deref())?;
     let mut sz_coverage = Vec::new();
     let mut sh_coverage = Vec::new();
     for window in coverage {

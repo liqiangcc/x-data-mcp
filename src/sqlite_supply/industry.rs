@@ -179,6 +179,7 @@ fn manifest(identity: &Identity) -> ManifestEntry {
             adjustment: None,
             lineage: None,
             index: None,
+            verified_through: None,
         }),
         stale: None,
         as_of_day: None,

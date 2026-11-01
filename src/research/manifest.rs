@@ -37,11 +37,15 @@ type LineageIndex = BTreeMap<String, GenerationBinding>;
 /// `files[].dataset`/`files[].temporal` (§12.4/§12.5); v3 adds the M3 industry
 /// intervals and de-duplicated code migrations, the universe identity columns
 /// (`canonical_entity`/`aliases`), the bound industry dataset version and the
-/// `coverage` block. `snapshot_id` keeps its definition (canonical identity →
-/// first 32 hex), and the schema string is part of the identity, so a v2
-/// directory and a v3 directory with otherwise identical inputs differ (a v2
-/// directory stays readable — see `scripts/export_smoke.py`).
-pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v3";
+/// `coverage` block; v4 adds `derived[].verified_through` and the
+/// `security_names`/`risk_warnings` registrations (XDM-157, #446 §5.3), so an
+/// export can say through which day a complete refresh run confirmed the
+/// sources its files were recomputed from. `snapshot_id` keeps its definition
+/// (canonical identity → first 32 hex), and the schema string is part of the
+/// identity, so a v3 directory and a v4 directory with otherwise identical
+/// inputs differ (a v2/v3 directory stays readable — see
+/// `scripts/export_smoke.py`).
+pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v4";
 
 /// Prefix of every snapshot id (§7.3).
 pub const ID_PREFIX: &str = "snapshot-";
@@ -116,6 +120,12 @@ fn derived_value(entry: &DerivedEntry, lineage: &LineageIndex) -> Result<Value, 
     });
     if entry.dataset == DerivedDataset::AdjustmentEvents {
         value["entity"] = json!(entry.key);
+    }
+    // v4: present only when a complete refresh run proves the confirmation.
+    // Omitted rather than null: "no complete run yet" and "confirmed on day D"
+    // must not look alike, and an absent key keeps the identity canonical.
+    if let Some(day) = entry.verified_through {
+        value["verified_through"] = json!(day.to_string());
     }
     Ok(value)
 }

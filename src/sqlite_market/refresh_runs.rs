@@ -17,6 +17,7 @@
 //! Layer position: this module persists neutral records only. Source names,
 //! windows and plans stay in `crate::source_refresh`.
 
+use chrono::NaiveDate;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{integrity, storage};
@@ -499,6 +500,56 @@ pub(crate) fn latest_complete_verified_through(
     Ok(latest_complete(c, source_id)?.map(|run| run.verified_through))
 }
 
+/// The sources each derived whole-market dataset is built from (`issue-446`
+/// §5.3). A dataset's `verified_through` is the weaker of its inputs': one
+/// stale table makes the whole dataset only that fresh.
+fn dataset_sources(dataset_kind: &str) -> &'static [crate::exchange_source::SourceId] {
+    use crate::exchange_source::SourceId;
+    match dataset_kind {
+        crate::security_master::assembly::DATASET_KIND => &[
+            SourceId::SseListing,
+            SourceId::SseDelisting,
+            SourceId::SzseListing,
+            SourceId::SzseDelisting,
+        ],
+        crate::security_master::names::DATASET_KIND => &[SourceId::SzseShortName],
+        crate::security_master::risk_warnings::DATASET_KIND => {
+            &[SourceId::SzseShortName, SourceId::SseBulletin]
+        }
+        crate::security_master::suspensions::DATASET_KIND => &[SourceId::SseSuspension],
+        _ => &[],
+    }
+}
+
+/// The dataset-level `verified_through` of a derived whole-market dataset: the
+/// **oldest** latest-complete confirmation among the sources it derives from
+/// (`issue-446` §5.3: an item is only as fresh as its stalest input).
+///
+/// `None` means "no complete refresh run proves any confirmation yet", which is
+/// a fresh init, not "verified today": a dataset-level number is never guessed
+/// from a page's `as_of` here. Datasets outside the four R3 read-path items have
+/// no refresh inputs and answer `None`. The refresh run record is the durable
+/// owner of this fact (§5.6), so a dataset rewrite or a replay cannot lose it.
+pub(crate) fn dataset_verified_through(
+    c: &Connection,
+    dataset_kind: &str,
+) -> Result<Option<NaiveDate>, Error> {
+    let mut weakest: Option<NaiveDate> = None;
+    for source in dataset_sources(dataset_kind) {
+        let Some(day) = latest_complete_verified_through(c, source.as_str())? else {
+            return Ok(None);
+        };
+        let day = NaiveDate::parse_from_str(day.trim(), "%Y-%m-%d").map_err(|_| {
+            integrity(format!(
+                "refresh run for {} has verified_through={day:?}, which is not a day",
+                source.as_str()
+            ))
+        })?;
+        weakest = Some(weakest.map_or(day, |seen| seen.min(day)));
+    }
+    Ok(weakest)
+}
+
 /// One complete successful refresh of one source: the run identity R3 puts in a
 /// derived item's evidence, the date the H gate compares, and the member pages
 /// the run validated as one set (issue-446 §5.4/§5.5).
@@ -574,4 +625,178 @@ fn i64(value: u64) -> Result<i64, Error> {
 
 fn u64(value: i64) -> Result<u64, Error> {
     u64::try_from(value).map_err(|_| integrity(format!("refresh counter {value} is negative")))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    fn backend() -> (
+        tempfile::TempDir,
+        crate::sqlite_market::backend::MarketBackend,
+    ) {
+        let dir = tempfile::Builder::new()
+            .permissions(std::fs::Permissions::from_mode(0o700))
+            .tempdir()
+            .unwrap();
+        let tasks = crate::sqlite_tasks::SqliteTasks::new(dir.path().join("market.sqlite"));
+        tasks.initialize_compact().unwrap();
+        std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        let market = crate::sqlite_market::backend::MarketBackend::open(&tasks).unwrap();
+        (dir, market)
+    }
+
+    /// Record one complete, successful run of `source_id` that confirmed
+    /// `day`. The run carries no member page: this test is about the date the
+    /// dataset-level fact is read from.
+    fn complete_source(
+        market: &crate::sqlite_market::backend::MarketBackend,
+        run_id: &str,
+        source_id: &str,
+        day: &str,
+    ) {
+        let claimed = market
+            .claim_source_refresh_run(&RunStart {
+                run_id: run_id.into(),
+                mode: "full".into(),
+                scope: source_id.into(),
+                started_at: format!("{day}T01:00:00Z"),
+                task_id: None,
+                owner_instance: "refresh-runs-tests".into(),
+            })
+            .unwrap();
+        assert!(claimed.is_none(), "a test run must not meet an open run");
+        market
+            .finish_source_refresh_run(
+                run_id,
+                &RunFinish {
+                    status: "succeeded".into(),
+                    finished_at: format!("{day}T02:00:00Z"),
+                    requests: 1,
+                    reused: 0,
+                    changed: 0,
+                    failed_windows: 0,
+                    unobserved_windows: 0,
+                    verified_through: Some(day.into()),
+                    detail: None,
+                },
+                &[RunSourceRow {
+                    run_id: run_id.into(),
+                    source_id: source_id.into(),
+                    class: "table".into(),
+                    complete: true,
+                    requests: 1,
+                    snapshots: 1,
+                    changed: 0,
+                    unobserved_windows: 0,
+                    failed_windows: 0,
+                    elapsed_ms: 1,
+                    verified_through: Some(day.into()),
+                }],
+                &[],
+            )
+            .unwrap();
+    }
+
+    /// XDM-157 (`issue-446` §5.3): the dataset-level `verified_through` is the
+    /// **oldest** confirmation among the dataset's inputs. A dataset with one
+    /// source not yet verified, or with no refresh inputs at all, answers
+    /// `None` rather than borrowing another source's date.
+    #[test]
+    fn a_dataset_takes_the_oldest_complete_confirmation_of_its_sources() {
+        let (_dir, market) = backend();
+        complete_source(&market, "run-sz", "szse_short_name", "2026-10-31");
+        complete_source(&market, "run-sh", "sse_bulletin", "2026-11-01");
+
+        let through = market
+            .read(|c| dataset_verified_through(c, crate::security_master::names::DATASET_KIND))
+            .unwrap();
+        assert_eq!(
+            through,
+            Some(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+        );
+
+        // risk_warnings reads both sources: the older confirmation wins.
+        let through = market
+            .read(|c| {
+                dataset_verified_through(c, crate::security_master::risk_warnings::DATASET_KIND)
+            })
+            .unwrap();
+        assert_eq!(
+            through,
+            Some(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
+        );
+
+        // security_master needs four sources; two have no run, so there is no
+        // dataset-level fact to report yet.
+        let through = market
+            .read(|c| dataset_verified_through(c, crate::security_master::assembly::DATASET_KIND))
+            .unwrap();
+        assert_eq!(through, None);
+
+        // A dataset with no refresh inputs is never given one.
+        let through = market
+            .read(|c| dataset_verified_through(c, crate::trading_rules::DATASET_KIND))
+            .unwrap();
+        assert_eq!(through, None);
+    }
+
+    /// A tail run that did not complete its source does not advance the date:
+    /// only `complete = 1` rows count (`issue-446` §5.2/§5.6).
+    #[test]
+    fn an_incomplete_source_run_does_not_confirm_the_dataset() {
+        let (_dir, market) = backend();
+        complete_source(&market, "run-full", "szse_short_name", "2026-10-31");
+        let claimed = market
+            .claim_source_refresh_run(&RunStart {
+                run_id: "run-tail".into(),
+                mode: "tail".into(),
+                scope: "szse_short_name".into(),
+                started_at: "2026-11-01T01:00:00Z".into(),
+                task_id: None,
+                owner_instance: "refresh-runs-tests".into(),
+            })
+            .unwrap();
+        assert!(claimed.is_none());
+        market
+            .finish_source_refresh_run(
+                "run-tail",
+                &RunFinish {
+                    status: "succeeded".into(),
+                    finished_at: "2026-11-01T02:00:00Z".into(),
+                    requests: 1,
+                    reused: 0,
+                    changed: 0,
+                    failed_windows: 0,
+                    unobserved_windows: 0,
+                    verified_through: Some("2026-11-01".into()),
+                    detail: None,
+                },
+                &[RunSourceRow {
+                    run_id: "run-tail".into(),
+                    source_id: "szse_short_name".into(),
+                    class: "table".into(),
+                    complete: false,
+                    requests: 1,
+                    snapshots: 1,
+                    changed: 0,
+                    unobserved_windows: 0,
+                    failed_windows: 0,
+                    elapsed_ms: 1,
+                    verified_through: Some("2026-11-01".into()),
+                }],
+                &[],
+            )
+            .unwrap();
+        let through = market
+            .read(|c| dataset_verified_through(c, crate::security_master::names::DATASET_KIND))
+            .unwrap();
+        assert_eq!(
+            through,
+            Some(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap()),
+            "a later tail that did not complete the source confirms nothing"
+        );
+    }
 }

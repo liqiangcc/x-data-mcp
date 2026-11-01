@@ -80,7 +80,20 @@
   `(snapshot_id, request_fingerprint)`：相同字节的不同请求（例如多个空窗口）必须能
   各自复用；同一请求以不同 sha 仍保留多行历史。
 
-### 1.3 整表一致性
+### 1.3 读面的 `metadata.verified_through`（XDM-157）
+
+`query_data`/`get_data_capabilities` 的 `manifest[].metadata` 增加可选 `verified_through`
+（`YYYY-MM-DD`）：该数据集全部输入来源中**最旧**的“完整刷新确认日”，即
+`source_refresh_run_sources` 里 `complete=1` 且 run `succeeded` 的最新日期取 `min`。
+它与行的 `as_of`/`known_at` 是三个字段：`as_of` 说事实/字节到哪一天、`known_at` 说我们
+何时知道、`verified_through` 说这组指纹被确认没变到哪一天。它只为四个 R3 只读 item 的
+数据集定义（`security_master`/`security_names`/`risk_warnings`/`suspensions`）；一个来源没有
+完整 run（fresh init）时**整个字段缺省**，不用页面的 `as_of` 猜。`market.security_names` 的
+读取面目前仍按“没有读取实现”回答 `absent`（`src/sqlite_supply/m2.rs`），所以实际能看到该字段
+的是 `security_master`/`risk_warnings`/`suspensions`。事实只存在于 run 记录
+（§1.2），所以重放或整表重写不会让它消失。
+
+### 1.4 整表一致性
 
 整表采集在最后一页之后重读第 1 页；sha 变化时重试一次，仍变化则
 `window_changed_mid_fetch` 且不选中该页集。选中前还逐页从来源库读回字节，核对页号、

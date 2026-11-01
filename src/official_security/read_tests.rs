@@ -48,6 +48,10 @@ const SZSE_DELISTING_NM: &[u8] =
     include_bytes!("../../tests/fixtures/exchange-a1a2/szse_delisting_nm.json");
 const SZSE_NAME_CHANGES: &[u8] =
     include_bytes!("../../tests/fixtures/exchange-security-names/szse-chain.json");
+/// The same table one round later: one more change row (`000005`), so every
+/// previous row is unchanged and one row is new (XDM-157's acceptance).
+const SZSE_NAME_CHANGES_ROUND2: &[u8] =
+    include_bytes!("../../tests/fixtures/exchange-security-names/szse-chain-round2.json");
 const SSE_BULLETINS: &[u8] =
     include_bytes!("../../tests/fixtures/exchange-risk-warnings/sse-bulletins.json");
 const A3_Q1_EMPTY: &[u8] = include_bytes!("../../tests/fixtures/exchange-a3/window_2008_q1.json");
@@ -466,17 +470,15 @@ fn the_same_frozen_set_reads_identically_twice() {
 // -------------------------------------------------------------- PR-10/PR-12 ---
 
 fn freeze_sz_short_name(scenario: &Scenario, fetched_at: &str) {
+    freeze_sz_short_name_body(scenario, SZSE_NAME_CHANGES, fetched_at);
+}
+
+/// Freeze one content version of the whole SZSE short-name table. Two calls
+/// with different bodies are two snapshots of the same request fingerprint:
+/// exactly what a table that gained a row looks like in the store.
+fn freeze_sz_short_name_body(scenario: &Scenario, body: &[u8], fetched_at: &str) {
     let plan = risk_warnings::szse_short_name_plan();
-    freeze(
-        scenario,
-        &plan,
-        1,
-        None,
-        "",
-        "",
-        SZSE_NAME_CHANGES,
-        fetched_at,
-    );
+    freeze(scenario, &plan, 1, None, "", "", body, fetched_at);
 }
 
 /// A quiet-quarter page: `pageCount = 0`, no rows (the shape 2000Q1 answers).
@@ -600,6 +602,22 @@ fn the_risk_warning_item_reads_the_table_and_the_bulletin_quarters() {
         Some("2024-06-30")
     );
     assert_eq!(admitted.freshness.selected_by, "refresh_run");
+    // XDM-157: the SZ intervals carry the day the frozen table entered the
+    // store (the page's `as_of`), never the change day.
+    let sz_rows: Vec<_> = admitted
+        .set
+        .rows
+        .iter()
+        .filter(|row| row.exchange == crate::security_master::Exchange::Sz)
+        .collect();
+    assert!(!sz_rows.is_empty());
+    assert!(
+        sz_rows
+            .iter()
+            .all(|row| row.known_at == Some(day(2024, 6, 30))),
+        "the SZ ST rows are known from the day their snapshot was stored"
+    );
+    assert_eq!(admitted.first_capture_day, Some(day(2024, 6, 30)));
     // §5.3 over two sources: the oldest confirmation wins.
     assert_eq!(admitted.freshness.as_of.as_deref(), Some("2024-06-30"));
     assert_eq!(scenario.manifest_lines(), manifest);
@@ -727,4 +745,197 @@ fn a_needed_window_missing_from_the_store_fails_closed() {
 
     let error = a3::read(&scenario.store, &scenario.market, &[], today).unwrap_err();
     assert_eq!(error.code(), "snapshot_incomplete");
+}
+
+// ------------------------------------------------ R5: known_at (XDM-157) ---
+
+// Shanghai days. The store records UTC instants: 2026-10-31T18:43:40Z is
+// already 2026-11-01 in Beijing, and that is the day a row became known here.
+const FIRST_CAPTURE: &str = "2026-11-01";
+const SECOND_CAPTURE: &str = "2026-11-02";
+
+/// Write the admitted name set the way `derived:security_names` does: one
+/// generation binding, then the whole-table replace.
+fn write_names(scenario: &Scenario, set: &crate::security_master::names::NameSet) {
+    scenario
+        .market
+        .commit_security_names(&crate::sqlite_market::security_names::SecurityNameWrite {
+            set,
+            task_id: "task-known-at",
+            item_id: "derived:security_names",
+            generation_id: "gen-known-at",
+            generation_manifest_sha256: &"11".repeat(32),
+            member_sha256: &"22".repeat(32),
+            security_event_sha256: &"33".repeat(32),
+            generation_evidence: &serde_json::json!({"generation_id": "gen-known-at"}),
+        })
+        .expect("the name history writes");
+}
+
+fn stored_names(scenario: &Scenario) -> Vec<crate::sqlite_market::security::SecurityNameRow> {
+    scenario
+        .market
+        .read(crate::sqlite_market::security::read_security_names)
+        .expect("the stored rows read back")
+}
+
+/// XDM-157 (`issue-446` §5.3/Q4): two collection rounds, offline.
+///
+/// - A row that was already in the first frozen table keeps the first round's
+///   day as its `known_at`, even though the second round rewrites the whole
+///   table (the day is the *first* snapshot containing it, not the write day).
+/// - A row that only appears in the second snapshot takes the second day.
+/// - The read model's `known_at` filter answers accordingly: a PIT query known
+///   by the first day does not see the second round's row and counts exactly
+///   that one as excluded.
+///
+/// No transport is involved: both rounds are frozen pages plus a refresh run
+/// record, which is the production read path.
+#[test]
+fn two_collection_rounds_date_new_rows_and_keep_the_first_day_for_unchanged_ones() {
+    let scenario = Scenario::new();
+    let first_day = day(2026, 11, 1);
+    let second_day = day(2026, 11, 2);
+
+    // Round 1: the table is captured for the first time.
+    freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES, "2026-10-31T18:43:40Z");
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SzseShortName,
+        FIRST_CAPTURE,
+        "2026-10-31T18:50:00Z",
+    );
+    let first = security_names::read_table(&scenario.store, &scenario.market, first_day)
+        .expect("the first round reads its frozen table");
+    assert_eq!(
+        first.first_capture_day,
+        Some(first_day),
+        "the store's acquired_at is a UTC instant: 18:43:40Z is 2026-11-01 in Shanghai"
+    );
+    assert!(
+        !first.set.rows.is_empty(),
+        "the fixture admitted no name row"
+    );
+    assert!(
+        first
+            .set
+            .rows
+            .iter()
+            .all(|row| row.known_at == Some(first_day)),
+        "every row of the first table is known from the first capture day"
+    );
+    write_names(&scenario, &first.set);
+    let before = stored_names(&scenario);
+    assert_eq!(before.len(), first.set.rows.len());
+    assert!(before.iter().all(|row| row.known_at == Some(first_day)));
+
+    // Round 2: same request, new bytes — one change row was appended.
+    freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES_ROUND2, "2026-11-01T18:10:00Z");
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SzseShortName,
+        SECOND_CAPTURE,
+        "2026-11-01T18:20:00Z",
+    );
+    let second = security_names::read_table(&scenario.store, &scenario.market, second_day)
+        .expect("the second round reads the newest complete table");
+    assert_eq!(
+        second.first_capture_day,
+        Some(first_day),
+        "a later snapshot does not move the first capture day"
+    );
+    let new_rows: Vec<_> = second
+        .set
+        .rows
+        .iter()
+        .filter(|row| row.code == "000005")
+        .collect();
+    assert_eq!(new_rows.len(), 1, "the added change opens one interval");
+    assert_eq!(new_rows[0].known_at, Some(second_day));
+    assert!(
+        second
+            .set
+            .rows
+            .iter()
+            .filter(|row| row.code != "000005")
+            .all(|row| row.known_at == Some(first_day)),
+        "an unchanged row keeps the day of the snapshot that first carried it"
+    );
+
+    write_names(&scenario, &second.set);
+    let after = stored_names(&scenario);
+    assert_eq!(after.len(), before.len() + 1);
+    let added = after
+        .iter()
+        .find(|row| row.code == "000005")
+        .expect("the new row is written");
+    assert_eq!(added.known_at, Some(second_day));
+    assert!(
+        after
+            .iter()
+            .filter(|row| row.code != "000005")
+            .all(|row| row.known_at == Some(first_day))
+    );
+
+    // The filter the read model applies (`research::temporal`), on the stored
+    // rows: known by the first capture day, the second round's row is
+    // invisible; known by the second day, every row is admitted.
+    use crate::research::temporal::{Temporal, TemporalReport};
+    let as_of = day(2026, 11, 30);
+    let mut first_pit = TemporalReport::new(Temporal::known_by(as_of, first_day));
+    let mut admitted = 0;
+    for row in &after {
+        if first_pit.observe("security_names", row.known_at) {
+            admitted += 1;
+        }
+    }
+    assert_eq!(admitted, after.len() - 1);
+    assert_eq!(
+        first_pit
+            .dataset("security_names")
+            .map(|entry| entry.excluded_known_at_rows),
+        Some(1),
+        "exactly the row first seen in the second round is excluded"
+    );
+    assert_eq!(first_pit.unknown_known_at_rows(), 0);
+
+    let mut second_pit = TemporalReport::new(Temporal::known_by(as_of, second_day));
+    assert!(
+        after
+            .iter()
+            .all(|row| second_pit.observe("security_names", row.known_at))
+    );
+    assert_eq!(
+        second_pit
+            .dataset("security_names")
+            .map(|entry| entry.excluded_known_at_rows),
+        Some(0)
+    );
+}
+
+/// The knowledge day is a **Shanghai** day, not the UTC date of `acquired_at`
+/// (Claude review, XDM-157). A snapshot stored between 16:00Z and 24:00Z is
+/// already the next day in Beijing; dating it by the UTC day would let a
+/// `known_at` filter admit the row a day before we had it.
+#[test]
+fn a_snapshot_is_dated_in_shanghai_not_in_utc() {
+    for (fetched_at, expected) in [
+        // The production first capture: 02:43 Beijing time on 2026-11-01.
+        ("2026-10-31T18:43:40Z", day(2026, 11, 1)),
+        ("2026-11-01T15:59:59Z", day(2026, 11, 1)),
+        ("2026-11-01T16:00:00Z", day(2026, 11, 2)),
+    ] {
+        let scenario = Scenario::new();
+        freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES, fetched_at);
+        let read = security_names::read_table(&scenario.store, &scenario.market, day(2026, 11, 2))
+            .expect("the frozen table reads");
+        assert_eq!(read.first_capture_day, Some(expected), "{fetched_at}");
+        assert!(
+            read.set
+                .rows
+                .iter()
+                .all(|row| row.known_at == Some(expected)),
+            "{fetched_at}"
+        );
+    }
 }

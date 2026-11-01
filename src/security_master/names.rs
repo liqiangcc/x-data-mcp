@@ -287,10 +287,10 @@ fn interval_from_change(code: &str, change: &SzNameChange, name: String) -> Name
         effective_to: None,
         name,
         certainty: NameCertainty::Unbounded,
-        // The SZSE change table carries the change day but no publication
-        // time, so `known_at` stays NULL instead of being filled with the
-        // change day.
-        known_at: None,
+        // §5.3/Q4: the knowledge time is the first snapshot that carried this
+        // row (the adapter resolves it from the source store), never the
+        // change day and never the write day.
+        known_at: change.known_at,
         source_kind: NameSourceKind::SzseNameHistory,
         source_record_id: Some(change.source_record_id.clone()),
     }
@@ -452,6 +452,7 @@ mod tests {
             after_name: after.into(),
             source_record_id: format!("{when}|{code}|{after}"),
             source_document_sha256: "a".repeat(64),
+            known_at: None,
         }
     }
 
@@ -492,8 +493,21 @@ mod tests {
         assert_eq!(set.rows[2].name, "深发展");
         assert_eq!(set.rows[2].effective_to, None);
         assert_eq!(set.rows[2].certainty, NameCertainty::Unbounded);
-        // The SZSE change table dates the change, not the publication.
+        // No store answered this call: the fixture changes carry no knowledge
+        // time, and the assembler does not invent one from the change day.
         assert!(set.rows.iter().all(|row| row.known_at.is_none()));
+    }
+
+    /// XDM-157: the interval carries the adapter's snapshot day, not the
+    /// change day. A `known_at` filter is only honest if the two stay
+    /// different fields (issue-446 §5.3).
+    #[test]
+    fn an_interval_carries_the_snapshot_day_it_was_first_stored() {
+        let mut first = change("000001", "1998-04-28", "深发展A", "ST深发展");
+        first.known_at = Some(day(2026, 10, 31));
+        let set = assemble_sz(&[first], Vec::new()).expect("single change assembles");
+        assert_eq!(set.rows[0].known_at, Some(day(2026, 10, 31)));
+        assert_eq!(set.rows[0].effective_from, day(1998, 4, 28));
     }
 
     #[test]

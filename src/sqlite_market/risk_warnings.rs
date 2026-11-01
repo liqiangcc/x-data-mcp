@@ -101,9 +101,19 @@ pub(crate) fn replace_risk_warnings(
         // D-58: absence of an announcement is `unknown`, never `normal`.
         "absence_policy": "no row is inferred as normal; a missing interval or a \
             not_observed coverage window is unknown (fail-closed)",
-        "known_at_policy": "SZ name-history rows carry known_at = NULL (the table has \
-            effective dates but no publication time); SH event rows carry the announcement \
-            day because it is the earliest time a consumer could know the event",
+        // §5.3/Q4: SZ rows take the day the first snapshot carrying the row was
+        // stored; SH rows keep the announcement day the source proves.
+        "known_at_policy": "SZ name-history rows carry known_at = the day the first \
+            snapshot containing the row entered the source store; SH event rows carry the \
+            announcement day because it is the earliest time a consumer could know the event",
+        "known_at_coverage": {
+            "effective_history": "effective-time ST state history is available from the \
+                source start (SZSE short-name table 1994-01-03; SSE bulletin index archive \
+                2000-01, with every 2000-2003 quarter permanently not_observed)",
+            "known_at_pit": "knowledge-time PIT (known_at filtering) is available from \
+                the first capture day; rows written before this rule keep known_at = NULL \
+                until a fresh init rewrites them",
+        },
     });
     let evidence_digest = evidence_store::put_evidence(c, EvidenceKind::Derived, &evidence)?;
     let now = chrono::Utc::now().to_rfc3339();

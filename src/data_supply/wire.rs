@@ -676,6 +676,14 @@ pub struct Metadata {
     /// `market.index`; an index's volume unit is 手, not 股.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<IndexMetadata>,
+    /// The date through which a *complete* refresh run has confirmed this
+    /// dataset's sources (`issue-446` §5.3, XDM-157). It sits next to
+    /// `coverage_status` because it is a dataset-level fact: `as_of`/`known_at`
+    /// say what the rows are about, this says how well we verified the inputs
+    /// behind them. Absent when the dataset has no refresh-run inputs or no
+    /// complete run yet — never guessed from a page's `as_of`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_through: Option<chrono::NaiveDate>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -329,8 +329,32 @@ for each plan (source_id, window/table):
 - `known_at`：深市简称/ST 行目前是 `NULL`（D-61：表只有变更日期，没有发布时间）。日更时滞后
   ≤1 天还可接受；改成每周全量后，**必须**把 `known_at` 填成“首次包含该行的快照入库日”，否则
   PIT 读取会一直排除这些行（有 `known_at` 过滤时 NULL 行被排除）。coverage 口径写成两句：
-  **有效时间历史从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日 2026-10-31 起**——
-  不要写成“简称历史从 2026-10-31 起可用”。这是诚实的，也是回填数据的固有限制。见 Q4。
+  **有效时间历史从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日起可用**——首次
+  采集日按上海日期是 **2026-11-01**（UTC `2026-10-31T18:43:40Z`），不要写成“简称历史从
+  2026-11-01 起可用”。这是诚实的，也是回填数据的固有限制。见 Q4。
+- **R5 落地（2026-11-01，XDM-157）**：`known_at` 的“首次包含该行的快照入库日”由适配器在
+  解析后从来源库清单求出（`official_security::risk_warnings::resolve_known_at`：按
+  `manifest.jsonl` 的 `acquired_at`（与快照 `as_of` 同一天）从旧到新读回 `szse_short_name` 冻结
+  字节，命中即取最早一天，全部命中即停；找不到的已登记行 fail-closed），日更读路径、测试用采集
+  入口与 `--scope security_names/risk_warnings` 重放共用它。因为入库日在来源库而不是市场库，
+  fresh-init 的 `--scope` 重放也能给出与首次写入相同的日期。数据集证据写
+  `known_at_coverage`（`effective_history` / `known_at_pit` 两句）。`verified_through` 的读面是
+  `metadata.verified_through`（取四个来源 item 输入来源的 `min`，无完整 run 则字段缺省），导出是
+  `research-snapshot.v4` 的 `derived[].verified_through`（并补上 `security_names`/`risk_warnings`
+  两个整表数据集身份）。解析器版本升到 `risk-warnings-v4` / `security-names-v3`，旧行不重写。
+- **Claude 审核裁定（2026-11-01，PR #498）**：
+  - `known_at` 与 `first_capture_day` 一律取**上海日期**：`acquired_at` 是 UTC 瞬时，来源库最早
+    的 `szse_short_name` 登记是 `2026-10-31T18:43:40Z`，即北京时间 **2026-11-01 02:43**。因此
+    首次采集日按上海日期是 **2026-11-01**，D-66 Q4 原文的 2026-10-31 是 UTC 日期（owner 已获
+    告知）；按 UTC 取日会把北京时间 00:00–08:00 入库的行记成前一天已知，PIT 查询提前看见它。
+    实现用 `crate::calendar::shanghai_date_of`（RFC3339 → 上海日期）；`index::observation_date`
+    的语义不变（它命名交易所的观测日，仍有别的调用方），证据里的 `known_at_pit` 由
+    `first_capture_day` 算出，不写死日期。
+  - 其余三项提案获准：`known_at` 以来源库清单的 `acquired_at` 为证明源（重放结果等于首次写入）；
+    数据集级 `verified_through` 取各输入的 `min`（与 R3 裁定同口径）；`v4` 只改清单、不改文件与列
+    结构。`src/sqlite_supply/m2.rs` 里 `security_names` 读路径仍是占位，**不在本 PR**，另开任务。
+  - 已知成本：`resolve_known_at` 每次日更从最早一份快照扫到最新一份，耗时随历史线性增长；本 PR
+    不改（见 PR「另外注意」）。
 
 ### 5.4 修订、全表位移与存储
 
@@ -509,7 +533,7 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 | **R2** 刷新任务 tail/full（本 PR：schema 026、run 成员、页 1 守卫） | 新任务 + `source_refresh_runs` 表（schema 26）+ 探针 + 全表完整性校验（页码/总数/末页回读 p1）+ revision 列表 | 只写来源库/索引/run 记录，不写业务表；`--dry-run` 只列计划 | tail 请求数 ≤28（夹具）；full 覆盖全部指纹；中途失败 → `snapshot_incomplete` 且不发布；重启后 run 记录可查；`verified_through` 只在成功时推进 | R1 |
 | **R3** 日更 item 只读 + 陈旧闸门（未实现） | 四个来源 item 去掉 `Client`，改用“读最新完整快照集”；`H` 超限 fail-closed；证据加 `verified_through`/`staleness_days` | 派生证据 `as_of` 按 §5.3 由被选快照算出（整表 min、窗口 max），不再用运行日 | 假 Client panic 也跑通（0 请求）；缺快照 → fail-closed；超 H → fail-closed；同输入两次 → 逐位相同 | R2 |
 | **R4** 重放选择一致 | `rebuild_risk_warnings` 同指纹取最新；`security_names` 取最后一次完整组；`--verify-only` 比对“live 选中的集合” | 修订窗口（同指纹两 sha）下 live 与 replay 同结果 | 两 sha 夹具：只算最新；旧 sha 不重复计事件；`--verify-only` match；不完整组 → `snapshot_incomplete` | — |
-| **R5** PIT 字段与 coverage | 深市简称/ST 行 `known_at` = 首次快照入库日；`coverage` 按 §5.3 的两句口径写；导出/读面带上 `verified_through` | 只影响新写入与重放，不改旧行历史（fresh-init 后统一） | 两轮采集：第二轮新增行 `known_at`=第二轮日期；未变行保留第一轮；`known_at` 过滤结果符合预期 | R2、Q4 |
+| **R5** PIT 字段与 coverage（本 PR：XDM-157） | 深市简称/ST 行 `known_at` = 首次快照入库日；`coverage` 按 §5.3 的两句口径写；导出/读面带上 `verified_through` | 只影响新写入与重放，不改旧行历史（fresh-init 后统一） | 两轮采集：第二轮新增行 `known_at`=第二轮日期；未变行保留第一轮；`known_at` 过滤结果符合预期 | R2、Q4 |
 | **R6** 文档、Skill 与运维 | 核对 SLO 第 2 行/D-66 与实现一致；更新 `docs/exchange-source.md`、`docs/daily-sync.md`、Skill 增加“tail → run_market_update →（每周）full”步骤、runbook | 不改代码 | 文档审阅；Skill 干跑；G2 记录可从 run 表查询 | R3、R4 |
 
 私有栈验收（部署前）：
