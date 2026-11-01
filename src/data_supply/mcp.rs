@@ -712,6 +712,16 @@ fn plan_error(e: super::plan::PlanError) -> ApiError {
         super::plan::PlanError::Storage(m) => ApiError::new("storage_error", m),
     }
 }
+/// Refresh errors are protocol errors first; the two that name a run also carry
+/// its id in `details` so a client can poll `{status_of: run_id}` without
+/// parsing the message.
+fn refresh_error(e: crate::source_refresh::RefreshError) -> ApiError {
+    let mut error = ApiError::new(e.code(), e.to_string());
+    if let Some(run_id) = e.run_id() {
+        error.details = Some(Box::new(json!({"run_id": run_id})));
+    }
+    error
+}
 fn plan_dataset_name(dataset: Dataset) -> &'static str {
     dataset.name()
 }
@@ -1040,6 +1050,27 @@ impl DataApi {
                 }
                 let command: crate::source_refresh::wire::RefreshRequest = decode(input)?;
                 let today = crate::calendar::shanghai_today();
+                // `status_of` is the read side of the asynchronous `full`: it
+                // takes nothing else, so a poll can never accidentally start a
+                // second run or drop the mode it is polling.
+                if let Some(run_id) = command.status_of.as_deref() {
+                    if command.mode.is_some() || !command.sources.is_empty() || command.dry_run {
+                        return Err(ApiError::new(
+                            "invalid_arguments",
+                            "status_of cannot be combined with mode, sources or dry_run",
+                        ));
+                    }
+                    let report =
+                        crate::source_refresh::status_of(&self.queries.repository.market, run_id)
+                            .map_err(refresh_error)?;
+                    return encode(report);
+                }
+                let mode = command.mode.ok_or_else(|| {
+                    ApiError::new(
+                        "invalid_arguments",
+                        "mode is required unless status_of is set",
+                    )
+                })?;
                 if command.dry_run {
                     let report = crate::source_refresh::dry_run(today, &command)
                         .map_err(|error| ApiError::new(error.code(), error.to_string()))?;
@@ -1056,16 +1087,40 @@ impl DataApi {
                             ),
                         )
                     })?;
+                // One client per run, created before the run row so a missing
+                // helper fails the call without leaving a `running` record.
                 let client = crate::exchange_source::Client::helper()
                     .map_err(|error| ApiError::new(error.code(), error.to_string()))?;
-                let report = crate::source_refresh::run(
-                    &store,
-                    &self.queries.repository.market,
-                    &client,
-                    today,
-                    &command,
-                )
-                .map_err(|error| ApiError::new(error.code(), error.to_string()))?;
+                let report = match mode {
+                    // A tail costs 28 requests (a probe-triggered whole table is
+                    // the documented exception), so the optional wait is cheap
+                    // and the caller sees the result. Its upper bound is
+                    // `docs/contracts/generic-data-v9.md` §1.1.
+                    crate::source_refresh::wire::RefreshMode::Tail => crate::source_refresh::run(
+                        &store,
+                        &self.queries.repository.market,
+                        &client,
+                        today,
+                        &command,
+                        &self.observer.run_id,
+                    )
+                    .map_err(refresh_error)?,
+                    // A full is 1,941 requests (~46 min at 1 req/s): open the
+                    // run and return `running` now; the acquisition continues
+                    // on a background thread of this process and is visible
+                    // through `{status_of: run_id}`.
+                    crate::source_refresh::wire::RefreshMode::Full => {
+                        crate::source_refresh::start_full_in_background(
+                            store,
+                            self.queries.repository.market.clone(),
+                            client,
+                            today,
+                            command.clone(),
+                            &self.observer.run_id,
+                        )
+                        .map_err(refresh_error)?
+                    }
+                };
                 encode(report)
             }
             Handler::Collection

@@ -374,6 +374,32 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
   而 `source_store` CLI 的写库 scope 要求停服（`docs/source-store.md` §4.2）；为每周 46 min 的刷新
   停一次服不可接受。这也是 Q5 推荐 MCP 工具而不是 CLI 的原因。
 
+**R2b 补充（运行语义，2026-11-02）**
+
+- **单飞**：开始新 run 前，在同一个写事务里检查是否已有 `status='running'` 的 run；有则
+  拒绝并返回稳定错误码 `refresh_already_running`（`details.run_id` 指向那个 run）。
+  `tail` 与 `full` 互斥：约束在 run 记录上，不按 mode 各放一个。理由：两个并发 run 各自
+  按 1 req/s 限速，合起来就是 2 req/s，违反 XDM-143；单飞让“单 Client 1 req/s”等于
+  “全局 1 req/s”。
+- **同步/异步**：`tail` 保持同步（28 个计划请求；探针触发整表是上界例外，最多 549 个）。
+  `full` 异步：校验并写好 run 记录后立即返回 `{run_id, status:"running"}`，实际抓取在
+  `data_service` 进程内的后台线程执行，写入仍经写协调器。客户端断开不影响后台 run；
+  服务停止会中断它（下次启动按下面的回收规则处理）。
+- **查询**：同一个工具的 `{"status_of":"<run_id>"}`，返回 run 记录
+  （mode/status/scope/起止时间/requests/reused/changed/failed_windows/`verified_through`/
+  失败列表），不启动任何 run；未知 id 为 `refresh_run_not_found`。
+- **回收遗留 running 行**：`data_service` 拿到数据库租约启动时，把上一个进程实例留下的
+  `running` 行标成 `failed`（失败码 `process_restarted`），**不**推进 `verified_through`。
+  归属判断用进程实例 id（`source_refresh_runs.owner_instance`，即本进程的 run id），
+  不用已过时间猜：同一进程正在跑的 full 不会被自己的启动逻辑回收。
+  回收后单飞闸门自动解开；`verified_through` 只能由完整的成功 run 推进
+  （`latest_complete_verified_through` 只读 `succeeded` 且 `complete=1` 的来源行，
+  被回收的 run 根本没有来源行）。
+- **取舍**：异步 full 需要一条只能由服务自己恢复的“遗留 running”状态，因此新增
+  `owner_instance` 列（026 未部署，直接改 026）；没有为状态查词另开读工具，而是复用同一工具的
+  `status_of` 参数，避免多一个工具进 `tools/list` 预算与 Skill 白名单。`tail` 不做异步：它的
+  SLO 是 <300s（G2），一次调用能等完，且日更编排需要它的结果作为下一步输入。
+
 ### 5.7 成本估算
 
 | 项 | 数值 | 依据 |

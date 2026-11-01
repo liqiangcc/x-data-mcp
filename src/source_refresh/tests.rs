@@ -22,6 +22,11 @@ fn day(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).unwrap()
 }
 
+/// The service instance id a run is attributed to. Startup reclaim closes only
+/// runs whose owner differs from the instance taking the database lease.
+const INSTANCE: &str = "service-1000-instance-a";
+const RESTARTED: &str = "service-2000-instance-b";
+
 struct State {
     short_code: String,
     short_day: String,
@@ -59,6 +64,9 @@ impl Default for State {
 struct RefreshFixture {
     state: Mutex<State>,
     calls: Mutex<Vec<String>>,
+    /// Lets a test hold the first request open so a background run is provably
+    /// still `running` while the test inspects it.
+    hold: (Mutex<bool>, std::sync::Condvar),
 }
 
 impl RefreshFixture {
@@ -66,7 +74,24 @@ impl RefreshFixture {
         Arc::new(Self {
             state: Mutex::new(State::default()),
             calls: Mutex::new(Vec::new()),
+            hold: (Mutex::new(false), std::sync::Condvar::new()),
         })
+    }
+
+    fn pause(&self) {
+        *self.hold.0.lock().unwrap() = true;
+    }
+
+    fn release(&self) {
+        *self.hold.0.lock().unwrap() = false;
+        self.hold.1.notify_all();
+    }
+
+    fn wait_if_paused(&self) {
+        let mut paused = self.hold.0.lock().unwrap();
+        while *paused {
+            paused = self.hold.1.wait(paused).unwrap();
+        }
     }
 
     fn calls(&self) -> usize {
@@ -244,6 +269,7 @@ fn sse_page(page_count: u32, total: u64, revision: u64) -> Vec<u8> {
 
 impl Transport for RefreshFixture {
     fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+        self.wait_if_paused();
         self.calls.lock().unwrap().push(request.url.clone());
         Ok(HttpResponse {
             status: 200,
@@ -304,9 +330,10 @@ impl Transport for Shared {
 
 fn request(mode: RefreshMode, sources: &[&str]) -> RefreshRequest {
     RefreshRequest {
-        mode,
+        mode: Some(mode),
         sources: sources.iter().map(|source| source.to_string()).collect(),
         dry_run: false,
+        status_of: None,
     }
 }
 
@@ -324,6 +351,7 @@ fn run_refresh(
         client,
         day(2026, 11, 2),
         &request(mode, sources),
+        INSTANCE,
     )
     .unwrap()
 }
@@ -344,6 +372,8 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         &[],
     );
     assert_eq!(first.status, RefreshStatus::Succeeded);
+    // A tail is synchronous: the reply is the finished run, not a handle.
+    assert!(first.finished_at.is_some());
     assert!(
         first.requests <= 28,
         "tail must stay within the D-66 budget, got {} ({} calls)",
@@ -759,9 +789,10 @@ fn dry_run_lists_the_plan_and_touches_nothing() {
     let report = dry_run(
         day(2026, 11, 2),
         &RefreshRequest {
-            mode: RefreshMode::Tail,
+            mode: Some(RefreshMode::Tail),
             sources: Vec::new(),
             dry_run: true,
+            status_of: None,
         },
     )
     .unwrap();
@@ -772,4 +803,305 @@ fn dry_run_lists_the_plan_and_touches_nothing() {
     assert!(report.sources.iter().all(|source| source.requests == 0));
     assert!(!scenario.db().exists());
     assert!(!store.manifest_path().exists());
+}
+
+#[test]
+fn a_second_run_is_rejected_while_one_is_open() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    // `tail` and `full` exclude each other: the guard is per run record, not
+    // per mode, so a background full cannot be doubled by a tail.
+    let first = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
+    let rejected =
+        super::start(&backend, day(2026, 11, 2), RefreshMode::Full, &[], INSTANCE).unwrap_err();
+    assert_eq!(rejected.code(), "refresh_already_running");
+    assert_eq!(rejected.run_id(), Some(first.run_id.as_str()));
+    let rejected_again =
+        super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], "other").unwrap_err();
+    assert_eq!(rejected_again.run_id(), Some(first.run_id.as_str()));
+
+    // The open run is durable and visible before any request is made.
+    let open = super::status_of(&backend, &first.run_id).unwrap();
+    assert_eq!(open.status, RefreshStatus::Running);
+    assert!(open.finished_at.is_none());
+    assert_eq!(open.requests, 0);
+
+    // A finished run releases the guard.
+    let client = client(&RefreshFixture::new());
+    super::execute(
+        &scenario.store(),
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        first,
+    )
+    .unwrap();
+    let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
+    assert!(next.run_id.starts_with("refresh-tail-"));
+}
+
+#[test]
+fn racing_starts_let_exactly_one_run_win() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    // The guard is checked and inserted in one write transaction, so a race is
+    // decided by the database, not by a check-then-insert window. Threads hand
+    // back only `String`s: the run/plan types never cross a thread boundary.
+    let (winners, rejected) = std::thread::scope(|scope| {
+        let handles = (0..4)
+            .map(|index| {
+                let backend = &backend;
+                scope.spawn(move || {
+                    match super::start(
+                        backend,
+                        day(2026, 11, 2),
+                        RefreshMode::Tail,
+                        &[],
+                        &format!("service-{index}"),
+                    ) {
+                        Ok(started) => Ok(started.run_id),
+                        Err(error) => {
+                            Err((error.code().to_string(), error.run_id().map(str::to_string)))
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut winners = Vec::new();
+        let mut rejected = Vec::new();
+        for handle in handles {
+            match handle.join().unwrap() {
+                Ok(run_id) => winners.push(run_id),
+                Err(error) => rejected.push(error),
+            }
+        }
+        (winners, rejected)
+    });
+    assert_eq!(winners.len(), 1, "exactly one start may open a run");
+    assert_eq!(rejected.len(), 3);
+    for (code, run_id) in rejected {
+        assert_eq!(code, "refresh_already_running");
+        assert_eq!(run_id.as_deref(), Some(winners[0].as_str()));
+    }
+    assert_eq!(
+        backend
+            .read_source_refresh_runs()
+            .unwrap()
+            .iter()
+            .filter(|row| row.status == "running")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn an_invalid_plan_opens_no_run() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let rejected = super::start(
+        &backend,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &["nope".into()],
+        INSTANCE,
+    )
+    .unwrap_err();
+    assert_eq!(rejected.code(), "invalid_arguments");
+    assert!(backend.read_source_refresh_runs().unwrap().is_empty());
+    assert_eq!(
+        super::status_of(&backend, "refresh-tail-1")
+            .unwrap_err()
+            .code(),
+        "refresh_run_not_found"
+    );
+}
+
+#[test]
+fn a_run_from_a_previous_instance_is_reclaimed_as_failed() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let finished = {
+        let fixture = RefreshFixture::new();
+        let client = client(&fixture);
+        run_refresh(
+            &fixture,
+            &scenario,
+            &backend,
+            &client,
+            RefreshMode::Tail,
+            &[],
+        )
+    };
+    assert_eq!(finished.status, RefreshStatus::Succeeded);
+    let finished_id = finished.run_id.unwrap();
+    // The interrupted run opened by the instance that "crashed"; it never
+    // finishes, so its row is still `running` when the next instance starts.
+    let interrupted =
+        super::start(&backend, day(2026, 11, 2), RefreshMode::Full, &[], INSTANCE).unwrap();
+
+    let reclaimed = super::reclaim_abandoned(&backend, RESTARTED).unwrap();
+    assert_eq!(reclaimed, vec![interrupted.run_id.clone()]);
+
+    let row = backend
+        .read_source_refresh_run(&interrupted.run_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, "failed");
+    assert!(row.finished_at.is_some());
+    assert!(row.verified_through.is_none());
+    assert_eq!(row.owner_instance.as_deref(), Some(INSTANCE));
+    let detail = row.detail.unwrap_or_default();
+    assert!(detail.contains("process_restarted"), "{detail}");
+    // The reclaimed run reports failed and no verified date; the earlier
+    // successful run is untouched.
+    let report = super::status_of(&backend, &interrupted.run_id).unwrap();
+    assert_eq!(report.status, RefreshStatus::Failed);
+    assert!(report.verified_through.is_none());
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].code, "process_restarted");
+    assert_eq!(report.failures[0].source_id, "*");
+    assert_eq!(
+        super::status_of(&backend, &finished_id).unwrap().status,
+        RefreshStatus::Succeeded
+    );
+    // Reclaiming twice is a no-op, and a run of the live instance is never
+    // touched: attribution is the owner id, not elapsed time.
+    assert!(
+        super::reclaim_abandoned(&backend, RESTARTED)
+            .unwrap()
+            .is_empty()
+    );
+    let live = super::start(
+        &backend,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &[],
+        RESTARTED,
+    )
+    .unwrap();
+    assert!(
+        super::reclaim_abandoned(&backend, RESTARTED)
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        super::status_of(&backend, &live.run_id).unwrap().status,
+        RefreshStatus::Running
+    );
+}
+
+#[test]
+fn a_full_run_returns_running_and_finishes_in_the_background() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    // Hold the first request so the background run is still `running` when the
+    // single-flight guard and the reply are checked.
+    fixture.pause();
+    let started = super::start_full_in_background(
+        scenario.store(),
+        backend.clone(),
+        client(&fixture),
+        day(2026, 11, 2),
+        request(RefreshMode::Full, &[]),
+        INSTANCE,
+    )
+    .unwrap();
+    // The call returns the open run, not the result: 1,941 requests at
+    // 1 req/s cannot be waited for in one MCP call.
+    assert_eq!(started.status, RefreshStatus::Running);
+    assert!(started.finished_at.is_none());
+    assert_eq!(started.requests, 0);
+    assert_eq!(started.planned.len(), 14);
+    let run_id = started.run_id.clone().unwrap();
+
+    // A tail is refused while the background full is open, even though the
+    // request that started it has already been answered.
+    let rejected =
+        super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap_err();
+    assert_eq!(rejected.code(), "refresh_already_running");
+    assert_eq!(rejected.run_id(), Some(run_id.as_str()));
+
+    // Releasing the transport is the only thing the finished call depended on:
+    // the run is not tied to the request that started it.
+    fixture.release();
+    let report = wait_for_run(&backend, &run_id);
+    assert_eq!(report.status, RefreshStatus::Succeeded);
+    assert_eq!(report.requests, 308);
+    assert_eq!(report.requests as usize, fixture.calls());
+    assert!(report.finished_at.is_some());
+    assert_eq!(report.verified_through.as_deref(), Some("2026-11-02"));
+    assert_eq!(
+        backend
+            .latest_complete_verified_through("sse_bulletin")
+            .unwrap()
+            .as_deref(),
+        Some("2026-11-02"),
+        "a completed background run advances the durable verified date"
+    );
+    // The reply is readable after the fact through the same durable record.
+    assert_eq!(super::status_of(&backend, &run_id).unwrap().requests, 308);
+    // The guard is released: the next run (here a tail) may start.
+    let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
+    assert_eq!(next.mode, RefreshMode::Tail);
+}
+
+#[test]
+fn a_failing_background_full_reports_failed_without_a_verified_date() {
+    let fixture = RefreshFixture::new();
+    fixture.set_delisting_pages(2);
+    fixture.fail_page_two();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    let started = super::start_full_in_background(
+        scenario.store(),
+        backend.clone(),
+        client(&fixture),
+        day(2026, 11, 2),
+        request(RefreshMode::Full, &["szse_delisting"]),
+        INSTANCE,
+    )
+    .unwrap();
+    let run_id = started.run_id.unwrap();
+
+    let report = wait_for_run(&backend, &run_id);
+    assert_eq!(report.status, RefreshStatus::Failed);
+    assert!(report.verified_through.is_none());
+    assert!(!report.failures.is_empty());
+    assert!(
+        report
+            .failures
+            .iter()
+            .all(|failure| failure.code == "snapshot_incomplete")
+    );
+    assert!(
+        backend
+            .latest_complete_verified_through("szse_delisting")
+            .unwrap()
+            .is_none(),
+        "a failed background run advances no verified date"
+    );
+    let row = backend.read_source_refresh_run(&run_id).unwrap().unwrap();
+    assert_eq!(row.status, "failed");
+    assert!(row.finished_at.is_some());
+    assert!(row.verified_through.is_none());
+}
+
+/// Poll the durable record until the background thread closes it.
+fn wait_for_run(backend: &MarketBackend, run_id: &str) -> super::wire::RefreshReport {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        let report = super::status_of(backend, run_id).unwrap();
+        if report.status != RefreshStatus::Running {
+            return report;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background refresh run {run_id} did not finish within 60 s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }

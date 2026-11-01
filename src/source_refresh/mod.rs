@@ -11,6 +11,16 @@
 //!
 //! It never publishes a market dataset and never writes a derived item: closed
 //! windows with revisions are picked up by the next daily update (D-66 Q7).
+//!
+//! R2b (§5.6): a run is **single-flight** — [`start`] refuses while any run is
+//! `running`, in the same write transaction that inserts the new row, so two
+//! clients can never share the exchanges' 1 request/s limit — and `full` is
+//! **asynchronous**: [`start_full_in_background`] opens the record, replies
+//! `running` and lets a background thread of the same process acquire. A run
+//! left `running` by a process that stopped is closed `failed`
+//! (`process_restarted`) by [`reclaim_abandoned`] when the next instance takes
+//! the database lease; attribution is the recorded owner instance id, never
+//! elapsed time, and such a run advances no `verified_through`.
 
 pub mod plan;
 pub mod wire;
@@ -39,6 +49,17 @@ use self::wire::{
 pub enum RefreshError {
     #[error("invalid_arguments: {0}")]
     Invalid(String),
+    /// Another run (`tail` or `full`) is still `running`. Refresh is
+    /// single-flight so the exchanges never see two clients each at the
+    /// 1 request/s limit.
+    #[error("refresh_already_running: run {run_id} is still running")]
+    AlreadyRunning { run_id: String },
+    #[error("refresh_run_not_found: no run {run_id}")]
+    NotFound { run_id: String },
+    /// The background thread of an asynchronous `full` could not be started.
+    /// The run row is already closed `failed`, so the caller may retry at once.
+    #[error("refresh_start_failed: {0}")]
+    StartFailed(String),
     #[error(transparent)]
     Unconfigured(#[from] Unconfigured),
     #[error(transparent)]
@@ -55,6 +76,9 @@ impl RefreshError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Invalid(_) => "invalid_arguments",
+            Self::AlreadyRunning { .. } => "refresh_already_running",
+            Self::NotFound { .. } => "refresh_run_not_found",
+            Self::StartFailed(_) => "refresh_start_failed",
             Self::Unconfigured(error) => error.code(),
             Self::Acquire(error) => error.code(),
             Self::Store(error) => error.code(),
@@ -62,9 +86,74 @@ impl RefreshError {
             Self::Transport(error) => error.code(),
         }
     }
+
+    /// The run a single-flight rejection refers to, when the error names one.
+    pub fn run_id(&self) -> Option<&str> {
+        match self {
+            Self::AlreadyRunning { run_id } | Self::NotFound { run_id } => Some(run_id),
+            _ => None,
+        }
+    }
 }
 
-/// Run one refresh and persist its record. `request.dry_run` must be false;
+/// A run opened in the durable record but not finished.
+pub struct StartedRun {
+    pub run_id: String,
+    pub started_at: String,
+    pub mode: RefreshMode,
+    pub plans: Vec<SourcePlan>,
+}
+
+impl StartedRun {
+    /// The reply a caller gets as soon as the durable row is open. `sources`
+    /// carries the plan (what will be requested), not results: the counters
+    /// are zero and nothing is complete yet.
+    pub fn running_report(&self) -> RefreshReport {
+        RefreshReport {
+            run_id: Some(self.run_id.clone()),
+            mode: self.mode,
+            status: RefreshStatus::Running,
+            dry_run: false,
+            started_at: self.started_at.clone(),
+            finished_at: None,
+            scope: self
+                .plans
+                .iter()
+                .map(|plan| plan.source_id.as_str().to_string())
+                .collect(),
+            requests: 0,
+            reused: 0,
+            changed: 0,
+            failed_windows: 0,
+            unobserved_windows: 0,
+            verified_through: None,
+            sources: self
+                .plans
+                .iter()
+                .map(|plan| SourceReport {
+                    source_id: plan.source_id.as_str().to_string(),
+                    class: plan.class.as_str().to_string(),
+                    planned_units: plan.planned_units(),
+                    planned_windows: plan.planned_windows(),
+                    complete: false,
+                    requests: 0,
+                    snapshots: 0,
+                    reused: 0,
+                    changed: 0,
+                    unobserved_windows: 0,
+                    failed_windows: 0,
+                    verified_through: None,
+                })
+                .collect(),
+            planned: self.plans.iter().flat_map(SourcePlan::planned).collect(),
+            revisions: Vec::new(),
+            failures: Vec::new(),
+        }
+    }
+}
+
+/// Run one refresh synchronously and persist its record. `tail` uses this;
+/// `full` uses [`start_full_in_background`]. `request.dry_run` must be false;
 /// call [`dry_run`] for the no-I/O planning response.
 pub fn run(
     store: &SourceStore,
@@ -72,22 +161,38 @@ pub fn run(
     client: &Client,
     today: NaiveDate,
     request: &RefreshRequest,
+    owner_instance: &str,
 ) -> Result<RefreshReport, RefreshError> {
-    let plans =
-        plan::build(request.mode, today, &request.sources).map_err(RefreshError::Invalid)?;
     if request.dry_run {
-        return Ok(dry_run_report(request, plans));
+        return dry_run(today, request);
     }
-    let previous = PreviousSnapshots::load(backend)?;
+    let mode = request.require_mode().map_err(RefreshError::Invalid)?;
+    let started = start(backend, today, mode, &request.sources, owner_instance)?;
+    execute_and_settle(store, backend, client, today, started)
+}
+
+/// Validate the plan and open the run record, at most one run at a time.
+///
+/// The plan is built before the row is written, so an unknown source name
+/// leaves no record; the single-flight check and the insert share one write
+/// transaction (see `sqlite_market::refresh_runs::begin_if_idle`).
+pub fn start(
+    backend: &MarketBackend,
+    today: NaiveDate,
+    mode: RefreshMode,
+    sources: &[String],
+    owner_instance: &str,
+) -> Result<StartedRun, RefreshError> {
+    let plans = plan::build(mode, today, sources).map_err(RefreshError::Invalid)?;
     let started_at = crate::exchange_source::freeze::now();
     let run_id = format!(
         "refresh-{}-{}",
-        request.mode.as_str(),
+        mode.as_str(),
         chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
     );
-    backend.begin_source_refresh_run(&RunStart {
+    let claimed = backend.claim_source_refresh_run(&RunStart {
         run_id: run_id.clone(),
-        mode: request.mode.as_str().to_string(),
+        mode: mode.as_str().to_string(),
         scope: plans
             .iter()
             .map(|plan| plan.source_id.as_str())
@@ -95,14 +200,230 @@ pub fn run(
             .join(","),
         started_at: started_at.clone(),
         task_id: None,
+        owner_instance: owner_instance.to_string(),
     })?;
+    if let Some(running) = claimed {
+        return Err(RefreshError::AlreadyRunning { run_id: running });
+    }
+    Ok(StartedRun {
+        run_id,
+        started_at,
+        mode,
+        plans,
+    })
+}
+
+/// `full` is asynchronous (§5.6 R2b): a 1,941-request run costs ~46 min at
+/// 1 req/s, so the MCP call only validates, opens the durable record and hands
+/// the acquisition to a background thread of this process. The thread owns the
+/// client, store and backend clones; the reply is already on its way out when
+/// the first request starts, and a client that disconnects does not stop the
+/// run. A process stop kills the thread, which leaves the row `running`; the
+/// next service start closes it `failed` (reason `process_restarted`).
+pub fn start_full_in_background(
+    store: SourceStore,
+    backend: MarketBackend,
+    client: Client,
+    today: NaiveDate,
+    request: RefreshRequest,
+    owner_instance: &str,
+) -> Result<RefreshReport, RefreshError> {
+    let mode = request.require_mode().map_err(RefreshError::Invalid)?;
+    if mode != RefreshMode::Full {
+        return Err(RefreshError::Invalid(
+            "start_full_in_background only serves mode=full".to_string(),
+        ));
+    }
+    let started = start(&backend, today, mode, &request.sources, owner_instance)?;
+    let reply = started.running_report();
+    let spawned = std::thread::Builder::new()
+        .name("refresh-full".to_string())
+        .spawn(move || {
+            // A detached thread: the run must outlive the request, so nothing
+            // joins it. Its terminal state is the durable row.
+            match execute_and_settle(&store, &backend, &client, today, started) {
+                Ok(report) => eprintln!(
+                    "refresh run {} {}: {} request(s), {} changed",
+                    report.run_id.as_deref().unwrap_or_default(),
+                    match report.status {
+                        RefreshStatus::Succeeded => "succeeded",
+                        RefreshStatus::Failed => "failed",
+                        RefreshStatus::Planned | RefreshStatus::Running => "unfinished",
+                    },
+                    report.requests,
+                    report.changed,
+                ),
+                Err(error) => eprintln!("refresh run stopped without a report: {error}"),
+            }
+        });
+    if let Err(error) = spawned {
+        // The run row is open but no thread will ever finish it; close it here
+        // so it cannot block every later start until the next restart.
+        let run_id = reply.run_id.clone().unwrap_or_default();
+        let _ = fail_run(
+            &backend,
+            &run_id,
+            "refresh_start_failed",
+            &format!("the background thread could not start: {error}"),
+        );
+        return Err(RefreshError::StartFailed(format!(
+            "the background thread of run {run_id} could not start: {error}"
+        )));
+    }
+    Ok(reply)
+}
+
+/// Read one durable run record. `status` is `running`, `succeeded` or
+/// `failed`; `sources`, `planned` and `revisions` are empty because only the
+/// run row and its failure list are durable (per-source rows are read from the
+/// database by R3, not re-derived here).
+pub fn status_of(backend: &MarketBackend, run_id: &str) -> Result<RefreshReport, RefreshError> {
+    let row = backend
+        .read_source_refresh_run(run_id)?
+        .ok_or_else(|| RefreshError::NotFound {
+            run_id: run_id.to_string(),
+        })?;
+    let mode = match row.mode.as_str() {
+        "tail" => RefreshMode::Tail,
+        "full" => RefreshMode::Full,
+        other => {
+            return Err(RefreshError::Invalid(format!(
+                "run {run_id} has unknown mode {other:?}"
+            )));
+        }
+    };
+    let status = match row.status.as_str() {
+        "running" => RefreshStatus::Running,
+        "succeeded" => RefreshStatus::Succeeded,
+        "failed" => RefreshStatus::Failed,
+        other => {
+            return Err(RefreshError::Invalid(format!(
+                "run {run_id} has unknown status {other:?}"
+            )));
+        }
+    };
+    let failures = row
+        .detail
+        .as_deref()
+        .and_then(|detail| serde_json::from_str::<Vec<RefreshFailure>>(detail).ok())
+        .unwrap_or_default();
+    Ok(RefreshReport {
+        run_id: Some(row.run_id),
+        mode,
+        status,
+        dry_run: false,
+        started_at: row.started_at,
+        finished_at: row.finished_at,
+        scope: row
+            .scope
+            .split(',')
+            .filter(|source| !source.is_empty())
+            .map(str::to_string)
+            .collect(),
+        requests: row.requests,
+        reused: count(row.reused)?,
+        changed: count(row.changed)?,
+        failed_windows: count(row.failed_windows)?,
+        unobserved_windows: count(row.unobserved_windows)?,
+        verified_through: row.verified_through,
+        sources: Vec::new(),
+        planned: Vec::new(),
+        revisions: Vec::new(),
+        failures,
+    })
+}
+
+/// Startup reclaim (§5.6 R2b): close refresh runs a previous process instance
+/// left `running`. A run is attributed to the instance that opened it, never
+/// inferred from elapsed time, so a long `full` in the current process is left
+/// alone. `verified_through` is untouched: an interrupted run verified nothing.
+pub fn reclaim_abandoned(
+    backend: &MarketBackend,
+    owner_instance: &str,
+) -> Result<Vec<String>, RefreshError> {
+    let finished_at = crate::exchange_source::freeze::now();
+    let detail = serde_json::to_string(&[RefreshFailure {
+        source_id: "*".to_string(),
+        window_start: None,
+        window_end: None,
+        code: "process_restarted".to_string(),
+        detail: format!(
+            "the run was still `running` when process instance {owner_instance} took the \
+             database lease; it cannot finish and advances no verified_through"
+        ),
+    }])
+    .unwrap_or_default();
+    Ok(backend.reclaim_source_refresh_runs(owner_instance, &finished_at, &detail)?)
+}
+
+/// Execute an opened run and, on a fault outside the per-request loop, close it
+/// `failed` instead of leaving it `running` (which would block the next start
+/// until a restart).
+fn execute_and_settle(
+    store: &SourceStore,
+    backend: &MarketBackend,
+    client: &Client,
+    today: NaiveDate,
+    started: StartedRun,
+) -> Result<RefreshReport, RefreshError> {
+    let run_id = started.run_id.clone();
+    match execute(store, backend, client, today, started) {
+        Ok(report) => Ok(report),
+        Err(error) => {
+            let _ = fail_run(backend, &run_id, error.code(), &error.to_string());
+            Err(error)
+        }
+    }
+}
+
+/// Close one open run `failed` with a run-level reason (`source_id` is `*`).
+fn fail_run(
+    backend: &MarketBackend,
+    run_id: &str,
+    code: &str,
+    message: &str,
+) -> Result<bool, RefreshError> {
+    let finished_at = crate::exchange_source::freeze::now();
+    let detail = serde_json::to_string(&[RefreshFailure {
+        source_id: "*".to_string(),
+        window_start: None,
+        window_end: None,
+        code: code.to_string(),
+        detail: message.to_string(),
+    }])
+    .unwrap_or_default();
+    Ok(backend.fail_source_refresh_run(run_id, &finished_at, &detail)?)
+}
+
+fn count(value: u64) -> Result<usize, RefreshError> {
+    usize::try_from(value).map_err(|_| {
+        RefreshError::Invalid(format!("run counter {value} exceeds this platform's usize"))
+    })
+}
+
+/// The acquisition of an already opened run.
+fn execute(
+    store: &SourceStore,
+    backend: &MarketBackend,
+    client: &Client,
+    today: NaiveDate,
+    started: StartedRun,
+) -> Result<RefreshReport, RefreshError> {
+    let StartedRun {
+        run_id,
+        started_at,
+        mode,
+        plans,
+    } = started;
+    let request_mode = mode;
+    let previous = PreviousSnapshots::load(backend)?;
 
     let entry = Entry::new(store, backend, client).with_today(today);
     let mut accumulator = Accumulator::default();
     let mut sources = Vec::with_capacity(plans.len());
     for source in &plans {
         let requests_before = client.attempts();
-        let mut stats = SourceStats::new(source, request.mode);
+        let mut stats = SourceStats::new(source, request_mode);
         match refresh_source(
             &entry,
             store,
@@ -190,7 +511,9 @@ pub fn run(
             status: match status {
                 RefreshStatus::Succeeded => "succeeded",
                 RefreshStatus::Failed => "failed",
-                RefreshStatus::Planned => unreachable!("a real run is never planned"),
+                RefreshStatus::Planned | RefreshStatus::Running => {
+                    unreachable!("a finished run is succeeded or failed")
+                }
             }
             .to_string(),
             finished_at: finished_at.clone(),
@@ -215,11 +538,11 @@ pub fn run(
 
     Ok(RefreshReport {
         run_id: Some(run_id),
-        mode: request.mode,
+        mode: request_mode,
         status,
         dry_run: false,
         started_at,
-        finished_at,
+        finished_at: Some(finished_at),
         scope: plans
             .iter()
             .map(|plan| plan.source_id.as_str().to_string())
@@ -239,12 +562,12 @@ pub fn run(
 
 /// Plan only: no HTTP, no store write, no run row.
 pub fn dry_run(today: NaiveDate, request: &RefreshRequest) -> Result<RefreshReport, RefreshError> {
-    let plans =
-        plan::build(request.mode, today, &request.sources).map_err(RefreshError::Invalid)?;
-    Ok(dry_run_report(request, plans))
+    let mode = request.require_mode().map_err(RefreshError::Invalid)?;
+    let plans = plan::build(mode, today, &request.sources).map_err(RefreshError::Invalid)?;
+    Ok(dry_run_report(mode, plans))
 }
 
-fn dry_run_report(request: &RefreshRequest, plans: Vec<SourcePlan>) -> RefreshReport {
+fn dry_run_report(mode: RefreshMode, plans: Vec<SourcePlan>) -> RefreshReport {
     let now = crate::exchange_source::freeze::now();
     let sources = plans
         .iter()
@@ -265,11 +588,11 @@ fn dry_run_report(request: &RefreshRequest, plans: Vec<SourcePlan>) -> RefreshRe
         .collect::<Vec<_>>();
     RefreshReport {
         run_id: None,
-        mode: request.mode,
+        mode,
         status: RefreshStatus::Planned,
         dry_run: true,
         started_at: now.clone(),
-        finished_at: now,
+        finished_at: Some(now),
         scope: plans
             .iter()
             .map(|plan| plan.source_id.as_str().to_string())

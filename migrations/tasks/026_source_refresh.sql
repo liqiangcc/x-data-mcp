@@ -30,6 +30,15 @@
 --    page and a table attempt that failed integrity are proposed but
 --    unconfirmed. None of those are written here.
 --
+--    `owner_instance` is the service instance that opened the run
+--    (`data_service`'s process run id, §5.6 R2b). Refresh is single-flight: a
+--    run may only be opened while no other run is `running`, which is checked
+--    in the same write transaction as the insert. A run left `running` by a
+--    previous process is closed `failed` (reason `process_restarted`) when the
+--    next instance takes the database lease; that decision is by owner id, so
+--    it never guesses from elapsed time. A row written before this column
+--    existed would be `NULL` and counts as foreign.
+--
 -- Append-only: 019-025 are unchanged. Fresh-init only (D-08), so the copy
 -- below normally sees an empty table; it keeps the step correct for a
 -- hand-built schema-25 file opened by the migration chain in tests.
@@ -84,6 +93,7 @@ CREATE TABLE source_refresh_runs(
   unobserved_windows INTEGER NOT NULL DEFAULT 0,
   verified_through TEXT,
   task_id TEXT,
+  owner_instance TEXT,
   detail TEXT
 ) STRICT;
 CREATE INDEX source_refresh_runs_status_finished

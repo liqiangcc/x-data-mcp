@@ -461,12 +461,49 @@ impl MarketBackend {
 
     /// Open a refresh run before its first request, so a process that dies
     /// mid-run leaves a visible `running` record instead of no evidence.
-    pub(crate) fn begin_source_refresh_run(
+    ///
+    /// Single-flight (§5.6 R2b): `Ok(Some(run_id))` refuses the start because
+    /// that run is still `running`; the check and the insert commit in one
+    /// write transaction, so two concurrent starts cannot both win. `tail` and
+    /// `full` exclude each other the same way.
+    pub(crate) fn claim_source_refresh_run(
         &self,
         start: &super::refresh_runs::RunStart,
-    ) -> Result<(), Error> {
+    ) -> Result<Option<String>, Error> {
         match self {
-            Self::Compact(m) => m.tx(|c| super::refresh_runs::begin(c, start)),
+            Self::Compact(m) => m.tx(|c| super::refresh_runs::begin_if_idle(c, start)),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "source_refresh_runs requires the compact market schema".into(),
+            )),
+        }
+    }
+
+    /// Close `running` rows left by another process instance (startup reclaim).
+    /// Attribution is the recorded owner instance id; elapsed time is never
+    /// used, so a long `full` in this process is untouched.
+    pub(crate) fn reclaim_source_refresh_runs(
+        &self,
+        owner_instance: &str,
+        finished_at: &str,
+        detail: &str,
+    ) -> Result<Vec<String>, Error> {
+        match self {
+            Self::Compact(m) => m.tx(|c| {
+                super::refresh_runs::reclaim_foreign(c, owner_instance, finished_at, detail)
+            }),
+            Self::Legacy(_) => Ok(Vec::new()),
+        }
+    }
+
+    /// Close one open run `failed` after a fault outside the per-request loop.
+    pub(crate) fn fail_source_refresh_run(
+        &self,
+        run_id: &str,
+        finished_at: &str,
+        detail: &str,
+    ) -> Result<bool, Error> {
+        match self {
+            Self::Compact(m) => m.tx(|c| super::refresh_runs::fail(c, run_id, finished_at, detail)),
             Self::Legacy(_) => Err(Error::Invalid(
                 "source_refresh_runs requires the compact market schema".into(),
             )),
@@ -500,6 +537,14 @@ impl MarketBackend {
         &self,
     ) -> Result<Vec<super::refresh_runs::RunRow>, Error> {
         self.read(super::refresh_runs::read_runs)
+    }
+
+    /// One durable refresh run record, for the `status_of` lookup.
+    pub(crate) fn read_source_refresh_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<super::refresh_runs::RunRow>, Error> {
+        self.read(|c| super::refresh_runs::read_run(c, run_id))
     }
 
     #[allow(dead_code)]
