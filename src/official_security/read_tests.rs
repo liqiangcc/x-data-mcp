@@ -189,20 +189,32 @@ fn the_daily_items_send_no_exchange_request() {
         .lock()
         .unwrap_or_else(|error| error.into_inner());
     let scenario = Scenario::new();
-    // The wall clock is what the three `run_source`s without a `today` argument
-    // gate on, so the confirmation is "today" and the pages stay visibly older.
-    let now = chrono::Utc::now().date_naive();
-    let confirmed = now.format("%Y-%m-%d").to_string();
-    let run_at = format!("{confirmed}T03:00:00Z");
-    let suspensions_today = day(2024, 7, 1);
+    // One fixed `today` for every item, the way `derived::run` takes it once
+    // from the market calendar (XDM-156 ruling A). It is the first day of a
+    // quarter, so the A-3 window list of a read (`today - 1`) ends on a quarter
+    // boundary and the frozen set needs no partial trailing quarter. The pages
+    // stay six days older, well inside `H`.
+    let today = day(2026, 10, 1);
+    let observed_at = "2026-09-25T02:00:00Z";
+    let confirmed = "2026-09-25";
 
-    freeze_a1a2(&scenario, OBSERVED_AT);
-    record_a1a2_runs(&scenario, &confirmed);
-    freeze_sz_short_name(&scenario, OBSERVED_AT);
-    record_test_refresh_run(&scenario.market, Id::SzseShortName, &confirmed, &run_at);
-    freeze_bulletins(&scenario, now, OBSERVED_AT);
-    record_test_refresh_run(&scenario.market, Id::SseBulletin, &confirmed, &run_at);
-    freeze_a3_except(&scenario, suspensions_today, |_| true);
+    freeze_a1a2(&scenario, observed_at);
+    record_a1a2_runs(&scenario, confirmed);
+    freeze_sz_short_name(&scenario, observed_at);
+    record_test_refresh_run(
+        &scenario.market,
+        Id::SzseShortName,
+        confirmed,
+        &format!("{confirmed}T03:00:00Z"),
+    );
+    freeze_bulletins(&scenario, today, observed_at);
+    record_test_refresh_run(
+        &scenario.market,
+        Id::SseBulletin,
+        confirmed,
+        &format!("{confirmed}T03:00:00Z"),
+    );
+    freeze_a3_except(&scenario, today, |_| true);
 
     let members: Vec<SecurityLifecycleFact> = ["600001", "600018", "600849", "601607"]
         .into_iter()
@@ -215,28 +227,23 @@ fn the_daily_items_send_no_exchange_request() {
     let (admitted, daily_calls) = with_helper_transport(fake_for_hook, || {
         let admitted = (
             matches!(
-                a1a2::run_source(&scenario.market, Policy::Required)
+                a1a2::run_source(&scenario.market, today, Policy::Required)
                     .expect("the security-master item reads its frozen set"),
                 a1a2::RunSource::Admitted(_)
             ),
             matches!(
-                security_names::run_source(&scenario.market, Policy::Required)
+                security_names::run_source(&scenario.market, today, Policy::Required)
                     .expect("the name-history item reads its frozen table"),
                 security_names::RunSource::Admitted(_)
             ),
             matches!(
-                risk_warnings::run_source(&scenario.market, Policy::Required)
+                risk_warnings::run_source(&scenario.market, today, Policy::Required)
                     .expect("the risk-warning item reads its frozen tables"),
                 risk_warnings::RunSource::Admitted(_)
             ),
             matches!(
-                a3::run_source(
-                    &scenario.market,
-                    &members,
-                    suspensions_today,
-                    Policy::Required
-                )
-                .expect("the suspension item reads its frozen windows"),
+                a3::run_source(&scenario.market, &members, today, Policy::Required)
+                    .expect("the suspension item reads its frozen windows"),
                 a3::RunSource::Admitted(_)
             ),
         );
@@ -422,7 +429,7 @@ fn a_missing_snapshot_fails_closed() {
         .unwrap_or_else(|error| error.into_inner());
     let scenario = Scenario::new();
     let _env = scenario.policy();
-    let error = a1a2::run_source(&scenario.market, Policy::Required).unwrap_err();
+    let error = a1a2::run_source(&scenario.market, day(2026, 11, 1), Policy::Required).unwrap_err();
     assert_eq!(error.code(), "source_snapshot_not_found");
 }
 

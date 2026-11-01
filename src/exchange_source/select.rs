@@ -298,11 +298,17 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
+    /// The default `today` is the market's own date (XDM-156 ruling A): the
+    /// refresh run writes `verified_through` in Shanghai time, so a UTC date
+    /// would open the `H` gate a day early between 00:00 and 08:00 Beijing
+    /// time. Every production caller passes the run's single `today` with
+    /// [`Reader::with_today`]; this default is the same date, so a forgotten
+    /// argument cannot silently change the verdict.
     pub fn new(store: &'a SourceStore, backend: &'a MarketBackend) -> Self {
         Self {
             store,
             backend,
-            today: chrono::Utc::now().date_naive(),
+            today: crate::calendar::shanghai_today(),
         }
     }
 

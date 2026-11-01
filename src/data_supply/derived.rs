@@ -23,7 +23,7 @@
 //! `needs_verification` exactly like the per-entity runner — a derived item
 //! must not invent a failure for a commit that may have landed.
 
-use chrono::Utc;
+use chrono::{NaiveDate, Utc};
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -157,6 +157,12 @@ pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
     // suspension binding both need the same member facts, so one worker turn
     // parses them at most once (issue-391 §12.1).
     let source_cache: RefCell<Option<DatasetSource>> = RefCell::new(None);
+    // One `today` for the whole daily run, taken once in the market's own
+    // calendar (XDM-156 A): `refresh_exchange_sources` writes `verified_through`
+    // as a Shanghai date, so a UTC-based `today` would open the H gate a day
+    // early between 00:00 and 08:00 Beijing time and plan different windows
+    // than the refresh run did.
+    let today = crate::calendar::shanghai_today();
     for item in items {
         let Some(mut binding) = market.task_item_binding(task_id, &item.item_id)? else {
             continue;
@@ -202,7 +208,9 @@ pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
             check_delisted_series(market, spec)
         } else {
             match session {
-                Some(_) => execute(ctx, item, revision, &source_cache).map_err(ItemFailure::Plain),
+                Some(_) => {
+                    execute(ctx, item, revision, &source_cache, today).map_err(ItemFailure::Plain)
+                }
                 None => Err(ItemFailure::Plain(Error::Invalid(format!(
                     "{} needs a verified official source; none is installed for this run",
                     item.item_id
@@ -343,6 +351,7 @@ fn execute(
     item: &ItemSpec,
     expected_task_revision: u64,
     source_cache: &RefCell<Option<DatasetSource>>,
+    today: NaiveDate,
 ) -> Result<Value, Error> {
     let RunContext {
         market,
@@ -458,24 +467,26 @@ fn execute(
         // complete, recent frozen set fails this item with R3's stable code
         // (`source_refresh_overdue` / `source_snapshot_not_found`); the
         // previously committed master version stays readable (§6.3) either way.
-        let (exchange, exchange_evidence) =
-            match crate::official_security::a1a2::run_source(market, policy).map_err(|error| {
-                Error::Invalid(format!(
-                    "exchange listing/delisting source: {}: {error}",
-                    error.code()
-                ))
-            })? {
-                crate::official_security::a1a2::RunSource::Pending(pending) => {
-                    (assembly::ExchangeSource::Pending(pending), Value::Null)
-                }
-                crate::official_security::a1a2::RunSource::Admitted(admitted) => {
-                    let evidence = admitted.evidence();
-                    // The candidate migration of D-46 is a recorded lead, never
-                    // dedup truth (§7.1).
-                    candidates.extend(crate::official_security::a1a2::candidate_migrations());
-                    (assembly::exchange_source(Some(admitted.snapshot)), evidence)
-                }
-            };
+        let (exchange, exchange_evidence) = match crate::official_security::a1a2::run_source(
+            market, today, policy,
+        )
+        .map_err(|error| {
+            Error::Invalid(format!(
+                "exchange listing/delisting source: {}: {error}",
+                error.code()
+            ))
+        })? {
+            crate::official_security::a1a2::RunSource::Pending(pending) => {
+                (assembly::ExchangeSource::Pending(pending), Value::Null)
+            }
+            crate::official_security::a1a2::RunSource::Admitted(admitted) => {
+                let evidence = admitted.evidence();
+                // The candidate migration of D-46 is a recorded lead, never
+                // dedup truth (§7.1).
+                candidates.extend(crate::official_security::a1a2::candidate_migrations());
+                (assembly::exchange_source(Some(admitted.snapshot)), evidence)
+            }
+        };
         let assembled = assembly::assemble_security_master(
             &snapshot.facts.lifecycle,
             &snapshot.facts.arrangements,
@@ -531,7 +542,7 @@ fn execute(
         // `source_store_unconfigured` under `Required`; a configured store with
         // no complete, recent frozen table fails this item (R3) and leaves the
         // previous version readable.
-        match crate::official_security::security_names::run_source(market, policy).map_err(
+        match crate::official_security::security_names::run_source(market, today, policy).map_err(
             |error| {
                 Error::Invalid(format!(
                     "security name-history source: {}: {error}",
@@ -579,7 +590,7 @@ fn execute(
     if item.item_id == task_control::derived::RISK_WARNINGS {
         let started = std::time::Instant::now();
         let source = dataset_source(session, source_cache)?;
-        match crate::official_security::risk_warnings::run_source(market, policy).map_err(
+        match crate::official_security::risk_warnings::run_source(market, today, policy).map_err(
             |error| {
                 Error::Invalid(format!(
                     "historical ST/risk-warning source: {}: {error}",
@@ -639,7 +650,7 @@ fn execute(
         let (seam, exchange_evidence) = match crate::official_security::a3::run_source(
             market,
             &inputs.intervals,
-            Utc::now().date_naive(),
+            today,
             policy,
         )
         .map_err(|error| {

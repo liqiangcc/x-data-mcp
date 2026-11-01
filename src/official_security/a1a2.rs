@@ -67,7 +67,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use crate::exchange_source::select::{self, Freshness, Reader};
@@ -467,7 +467,11 @@ pub enum RunSource {
 /// `refresh_exchange_sources` run, so a stale or missing set fails closed with
 /// `source_refresh_overdue` / `source_snapshot_not_found` and the previously
 /// published master stays readable.
-pub fn run_source(market: &MarketBackend, policy: Policy) -> Result<RunSource, A1A2Error> {
+pub fn run_source(
+    market: &MarketBackend,
+    today: NaiveDate,
+    policy: Policy,
+) -> Result<RunSource, A1A2Error> {
     let Some(store) =
         crate::source_store::configured(policy).map_err(|error| A1A2Error::Invalid {
             code: error.code(),
@@ -481,11 +485,7 @@ pub fn run_source(market: &MarketBackend, policy: Policy) -> Result<RunSource, A
                      (X_DATA_MCP_SOURCE_STORE); A-1/A-2 stay pending_source",
         }));
     };
-    Ok(RunSource::Admitted(read(
-        &store,
-        market,
-        Utc::now().date_naive(),
-    )?))
+    Ok(RunSource::Admitted(read(&store, market, today)?))
 }
 
 /// Acquire, parse and merge every plan (§7.1). One shared run cache serves all

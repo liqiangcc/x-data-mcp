@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 
 use super::bind::{self, SnapshotBinding};
 use super::freeze::{FrozenBytes, FrozenSnapshot, freeze_bytes, record_snapshots};
@@ -364,7 +364,10 @@ impl<'a> Entry<'a> {
             store,
             backend,
             client,
-            today: Utc::now().date_naive(),
+            // `source_refresh` passes its own `today` with `with_today`; the
+            // default is the market's date for the same reason as
+            // `select::Reader` (XDM-156 ruling A).
+            today: crate::calendar::shanghai_today(),
             cache: None,
             reuse: ReusePolicyTable::declared(),
         }

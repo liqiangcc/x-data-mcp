@@ -65,7 +65,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use crate::exchange_source::select::{self, Freshness, Reader};
@@ -204,6 +204,7 @@ impl Error {
 /// than `H` fails closed and the previous version stays readable.
 pub fn run_source(
     market: &MarketBackend,
+    today: NaiveDate,
     policy: crate::source_store::Policy,
 ) -> Result<RunSource, Error> {
     let Some(store) = crate::source_store::configured(policy).map_err(|error| Error::Invalid {
@@ -218,11 +219,7 @@ pub fn run_source(
                      (X_DATA_MCP_SOURCE_STORE); name history stays pending_source",
         }));
     };
-    Ok(RunSource::Admitted(read_table(
-        &store,
-        market,
-        Utc::now().date_naive(),
-    )?))
+    Ok(RunSource::Admitted(read_table(&store, market, today)?))
 }
 
 /// Read the frozen SZSE table and assemble the name set, without a request.
@@ -493,7 +490,12 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let _env = crate::source_store::PolicyEnv::set(None, false);
         let (_dir, market) = crate::official_security::compact_market_fixture();
-        let error = run_source(&market, crate::source_store::Policy::Required).unwrap_err();
+        let error = run_source(
+            &market,
+            day(2026, 11, 1),
+            crate::source_store::Policy::Required,
+        )
+        .unwrap_err();
         assert_eq!(error.code(), "source_store_unconfigured");
         assert!(
             error.to_string().starts_with("source_store_unconfigured: "),

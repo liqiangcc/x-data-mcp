@@ -140,7 +140,7 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 R1 的跨日复用读路径、R2 的刷新任务（`refresh_exchange_sources` 的 tail/full、run 成员与
 页 1 守卫）与 R3 的只读日更路径（`exchange_source::select`：整表源取最新完整 run 的成员页，
 窗口源按窗口取最新完整页集，`today − verified_through > H=14d` 即 `source_refresh_overdue`
-fail-closed）已在代码中，随 `generic-data-v9`/schema 26 未部署；日更的四个派生 item 不再
+fail-closed；`today` 是上海日期、每次日更只取一次）已在代码中，随 `generic-data-v9`/schema 26 未部署；日更的四个派生 item 不再
 内联获取，改动在部署后生效。R2b 把运行语义补齐：刷新**单飞**（已有 `running` run 时新开始被拒，
 `refresh_already_running` 并回带 run_id；tail 与 full 互斥，检查与插入同一写事务），
 `full` **异步**（立即返回 `running`，抓取在本进程后台线程，用 `{status_of: run_id}` 查询；

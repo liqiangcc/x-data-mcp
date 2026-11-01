@@ -52,7 +52,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 
 use crate::exchange_source::select::{self, Freshness, FrozenPage, Reader};
@@ -306,7 +306,11 @@ pub enum RunSource {
 /// The daily item sends no request (R3, issue-446 §5.1): the SZ table and the
 /// SH bulletin windows come from `refresh_exchange_sources` runs, and a stale
 /// confirmation fails closed so the previous version stays readable.
-pub fn run_source(market: &MarketBackend, policy: Policy) -> Result<RunSource, Error> {
+pub fn run_source(
+    market: &MarketBackend,
+    today: NaiveDate,
+    policy: Policy,
+) -> Result<RunSource, Error> {
     let Some(store) = crate::source_store::configured(policy).map_err(|error| Error::Invalid {
         code: error.code(),
         detail: error.detail().to_string(),
@@ -319,11 +323,7 @@ pub fn run_source(market: &MarketBackend, policy: Policy) -> Result<RunSource, E
                      (X_DATA_MCP_SOURCE_STORE); historical ST stays pending_source",
         }));
     };
-    Ok(RunSource::Admitted(read_set(
-        &store,
-        market,
-        Utc::now().date_naive(),
-    )?))
+    Ok(RunSource::Admitted(read_set(&store, market, today)?))
 }
 
 /// One frozen SZSE short-name table: the dated change rows both derived
@@ -1487,7 +1487,7 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let _env = crate::source_store::PolicyEnv::set(None, false);
         let (_dir, market) = crate::official_security::compact_market_fixture();
-        let error = run_source(&market, Policy::Required).unwrap_err();
+        let error = run_source(&market, day(2026, 11, 1), Policy::Required).unwrap_err();
         assert_eq!(error.code(), "source_store_unconfigured");
         assert!(
             error.to_string().starts_with("source_store_unconfigured: "),

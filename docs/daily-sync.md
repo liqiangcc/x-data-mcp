@@ -304,15 +304,23 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
 → plan_market_update → run_market_update（四个同源 item 读本次冻结集）
 ```
 
+- `tail` **同步**返回 `RefreshReport`，不必轮询。
 - **每周一次 `{"mode":"full"}`**：窗口类来源补齐全部季度、整表类来源重读整表，并推进
-  `verified_through`。`tail` 只覆盖开窗与上一自然季度，不能单独让闸门长期通过。`full`
-  放低峰（周末候选）；预算 `tail` <300s、触发整表 <600s、`full` <60min，1 req/s 不变。
+  `verified_through`。`full` **异步**：调用立刻返回 `{"status":"running","run_id":…}`，抓取
+  在本进程后台线程（客户端断开不影响）；用 `refresh_exchange_sources({"status_of":run_id})`
+  轮询到 `succeeded`/`failed` 再继续。`running` 期间的计数是 0，不是进度。`tail` 只覆盖开窗
+  与上一自然季度，不能单独让闸门长期通过。`full` 放低峰（周末候选）。
+- 返回 `refresh_already_running`：已有运行中的刷新（`tail` 与 `full` 互斥），读
+  `details.run_id` 并轮询**那个** run 到终态，不要再起新 run。
+- 预算：`tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设
+  门禁，按表读 `source_refresh_run_sources.elapsed_ms`）、`full` <60min；1 req/s 不变。
 - **全新数据库（fresh init）**：在首次日更前先跑一次 `full`。否则四个同源 item 以
   `source_snapshot_not_found` 失败——这是配置/首次顺序问题，不是数据缺陷。
 - 这四个 item **零请求、零探针**（含深市上市/简称的页 1 探针）：整表身份来自刷新 run 的
   成员页，日更不得与刷新任务叠加出 2 req/s。刷新任务的单飞闸门只看刷新，看不到日更
   worker，所以这条由回归用例守（计数假传输断言日更跑完 0 次尝试）。
-- `source_refresh_overdue` → 先 `full`，再重跑 `plan_market_update`/`run_market_update`。
+- `source_refresh_overdue` → 先 `full`（返回 `refresh_already_running` 就轮询那个 run），
+  再重跑 `plan_market_update`/`run_market_update`。
   不要用 `update_data` 补漏，也不要把它当成实体 item 重试；上一版主表/数据集仍是 latest。
 - `source_snapshot_not_found` / `snapshot_incomplete` → 同样先 `full`；`snapshot_incomplete`
   还可能来自页集合不完整（缺页、页数或行数与发布方计数不符），`full` 重跑一次仍失败则报
