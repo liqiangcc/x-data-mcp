@@ -352,13 +352,31 @@ class ContractSnapshots(unittest.TestCase):
         self.assertEqual({line for line, _, _ in found}, {6})
 
     def test_repository_contracts_pass(self):
+        # The deployed schema is a deployment fact (docs/STATUS.md), not the
+        # REGION_SCHEMA fixture: read it so a phase-g deployment that changes
+        # it does not need a fixture edit here as well.
+        status_text = (cf.ROOT / "docs" / "STATUS.md").read_text(encoding="utf-8")
+        schema = cf.deployed_schema_number(status_text)
+        if schema is None:
+            self.skipTest("docs/STATUS.md has no '部署：schema N' row")
+
+        def claims(text: str) -> list[tuple[int, str, str]]:
+            return cf.contract_snapshot_claims(
+                text,
+                schema,
+                REGION_REVISION,
+                REGION_DATA_TOOLS,
+                REGION_ACQUIRE_TOOLS,
+                code_data_tools=REGION_CODE_DATA_TOOLS,
+            )
+
         for path in sorted(cf.CONTRACTS_DIR.iterdir()):
             if not path.is_file():
                 continue
             rel = path.relative_to(cf.ROOT).as_posix()
             self.assertEqual(cf.contract_name_claims(rel), [], rel)
             if path.suffix == ".md":
-                self.assertEqual(contract_claims(path.read_text(encoding="utf-8")), [], rel)
+                self.assertEqual(claims(path.read_text(encoding="utf-8")), [], rel)
 
 
 DECISIONS_OK = """# 决策记录

@@ -30,8 +30,8 @@ M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 涨跌停规则原文未接入时仍按 `pending_source` 记录、`trading_rules` 写 0 行。因此日更成功后，M2 数据集的新鲜度与日线同步，
 不需要单独跑任务（详见 [STATUS](STATUS.md)「数据」段的 M2 数据集行）。
 
-已部署实例为 fresh compact schema 24；代码（main）同为 schema 24（M1 的 schema 22 +
-M2 PR-1 的 023 + M2 PR-2 的 024），三个入口合计注册 24 个工具；
+已部署实例为 fresh compact schema 25；代码（main）同为 schema 25（M1 的 schema 22 +
+M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025），三个入口合计注册 24 个工具；
 显式 init 的新库按代码的 schema 建立；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
 

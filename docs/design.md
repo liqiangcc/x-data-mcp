@@ -16,9 +16,9 @@
 
 本文中「版本」「head」「旧版本可按原 ID 读取」「不可原地修订」等表述描述的是**版本链模型**：它是
 schema 20（v0.2.0-preview.31 及更早）的行为，**已被 schema 21 取代**（历史，不再被视为目标模型）。
-当前部署的是 schema 24 的单版本存储：每 `(实体, 周期)` 只存当前序列，变更由追加式事件日志记录。
+当前部署的是 schema 25 的单版本存储：每 `(实体, 周期)` 只存当前序列，变更由追加式事件日志记录。
 schema 21 自 preview.32 起部署（2026-10-13 全新 init，旧 v20 库归档；历史），M1 于 2026-10-27
-把生产库全新 init 到 schema 24；部署与运行事实以 [STATUS](STATUS.md) 为准。详见[单版本（latest-only）行情存储模型](latest-only-storage.md)。
+把生产库全新 init 到 schema 24，M3 的 025 随上一次 phase-g 部署上线；部署与运行事实以 [STATUS](STATUS.md) 为准。详见[单版本（latest-only）行情存储模型](latest-only-storage.md)。
 下文各处只在受影响的段落加注。
 
 ## 文档状态与权威入口

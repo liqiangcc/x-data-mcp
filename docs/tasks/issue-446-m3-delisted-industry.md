@@ -1856,7 +1856,7 @@ AC-M3-5 的场景③/④待 XDM-144 发布后补。
 |---|---|---|
 | AC-M3-1 | 已执行 | `market.security_master` + `universe` + `filter.as_of=2015-01-05`：2,595 个成员；`listing_source` exchange_list 2,590 / tdx_ssdate 5；`delisting_source` unknown 2,367 / exchange_list 228；flags 2579 空 / listing_conflict 1 / delisting_conflict 15；`issuer_resolution` code_date 2,594 / ambiguous 1；2015 年以来退市 256 个且全部有 bar；与当日目录差集：universe 不在目录 232（退市股）、目录不在 universe 2,862（2015 后上市）；`listing_date` unknown 0；逐条成员 TSV 在验收目录 |
 | AC-M3-2 | 已执行 | 2015–2025 逐年「有 bar 实体（`instrument_class=0`）vs 主表当年在册」：2812/2819、3034/3039、3466/3476、3569/3576、3767/3774、4155/4160、4620/4627、4948/4952、5142/5145、5171/5177、5212/5215，delta −3..−10；`bars_only=0`，`reg_only` 全部是「主表在册但当年整年无 bar」：3 个迁移别名（`sh.601313`、`sz.000022`、`sz.000043`，序列在新代码下）+ 24 个整年停牌代码（如 `sh.600485` 2017/2018/2021、`sz.000029` 2017–2019）。首版脚本把 9 条指数序列算进 bars 才出现 +8/+9，已修正。计数用 DB 只读统计，`research-snapshot.v3` 导出的交叉核对未跑 |
-| AC-M3-3 | 已执行 | `as_of=2015-01-05` → 3/3 `status=unknown, reason=before_coverage`；覆盖起点 2026-09-30；`as_of=2026-10-08`/`2026-10-28` → `assigned`（`X5001`，`name_status=unknown_dictionary`，grade A）；`known_at` 读面可用且 `unknown_known_at_rows=0`；5,235 行 assignment 全部 `unknown_dictionary`——归档快照未配 `incon.dat`（只有 generation 快照有），按 §5.6 不得用当前名称回填 |
+| AC-M3-3 | 已执行 | `as_of=2015-01-05` → 3/3 `status=unknown, reason=before_coverage`；覆盖起点 2026-09-30；`as_of=2026-10-08`/`2026-10-28` → `assigned`（`X5001`，`name_status=unknown_dictionary`，grade A）；`known_at` 读面可用且 `unknown_known_at_rows=0`；5,235 行 assignment 全部 `unknown_dictionary`——**区间起点落在归档快照上**（5,234 行起于 2026-09-30 那个快照、1 行起于 2026-10-24 那个），而 6 个归档快照的 `dictionary_sha256` 全为 NULL（只有 2026-10-28 的 generation 快照有字典），按 §5.6 不得用当前名称回填。**不是「旧代的 `incon.dat` 没登记」**：XDM-146 §6 实测，把同一份 `incon.dat` 重新登记给这些归档快照，5,235 行里只有 1 行的名称会变 |
 | AC-M3-5 | 部分 | P1（无 `--market-db`）`retire_gate_unconfigured`；P2（有来源库、缺证据）`source_store_evidence_missing`，字节未变，detail 无 replay 提示（§10 第 2 条实测形态）；③/④待 XDM-144 后的第一次跨代日更补 |
 | AC-M3-6 | 未执行 | 首轮 `derived:delisted_series_check` `checked=0`（主表在 plan 解析时为空，符合设计）；需要第二个 generation 的日更才有有效读数（PR-5 规定取第二次日更） |
 | AC-M3-7 | 已执行 | 主表 5,565 行；`listing_date` unknown 0；337 个已退市行全部有日期；上市冲突 2 行 / 退市冲突 15 行（两侧值见 §3）；`listing_source` / `delisting_source` 分布见 §3 |
@@ -1882,8 +1882,10 @@ AC-M3-5 的场景③/④待 XDM-144 发布后补。
   删除 `research.sock.owner`/`maint.sock.owner`，否则 readiness 探活失败（本轮已手工清理）。
 - `get_task_progress` 的 `items` 仍为 null（v1/v2），逐 item 证据只能读 `task_items.outcome_json`
   （§10 第 5 条再次实测）。
-- 归档快照（批 B）没有 `incon.dat`，所以由它们开启的行业区间只能是 `unknown_dictionary`；
-  只有 generation 快照开启的区间才有名称。这是 §5.6 的既定语义，不是回填缺失。
+- 归档快照（批 B，6 个，2026-09-30/10-12/10-13/10-16/10-19/10-24）的 `dictionary_sha256` 全为 NULL，
+  所以由它们开启的行业区间只能是 `unknown_dictionary`（5,235 行里 5,234 行起于 2026-09-30 那个快照）；
+  只有 generation 快照（2026-10-28）开启的区间才有名称。这是 §5.6 的既定语义，不是回填缺失，
+  也不是「旧代 `incon.dat` 没登记」——XDM-146 §6 实测重新登记同一份字典只改变 1 行。
 - `/` 可用空间在重建期最低 5.39 GiB，距 5 GB 停止线很近；下一次全量重建前仍需先腾空间。
 - 离库验证必须同时停 `data` 与 `acquire`：acquire 的只读连接同样占住 DB 的 flock，只停 data 时
   `replay --scope suspensions` 报 `database lease … lock acquisition failed`。停机窗口里 data
