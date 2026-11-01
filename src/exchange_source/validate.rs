@@ -13,7 +13,11 @@
 //! A 0-row answer is a failure by default: "0 rows is not evidence" (§6.4,
 //! `work/evidence-notes.md` U-1: a 5-quarter request silently returned
 //! `data:[]`). Only a window the caller declared empty in advance — in this
-//! entry, a fully future window — may be 0 rows ([`EmptyPolicy`]).
+//! entry, a fully future window — may be 0 rows ([`EmptyPolicy`]). The
+//! producer's own page bookkeeping does not change that verdict: a window that
+//! answers `pageCount=0` with no rows is the same empty window as
+//! `pageCount=1` with `data: []`, so both reach the same 0-row policy (#446
+//! §5: the SSE announcement index answers `pageCount=0` for 2000Q1).
 
 use serde_json::Value;
 
@@ -579,19 +583,20 @@ pub fn validate_pages(
     })?;
     let page_count = first.page_count;
     if page_count == 0 {
-        // A quiet window of a `commonSoaQuery` source answers `pageCount=0`
-        // with no rows. Only a consumer that treats 0 rows as an unobserved
-        // window may accept it, and only when nothing was returned.
-        if zero == ZeroPolicy::NotObserved && pages.iter().all(|page| page.rows == 0) {
-            return Ok(PageSet {
-                pages: pages.to_vec(),
-                row_count: 0,
-                page_count: 0,
+        // A quiet window answers `pageCount=0` with no rows: `commonSoaQuery`
+        // does it (A-3), and so does the SSE announcement index for a quarter
+        // without a matching bulletin (2000Q1, #446 §5). No page was declared,
+        // so the page-number/total checks below have nothing to check; what is
+        // left is exactly the 0-row question, answered as for a
+        // `pageCount=1, 0 rows` window. A response that declares `pageCount=0`
+        // and still carries rows is self-contradictory and stays a format
+        // error.
+        if pages.iter().any(|page| page.rows > 0) {
+            return Err(ValidateError::Format {
+                detail: "page_count is 0".to_string(),
             });
         }
-        return Err(ValidateError::Format {
-            detail: "page_count is 0".to_string(),
-        });
+        return zero_row_verdict(pages, policy, zero);
     }
     let mut seen = Vec::new();
     let mut row_count = 0usize;
@@ -643,23 +648,37 @@ pub fn validate_pages(
         });
     }
     if row_count == 0 {
-        return match (policy, zero) {
-            (EmptyPolicy::DeclaredEmptyWindow, _) | (_, ZeroPolicy::NotObserved) => Ok(PageSet {
-                pages: pages.to_vec(),
-                row_count,
-                page_count,
-            }),
-            (EmptyPolicy::Forbidden, ZeroPolicy::FailClosed) => {
-                Err(ValidateError::UnverifiedZero {
-                    pages: pages.len(),
-                    rows: row_count,
-                })
-            }
-        };
+        return zero_row_verdict(pages, policy, zero);
     }
     Ok(PageSet {
         pages: pages.to_vec(),
         row_count,
         page_count,
     })
+}
+
+/// The one verdict on a window that carries no row (§6.4, BR-M3-10).
+///
+/// Both shapes of an empty window — `pageCount=0` with `data: []`, and
+/// `pageCount=1` with `data: []` — reach this function, so the producer's
+/// page-count bookkeeping cannot decide the outcome: a 0-row answer is a
+/// failure (`unverified_zero`) unless the caller declared the window empty or
+/// stores positive facts only. It is never a format error, which is a verdict
+/// on the response itself and would send every consumer down the wrong branch.
+fn zero_row_verdict(
+    pages: &[PageEnvelope],
+    policy: EmptyPolicy,
+    zero: ZeroPolicy,
+) -> Result<PageSet, ValidateError> {
+    match (policy, zero) {
+        (EmptyPolicy::DeclaredEmptyWindow, _) | (_, ZeroPolicy::NotObserved) => Ok(PageSet {
+            pages: pages.to_vec(),
+            row_count: 0,
+            page_count: pages.first().map_or(0, |page| page.page_count),
+        }),
+        (EmptyPolicy::Forbidden, ZeroPolicy::FailClosed) => Err(ValidateError::UnverifiedZero {
+            pages: pages.len(),
+            rows: 0,
+        }),
+    }
 }

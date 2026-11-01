@@ -143,6 +143,13 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
   `source_invalid`。
 - 0 行默认失败（`unverified_zero`）：只有「整段窗口晚于今天」这一种显式声明才允许 0 行
   （`EmptyPolicy`）。「0 行」不是「没有事件」的证据（§6.4、`work/evidence-notes.md` U-1）。
+  信封的页数记账不改变这个裁决：`pageCount=0` 且 `data:[]` 与 `pageCount=1` 且
+  `data:[]` 是同一个空窗口，都走同一条零行策略（XDM-139 §5：上交所公告索引对 2000Q1
+  返回 `pageCount:0`、`total:0`）。`pageCount=0` 却带行是自相矛盾的响应，仍是
+  `source_invalid`（`page_count is 0`）。因此 XDM-148 以前在 FailClosed 下返回
+  `source_invalid` 的调用方（A-1/A-2、S-6、`risk_warnings` 的深市表）现在拿到
+  `unverified_zero`，仍然失败；只有 `risk_warnings` 的沪市公告按设计把它记成
+  `not_observed` 季度并在该季度起点截断区间。
 - 计数不一致（`pageHelp.total`/`recordcount` 与收集行数不符、页数不符、重复页）一律
   `truncated`，入口返回失败；已冻结的页仍按上面的规则入索引。上交所名单的
   `pageHelp.total` 现为真实总数（2026-10-30 实测）；旧快照里的 `total=0` 仍按「未声明
@@ -217,8 +224,9 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
   `TABKEY=tab2`（`tab1` 暂停上市为 0 行 `pagecount=0`）；`1110` 不声明，真实响应 4 个块
   只有 `tab1` 有数据。信封与消费者共用同一个选择函数，行数组与分页计数不会来自不同块。
   选中块的 `tabkey`、选择依据（`declared_tabkey`/`unique_non_empty`/`only_block`）与各块
-  的 row/page 数写入 item 证据的 `block_selection`，因此 `page_count is 0` 能直接看出是
-  「选错块」还是「块本来就空」。
+  的 row/page 数写入 item 证据的 `block_selection`，因此选中块 0 行（XDM-148 起报
+  `unverified_zero`，此前是格式错误 `page_count is 0`）能直接看出是「选错块」还是
+  「块本来就空」。
 - 深市代码列：终止上市名单是 `zqdm`，`CATALOGID=1110` 的当前名单是 `agdm`（#446 D2）。
   按行取存在的那个（不按计划名硬编码）；两者都有且不等 → `source_invalid`，都没有也
   `source_invalid`。

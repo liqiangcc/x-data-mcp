@@ -476,3 +476,109 @@ fn an_invalid_event_date_fails_closed() {
     let error = parse_security_facts(&base, &[], &events).unwrap_err();
     assert!(matches!(error, Error::EventDate { .. }), "{error}");
 }
+
+/// The empty-window shapes the sources answer with `pageCount=0` and no rows.
+///
+/// The SSE announcement index says so for a quarter without a matching
+/// bulletin (2000Q1, XDM-139 §5); `commonSoaQuery` and the SZSE blocks say so
+/// for a quiet window / an empty tab.
+const EMPTY_BULLETIN: &[u8] =
+    br#"{"pageHelp":{"pageNo":1,"pageSize":100,"pageCount":0,"total":0,"data":[]}}"#;
+const EMPTY_SZSE_TABLE: &[u8] = br#"[
+  {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":0,"recordcount":0},"data":[]},
+  {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":0,"recordcount":0},"data":[]}
+]"#;
+const EMPTY_SOA_WINDOW: &[u8] =
+    br#"{"pageHelp":{"pageNo":1,"pageSize":25,"pageCount":0,"total":0,"data":[]}}"#;
+
+/// Answers every adapter's request with the empty-window shape of its own
+/// dialect. No test here opens a socket.
+struct EmptyWindows;
+
+impl crate::exchange_source::Transport for EmptyWindows {
+    fn get(
+        &self,
+        request: &crate::exchange_source::HttpRequest,
+    ) -> Result<crate::exchange_source::HttpResponse, crate::exchange_source::TransportError> {
+        let body = if request.url.contains("CATALOGID=") {
+            EMPTY_SZSE_TABLE.to_vec()
+        } else if request.url.contains("commonSoaQuery") {
+            EMPTY_SOA_WINDOW.to_vec()
+        } else {
+            EMPTY_BULLETIN.to_vec()
+        };
+        Ok(crate::exchange_source::HttpResponse {
+            status: 200,
+            etag: None,
+            last_modified: None,
+            body,
+        })
+    }
+}
+
+/// XDM-148 / XDM-139 §5: a `pageCount=0` window with no rows is the same empty
+/// window as `pageCount=1` with `data: []`, so every consumer gets the verdict
+/// of **its own** zero-row policy instead of a format error:
+///
+/// - A-1/A-2 (`security_master`) and S-6 (`security_names`, through the SZSE
+///   short-name table it shares with `risk_warnings`) fail closed with
+///   `unverified_zero`;
+/// - the SH announcement channel of `risk_warnings` fails the *window* the same
+///   way and its quarter loop records it as `not_observed`;
+/// - A-3 (`suspensions`) asked for `not_observed` and accepts the window.
+///
+/// Before the fix the first three failed with `source_invalid`
+/// ("page_count is 0"), which also made `risk_warnings` treat an empty quarter
+/// as a broken response and fail the whole item.
+#[test]
+fn a_page_count_zero_window_reaches_every_consumer_as_a_zero_row_verdict() {
+    use crate::exchange_source::{Client, Entry, RetryPolicy, RunCache, Segment};
+    use crate::source_store::SourceStore;
+    use std::sync::Arc;
+
+    let (dir, market) = compact_market_fixture();
+    let store = SourceStore::new(dir.path().join("source-store"));
+    let client = Client::with_transport(EmptyWindows)
+        .with_policy(RetryPolicy::single())
+        .without_sleep();
+
+    // A-1/A-2: the SSE listing list is empty; the item fails closed with the
+    // zero-row code, never with a format error.
+    let error = a1a2::acquire(&store, &market, &client).unwrap_err();
+    assert_eq!(error.code(), "unverified_zero");
+    assert!(error.to_string().contains("unverified_zero"), "{error}");
+
+    // S-6 and the SZSE half of `risk_warnings` read the same table through one
+    // acquisition; both consumers turn it into a failed item.
+    let entry = Entry::new(&store, &market, &client)
+        .with_cache(Arc::new(RunCache::new()))
+        // Past every window below, so an empty window can only be accepted by
+        // the plan's own `not_observed` policy, never by the future-window rule.
+        .with_today(day(2008, 12, 31));
+    let error = risk_warnings::acquire_sz_short_name_table(&entry, &store).unwrap_err();
+    assert_eq!(error.code(), "unverified_zero");
+
+    // The SH announcement channel: the window is refused with the code its
+    // quarter loop catches (`derive_sh`); nothing else changes.
+    let mut sse_plans = 0;
+    for (kind, plan) in risk_warnings::plans() {
+        if !matches!(
+            kind,
+            risk_warnings::Kind::SseRiskWarning | risk_warnings::Kind::SseSpecialTreatment
+        ) {
+            continue;
+        }
+        sse_plans += 1;
+        let error = entry.acquire(&plan).unwrap_err();
+        assert_eq!(error.code(), "unverified_zero", "{kind:?}");
+    }
+    assert_eq!(sse_plans, 2, "both title filters are covered");
+
+    // A-3 asked for `not_observed`: the same shape is an accepted window that
+    // carries no fact, which is what its item evidence records.
+    let window = Segment::new(day(2008, 1, 1), day(2008, 3, 31)).unwrap();
+    let outcome = entry
+        .acquire_window(&a3::plan(), window, "startStopDate", "endStopDate")
+        .unwrap();
+    assert_eq!((outcome.row_count, outcome.page_count), (0, 0));
+}
