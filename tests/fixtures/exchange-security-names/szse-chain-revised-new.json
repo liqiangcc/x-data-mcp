@@ -1,0 +1,29 @@
+[
+  {
+    "metadata": {
+      "catalogid": "SSGSGMXX",
+      "name": "简称变更",
+      "tabkey": "tab2",
+      "pagesize": 2,
+      "pageno": 1,
+      "pagecount": 1,
+      "recordcount": 2
+    },
+    "data": [
+      {
+        "bgrq": "1999-04-27",
+        "zqdm": "000004",
+        "zqjc": "ST深安达",
+        "bgqzqjc": "深安达A",
+        "bghzqjc": "ST深安达"
+      },
+      {
+        "bgrq": "2001-03-07",
+        "zqdm": "000004",
+        "zqjc": "深振业A",
+        "bgqzqjc": "ST深安达",
+        "bghzqjc": "深振业A"
+      }
+    ]
+  }
+]

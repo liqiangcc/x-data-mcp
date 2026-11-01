@@ -1,0 +1,40 @@
+{
+  "pageHelp": {
+    "beginPage": 1,
+    "endPage": 1,
+    "pageNo": 1,
+    "pageSize": 100,
+    "pageCount": 1,
+    "total": 2,
+    "data": [
+      [
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2024",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "rev-1",
+          "ORG_FILE_TYPE": 0,
+          "SECURITY_CODE": "600003",
+          "SECURITY_NAME": "示例三",
+          "SSEDATE": "2024-06-01",
+          "TITLE": "示例三关于公司股票被实施其他风险警示的公告",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2024-06-01/600003_1.pdf"
+        }
+      ],
+      [
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2024",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "rev-2",
+          "ORG_FILE_TYPE": 0,
+          "SECURITY_CODE": "600001",
+          "SECURITY_NAME": "示例一",
+          "SSEDATE": "2024-04-30",
+          "TITLE": "示例一关于公司股票被实施其他风险警示的公告",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2024-04-30/600001_1.pdf"
+        }
+      ]
+    ]
+  }
+}

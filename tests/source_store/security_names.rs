@@ -29,19 +29,39 @@ fn market_db(dir: &Path) -> PathBuf {
     db
 }
 
+/// The request fingerprint of one page of the SZSE `SSGSGMXX`/`tab2` table:
+/// the page number is part of it, so two pages are two fingerprints and a
+/// re-fetch of one page is a second answer to the same fingerprint.
+fn short_name_origin(page: u32) -> String {
+    format!(
+        "https://www.szse.cn/api/report/ShowReport/data?CATALOGID=SSGSGMXX&TABKEY=tab2&PAGENO={page}"
+    )
+}
+
 /// One frozen SZSE `SSGSGMXX`/`tab2` page as PR-2's freeze path registers it:
 /// `store_kind=http_fetch`, the request fingerprint as `origin`, the envelope
 /// parser version, one acquisition time for the whole page set.
-fn frozen_short_name(store: &SourceStore, body: &[u8], parser_version: &str) -> String {
-    let mut facts = Registration::new(
-        "szse_short_name",
-        StoreKind::HttpFetch,
-        "https://www.szse.cn/api/report/ShowReport/data?CATALOGID=SSGSGMXX&TABKEY=tab2&PAGENO=1",
-        "2026-10-30T02:00:00Z",
-    );
+fn frozen_page(
+    store: &SourceStore,
+    body: &[u8],
+    parser_version: &str,
+    origin: &str,
+    acquired_at: &str,
+) -> String {
+    let mut facts = Registration::new("szse_short_name", StoreKind::HttpFetch, origin, acquired_at);
     facts.parser_version = Some(parser_version.to_string());
     facts.basis_status = Some("approved_source".to_string());
     store.register(body, &facts).unwrap().sha256
+}
+
+fn frozen_short_name(store: &SourceStore, body: &[u8], parser_version: &str) -> String {
+    frozen_page(
+        store,
+        body,
+        parser_version,
+        &short_name_origin(1),
+        "2026-10-30T02:00:00Z",
+    )
 }
 
 fn register_generation_member(store: &SourceStore) {
@@ -348,4 +368,197 @@ fn a_zero_row_table_is_not_reported_as_an_empty_rebuild() {
     );
     assert_eq!(name_rows(&db), 3, "the previous version stays readable");
     assert_eq!(registrations(&db), 1);
+}
+
+/// The whole table is one snapshot split into pages: a two-page fetch replays
+/// to the same rows and the same summary as the one-page snapshot of the same
+/// change chain, because the selection is the page *set*, not "what is frozen".
+#[test]
+fn a_two_page_table_replays_to_the_same_history_as_a_one_page_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let single = SourceStore::new(dir.path().join("single-page"));
+    frozen_short_name(&single, &fixture("szse-chain.json"), SZSE_PARSER_VERSION);
+    let single_db = market_db(dir.path());
+    let (code, report) = cli(single.root(), Some(&single_db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    let single_summary = report["scopes"][0]["summary"].as_str().unwrap().to_string();
+
+    let split = SourceStore::new(dir.path().join("two-pages"));
+    frozen_page(
+        &split,
+        &fixture("szse-chain-page1.json"),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(1),
+        "2026-10-30T02:00:00Z",
+    );
+    frozen_page(
+        &split,
+        &fixture("szse-chain-page2.json"),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(2),
+        "2026-10-30T02:00:00Z",
+    );
+    let split_db = market_db(&dir.path().join("two-pages"));
+    let (code, report) = cli(split.root(), Some(&split_db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    let scope = &report["scopes"][0];
+    assert_eq!(scope["rebuilt"], "rebuilt");
+    assert_eq!(scope["database"], "match");
+    assert_eq!(scope["entries"], 2, "both pages of the set are selected");
+    assert_eq!(scope["snapshots"], 3);
+    assert_eq!(scope["summary"], single_summary.as_str());
+    assert_eq!(name_rows(&split_db), 3);
+}
+
+/// A page set that is missing a page is not a shorter table: the scope fails
+/// closed with `snapshot_incomplete`, writes nothing, and the previous version
+/// stays readable.
+#[test]
+fn a_missing_page_is_snapshot_incomplete() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("store"));
+    frozen_page(
+        &store,
+        &fixture("szse-chain-page1.json"),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(1),
+        "2026-10-30T02:00:00Z",
+    );
+
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 1);
+    assert_eq!(report["status"], "snapshot_incomplete");
+    let scope = &report["scopes"][0];
+    assert_eq!(scope["scope"], "security_names");
+    assert_eq!(scope["status"], "snapshot_incomplete");
+    assert_eq!(scope["rebuilt"], "not_rebuilt");
+    assert!(scope.get("summary").is_none(), "{report}");
+    assert_eq!(report["problems"][0]["reason"], "snapshot_incomplete");
+    assert!(
+        report["problems"][0]["actual"]
+            .as_str()
+            .unwrap()
+            .contains("page(s) 2 of 2"),
+        "the report names the missing page: {report}"
+    );
+    assert_eq!(name_rows(&db), 0);
+    assert_eq!(registrations(&db), 0);
+}
+
+/// A page set whose rows do not add up to the declared `recordcount` is a
+/// partial fetch, not the whole table: `snapshot_incomplete`, and the last
+/// published version stays readable.
+#[test]
+fn rows_that_do_not_add_up_to_recordcount_are_snapshot_incomplete() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("store"));
+    frozen_page(
+        &store,
+        &fixture("szse-chain-page1.json"),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(1),
+        "2026-10-30T02:00:00Z",
+    );
+    frozen_page(
+        &store,
+        &fixture("szse-chain-page2.json"),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(2),
+        "2026-10-30T02:00:00Z",
+    );
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    assert_eq!(name_rows(&db), 3);
+
+    // The next day the table grew by one row and only page 1 was re-frozen:
+    // page 1 now declares recordcount 5 while page 2 still carries (and
+    // declares) the old four-row table. Joining the two newest answers would
+    // rebuild a table with four of the five rows and silently drop a name.
+    let mut grown: serde_json::Value =
+        serde_json::from_slice(&fixture("szse-chain-page1.json")).unwrap();
+    grown[0]["metadata"]["recordcount"] = serde_json::json!(5);
+    frozen_page(
+        &store,
+        serde_json::to_vec(&grown).unwrap().as_slice(),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(1),
+        "2026-10-31T02:00:00Z",
+    );
+
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 1);
+    assert_eq!(report["status"], "snapshot_incomplete");
+    assert!(
+        report["problems"][0]["actual"]
+            .as_str()
+            .unwrap()
+            .contains("disagree on recordcount"),
+        "{report}"
+    );
+    assert_eq!(name_rows(&db), 3, "the previous version stays readable");
+}
+
+/// One fingerprint answered twice (the page was revised between runs): replay
+/// uses the newest answer, exactly like the live item that re-fetched it. The
+/// older page's chain must not resurface — it would open a risk-warning
+/// interval the revised table closes.
+#[test]
+fn the_newest_answer_for_a_page_is_the_one_replayed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("store"));
+    frozen_page(
+        &store,
+        &fixture("szse-chain-revised-old.json"),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(1),
+        "2026-10-30T02:00:00Z",
+    );
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    // The old answer re-stamped the code to ST in 2001: two intervals.
+    assert_eq!(report["scopes"][0]["snapshots"], 2);
+    assert_eq!(name_rows(&db), 2);
+
+    // The publisher revised the table: the 2001 change renames to a normal
+    // name instead of re-stamping ST.
+    let newest = frozen_page(
+        &store,
+        &fixture("szse-chain-revised-new.json"),
+        SZSE_PARSER_VERSION,
+        &short_name_origin(1),
+        "2026-10-31T02:00:00Z",
+    );
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    let scope = &report["scopes"][0];
+    assert_eq!(scope["rebuilt"], "rebuilt");
+    assert_eq!(scope["database"], "match");
+    assert_eq!(scope["snapshots"], 1, "only the revised page is counted");
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    let open: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM security_name_history WHERE effective_to IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(open, 0, "the revisited ST interval is gone");
+
+    // The record is still there (a revision adds an answer, it does not
+    // overwrite the manifest), and `--verify-only` compares the live selection
+    // — the same newest answer — with the database.
+    assert!(
+        store
+            .records()
+            .unwrap()
+            .iter()
+            .any(|record| record.sha256 == newest)
+    );
+    let (code, verify) = cli(store.root(), Some(&db), "verify", "security_names");
+    assert_eq!(code, 0, "{verify}");
+    assert_eq!(verify["scopes"][0]["database"], "match");
+    assert_eq!(verify["scopes"][0]["snapshots"], 1);
 }

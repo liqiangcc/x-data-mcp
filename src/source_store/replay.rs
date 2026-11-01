@@ -22,8 +22,14 @@
 //!   recomputed summary with the stored rows (`match` / `drift`).
 //! - `risk_warnings` (M3 PR-10): the frozen SZSE short-name table and SSE
 //!   bulletin pages are re-parsed and `risk_warning_intervals` is replaced.
+//!   Selection follows the live item (XDM-154, §5.5): one snapshot per request
+//!   fingerprint, the newest acquisition, so a revised window's older page
+//!   cannot contribute events the live run no longer has. The SZSE whole-table
+//!   snapshot must be a complete page set (§5.4), otherwise the scope is
+//!   `snapshot_incomplete` and nothing is written.
 //! - `security_names` (M3 PR-12): the frozen SZSE `SSGSGMXX`/`tab2` table is
-//!   re-parsed and `security_name_history` (plus its
+//!   re-parsed (from the newest answer per page request, and only when those
+//!   pages form the complete table of §5.4) and `security_name_history` (plus its
 //!   `derived_dataset_versions` registration) is replaced through the same
 //!   writer the live item uses. The coverage windows are derived from the
 //!   bytes — the SH/BJ `NOT_AVAILABLE` windows end on the table's last change
@@ -63,7 +69,7 @@
 //! `source_store_corrupt`; an unknown `parser_version` is fail-closed (§9.4.1).
 //! No partial rebuild is produced: the index replacement is one transaction.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use chrono::NaiveDate;
@@ -113,6 +119,13 @@ pub const SUSPENSION_REPLAY_NOT_READY: &str = "suspension_replay_not_ready";
 /// The scope had no matching manifest records: nothing was computed or written.
 /// It is never reported as `rebuilt` — "no data" is not "an empty table".
 pub const NOTHING_SELECTED: &str = "nothing_selected";
+/// Stable code of a replay whose selected SZSE short-name pages are not the
+/// complete whole-table fetch §5.4 requires: a page number between 1 and
+/// `pagecount` has no selected answer, the pages disagree on `pagecount` or
+/// `recordcount`, or the rows do not add up to the declared record count. It is
+/// fail-closed like `suspension_replay_not_ready`: a partial page set would
+/// rebuild a name history (and ST intervals) that the source never published.
+pub const SNAPSHOT_INCOMPLETE: &str = "snapshot_incomplete";
 
 /// Source id of the frozen SZSE `SSGSGMXX`/`tab2` short-name table (PR-2).
 const SZSE_SHORT_NAME_SOURCE_ID: &str = "szse_short_name";
@@ -467,7 +480,7 @@ fn run(
             match rebuild_exchange(store, &selected, request.verify_only, request.database) {
                 Ok(outcome) => {
                     rebuilt = outcome.rebuilt;
-                    summary = Some(outcome.summary);
+                    summary = outcome.summary;
                     database_verdict = outcome.database;
                     drift_keys = outcome.drift;
                     snapshot_count = Some(outcome.snapshots);
@@ -500,10 +513,19 @@ fn run(
             match rebuild_risk_warnings(store, &selected, request.verify_only, request.database) {
                 Ok(outcome) => {
                     rebuilt = outcome.rebuilt;
-                    summary = Some(outcome.summary);
+                    summary = outcome.summary;
                     database_verdict = outcome.database;
                     drift_keys = outcome.drift;
                     snapshot_count = Some(outcome.snapshots);
+                    for issue in outcome.problems {
+                        problems.push(BlobProblem {
+                            sha256: issue.snapshot_id,
+                            source_id: issue.source_id,
+                            reason: issue.reason,
+                            expected: outcome.expected.clone(),
+                            actual: issue.detail,
+                        });
+                    }
                     if outcome.status != "ok" {
                         status = outcome.status;
                     }
@@ -549,11 +571,14 @@ fn run(
             match rebuild_security_names(store, &selected, request.verify_only, request.database) {
                 Ok(outcome) => {
                     rebuilt = outcome.rebuilt;
-                    summary = Some(outcome.summary);
+                    summary = outcome.summary;
                     database_verdict = outcome.database;
                     drift_keys = outcome.drift;
-                    snapshot_count = Some(outcome.rows);
+                    snapshot_count = outcome.rows;
                     as_of = outcome.as_of;
+                    for issue in outcome.problems {
+                        problems.push(issue);
+                    }
                     if outcome.status != "ok" {
                         status = outcome.status;
                     }
@@ -686,12 +711,36 @@ fn run(
 struct ExchangeOutcome {
     status: &'static str,
     rebuilt: &'static str,
-    summary: String,
+    /// Canonical summary of the rebuilt table set; `None` when nothing was
+    /// built, so the report never shows a summary for an empty result.
+    summary: Option<String>,
     database: Option<&'static str>,
     drift: Vec<String>,
     snapshots: usize,
     problems: Vec<crate::exchange_source::RebuildProblem>,
     expected: String,
+}
+
+impl ExchangeOutcome {
+    /// A scope that built nothing: the status names the reason, one problem
+    /// carries the detail, and no summary or table set is claimed.
+    fn not_built(status: &'static str, source_id: &str, expected: &str, detail: String) -> Self {
+        Self {
+            status,
+            rebuilt: REBUILT_NOT_READY,
+            summary: None,
+            database: None,
+            drift: Vec::new(),
+            snapshots: 0,
+            problems: vec![crate::exchange_source::RebuildProblem {
+                snapshot_id: String::new(),
+                source_id: source_id.to_string(),
+                reason: status,
+                detail,
+            }],
+            expected: expected.to_string(),
+        }
+    }
 }
 
 fn rebuild_exchange(
@@ -718,7 +767,7 @@ fn rebuild_exchange(
             "partially_failed"
         },
         rebuilt: COMPUTED_EXCHANGE_NO_DB,
-        summary,
+        summary: Some(summary),
         database: None,
         drift: Vec::new(),
         snapshots: rebuild.rows.len(),
@@ -736,7 +785,7 @@ fn rebuild_exchange(
             .read_exchange_snapshots()
             .map_err(|error| error.to_string())?;
         let stored_summary = crate::exchange_source::summary(&stored);
-        if stored_summary == outcome.summary {
+        if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
             outcome.database = Some("match");
             return Ok(outcome);
         }
@@ -755,7 +804,7 @@ fn rebuild_exchange(
         .read_exchange_snapshots()
         .map_err(|error| error.to_string())?;
     let stored_summary = crate::exchange_source::summary(&stored);
-    if stored_summary == outcome.summary {
+    if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
         outcome.database = Some("match");
         return Ok(outcome);
     }
@@ -765,52 +814,233 @@ fn rebuild_exchange(
     Ok(outcome)
 }
 
+/// One snapshot per request fingerprint: the newest acquisition.
+///
+/// The live daily item re-fetches every window it derives from, so the set it
+/// used is exactly "the newest answer to each fingerprint". A revised window
+/// (one fingerprint, two shas) therefore hides its older page, and replay must
+/// make the same choice or it re-derives facts the source no longer states
+/// (§5.5 AC-M3-9). Ties break on the snapshot id, so the choice is
+/// deterministic.
+fn latest_per_fingerprint<'a, I>(records: I) -> Vec<&'a ManifestRecord>
+where
+    I: IntoIterator<Item = &'a ManifestRecord>,
+{
+    let mut latest: BTreeMap<(&str, &str), &ManifestRecord> = BTreeMap::new();
+    for record in records {
+        let key = (record.source_id.as_str(), record.origin.as_str());
+        let newer = match latest.get(&key) {
+            None => true,
+            Some(previous) => {
+                (record.acquired_at.as_str(), record.sha256.as_str())
+                    > (previous.acquired_at.as_str(), previous.sha256.as_str())
+            }
+        };
+        if newer {
+            latest.insert(key, record);
+        }
+    }
+    latest.into_values().collect()
+}
+
+/// One frozen SZSE short-name page plus the §5.4 completeness inputs of its
+/// envelope.
+struct ShortNamePage<'a> {
+    record: &'a ManifestRecord,
+    page: u32,
+    page_count: u32,
+    rows: usize,
+    record_count: Option<u64>,
+}
+
+/// The SZSE short-name selection: a complete whole-table page set, or the
+/// reason the newest answer per page request is not one.
+enum ShortNameTable<'a> {
+    /// The complete page set (§5.4), ordered by page number.
+    Complete(Vec<&'a ManifestRecord>),
+    /// The newest answers do not form the table the source published.
+    Incomplete(String),
+}
+
+/// Select the frozen SZSE short-name pages a replay may rebuild from.
+///
+/// The table is one whole-market snapshot, not an append log: each page request
+/// (its fingerprint includes `PAGENO`) has one current answer, and the newest one
+/// is what the source states. An older answer is a revised page, and replaying it
+/// would duplicate a change chain.
+///
+/// The selected set must be **complete** before anything is rebuilt (§5.4):
+/// every page number `1..=pagecount` present, one `pagecount` for the set, and
+/// the per-page row counts adding up to the declared `recordcount`. A fetch that
+/// failed on a later page leaves the earlier pages frozen behind (freeze comes
+/// before parse), and those pages must not silently become a shorter table — and
+/// a shorter name history — that the source never published.
+///
+/// The manifest cannot name an acquisition: re-downloading an unchanged page is
+/// deduplicated by `(sha256, source_id, origin)`, so a whole fetch does not leave
+/// one group under one `acquired_at`. "The newest complete page set" is therefore
+/// assembled per request fingerprint, and the completeness conditions are what
+/// detect a fetch that stopped early. They cannot detect a set whose pages come
+/// from two different tables while still adding up (page 1 revised, page 2 not
+/// yet re-fetched); that identity belongs to the refresh run (XDM-446 §5.4),
+/// which validates the fetch it made before publishing it.
+///
+/// The inputs come from the envelope dialect the domain row parser reads (the
+/// block the request declared), not from the parser version a page was frozen
+/// with: [`crate::official_security::risk_warnings::parse_sz_page`] reads that
+/// block for every frozen page, so "the set is complete" and "what the writer
+/// parsed" cannot come from different blocks.
+fn select_short_name_table<'a>(
+    store: &SourceStore,
+    records: &[&'a ManifestRecord],
+) -> Result<ShortNameTable<'a>, String> {
+    let declared = crate::official_security::risk_warnings::szse_declared_tabkey();
+    let mut by_page: BTreeMap<u32, ShortNamePage<'a>> = BTreeMap::new();
+    for record in latest_per_fingerprint(records.iter().copied()) {
+        let bytes = store
+            .read_verified(&record.sha256)
+            .map_err(|error| error.to_string())?;
+        let envelope = crate::exchange_source::validate::parse_page(
+            crate::exchange_source::request::PagingFormat::SzseMetadata,
+            declared.as_deref(),
+            &bytes,
+        )
+        .map_err(|error| format!("{}: {error}", error.code()))?;
+        let page = ShortNamePage {
+            record,
+            page: envelope.page,
+            page_count: envelope.page_count,
+            rows: envelope.rows,
+            record_count: envelope.total,
+        };
+        // One page number can be answered by more than one fingerprint (a plan's
+        // page size may change); the newest answer is the one the live run read.
+        let newer = match by_page.get(&page.page) {
+            None => true,
+            Some(existing) => {
+                (record.acquired_at.as_str(), record.sha256.as_str())
+                    > (
+                        existing.record.acquired_at.as_str(),
+                        existing.record.sha256.as_str(),
+                    )
+            }
+        };
+        if newer {
+            by_page.insert(page.page, page);
+        }
+    }
+    let Some(first) = by_page.values().next() else {
+        // No frozen page at all is not an incomplete table: the caller reports
+        // `store_empty`/`nothing_selected` for that case.
+        return Ok(ShortNameTable::Complete(Vec::new()));
+    };
+    let incomplete = |reason: String| {
+        ShortNameTable::Incomplete(format!(
+            "the selected SZSE short-name pages are not the whole table: {reason}"
+        ))
+    };
+    let page_count = first.page_count;
+    for page in by_page.values() {
+        if page.page_count != page_count {
+            return Ok(incomplete(format!(
+                "the pages disagree on pagecount: {} says {page_count}, {} says {}",
+                first.record.sha256, page.record.sha256, page.page_count
+            )));
+        }
+    }
+    if page_count == 0 {
+        return Ok(incomplete(format!(
+            "the pages declare pagecount 0 but {} page(s) carry {} row(s)",
+            by_page.len(),
+            by_page.values().map(|page| page.rows).sum::<usize>(),
+        )));
+    }
+    let missing: Vec<String> = (1..=page_count)
+        .filter(|page| !by_page.contains_key(page))
+        .map(|page| page.to_string())
+        .collect();
+    if !missing.is_empty() {
+        return Ok(incomplete(format!(
+            "page(s) {} of {page_count} have no snapshot",
+            missing.join(", ")
+        )));
+    }
+    let pages: Vec<&ShortNamePage<'a>> = (1..=page_count)
+        .filter_map(|page| by_page.get(&page))
+        .collect();
+    let rows: usize = pages.iter().map(|page| page.rows).sum();
+    let mut declared_total: Option<u64> = None;
+    for page in &pages {
+        let Some(total) = page.record_count else {
+            continue;
+        };
+        match declared_total {
+            None => declared_total = Some(total),
+            Some(known) if known != total => {
+                return Ok(incomplete(format!(
+                    "the pages disagree on recordcount: {known} and {total} (page {})",
+                    page.page
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+    if let Some(total) = declared_total
+        && rows as u64 != total
+    {
+        return Ok(incomplete(format!(
+            "the pages carry {rows} row(s) but the table declares {total}"
+        )));
+    }
+    Ok(ShortNameTable::Complete(
+        pages.into_iter().map(|page| page.record).collect(),
+    ))
+}
+
 /// Rebuild `risk_warning_intervals` from the frozen SZSE short-name table and
 /// SSE bulletin pages. No HTTP request is made; the live coverage windows (and
 /// therefore the gaps that cut open SH intervals) are read back from the
 /// registration evidence when a database is supplied.
+///
+/// Selection is the live selection (§5.5 AC-M3-9): one snapshot per request
+/// fingerprint, the newest acquisition, and — for the SZSE whole-table
+/// snapshot — the complete page set. Parsing *every* frozen page instead would
+/// resurrect events of a revised window: a bulletin window answered twice under
+/// one fingerprint keeps both pages in the store, and the live run only has the
+/// newer one, whose events the per-window de-duplication cannot remove from the
+/// older page's rows.
 fn rebuild_risk_warnings(
     store: &SourceStore,
     records: &[&ManifestRecord],
     verify_only: bool,
     database: Option<&Path>,
 ) -> Result<ExchangeOutcome, String> {
-    let mut selected: Vec<&ManifestRecord> = records
+    let bulletins = latest_per_fingerprint(
+        records
+            .iter()
+            .copied()
+            .filter(|record| record.source_id == "sse_bulletin"),
+    );
+    let short_name_records: Vec<&ManifestRecord> = records
         .iter()
         .copied()
-        .filter(|record| {
-            matches!(
-                record.source_id.as_str(),
-                "sse_bulletin" | "szse_short_name"
-            )
-        })
+        .filter(|record| record.source_id == SZSE_SHORT_NAME_SOURCE_ID)
         .collect();
-    selected.sort_by(|left, right| {
-        (
-            left.source_id.as_str(),
-            left.acquired_at.as_str(),
-            left.sha256.as_str(),
-        )
-            .cmp(&(
-                right.source_id.as_str(),
-                right.acquired_at.as_str(),
-                right.sha256.as_str(),
-            ))
-    });
-    // The SZSE table is a whole snapshot, not an append log. Replay only the
-    // latest frozen acquisition; older snapshots would duplicate the same
-    // change chain and look like same-day conflicts.
-    let latest_sz = selected
-        .iter()
-        .filter(|record| record.source_id == "szse_short_name")
-        .map(|record| record.acquired_at.as_str())
-        .max();
+    let short_names = match select_short_name_table(store, &short_name_records)? {
+        ShortNameTable::Complete(pages) => pages,
+        ShortNameTable::Incomplete(detail) => {
+            return Ok(ExchangeOutcome::not_built(
+                SNAPSHOT_INCOMPLETE,
+                SZSE_SHORT_NAME_SOURCE_ID,
+                "the complete SZSE short-name page set (§5.4: pages 1..=pagecount whose \
+                 row counts add up to recordcount)",
+                detail,
+            ));
+        }
+    };
     let mut seen = BTreeSet::new();
     let mut pages = Vec::new();
-    for record in selected {
-        if record.source_id == "szse_short_name" && Some(record.acquired_at.as_str()) != latest_sz {
-            continue;
-        }
+    for record in short_names.into_iter().chain(bulletins) {
         if !seen.insert(record.sha256.as_str()) {
             continue;
         }
@@ -853,7 +1083,7 @@ fn rebuild_risk_warnings(
     let mut outcome = ExchangeOutcome {
         status: "ok",
         rebuilt: COMPUTED_RISK_WARNINGS_NO_DB,
-        summary: summary.clone(),
+        summary: Some(summary.clone()),
         database: None,
         drift: Vec::new(),
         snapshots: set.rows.len(),
@@ -1043,65 +1273,77 @@ fn row_drift(
 struct SecurityNamesOutcome {
     status: &'static str,
     rebuilt: &'static str,
-    summary: String,
+    /// Canonical summary of the rebuilt set; `None` when nothing was built.
+    summary: Option<String>,
     database: Option<&'static str>,
     drift: Vec<String>,
-    rows: usize,
+    /// Rows of the rebuilt set; `None` when nothing was built.
+    rows: Option<usize>,
     as_of: Option<String>,
+    problems: Vec<BlobProblem>,
+}
+
+impl SecurityNamesOutcome {
+    /// A scope that built nothing because the frozen pages are not a complete
+    /// whole-table fetch: the previous version stays readable and the report
+    /// names the missing pages instead of rebuilding a shorter history.
+    fn snapshot_incomplete(detail: String) -> Self {
+        Self {
+            status: SNAPSHOT_INCOMPLETE,
+            rebuilt: REBUILT_NOT_READY,
+            summary: None,
+            database: None,
+            drift: Vec::new(),
+            rows: None,
+            as_of: None,
+            problems: vec![BlobProblem {
+                sha256: String::new(),
+                source_id: SZSE_SHORT_NAME_SOURCE_ID.to_string(),
+                reason: SNAPSHOT_INCOMPLETE,
+                expected: "the complete SZSE short-name page set (§5.4: pages \
+                           1..=pagecount whose row counts add up to recordcount)"
+                    .to_string(),
+                actual: detail,
+            }],
+        }
+    }
 }
 
 /// Rebuild `security_name_history` from the frozen SZSE short-name table
 /// (M3 PR-12, D-61).
 ///
-/// Only `szse_short_name` `http_fetch` records are selected, and only the
-/// latest acquisition group: the table is a whole-market snapshot, so replaying
-/// an older page set would duplicate the same change chain. One multi-page
-/// fetch stamps every page with the same `acquired_at` (PR-2
-/// `freeze_bytes(fetched_at)`), so a group is one complete page set. The
-/// manifest has no acquisition-completeness flag: pages frozen by a fetch that
-/// failed on a later page stay behind with the same `acquired_at`, so replay
-/// cannot tell such a partial group apart (the live item never wrote it). The
-/// set is built by
-/// the adapter's replay entry, which derives the coverage windows from the
-/// bytes, and written through the live item's own writer (whole-table replace +
-/// `derived_dataset_versions` registration) in one transaction. `--verify-only`
-/// compares the recomputed rows **and** coverage windows with the stored ones.
+/// Only `szse_short_name` `http_fetch` records are selected, and only a
+/// **complete** page set: the table is a whole-market snapshot, so replaying an
+/// older page set would duplicate the same change chain, and replaying an
+/// incomplete one would rebuild a shorter history than the source published.
+/// [`select_short_name_table`] takes the newest answer per page request and
+/// applies the §5.4 completeness conditions (every page present, one
+/// `pagecount`, rows adding up to `recordcount`); anything less is
+/// `snapshot_incomplete` and the previous version stays readable. The set is
+/// built by the adapter's replay entry, which derives the coverage windows from
+/// the bytes, and written through the live item's own writer (whole-table
+/// replace + `derived_dataset_versions` registration) in one transaction.
+/// `--verify-only` compares the recomputed rows **and** coverage windows with
+/// the stored ones, over the same selection a write would use.
 fn rebuild_security_names(
     store: &SourceStore,
     records: &[&ManifestRecord],
     verify_only: bool,
     database: Option<&Path>,
 ) -> Result<SecurityNamesOutcome, String> {
-    let mut selected: Vec<&ManifestRecord> = records
+    let selected: Vec<&ManifestRecord> = records
         .iter()
         .copied()
         .filter(|record| record.source_id == SZSE_SHORT_NAME_SOURCE_ID)
         .collect();
-    selected.sort_by(|left, right| {
-        (
-            left.acquired_at.as_str(),
-            left.origin.as_str(),
-            left.sha256.as_str(),
-        )
-            .cmp(&(
-                right.acquired_at.as_str(),
-                right.origin.as_str(),
-                right.sha256.as_str(),
-            ))
-    });
-    let latest = selected
-        .iter()
-        .map(|record| record.acquired_at.as_str())
-        .max();
-    let mut seen = BTreeSet::new();
+    let selected = match select_short_name_table(store, &selected)? {
+        ShortNameTable::Complete(pages) => pages,
+        ShortNameTable::Incomplete(detail) => {
+            return Ok(SecurityNamesOutcome::snapshot_incomplete(detail));
+        }
+    };
     let mut pages = Vec::new();
     for record in selected {
-        if Some(record.acquired_at.as_str()) != latest {
-            continue;
-        }
-        if !seen.insert(record.sha256.as_str()) {
-            continue;
-        }
         let bytes = store
             .read_verified(&record.sha256)
             .map_err(|error| error.to_string())?;
@@ -1120,11 +1362,12 @@ fn rebuild_security_names(
     let mut outcome = SecurityNamesOutcome {
         status: "ok",
         rebuilt: COMPUTED_SECURITY_NAMES_NO_DB,
-        summary,
+        summary: Some(summary),
         database: None,
         drift: Vec::new(),
-        rows: set.rows.len(),
+        rows: Some(set.rows.len()),
         as_of,
+        problems: Vec::new(),
     };
     let Some(database) = database else {
         return Ok(outcome);
@@ -1135,7 +1378,7 @@ fn rebuild_security_names(
         let stored_rows = stored_intervals(&stored_rows)?;
         let stored_coverage = stored_coverage.unwrap_or_default();
         let stored_summary = names_summary(&stored_rows, &stored_coverage);
-        if stored_summary == outcome.summary {
+        if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
             outcome.database = Some("match");
             return Ok(outcome);
         }
@@ -1187,7 +1430,7 @@ fn rebuild_security_names(
     let stored_coverage = stored_coverage
         .ok_or_else(|| "the name-history registration has no coverage evidence".to_string())?;
     let stored_summary = names_summary(&stored_rows, &stored_coverage);
-    if stored_summary == outcome.summary {
+    if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
         outcome.rebuilt = REBUILT_SECURITY_NAMES;
         outcome.database = Some("match");
         return Ok(outcome);
