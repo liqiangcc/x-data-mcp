@@ -1003,6 +1003,13 @@ mod tests {
       "BULLETIN_TYPE_DESC":"风险警示","ORG_BULLETIN_ID":"risk-1",
       "URL":"/disclosure/listedinfo/announcement/c/new/2000-05-08/600001_1.pdf"}]}}"#
         .as_bytes();
+    /// The revocation of the same warning in 2000Q4.
+    const ONE_REVOKE_QUARTER: &[u8] = r#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":1,
+      "total":1,"data":[{"SSEDATE":"2000-10-11","SECURITY_CODE":"600001",
+      "SECURITY_NAME":"示例一","TITLE":"示例一关于撤销其他风险警示的公告",
+      "BULLETIN_TYPE_DESC":"风险警示","ORG_BULLETIN_ID":"risk-1-revoke",
+      "URL":"/disclosure/listedinfo/announcement/c/new/2000-10-11/600001_2.pdf"}]}}"#
+        .as_bytes();
     /// The SZSE short-name table the same item reads, in the real two-block
     /// shape: `tab1` (暂停上市) empty, `tab2` with one A-share change.
     const SHORT_NAME_TABLE: &[u8] = r#"[
@@ -1013,9 +1020,10 @@ mod tests {
     .as_bytes();
 
     /// Scripted transport for the whole item: the SZSE table, plus the SSE
-    /// announcement index where 2000Q2 carries one event and every other
-    /// quarter is the empty shape. Both title filters ask for the same
-    /// windows, so the duplicate event is also a de-duplication fixture.
+    /// announcement index where 2000Q2 carries one implementation and 2000Q4
+    /// its revocation, while every other quarter is the empty shape. Both
+    /// title filters ask for the same windows, so the duplicate event is also
+    /// a de-duplication fixture.
     struct BulletinPages {
         requests: Mutex<Vec<String>>,
     }
@@ -1027,6 +1035,8 @@ mod tests {
                 SHORT_NAME_TABLE.to_vec()
             } else if request.url.contains("END_DATE=2000-06-30") {
                 ONE_EVENT_QUARTER.to_vec()
+            } else if request.url.contains("END_DATE=2000-12-31") {
+                ONE_REVOKE_QUARTER.to_vec()
             } else {
                 EMPTY_QUARTER.to_vec()
             };
@@ -1122,17 +1132,18 @@ mod tests {
         assert_eq!(pages.requests.lock().unwrap().len(), 3);
     }
 
-    /// (b) A mixed run: empty quarters before and after an observed one. The
-    /// derivation must still produce the interval and must cut it at the next
-    /// unobserved quarter instead of carrying a warning across the gap.
+    /// (b) A mixed run: an empty quarter, an implementation, an empty quarter,
+    /// the revocation. The derivation must still produce the interval and must
+    /// cut it at the start of the unobserved quarter between the two events
+    /// instead of carrying the warning across the gap.
     #[test]
     fn empty_quarters_around_an_observed_one_still_derive_intervals() {
         let (_dir, store, market, pages) = bulletin_fixture();
         let admitted = acquire_quarters(&store, &market, &pages, day(2000, 12, 31))
             .expect("the mixed run succeeds");
-        // One event, seen through both title filters and de-duplicated by its
-        // record id; two rows were read from the two observed pages.
-        assert_eq!((admitted.sh_events, admitted.sh_rows), (1, 2));
+        // Two events, each seen through both title filters and de-duplicated by
+        // its record id; four rows were read from the two observed quarters.
+        assert_eq!((admitted.sh_events, admitted.sh_rows), (2, 4));
         let sh_rows: Vec<_> = admitted
             .set
             .rows
@@ -1145,7 +1156,7 @@ mod tests {
         assert_eq!(
             sh_rows[0].effective_to,
             Some(day(2000, 7, 1)),
-            "the interval stops at the unobserved quarter, it is not claimed past it"
+            "the interval stops at the 2000Q3 gap, it is not claimed past it"
         );
         let coverage: Vec<(bool, usize)> = admitted
             .set
@@ -1154,12 +1165,9 @@ mod tests {
             .filter(|window| window.source_kind == "exchange_announcement")
             .map(|window| (window.observed, window.rows))
             .collect();
-        // 2000Q1 empty, 2000Q2 observed, 2000Q3 and 2000Q4 empty.
-        assert_eq!(
-            coverage,
-            vec![(false, 0), (true, 2), (false, 0), (false, 0)]
-        );
-        assert_eq!(admitted.set.not_observed_windows(), 3);
+        // 2000Q1 empty, 2000Q2 observed, 2000Q3 empty, 2000Q4 observed.
+        assert_eq!(coverage, vec![(false, 0), (true, 2), (false, 0), (true, 2)]);
+        assert_eq!(admitted.set.not_observed_windows(), 2);
         // One SZSE request plus two title filters over four quarters; every
         // page is frozen even when its window is empty.
         assert_eq!(pages.requests.lock().unwrap().len(), 9);
