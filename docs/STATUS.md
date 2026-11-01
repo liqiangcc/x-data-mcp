@@ -218,7 +218,7 @@ acquire socket 10；隧道仍连 `mcp.sock`。preview.37 窗口的 `get_data_cap
 时间均为 `tasks.created_at`/`last_progress_at`（数据库写入时间，UTC）：
 
 1. 01:14:57Z 激活 `f2fd6fcb…`（request `daily-20261101-xdm139-activate`，带 previous `0f1623b0…`）。
-2. 04:21:56→05:12:05Z 日线 plan/run（`task-8128ffb4…`，**5,240** 项 = 5,223 个 catalog 实体 + 17 个派生 item）：
+2. 04:21:56→05:12:05Z 日线 plan/run（`task-8128ffb4…`，**5,240** 项 = 5,223 个 catalog 实体 + 17 个派生 item），写循环 **3,009.6s**（`created_at` 04:21:56.224 → `last_progress_at` 05:12:05.864）：
    **5,215 成功、25 失败**（24 项 `REVISION_UNVERIFIED` + `derived:risk_warnings`）。
 3. 05:32:28→05:33:04Z 日线显式前向窗口补推（`explicit-range-task-v1`，**24/24 成功**，实体集合即上一步的 24 个失败项）。
 4. 05:34:40→05:46:50Z 年线 plan/run（**5,130/5,130 成功**；5,223 − 5,130 = 93 个 ineligible 实体）。
@@ -276,7 +276,7 @@ evidence_only 的代），超限后 `acquire_generation` 被拒 `generation_capa
 另有过期证据卡住回收的路径见「数据」表的「旧代回收」行。Skill 在有更新日的路径仍未完整验证
 （枚举过慢一次、部分自行追加一次）；#304 的有效 PASS 仍为 3/10（均为 unchanged）。批量更新工具
 （`plan_market_update`/`run_market_update`）自 `generic-data-v7`（preview.33，2026-10-16）起已实现并随
-二进制上线；XDM-139 的第 1 代日更即由它驱动（5,240 项 / 50 分钟，见「数据」段）。
+二进制上线；XDM-139 的第 1 代日更即由它驱动（5,240 项，写循环 **3,009.6s**，见「数据」段）。
 
 ## 新鲜度
 
