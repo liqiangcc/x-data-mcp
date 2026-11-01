@@ -51,5 +51,8 @@
   此时 `ops` 的 `tools/list` 没有本工具，16 只是代码 allowlist 计数。
 - schema 26 仍按 D-08 全新 init，不做原地迁移；旧二进制拒绝 26。
 - 回滚：回到 v8 二进制并保留旧库归档；schema 26 的 run 记录不参与 v8 的读写面。
-- 工具面预算：`tools/list` 不内联 `outputSchema`；ops 新增一个输入 schema，预算以
-  实现 PR 的实测值为准（`tests/mcp/v8_tool_surface.rs`）。
+- 工具面预算：`tools/list` 不内联 `outputSchema`。实测 research 11,691 B、ops 29,814 B、
+  maint 13,523 B；main 的 15-tool ops payload 为 28,701 B，R2 新增工具贡献 1,113 B。
+  按 v8 §6.3 「已批准上限 + 已记录面增长」的规则，ops 上限从 29,300 调为
+  29,300 + 1,113 = 30,413，向上取整到 30,500 B（`tests/mcp/v8_tool_surface.rs`）；
+  待 owner 批准。
