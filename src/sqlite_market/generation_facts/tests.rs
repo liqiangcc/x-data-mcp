@@ -184,7 +184,7 @@ fn facts_of(db: &Path, generation: &str) -> Vec<GenerationFact> {
     })
 }
 
-fn fact(facts: &[GenerationFact], kind: &str) -> Option<&GenerationFact> {
+fn fact<'a>(facts: &'a [GenerationFact], kind: &str) -> Option<&'a GenerationFact> {
     facts.iter().find(|fact| fact.fact_kind == kind)
 }
 
