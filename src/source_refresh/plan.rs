@@ -220,6 +220,6 @@ pub fn build(
 fn trim_tail(windows: &mut Vec<Segment>) {
     if windows.len() > 2 {
         let keep_from = windows.len() - 2;
-        windows.drain(..keep_from);
+        windows.drain(..keep_from).for_each(drop);
     }
 }
