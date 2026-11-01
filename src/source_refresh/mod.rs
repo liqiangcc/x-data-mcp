@@ -142,7 +142,11 @@ pub fn run(
     // no complete set and must not claim a date. Per-source rows carry the
     // finer truth, and `latest_complete_verified_through` reads those.
     let any_complete = sources.iter().any(|source| source.complete);
-    let verified_through = (!failed && any_complete).then(|| today.to_string());
+    let verified_through = if !failed && any_complete {
+        Some(today.to_string())
+    } else {
+        None
+    };
     if !failed {
         for source in &mut sources {
             if source.complete {
@@ -432,7 +436,7 @@ fn refresh_source(
             let Some(snapshot) = probe.snapshots.first() else {
                 return Err(AcquireError::Invalid {
                     code: "snapshot_incomplete",
-                    detail: format!("{} probe produced no page", label),
+                    detail: format!("{label} probe produced no page"),
                 }
                 .into());
             };
@@ -532,7 +536,7 @@ fn acquire_guarded_table(
     store: &SourceStore,
     plan: &crate::exchange_source::AcquisitionPlan,
 ) -> Result<AcquisitionOutcome, AcquireError> {
-    for attempt in 0..=1 {
+    for _ in 0..=1 {
         let outcome = entry.acquire(plan).map_err(table_acquisition_error)?;
         verify_table_set(store, plan, &outcome)?;
         let first = outcome
@@ -549,11 +553,9 @@ fn acquire_guarded_table(
         if first.row.snapshot_id == guard_first.row.snapshot_id {
             return Ok(outcome);
         }
-        if attempt == 0 {
-            // The first page changed while the later pages were being read:
-            // the set is a mix of two table versions. Retry once from page 1.
-            continue;
-        }
+        // The first page changed while the later pages were being read: the
+        // set is a mix of two table versions. The loop retries once from page
+        // 1 and fails after the second mismatch.
     }
     Err(AcquireError::Invalid {
         code: "window_changed_mid_fetch",
