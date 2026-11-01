@@ -766,14 +766,17 @@ source_store register-generation-member --store <dir> \
 - **写入语义**：走 `SourceStore::register`，沿用来源库 flock、torn-tail 检查与 `(sha256, source_id, origin)` 幂等键；blob 已在库 → 只追加清单行、复用并校验已有 blob；不在库 → 按 §9.4.1 写序落 blob。**只追加**，不改写也不删除任何已有行；重复执行不新增行。
 - **失败不伪装成功**：该代没有 `tdxhy.cfg` 时报 `generation_has_no_industry_member` 并退出 1（门禁同样会拒，报 `ok` 会误导）。
 - **输出 JSON**：每个成员的 `role`/`source_id`/`member`/`sha256`/`size_bytes`/`added`（本次是否新增清单行）/`blob_reused`（是否复用已有 blob），以及门禁要找的 `origin`。
-- 只写来源库、不写市场库；两个服务仍持有来源库读锁，所以在与退役相同的停服窗口内执行。
+- 只写来源库、不写市场库；两个服务仍持有来源库读锁，所以在与退役相同的停服窗口内执行。窗口必须把 tunnel 也算进去（先停 tunnel、最后起它），否则 tunnel 会在 10 s 后把 data 拉起，replay 报 `database service already active`（2026-11-01 实测）。
 
 **遗留代退役操作序列（XDM-146 §8.0，方案 A）**：以 `9d9e38d7…`/`c184e9c4…` 为例。方案 C（改门禁）已否，门禁规则不改；豁免只覆盖「这一代确实从未向本库写入过那三类行情派生事实」。
 
 ```bash
 S=/opt/x-data-mcp-preview/state; B=/opt/x-data-mcp-preview/current/bin
 G=<generation manifest sha>
-systemctl stop x-data-mcp-acquire x-data-mcp-data
+# 停服顺序 tunnel -> acquire -> data；只停 data+acquire 时 tunnel 的 Restart=always
+# 会在 10 s 后重启并把 data 拉起来（2026-11-01T10:22Z 实测）
+systemctl stop x-data-mcp-tunnel x-data-mcp-acquire x-data-mcp-data
+systemctl is-active x-data-mcp-tunnel x-data-mcp-acquire x-data-mcp-data  # 期望三者都 inactive
 # 1) 补登记（幂等，可重复）
 $B/source_store register-generation-member --store $S/source-store \
     --generation $G --generation-dir /opt/x-data-mcp-preview/generations/generations/$G
@@ -787,7 +790,7 @@ for K in derived_fact:gbbq.zip:capital_events \
       --reason "generation predates the source store and never wrote market-derived facts into this database (source_bindings=0); <采集窗口>" \
       --recorded-by "<owner>"
 done
-systemctl start x-data-mcp-data x-data-mcp-acquire
+systemctl start x-data-mcp-data x-data-mcp-acquire x-data-mcp-tunnel
 # 4) 逐代退役（confirm_token = generation sha）
 retire_generation(request_id="retire-<date>-<gen8>", generation_id=$G, confirm_token=$G)
 # 期望 state=evidence_only，detail=exemptions: derived_fact:...
@@ -1898,7 +1901,9 @@ AC-M3-5 的场景③/④待 XDM-144 发布后补。
 
 窗口：`data` 与 `acquire` 均 `inactive`（先只停 data 时 acquire 的只读连接会占住 flock，重放报
 `database lease … lock acquisition failed`；`/proc/locks` 无持有者后重跑即通过——这是新增的
-运维事实），随后 `verify --scope all`。
+运维事实），随后 `verify --scope all`。**2026-11-01 起窗口还要停 tunnel**：只停 data+acquire 时
+tunnel 会在约 10 s 后重启并把 data 拉起，写库步骤随即因 `database service already active` 失败
+（见 M3 设计 §8.3 与 [source-store](../source-store.md) §4.3）。
 
 | scope | 结果 | 证据 |
 |---|---|---|
@@ -1932,7 +1937,8 @@ AC-M3-5 的场景③/④待 XDM-144 发布后补。
     之后必须重跑全部重建（catalog + 5,225 日线 + 17 派生 + 年线 + listed-ever）。按本轮实测约
     60–70 分钟（A-3 1,388 s、日更 1,978 s、年线 597 s、首采 540 s、listed-ever 49 s），
     成本高，只在 schema 变化时值得。
-- 补跑最小步骤（A 路径）：①bump PR 合入 → ②tag + Release 构建/smoke → ③停 data、切
+- 补跑最小步骤（A 路径，历史记录；当时只停 data，现在停机窗口还要停 tunnel，见 §8.3）：
+  ①bump PR 合入 → ②tag + Release 构建/smoke → ③停 data、切
   `current`、起 data → ④`retry_task(task-4411ad308f647e93c0a013b0a06f0b00)`（只重试失败的
   `derived:risk_warnings`）→ ⑤验 `risk_warning_intervals > 0`、`derived_dataset_versions` 有
   `risk_warnings` 行、`replay --scope risk_warnings --verify-only = match` → ⑥同次日更顺带取

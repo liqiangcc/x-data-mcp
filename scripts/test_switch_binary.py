@@ -43,14 +43,29 @@ TAG_SHORT = "preview30"
 sys.path.insert(0, str(REPO / "scripts"))
 from test_wait_service_ready import FakeService, mcp_handler  # noqa: E402
 import data_unit_layout as layout  # noqa: E402
+import systemd_exec_start as exec_start  # noqa: E402
 
 SYSTEMCTL_STUB = """#!/usr/bin/env bash
 # Test stand-in for systemctl: log argv, honour one injected failure, never act.
-# `cat` is a read for ExecStart parsing, not an action, so it is not logged;
-# XDM_TEST_DATA_UNIT supplies the data unit body once a test needs one.
+# `cat` and `show -p ExecStart` are reads for ExecStart resolution, not actions,
+# so they are not logged. XDM_TEST_DATA_UNIT is the base unit body,
+# XDM_TEST_DROPIN_UNIT the drop-in (`systemctl cat` concatenates both) and
+# XDM_TEST_EFFECTIVE_EXEC what `systemctl show -p ExecStart --value` reports;
+# leaving the last one unset exercises the `cat` fallback.
 if [[ "$1" == cat ]]; then
     if [[ -n "${XDM_TEST_DATA_UNIT:-}" && "$2" == *-data.service ]]; then
         cat "$XDM_TEST_DATA_UNIT"
+        if [[ -n "${XDM_TEST_DROPIN_UNIT:-}" ]]; then
+            printf '# %s\\n' "$XDM_TEST_DROPIN_UNIT"
+            cat "$XDM_TEST_DROPIN_UNIT"
+        fi
+    fi
+    exit 0
+fi
+if [[ "$1" == show && "$*" == *ExecStart* ]]; then
+    if [[ -n "${XDM_TEST_EFFECTIVE_EXEC:-}" && "$2" == *-data.service ]]; then
+        printf '{ path=%s ; argv[]=%s ; ignore_errors=no ; start_time=[n/a] ; }\\n' \\
+            "${XDM_TEST_EFFECTIVE_EXEC%% *}" "$XDM_TEST_EFFECTIVE_EXEC"
     fi
     exit 0
 fi
@@ -58,9 +73,22 @@ printf '%s\\n' "$*" >>"${XDM_TEST_SYSTEMCTL_LOG:-/dev/null}"
 if [[ -n "${XDM_TEST_SYSTEMCTL_FAIL:-}" && "$*" == *"$XDM_TEST_SYSTEMCTL_FAIL"* ]]; then
     exit 1
 fi
+unit=${!#}
+state_file="${XDM_TEST_SYSTEMCTL_STATE:-}/${unit}"
 case "$1" in
     show) printf 'ControlGroup=/stub\\n' ;;
-    is-active) [[ "$*" == *--quiet* ]] || echo active ;;
+    is-active)
+        state=active
+        [[ -n "${XDM_TEST_SYSTEMCTL_STATE:-}" && -f "$state_file" ]] && state=$(cat "$state_file")
+        [[ "$state" == active ]] || exit 3
+        [[ "$*" == *--quiet* ]] || echo active
+        ;;
+    stop|start)
+        if [[ -n "${XDM_TEST_SYSTEMCTL_STATE:-}" ]]; then
+            mkdir -p "$XDM_TEST_SYSTEMCTL_STATE"
+            echo "$([[ "$1" == stop ]] && echo inactive || echo active)" >"$state_file"
+        fi
+        ;;
 esac
 exit 0
 """
@@ -153,7 +181,7 @@ class ExecuteHarness:
 
     def __init__(self, tmp: Path, data_tools=("plan_market_update",),
                  acquire_tools=("acquire_generation",), unit_exec=None,
-                 entry_tools=None):
+                 entry_tools=None, dropin_exec=None, effective_exec=True):
         self.tmp = tmp
         self.root = deploy_root(tmp)
         self.assets = release_fixture(tmp, SHA)
@@ -162,23 +190,43 @@ class ExecuteHarness:
         write_stub(self.stub_bin / "systemctl", SYSTEMCTL_STUB)
         write_stub(self.stub_bin / "gh", GH_STUB)
         self.log = tmp / "systemctl.log"
+        self.state = tmp / "systemctl-state"
         self.data_tools = data_tools
         self.acquire_tools = acquire_tools
         self.unit_exec = unit_exec
         self.entry_tools = entry_tools or {}
         self.unit_file = None
+        self.dropin_file = None
+        self.effective_exec = None
+        self.effective_enabled = effective_exec
         if unit_exec is not None:
-            self.set_unit(unit_exec)
+            self.set_unit(unit_exec, dropin_exec)
 
-    def set_unit(self, unit_exec):
+    def set_unit(self, unit_exec, dropin_exec=None):
+        """Install a base unit and (optionally) the production drop-in.
+
+        The drop-in clears the inherited `ExecStart=` before setting its own,
+        exactly like `exec-start.conf`; what systemd would report through
+        `show` is the drop-in's line, while `cat` keeps both snippets.
+        """
         self.unit_exec = unit_exec
         self.unit_file = self.tmp / "data.service"
         self.unit_file.write_text(f"[Service]\nExecStart={unit_exec}\n")
+        self.dropin_file = None
+        self.effective_exec = None
+        self.served_exec = unit_exec
+        if dropin_exec is not None:
+            self.dropin_file = self.tmp / "exec-start.conf"
+            self.dropin_file.write_text(
+                f"[Service]\nExecStart=\nExecStart={dropin_exec}\n"
+            )
+            self.effective_exec = dropin_exec
+            self.served_exec = dropin_exec
 
     def endpoints(self):
         if self.unit_exec is None:
             return [("ops", self.root / "run" / "mcp.sock")]
-        parsed = layout.parse(self.unit_exec)["endpoints"]
+        parsed = layout.parse(self.served_exec)["endpoints"]
         return [(e["entry"], Path(e["socket"])) for e in parsed]
 
     def tools_for(self, entry):
@@ -191,11 +239,19 @@ class ExecuteHarness:
             "PATH": f"{self.stub_bin}{os.pathsep}{os.environ['PATH']}",
             "XDM_TEST_RELEASE_DIR": str(self.assets),
             "XDM_TEST_SYSTEMCTL_LOG": str(self.log),
+            "XDM_TEST_SYSTEMCTL_STATE": str(self.state),
         }
         if self.unit_file is not None:
             env["XDM_TEST_DATA_UNIT"] = str(self.unit_file)
+        if self.dropin_file is not None:
+            env["XDM_TEST_DROPIN_UNIT"] = str(self.dropin_file)
+        if self.effective_exec is not None and self.effective_enabled:
+            env["XDM_TEST_EFFECTIVE_EXEC"] = self.effective_exec
         env.update(extra)
         return env
+
+    def calls(self):
+        return self.log.read_text().splitlines() if self.log.exists() else []
 
     def run(self, *args, **extra_env):
         with contextlib.ExitStack() as stack:
@@ -232,8 +288,11 @@ class SwitchBinary(unittest.TestCase):
             out = proc.stdout
             for marker in (
                 "DRY: gh release download",
-                "DRY: systemctl stop x-data-mcp-acquire",
-                "DRY: systemctl stop x-data-mcp-data",
+                # XDM-160: the tunnel is stopped first (it Wants/After data
+                # and Restart=always), then acquire, then data.
+                "DRY: systemctl stop x-data-mcp-tunnel.service",
+                "DRY: systemctl stop x-data-mcp-acquire.service",
+                "DRY: systemctl stop x-data-mcp-data.service",
                 "DRY: ln -sfn",
                 "DRY: mv -T",
                 "DRY: systemctl start",
@@ -420,8 +479,8 @@ class ReportSchema(unittest.TestCase):
                              harness.root / "releases" / PREV)
             # systemctl saw the rollback stop/start pair, never a real unit.
             calls = harness.log.read_text().splitlines()
-            self.assertIn("start x-data-mcp-data", calls)
-            self.assertIn("stop x-data-mcp-acquire", calls)
+            self.assertIn("start x-data-mcp-data.service", calls)
+            self.assertIn("stop x-data-mcp-acquire.service", calls)
 
     def test_failure_before_mutation_reports_not_needed_rollback(self):
         with tempfile.TemporaryDirectory() as td:
@@ -647,7 +706,8 @@ def multi_socket_exec(root: Path, tail="--poll-ms 1000") -> str:
     ).strip()
 
 
-def run_dry_with_unit(tmp: Path, root: Path, unit_exec: str, *args):
+def run_dry_with_unit(tmp: Path, root: Path, unit_exec: str, *args,
+                      dropin_exec: str | None = None, effective: bool = True):
     stub_bin = tmp / "stub-bin"
     stub_bin.mkdir(parents=True)
     write_stub(stub_bin / "systemctl", SYSTEMCTL_STUB)
@@ -660,6 +720,13 @@ def run_dry_with_unit(tmp: Path, root: Path, unit_exec: str, *args):
         XDM_READY_TIMEOUT="5",
         XDM_TEST_DATA_UNIT=str(unit),
     )
+    if dropin_exec is not None:
+        dropin = tmp / "exec-start.conf"
+        dropin.write_text(f"[Service]\nExecStart=\nExecStart={dropin_exec}\n")
+        env["XDM_TEST_DROPIN_UNIT"] = str(dropin)
+        if effective:
+            # What systemd's merged view reports: the drop-in wins.
+            env["XDM_TEST_EFFECTIVE_EXEC"] = dropin_exec
     return subprocess.run(
         ["bash", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=180
     )
@@ -775,6 +842,200 @@ class MultiSocketUnitShape(unittest.TestCase):
                 (harness.root / "current").readlink(),
                 harness.root / "releases" / PREV,
             )
+
+
+
+def single_socket_exec(root: Path, tail="") -> str:
+    """The base unit shape before the v8 phase-2 drop-in."""
+    return (
+        f"{root}/current/bin/data_service {root}/state/preview.sqlite "
+        f"{root}/run/mcp.sock {tail}"
+    ).strip()
+
+
+class SystemdExecStartParser(unittest.TestCase):
+    """XDM-160: the effective ExecStart, not the base unit's first line."""
+
+    def test_show_value_takes_argv_only(self):
+        value = (
+            "{ path=/x/bin/data_service ; argv[]=/x/bin/data_service /x/db.sqlite "
+            "/x/mcp.sock --entry ops ; ignore_errors=no ; start_time=[n/a] ; }"
+        )
+        self.assertEqual(
+            exec_start.from_show_value(value),
+            "/x/bin/data_service /x/db.sqlite /x/mcp.sock --entry ops",
+        )
+
+    def test_show_value_requotes_escaped_spaces(self):
+        self.assertEqual(
+            exec_start.from_show_value("{ argv[]=/x/a\\x20b /x/mcp.sock ; }"),
+            "'/x/a b' /x/mcp.sock",
+        )
+
+    def test_cat_last_non_empty_execstart_wins_after_a_reset(self):
+        text = (
+            "# /etc/systemd/system/x-data-mcp-data.service\n"
+            "[Service]\n"
+            "ExecStart=/x/base /x/db.sqlite /x/mcp.sock\n"
+            "# /etc/systemd/system/x-data-mcp-data.service.d/exec-start.conf\n"
+            "[Service]\n"
+            "ExecStart=\n"
+            "ExecStart=/x/three --entry ops /x/research.sock --entry research\n"
+        )
+        self.assertEqual(
+            exec_start.from_cat(text),
+            "/x/three --entry ops /x/research.sock --entry research",
+        )
+
+    def test_cat_reset_without_a_new_value_has_no_execstart(self):
+        with self.assertRaises(exec_start.ExecStartError):
+            exec_start.from_cat("[Service]\nExecStart=/x/base\nExecStart=\n")
+
+    def test_cat_joins_continuation_lines(self):
+        text = "[Service]\nExecStart=/x/db \\\n    /x/mcp.sock --entry ops\n"
+        self.assertEqual(
+            exec_start.from_cat(text), "/x/db /x/mcp.sock --entry ops"
+        )
+
+
+class EffectiveExecStartResolution(unittest.TestCase):
+    """XDM-160: production keeps the three sockets in a drop-in.
+
+    The base unit still carries the old single-socket ExecStart; the
+    `exec-start.conf` drop-in resets it and installs the three-socket line.
+    Parsing the base unit's first `ExecStart=` saw only `ops` (preview.41).
+    """
+
+    def test_dry_run_reports_every_endpoint_of_the_merged_view(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            root = deploy_root(tmp)
+            proc = run_dry_with_unit(
+                tmp, root, single_socket_exec(root), TAG, SHA,
+                dropin_exec=multi_socket_exec(root),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            self.assertIn(
+                f"data endpoints -> ops={root}/run/mcp.sock "
+                f"research={root}/run/research.sock "
+                f"maint={root}/run/maint.sock",
+                proc.stdout,
+            )
+            self.assertIn("data tail args -> --poll-ms 1000", proc.stdout)
+            probe = [l for l in proc.stdout.splitlines()
+                     if l.startswith("DRY: python3") and "wait_service_ready.py" in l
+                     and "--endpoint" in l]
+            self.assertEqual(len(probe), 1, proc.stdout)
+            for fragment in (
+                f"--endpoint ops={root}/run/mcp.sock",
+                f"--endpoint research={root}/run/research.sock",
+                f"--endpoint maint={root}/run/maint.sock",
+            ):
+                self.assertIn(fragment, probe[0])
+
+    def test_cat_fallback_applies_the_dropin_override_rule(self):
+        # No `systemctl show` value (older systemd or a stubbed host): the
+        # fallback must replay the override rule, not return the base line.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            root = deploy_root(tmp)
+            proc = run_dry_with_unit(
+                tmp, root, single_socket_exec(root), TAG, SHA,
+                dropin_exec=multi_socket_exec(root), effective=False,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            for fragment in (
+                f"ops={root}/run/mcp.sock",
+                f"research={root}/run/research.sock",
+                f"maint={root}/run/maint.sock",
+            ):
+                self.assertIn(fragment, proc.stdout)
+
+    def test_execute_probes_all_three_dropin_sockets(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            harness = ExecuteHarness(
+                tmp,
+                entry_tools={
+                    "research": ("query_data",),
+                    "maint": ("compute_metrics",),
+                },
+            )
+            harness.set_unit(
+                single_socket_exec(harness.root), multi_socket_exec(harness.root)
+            )
+            proc = harness.run(TAG, SHA, "--execute")
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            rep = harness.read_report()
+            entries = rep["readiness_probe"]["data_entries"]
+            self.assertEqual(set(entries), {"ops", "research", "maint"})
+            self.assertEqual(entries["research"]["tool"], "query_data")
+            self.assertEqual(entries["maint"]["tool"], "compute_metrics")
+            s6 = [s for s in rep["steps"] if s["step"] == "S6"][0]
+            self.assertIn("3 socket(s)", s6["evidence"])
+
+
+class MaintenanceWindowOrder(unittest.TestCase):
+    """XDM-160: the tunnel must leave first and return last.
+
+    `x-data-mcp-tunnel` has `Wants=`/`After=x-data-mcp-data.service` and
+    `Restart=always` (`RestartSec=10`), so a window that stops only
+    data/acquire is undone when the tunnel restarts and starts data again.
+    """
+
+    STOP = (
+        "stop x-data-mcp-tunnel.service",
+        "stop x-data-mcp-acquire.service",
+        "stop x-data-mcp-data.service",
+    )
+    START = (
+        "start x-data-mcp-data.service",
+        "start x-data-mcp-acquire.service",
+        "start x-data-mcp-tunnel.service",
+    )
+
+    def test_execute_stops_tunnel_first_and_starts_it_last(self):
+        with tempfile.TemporaryDirectory() as td:
+            harness = ExecuteHarness(Path(td))
+            proc = harness.run(TAG, SHA, "--execute")
+            self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+            calls = harness.calls()
+            for want in self.STOP + self.START:
+                self.assertIn(want, calls)
+            self.assertEqual(
+                [calls.index(want) for want in self.STOP],
+                sorted(calls.index(want) for want in self.STOP),
+                calls,
+            )
+            self.assertEqual(
+                [calls.index(want) for want in self.START],
+                sorted(calls.index(want) for want in self.START),
+                calls,
+            )
+            rep = harness.read_report()
+            s4 = [s for s in rep["steps"] if s["step"] == "S4"][0]
+            self.assertIn("all three confirmed inactive", s4["evidence"])
+            s6 = [s for s in rep["steps"] if s["step"] == "S6"][0]
+            self.assertIn("data,acquire,tunnel", s6["evidence"])
+
+    def test_rollback_restores_data_acquire_tunnel_in_that_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            harness = ExecuteHarness(Path(td), data_tools=())
+            proc = harness.run(TAG, SHA, "--execute")
+            self.assertEqual(proc.returncode, 1, proc.stderr + proc.stdout)
+            self.assertEqual(
+                harness.read_report()["rollback_outcome"],
+                "restored_previous_release",
+            )
+            calls = harness.calls()
+
+            def last(cmd):
+                return max(i for i, c in enumerate(calls) if c == cmd)
+
+            # The rollback's own stop/start sequence is the last use of each.
+            positions = [last(want) for want in self.STOP + self.START]
+            self.assertEqual(positions, sorted(positions), calls)
+
 
 
 if __name__ == "__main__":
