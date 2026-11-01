@@ -91,6 +91,10 @@ impl RefreshFixture {
         self.state.lock().unwrap().bump_on_page_two = true;
     }
 
+    fn bump_every_page_one(&self) {
+        self.state.lock().unwrap().bump_every_page_one = true;
+    }
+
     fn body(&self, url: &str) -> Result<Vec<u8>, TransportError> {
         if url.contains("commonSoaQuery") {
             return Ok(
@@ -584,6 +588,43 @@ fn table_guard_retries_once_when_page_one_changes_mid_fetch() {
             .unwrap()
             .len(),
         4
+    );
+}
+
+#[test]
+fn table_guard_gives_up_after_one_retry_and_records_no_members() {
+    let fixture = RefreshFixture::new();
+    fixture.set_delisting_pages(2);
+    fixture.bump_every_page_one();
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    let report = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client,
+        RefreshMode::Tail,
+        &["szse_delisting"],
+    );
+    assert_eq!(report.status, RefreshStatus::Failed);
+    assert_eq!(
+        report.requests, 12,
+        "each plan: page 1+2, guard, retried page 1+2, guard"
+    );
+    assert!(
+        report
+            .failures
+            .iter()
+            .all(|failure| failure.code == "window_changed_mid_fetch")
+    );
+    assert!(!report.sources[0].complete);
+    assert!(
+        backend
+            .read_source_refresh_run_members(&report.run_id.clone().unwrap())
+            .unwrap()
+            .is_empty()
     );
 }
 

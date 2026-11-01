@@ -236,7 +236,7 @@ SQLite 原子受理、发布及文件先落盘规则由专项设计定义。一�
 `run_worker_once` 仅为 operator/debug 能力，并通过同一 WorkerGate 与后台执行互斥，正常 AI 编排不得调用。
 
 **工具面按使用者分入口（v8，未部署）**：同一份读取核心上有三个入口——研究（只读 5 个工具）、
-编排（日更 15 个工具）、运维/取证（9 个工具），各自一个本机 socket；隧道只暴露研究入口，
+编排（日更：部署 15 个、代码 16 个工具）、运维/取证（9 个工具），各自一个本机 socket；隧道只暴露研究入口，
 `mcp.sock` 保留为编排入口。入口是 Adapter 的过滤，不是权限系统，也不拥有业务规则：同一工具在
 不同入口的输出逐字节相同；入口外工具报“未知工具”而不是“禁止”，不泄露存在性。
 契约与部署边界见 [generic-data-v8](contracts/generic-data-v8.md)、[v9 增量](contracts/generic-data-v9.md)、[切换清单](contracts/v8-switch-checklist.md)。
