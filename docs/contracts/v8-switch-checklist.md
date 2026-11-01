@@ -326,6 +326,13 @@ Rust 测试由 CI 证明；部署主机上不编译。
 
 只切回二进制会因 schema 不匹配拒绝启动（§0.4），**不能**只退二进制。
 
+**维护窗口的停/起顺序（2026-11-01 起，XDM-160）**：先停 `x-data-mcp-tunnel`，再 acquire，
+最后 data；起服务反过来 data → acquire → tunnel，并逐个确认 `is-active`。tunnel 单元带
+`Wants=`/`After=x-data-mcp-data.service` 与 `Restart=always`（`RestartSec=10`），只停
+data+acquire 的窗口会在约 10 s 后被 tunnel 重启把 data 拉回来（2026-11-01T10:22Z 实测：
+正在跑的 replay 报 `database service already active`）。`scripts/switch_binary.sh` 与
+`scripts/deploy_phase_g.sh` 的主流程和回滚路径都已按此执行；改的是脚本，不改 systemd 单元。
+
 ## 8. 未决事项（需 owner 裁决后才能执行 §3）
 
 | # | 事项 | 影响 | 现状 |

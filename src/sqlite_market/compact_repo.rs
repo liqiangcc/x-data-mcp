@@ -254,13 +254,13 @@ impl SqliteCompactMarket {
         self.read(|c| super::generation_facts::read_facts(c, None))
     }
 
-    /// The market-derived facts one generation actually wrote, recomputed
-    /// from the derived tables' `source_bindings` (§9.4.2).
-    pub(crate) fn derived_generation_facts(
-        &self,
-        generation: &str,
-    ) -> Result<Vec<crate::generation_gate::GenerationFact>, Error> {
-        self.read(|c| super::generation_facts::derived_facts_for(c, generation))
+    /// Recompute and upsert every generation's market-derived facts after a
+    /// successful commit (XDM-161). Unlike registering only the generation
+    /// that just wrote, this also refreshes older generations whose rows were
+    /// re-pointed to the new binding, so `replay --scope generation_facts
+    /// --verify-only` matches right after the daily run.
+    pub(crate) fn refresh_derived_generation_facts(&self) -> Result<usize, Error> {
+        self.tx(super::generation_facts::refresh_derived_facts)
     }
 
     /// Every generation's market-derived facts, the DB half of the

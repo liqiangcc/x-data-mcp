@@ -28,11 +28,24 @@
 #
 # S6 readiness covers every socket the installed data unit serves, not just
 # `run/mcp.sock`: since v8 phase 2 (D-56) one data unit can bind several
-# `<socket> --entry <kind>` pairs. The unit ExecStart is parsed with
-# scripts/data_unit_layout.py, which accepts the old single-socket shape too
-# and keeps tail options such as `--poll-ms 1000`. When the unit is not
-# readable this script falls back to the single ops socket at
-# `$ROOT/run/mcp.sock`, which is what the pre-phase-2 topology served.
+# `<socket> --entry <kind>` pairs, and production keeps that layout in the
+# `exec-start.conf` drop-in rather than in the base unit. The *effective*
+# ExecStart is resolved by scripts/systemd_exec_start.py (`systemctl show -p
+# ExecStart --value`, which has already merged the drop-in and its
+# `ExecStart=` reset; the `systemctl cat` concatenation is only the fallback)
+# and then parsed with scripts/data_unit_layout.py, which accepts the old
+# single-socket shape too and keeps tail options such as `--poll-ms 1000`.
+# Reading the first `ExecStart=` of `systemctl cat` showed only the base unit's
+# single `ops` socket and skipped research/maint (preview.41, XDM-160).
+# When the unit is not readable this script falls back to the single ops
+# socket at `$ROOT/run/mcp.sock`, which is what the pre-phase-2 topology served.
+#
+# Maintenance-window order: stop tunnel -> acquire -> data, start data ->
+# acquire -> tunnel, and confirm each unit's state. The tunnel unit has
+# `Wants=`/`After=x-data-mcp-data.service` plus `Restart=always`
+# (`RestartSec=10`), so a window that stops only data/acquire is undone when
+# systemd restarts the tunnel and pulls data back up ~10s later (observed on
+# 2026-11-01, XDM-159).
 #
 # usage: switch_binary.sh <v0.2.0-preview.N> <S:40-hex> [--execute] [--report <path>]
 # env:   XDM_DEPLOY_ROOT (default /opt/x-data-mcp-preview)
@@ -67,6 +80,8 @@ TARBALL="x-data-mcp-${VER}-linux-x86_64.tar.gz"
 # Same short-tag rule as deploy_phase_g.sh: v0.2.0-preview.36 -> preview36.
 TAG_SHORT=$(sed -E 's/^v[0-9.]+-//; s/\.//g' <<<"$TAG")
 DATA_SERVICE=${XDM_DATA_SERVICE:-x-data-mcp-data.service}
+ACQ_SERVICE=${XDM_ACQ_SERVICE:-x-data-mcp-acquire.service}
+TUNNEL_SERVICE=${XDM_TUNNEL_SERVICE:-x-data-mcp-tunnel.service}
 DATA_ENDPOINTS=()
 DATA_TAIL_ARGS=()
 DATA_TARGET=""
@@ -188,6 +203,47 @@ PY
     echo "report: $REPORT"
 }
 
+# Effective ExecStart of an installed unit. `systemctl show` reports the
+# vector systemd would run (drop-ins merged, `ExecStart=` reset applied);
+# `systemctl cat` is the fallback and scripts/systemd_exec_start.py replays
+# the override rule on it. Empty when the unit cannot be read.
+installed_exec_start() {
+    python3 "$SCRIPTS_DIR/systemd_exec_start.py" --unit "$1" 2>/dev/null || true
+}
+
+# Maintenance-window transitions (XDM-159/XDM-160). The tunnel is stopped
+# first and started last: it has `Wants=`/`After=x-data-mcp-data.service` and
+# `Restart=always`, so leaving it running lets its restart pull data back up
+# about 10s into a window that stopped data.
+stop_units() {
+    run systemctl stop "$TUNNEL_SERVICE"
+    run systemctl stop "$ACQ_SERVICE"
+    run systemctl stop "$DATA_SERVICE"
+}
+start_units() {
+    run systemctl start "$DATA_SERVICE"
+    run systemctl start "$ACQ_SERVICE"
+}
+start_tunnel() {
+    run systemctl start "$TUNNEL_SERVICE"
+}
+confirm_units() {  # confirm_units active|inactive: fail() unless all three match
+    local want=$1 unit
+    if [[ $EXECUTE != 1 ]]; then
+        echo "DRY: confirm $want: $DATA_SERVICE, $ACQ_SERVICE, $TUNNEL_SERVICE"
+        return 0
+    fi
+    for unit in "$DATA_SERVICE" "$ACQ_SERVICE" "$TUNNEL_SERVICE"; do
+        if [[ $want == active ]]; then
+            systemctl is-active --quiet "$unit" || fail "$unit is not active"
+        else
+            if systemctl is-active --quiet "$unit"; then
+                fail "$unit is still active after the stop"
+            fi
+        fi
+    done
+}
+
 # Sets ROLLBACK_OUTCOME (not stdout: child commands must not corrupt it).
 ROLLBACK_OUTCOME="not_needed"
 rollback() {
@@ -195,11 +251,13 @@ rollback() {
     if [[ $EXECUTE == 1 && $MUTATING == 1 ]]; then
         echo "ROLLBACK -> $PREV" >&2
         ROLLBACK_OUTCOME="failed"
-        systemctl stop x-data-mcp-acquire 2>/dev/null || true
-        systemctl stop x-data-mcp-data 2>/dev/null || true
+        systemctl stop "$TUNNEL_SERVICE" 2>/dev/null || true
+        systemctl stop "$ACQ_SERVICE" 2>/dev/null || true
+        systemctl stop "$DATA_SERVICE" 2>/dev/null || true
         ln -sfn "$PREV" "$ROOT/current.rb" && mv -T "$ROOT/current.rb" "$ROOT/current" || true
-        if systemctl start x-data-mcp-data && systemctl is-active --quiet x-data-mcp-data \
-           && systemctl start x-data-mcp-acquire && systemctl is-active --quiet x-data-mcp-acquire; then
+        if systemctl start "$DATA_SERVICE" && systemctl is-active --quiet "$DATA_SERVICE" \
+           && systemctl start "$ACQ_SERVICE" && systemctl is-active --quiet "$ACQ_SERVICE" \
+           && systemctl start "$TUNNEL_SERVICE" && systemctl is-active --quiet "$TUNNEL_SERVICE"; then
             ROLLBACK_OUTCOME="restored_previous_release"
         else
             ROLLBACK_OUTCOME="failed_services_not_restored"
@@ -235,10 +293,10 @@ p_preconditions() {
     if [[ ! -d "$ROOT/releases/${PREV##*/}" ]]; then
         fail "previous release dir missing: $PREV"
     fi
-    # Parse the installed unit's ExecStart; no `run` wrapper: this is a read.
+    # Parse the installed unit's *effective* ExecStart (drop-ins included);
+    # no `run` wrapper: this is a read.
     local data_exec layout i
-    data_exec=$(systemctl cat "$DATA_SERVICE" 2>/dev/null \
-        | sed -nE 's/^ExecStart=//p' | head -1 || true)
+    data_exec=$(installed_exec_start "$DATA_SERVICE")
     if [[ -n "$data_exec" ]]; then
         layout=$(python3 "$SCRIPTS_DIR/data_unit_layout.py" --exec-start "$data_exec" --format sh) \
             || fail "cannot parse $DATA_SERVICE ExecStart: $data_exec"
@@ -321,15 +379,16 @@ s3_install() {
 
 # --- S4. stop services -------------------------------------------------------
 s4_stop() {
-    begin_step S4 "stop services (acquire first, then data). Downtime starts here."
+    begin_step S4 "stop services (tunnel first, then acquire, then data). Downtime starts here."
     echo "   DB, -wal, -shm and socket owner markers are left untouched."
+    echo "   Tunnel first: it Wants/After data and Restart=always, so it would pull data back up."
     # Set before the first stop: a partial stop already needs the restore path.
     if [[ $EXECUTE == 1 ]]; then
         MUTATING=1
     fi
-    run systemctl stop x-data-mcp-acquire
-    run systemctl stop x-data-mcp-data
-    end_step "systemctl stop acquire,data issued"
+    stop_units
+    confirm_units inactive
+    end_step "systemctl stop tunnel,acquire,data issued; all three confirmed inactive"
 }
 
 # --- S5. atomic symlink switch ----------------------------------------------
@@ -346,9 +405,8 @@ s5_switch() {
 
 # --- S6. start + readiness ---------------------------------------------------
 s6_start() {
-    begin_step S6 "start (data then acquire), wait for readiness, verify is-active and symlink"
-    run systemctl start x-data-mcp-data
-    run systemctl start x-data-mcp-acquire
+    begin_step S6 "start (data then acquire then tunnel), wait for readiness, verify is-active and symlink"
+    start_units
     # Readiness is the MCP handshake on every parsed data socket and on the
     # acquire socket (scripts/wait_service_ready.py), never a fixed sleep or a
     # bare socket-file test: a cold data service binds the endpoint only after
@@ -362,13 +420,17 @@ s6_start() {
         python3 "$SCRIPTS_DIR/wait_service_ready.py" "$ROOT/run/acquire.sock" \
             --timeout "$READY_TIMEOUT" --expect-tool acquire_generation \
             >"$WORK/readiness.acquire.json"
-        systemctl is-active --quiet x-data-mcp-data
-        systemctl is-active --quiet x-data-mcp-acquire
+        # The tunnel goes last, after the data plane answers, so its own
+        # readiness gate does not race the cold start.
+        start_tunnel
+        confirm_units active
         [[ "$(readlink "$ROOT/current")" == "$NEW" ]]
-        end_step "data (${#DATA_ENDPOINTS[@]} socket(s)) + acquire ready via probe; is-active data,acquire; current -> $NEW"
+        end_step "data (${#DATA_ENDPOINTS[@]} socket(s)) + acquire ready via probe; is-active data,acquire,tunnel; current -> $NEW"
     else
         echo "DRY: python3 $SCRIPTS_DIR/wait_service_ready.py ${data_args[*]}  # each entry asserts its tool"
         echo "DRY: python3 $SCRIPTS_DIR/wait_service_ready.py $ROOT/run/acquire.sock --timeout $READY_TIMEOUT --expect-tool acquire_generation"
+        start_tunnel
+        confirm_units active
         end_step "dry-run: services not started"
     fi
 }
@@ -381,7 +443,8 @@ s7_next_steps() {
     echo "   sync_status idle and active generation unchanged; pending_roles present;"
     echo "   head counts equal baseline; sample query_data reads unchanged."
     say "ROLLBACK plan on any mismatch (S2 failure aborts before touching prod; S6/S7 failure):"
-    echo "   systemctl stop both services; mv -T symlink back to $PREV; restart data then acquire;"
+    echo "   systemctl stop $TUNNEL_SERVICE $ACQ_SERVICE $DATA_SERVICE (tunnel first);"
+    echo "   mv -T symlink back to $PREV; restart $DATA_SERVICE then $ACQ_SERVICE then $TUNNEL_SERVICE;"
     echo "   re-run S7 checks (a)-(d)(f). The database is never modified, so no DB restore is needed."
     end_step "operator checklist printed"
 }
