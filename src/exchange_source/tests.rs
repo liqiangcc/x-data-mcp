@@ -345,7 +345,8 @@ fn the_szse_envelope_reads_the_declared_or_only_non_empty_block() {
     // 2026-10-31 real shape of `CATALOGID=1110`: four blocks, only tab1
     // carries the current list; the request declares no tabkey, so the only
     // non-empty block decides (#446 D1). "tab2 first" would read an empty
-    // block and later fail `page_count is 0`.
+    // block and later fail the window (today `unverified_zero`, before XDM-148
+    // the format error `page_count is 0`).
     let current = br#"[
       {"metadata":{"tabkey":"tab1","pageno":1,"pagesize":20,"pagecount":146,"recordcount":2905},
        "data":[{"agdm":"000001"},{"agdm":"000002"}]},
@@ -514,21 +515,54 @@ fn a_quiet_soa_window_can_be_not_observed() {
     )
     .unwrap();
     assert_eq!((set.row_count, set.page_count), (0, 0));
+    // `pageCount=0` is the producer's way of saying "no page", not a different
+    // answer from `pageCount=1, data: []`: a fail-closed consumer refuses both
+    // with the same code. Before #446 §5 this branch returned `source_invalid`
+    // and made `derived:risk_warnings` fail on every empty quarter (2000Q1).
     assert_eq!(
-        validate::validate_pages(&[empty], EmptyPolicy::Forbidden, ZeroPolicy::FailClosed)
-            .unwrap_err()
-            .code(),
-        "source_invalid"
+        validate::validate_pages(
+            std::slice::from_ref(&empty),
+            EmptyPolicy::Forbidden,
+            ZeroPolicy::FailClosed
+        )
+        .unwrap_err()
+        .code(),
+        "unverified_zero"
     );
-    // A page that claims `pageCount=0` but carries rows is never accepted.
+    // A declared empty window (only a fully future one) is accepted either
+    // way, so the declaration keeps working for a source that answers
+    // `pageCount=0`.
+    let declared = validate::validate_pages(
+        std::slice::from_ref(&empty),
+        EmptyPolicy::DeclaredEmptyWindow,
+        ZeroPolicy::FailClosed,
+    )
+    .unwrap();
+    assert_eq!((declared.row_count, declared.page_count), (0, 0));
+    // A page that claims `pageCount=0` but carries rows is never accepted;
+    // that one is a self-contradictory response, so it stays a format error
+    // rather than a zero-row verdict.
     let liar = PageEnvelope {
         page: 1,
         page_count: 0,
         rows: 2,
         total: None,
     };
+    for zero in [ZeroPolicy::NotObserved, ZeroPolicy::FailClosed] {
+        let error =
+            validate::validate_pages(std::slice::from_ref(&liar), EmptyPolicy::Forbidden, zero)
+                .unwrap_err();
+        assert_eq!(error.code(), "source_invalid");
+        assert!(error.to_string().contains("page_count is 0"), "{error}");
+    }
     assert!(
-        validate::validate_pages(&[liar], EmptyPolicy::Forbidden, ZeroPolicy::NotObserved).is_err()
+        validate::validate_pages(
+            &[liar],
+            EmptyPolicy::DeclaredEmptyWindow,
+            ZeroPolicy::FailClosed
+        )
+        .is_err(),
+        "a declared empty window does not excuse a contradictory response"
     );
 }
 

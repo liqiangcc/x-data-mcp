@@ -143,6 +143,13 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
   `source_invalid`。
 - 0 行默认失败（`unverified_zero`）：只有「整段窗口晚于今天」这一种显式声明才允许 0 行
   （`EmptyPolicy`）。「0 行」不是「没有事件」的证据（§6.4、`work/evidence-notes.md` U-1）。
+  信封的页数记账不改变这个裁决：`pageCount=0` 且 `data:[]` 与 `pageCount=1` 且
+  `data:[]` 是同一个空窗口，都走同一条零行策略（XDM-139 §5：上交所公告索引对 2000Q1
+  返回 `pageCount:0`、`total:0`）。`pageCount=0` 却带行是自相矛盾的响应，仍是
+  `source_invalid`（`page_count is 0`）。因此 XDM-148 以前在 FailClosed 下返回
+  `source_invalid` 的调用方（A-1/A-2、S-6、`risk_warnings` 的深市表）现在拿到
+  `unverified_zero`，仍然失败；只有 `risk_warnings` 的沪市公告按设计把它记成
+  `not_observed` 季度并在该季度起点截断区间。
 - 计数不一致（`pageHelp.total`/`recordcount` 与收集行数不符、页数不符、重复页）一律
   `truncated`，入口返回失败；已冻结的页仍按上面的规则入索引。上交所名单的
   `pageHelp.total` 现为真实总数（2026-10-30 实测）；旧快照里的 `total=0` 仍按「未声明

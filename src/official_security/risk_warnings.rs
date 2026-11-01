@@ -33,7 +33,10 @@
 //! A filtered quarter with no rows is `unverified_zero` from PR-2, not proof
 //! that nothing happened. The adapter records it as a `not_observed` coverage
 //! window; the domain cuts every open SH interval at that gap. No row ever
-//! says `normal` because evidence is absent.
+//! says `normal` because evidence is absent. The source states an empty
+//! quarter as `pageCount=0` with `data: []` (2000Q1 is always one, #446 §5);
+//! PR-2 reports that with the same `unverified_zero` as a `pageCount=1` empty
+//! page, so one branch covers both shapes.
 //!
 //! ## Failure semantics
 //!
@@ -419,7 +422,10 @@ fn acquire_today(
                 }) => {
                     // A title-filtered quarter may genuinely have no matching
                     // announcement. That is not "no warning": keep it as an
-                    // unobserved window and cut intervals at its start.
+                    // unobserved window and cut intervals at its start. The
+                    // source states it as `pageCount=0` with `data: []`
+                    // (2000Q1, #446 §5), and PR-2 reports that with the same
+                    // `unverified_zero` as a `pageCount=1` empty page.
                     quarter_failures.insert(key, "unverified_zero".into());
                 }
                 Err(error) => return Err(Error::Acquire(error)),
@@ -794,6 +800,9 @@ pub fn replay(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    use crate::exchange_source::{HttpRequest, HttpResponse, RetryPolicy, Transport};
 
     fn fixture(name: &str) -> Vec<u8> {
         std::fs::read(format!("tests/fixtures/exchange-risk-warnings/{name}"))
@@ -976,5 +985,184 @@ mod tests {
             "the stable code leads the item error text: {error}"
         );
         assert!(market.read_exchange_snapshots().unwrap().is_empty());
+    }
+
+    fn day(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    }
+
+    /// The real empty-window shape of the SSE announcement index: 2000Q1
+    /// answers `pageCount:0`, `data:[]`, `total:0` (XDM-139 §5, reproduced with
+    /// curl against the live source).
+    const EMPTY_QUARTER: &[u8] =
+        br#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":0,"total":0,"data":[]}}"#;
+    /// One implementation announcement in 2000Q2, minimal row shape.
+    const ONE_EVENT_QUARTER: &[u8] = r#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":1,
+      "total":1,"data":[{"SSEDATE":"2000-05-08","SECURITY_CODE":"600001",
+      "SECURITY_NAME":"示例一","TITLE":"示例一关于公司股票被实施其他风险警示的公告",
+      "BULLETIN_TYPE_DESC":"风险警示","ORG_BULLETIN_ID":"risk-1",
+      "URL":"/disclosure/listedinfo/announcement/c/new/2000-05-08/600001_1.pdf"}]}}"#
+        .as_bytes();
+    /// The SZSE short-name table the same item reads, in the real two-block
+    /// shape: `tab1` (暂停上市) empty, `tab2` with one A-share change.
+    const SHORT_NAME_TABLE: &[u8] = r#"[
+      {"metadata":{"tabkey":"tab1","pageno":1,"pagecount":0,"recordcount":0},"data":[]},
+      {"metadata":{"tabkey":"tab2","pageno":1,"pagecount":1,"recordcount":1},
+       "data":[{"bgrq":"2000-03-07","zqdm":"000004","bgqzqjc":"辽物资A","bghzqjc":"ST辽物资"}]}
+    ]"#
+    .as_bytes();
+
+    /// Scripted transport for the whole item: the SZSE table, plus the SSE
+    /// announcement index where 2000Q2 carries one event and every other
+    /// quarter is the empty shape. Both title filters ask for the same
+    /// windows, so the duplicate event is also a de-duplication fixture.
+    struct BulletinPages {
+        requests: Mutex<Vec<String>>,
+    }
+
+    impl Transport for BulletinPages {
+        fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+            self.requests.lock().unwrap().push(request.url.clone());
+            let body = if request.url.contains("CATALOGID=") {
+                SHORT_NAME_TABLE.to_vec()
+            } else if request.url.contains("END_DATE=2000-06-30") {
+                ONE_EVENT_QUARTER.to_vec()
+            } else {
+                EMPTY_QUARTER.to_vec()
+            };
+            Ok(HttpResponse {
+                status: 200,
+                etag: None,
+                last_modified: None,
+                body,
+            })
+        }
+    }
+
+    struct SharedBulletins(Arc<BulletinPages>);
+
+    impl Transport for SharedBulletins {
+        fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+            self.0.get(request)
+        }
+    }
+
+    /// One item-level acquisition (`acquire_today`) from synthetic windows,
+    /// through the real entry (freeze, index, validate) and the real domain
+    /// assembly. `today` bounds the quarter loop, so a test stays at a handful
+    /// of windows.
+    fn acquire_quarters(
+        store: &SourceStore,
+        market: &MarketBackend,
+        pages: &Arc<BulletinPages>,
+        today: NaiveDate,
+    ) -> Result<Admitted, Error> {
+        let client = Client::with_transport(SharedBulletins(pages.clone()))
+            .with_policy(RetryPolicy::single())
+            .without_sleep();
+        acquire_today(store, market, &client, today, Arc::new(RunCache::new()))
+    }
+
+    fn bulletin_fixture() -> (
+        tempfile::TempDir,
+        SourceStore,
+        MarketBackend,
+        Arc<BulletinPages>,
+    ) {
+        let (dir, market) = crate::official_security::compact_market_fixture();
+        let store = SourceStore::new(dir.path().join("source-store"));
+        let pages = Arc::new(BulletinPages {
+            requests: Mutex::new(Vec::new()),
+        });
+        (dir, store, market, pages)
+    }
+
+    /// (a) XDM-139 §5: 2000Q1 is always an empty quarter and the source says
+    /// so as `pageCount:0` with `data:[]`. The item must not fail: the quarter
+    /// is an unobserved coverage window and no `normal` row is derived from it.
+    #[test]
+    fn an_empty_first_quarter_is_not_observed_instead_of_failing_the_item() {
+        let (_dir, store, market, pages) = bulletin_fixture();
+        let admitted = acquire_quarters(&store, &market, &pages, day(2000, 3, 31))
+            .expect("an empty quarter is a coverage gap, not a failure");
+        // The empty quarter is named in the coverage with the acquisition
+        // verdict, and it produced no SH row and no SH event.
+        let sh_windows: Vec<_> = admitted
+            .set
+            .coverage
+            .iter()
+            .filter(|window| window.source_kind == "exchange_announcement")
+            .collect();
+        assert_eq!(sh_windows.len(), 1);
+        assert_eq!(
+            (sh_windows[0].from, sh_windows[0].to),
+            (day(2000, 1, 1), day(2000, 3, 31))
+        );
+        assert!(!sh_windows[0].observed);
+        assert_eq!(sh_windows[0].rows, 0);
+        assert!(
+            sh_windows[0]
+                .reason
+                .starts_with("not_observed: unverified_zero"),
+            "the reason carries the acquisition verdict: {}",
+            sh_windows[0].reason
+        );
+        assert_eq!((admitted.sh_events, admitted.sh_rows), (0, 0));
+        assert!(
+            admitted
+                .set
+                .rows
+                .iter()
+                .all(|row| row.exchange == Exchange::Sz),
+            "the only rows are the SZSE change intervals"
+        );
+        // Both sources are bound: the empty page was still frozen and indexed,
+        // so the item can claim an admitted set.
+        assert_eq!(admitted.bindings.len(), 2);
+        assert_eq!(pages.requests.lock().unwrap().len(), 3);
+    }
+
+    /// (b) A mixed run: empty quarters before and after an observed one. The
+    /// derivation must still produce the interval and must cut it at the next
+    /// unobserved quarter instead of carrying a warning across the gap.
+    #[test]
+    fn empty_quarters_around_an_observed_one_still_derive_intervals() {
+        let (_dir, store, market, pages) = bulletin_fixture();
+        let admitted = acquire_quarters(&store, &market, &pages, day(2000, 12, 31))
+            .expect("the mixed run succeeds");
+        // One event, seen through both title filters and de-duplicated by its
+        // record id; two rows were read from the two observed pages.
+        assert_eq!((admitted.sh_events, admitted.sh_rows), (1, 2));
+        let sh_rows: Vec<_> = admitted
+            .set
+            .rows
+            .iter()
+            .filter(|row| row.exchange == Exchange::Sh)
+            .collect();
+        assert_eq!(sh_rows.len(), 1);
+        assert_eq!(sh_rows[0].code, "600001");
+        assert_eq!(sh_rows[0].effective_from, day(2000, 5, 8));
+        assert_eq!(
+            sh_rows[0].effective_to,
+            Some(day(2000, 7, 1)),
+            "the interval stops at the unobserved quarter, it is not claimed past it"
+        );
+        let coverage: Vec<(bool, usize)> = admitted
+            .set
+            .coverage
+            .iter()
+            .filter(|window| window.source_kind == "exchange_announcement")
+            .map(|window| (window.observed, window.rows))
+            .collect();
+        // 2000Q1 empty, 2000Q2 observed, 2000Q3 and 2000Q4 empty.
+        assert_eq!(
+            coverage,
+            vec![(false, 0), (true, 2), (false, 0), (false, 0)]
+        );
+        assert_eq!(admitted.set.not_observed_windows(), 3);
+        // One SZSE request plus two title filters over four quarters; every
+        // page is frozen even when its window is empty.
+        assert_eq!(pages.requests.lock().unwrap().len(), 9);
+        assert_eq!(store.records().unwrap().len(), 9);
     }
 }
