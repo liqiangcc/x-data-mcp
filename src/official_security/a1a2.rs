@@ -312,7 +312,7 @@ pub struct SzseBlockRows {
 /// Which block each page of one SZSE plan was read from, and why.
 ///
 /// The selection basis and the per-block counts are evidence in their own
-/// right: `page_count is 0` alone cannot tell an empty list from a mis-selected
+/// right: a failed window alone cannot tell an empty list from a mis-selected
 /// block (#446 D1), so an operator reads the selected `tabkey` and every
 /// block's row/page counts from the item's evidence.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

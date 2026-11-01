@@ -224,8 +224,9 @@ PR-3 起证券主表的交易所分支由 `src/official_security/a1a2.rs` 消费
   `TABKEY=tab2`（`tab1` 暂停上市为 0 行 `pagecount=0`）；`1110` 不声明，真实响应 4 个块
   只有 `tab1` 有数据。信封与消费者共用同一个选择函数，行数组与分页计数不会来自不同块。
   选中块的 `tabkey`、选择依据（`declared_tabkey`/`unique_non_empty`/`only_block`）与各块
-  的 row/page 数写入 item 证据的 `block_selection`，因此 `page_count is 0` 能直接看出是
-  「选错块」还是「块本来就空」。
+  的 row/page 数写入 item 证据的 `block_selection`，因此选中块 0 行（XDM-148 起报
+  `unverified_zero`，此前是格式错误 `page_count is 0`）能直接看出是「选错块」还是
+  「块本来就空」。
 - 深市代码列：终止上市名单是 `zqdm`，`CATALOGID=1110` 的当前名单是 `agdm`（#446 D2）。
   按行取存在的那个（不按计划名硬编码）；两者都有且不等 → `source_invalid`，都没有也
   `source_invalid`。
