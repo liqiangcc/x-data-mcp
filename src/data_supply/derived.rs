@@ -821,6 +821,7 @@ fn execute(
                 incon_publisher_last_modified: facts.incon_publisher_last_modified.as_deref(),
                 incon_observed_at: &facts.incon_observed_at,
                 base_zip_sha256: &facts.base_zip_sha256,
+                gbbq_zip_sha256: &facts.gbbq_zip_sha256,
             },
         )
         .map_err(|e| Error::Integrity(e.to_string()))?;

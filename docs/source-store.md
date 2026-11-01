@@ -93,6 +93,8 @@ source_store verify --store <dir> \
   [--db <market.sqlite>]
 source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
   [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+source_store register-generation-member --store <dir> \
+  --generation <manifest sha256> --generation-dir <installed generation dir>
 source_store exempt --db <market.sqlite> --generation <manifest sha256> \
   --missing <key> --reason <text> --recorded-by <who> [--owner-approve-evidence]
 ```
@@ -185,6 +187,40 @@ reason 码 `empty_name_set`），不写库、上一版仍可读。
 
 `--scope suspensions` 的 `--db` 写入仍需服务停止（重放取数据库租约），与其它写库
 scope 相同。
+
+### 4.3 `register-generation-member`：遗留代补登记
+
+在来源库出现之前采集的 generation，成员字节可能已经在库里（`archive_import`，
+sha 与重算一致），但清单里没有 `origin=generation:<manifest sha>` 的行，
+退役门禁因此拒绝（[M3 设计](tasks/issue-446-m3-delisted-industry.md) §8.3、
+XDM-146 报告 §3/§4.3 方案 A）。`import` 补不上：它的 origin 固定为
+`<batch>:<container>!<suffix>`。用 XDM-150 的子命令补：
+
+```bash
+source_store register-generation-member --store <dir> \
+  --generation <manifest sha256> --generation-dir <generations/generations/<sha>>
+```
+
+- `--generation` 必须等于 `<generation-dir>/snapshot-manifest.json` 字节的 sha256
+  （generation id 的定义）；不符 → `generation_manifest_mismatch`，退出码 1。
+- 成员清单与日更 item 同源：按 manifest 的角色绑定调
+  `TdxMarketSource::industry_facts` 抽 `base.zip!tdxhy.cfg` 与
+  `gbbq.zip!zhb.zip!incon.dat`，再用 `industry::register_generation_members`
+  的同一实现登记。`base.zip`/`gbbq.zip` 按 manifest 的 `bytes`+`sha256` 重算比对
+  （不符 → `generation_container_mismatch`）；不读 `hsjday.zip`，因为这里不登记
+  日线字节。
+- 写入走 `SourceStore::register`：flock、torn-tail 检查、
+  `(sha256, source_id, origin)` 幂等键不变；blob 已在库时只追加清单行并复用已有
+  blob（不重写），否则按 §3 的写序落 blob。**只追加**，不改写、不删除已有行，重复
+  执行不新增行。
+- 该代没有 `tdxhy.cfg` → `generation_has_no_industry_member`，退出码 1（不报 `ok`）。
+- 输出单个 JSON：`origin`（`generation:<sha>`）与每个成员的
+  `role`/`source_id`/`member`/`sha256`/`size_bytes`/`added`/`blob_reused`。
+- 只写来源库、不写市场库；仍需停 `data_service`/`acquire`（它们持有来源库读锁）。
+
+补登记后跑 `source_store replay --scope generation_facts --db <market db>`，再用
+`source_store exempt` 覆盖该代确未写入的行情派生事实（理由写 `source_bindings=0`）；
+完整退役序列见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §8.3。
 
 ## 5. 退役豁免
 

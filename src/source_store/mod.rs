@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+pub mod generation_member;
 pub mod import;
 pub mod replay;
 

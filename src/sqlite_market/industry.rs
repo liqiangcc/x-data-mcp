@@ -30,7 +30,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{integrity, storage};
 use crate::industry::{
-    self, AssignmentRow, IndustryMember, SnapshotFacts, SnapshotRecord, SourceKind,
+    self, AssignmentRow, Dictionary, IndustryMember, SnapshotFacts, SnapshotRecord, SourceKind,
     parse_dictionary, parse_members,
 };
 use crate::market_storage::Error;
@@ -324,6 +324,10 @@ pub(crate) fn read_assignments(c: &Connection) -> Result<Vec<AssignmentRow>, Err
     rows.collect::<Result<Vec<_>, _>>().map_err(storage)
 }
 
+/// Parsed dictionaries keyed by blob digest, shared by the snapshots of one
+/// replay (`incon.dat` contents repeat across generations).
+type DictionaryCache = BTreeMap<String, Option<Dictionary>>;
+
 /// The source-store replay body: parse every registered `tdxhy.cfg` (and the
 /// `incon.dat` of the same source) into snapshot facts, then rebuild the
 /// intervals deterministically. Every blob is read back by digest first, so a
@@ -336,7 +340,7 @@ pub(crate) fn facts_from_store(store: &SourceStore) -> Result<Vec<SnapshotFacts>
     // are two points in the timeline, even though storage keeps one row. Parsing
     // is content addressed, so the duplicates share one parse.
     let mut parsed: BTreeMap<String, (i64, Vec<IndustryMember>)> = BTreeMap::new();
-    let mut dictionaries: BTreeMap<String, Option<BTreeMap<String, String>>> = BTreeMap::new();
+    let mut dictionaries: DictionaryCache = BTreeMap::new();
     let mut snapshots: Vec<SnapshotFacts> = Vec::new();
     for record in &records {
         if record.source_id != source_store::TDXHY_SOURCE_ID {
@@ -369,7 +373,7 @@ pub(crate) fn facts_from_store(store: &SourceStore) -> Result<Vec<SnapshotFacts>
 /// paired `incon.dat` has no `#TDXRSHY` section) and the sha256 of its bytes,
 /// or `None`/`None` when the same source registered no dictionary at all.
 struct PairedDictionary {
-    names: Option<BTreeMap<String, String>>,
+    names: Option<Dictionary>,
     sha256: Option<String>,
 }
 
@@ -378,7 +382,7 @@ fn dictionary_for(
     store: &SourceStore,
     records: &[ManifestRecord],
     tdxhy: &ManifestRecord,
-    cache: &mut BTreeMap<String, Option<BTreeMap<String, String>>>,
+    cache: &mut DictionaryCache,
 ) -> Result<PairedDictionary, Error> {
     let absent = PairedDictionary {
         names: None,
@@ -782,6 +786,7 @@ mod tests {
                 incon_publisher_last_modified: last_modified,
                 incon_observed_at: observed,
                 base_zip_sha256: &"e".repeat(64),
+                gbbq_zip_sha256: &"f".repeat(64),
             },
         )
         .unwrap()

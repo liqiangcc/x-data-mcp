@@ -133,9 +133,9 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。热�
 冷归档仍需 #259 容量目标与 #260 另行裁定，被自动退役的字节不再可用于完整 source replay。任何被 task/session 引用的 generation
 必须保留，状态需区分 hot、cold、evidence-only 和 unavailable，不能在删除原字节后继续声称可完整 source replay。
 
-退役前有 M3 门禁（`#446` §8.3，PR-8）：该代不可再生的行业原始成员必须已按 sha 在来源库读回，且 `generation_facts` 覆盖全部必需 kind。任一项不满足就拒绝删除，返回 `source_store_evidence_missing` 或 `derived_facts_missing`（附缺失清单；索引缺失先跑 `source_store replay --scope generation_facts`），自动保留遇到拒绝只跳过该代、不使激活失败，下轮再试。人工退役因门禁被拒时，只有 owner 能用 `source_store exempt` 写豁免；Skill/agent 不得自行豁免。
+退役前有 M3 门禁（`#446` §8.3，PR-8）：该代不可再生的行业原始成员必须已按 sha 在来源库读回，且 `generation_facts` 覆盖全部必需 kind。任一项不满足就拒绝删除，返回 `source_store_evidence_missing` 或 `derived_facts_missing`（附缺失清单；索引缺失先跑 `source_store replay --scope generation_facts`），自动保留遇到拒绝只跳过该代、不使激活失败，下轮再试。证据缺失如果是「字节在库里但 `origin` 不是 `generation:<sha>`」（来源库出现之前采集的遗留代），owner 用 `source_store register-generation-member --generation <sha> --generation-dir <代目录> --store <来源库>` 补登记后再重试（只追加、幂等，见 [来源库](source-store.md) §4.3）；其余情况人工退役因门禁被拒时，只有 owner 能用 `source_store exempt` 写豁免；Skill/agent 不得自行豁免或补登记。
 
-`acquire_generation` 被 `generation_capacity` 拒绝时，同样需要 owner/operator 先腾出热代；退役现在可能被上述门禁拦下，所以「腾位」不再是必然成功的动作：先按提示重放索引，来源库证据缺失只能由 owner 修复/重新导入，或由 owner 显式写证据豁免（`source_store exempt ... --owner-approve-evidence`）。不要为了腾位删除 generation 目录或绕过 acquire。
+`acquire_generation` 被 `generation_capacity` 拒绝时，同样需要 owner/operator 先腾出热代；退役现在可能被上述门禁拦下，所以「腾位」不再是必然成功的动作：先按提示重放索引，来源库证据缺失先试补登记（遗留代）或由 owner 显式写证据豁免（`source_store exempt ... --owner-approve-evidence`）。不要为了腾位删除 generation 目录或绕过 acquire。
 
 ## 目标工具职责
 
