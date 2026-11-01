@@ -149,22 +149,26 @@ pending 就必须停止。
 v9 起同源的四个派生 item（`derived:security_master`、`derived:security_names`、
 `derived:risk_warnings`、`derived:suspensions`）不再自己发请求：它们只读
 `X_DATA_MCP_SOURCE_STORE` 里由 `refresh_exchange_sources` 冻结的快照，并要求最近一次完整
-刷新距今不超过 `H=14` 天。顺序属于 Skill：**先刷新来源，再 plan/run 日更**。
+刷新距今不超过 `H=14` 天。顺序属于 Skill：**先刷新来源，再 plan/run 日更**；一次完整日更的
+顺序是 **`tail` → `plan`/`run_market_update` →（每周）`full`**。
 
 - 每次日更前：`refresh_exchange_sources({"mode":"tail"})`（开窗 + 上一自然季度；整表类重读
   整表，深市上市/简称先探页 1）。`tail` **同步返回** `RefreshReport`（无 task ref，不必轮询），
   按其中的 `status`、`requests`、`failed_windows`、`unobserved_windows`、`revisions` 复核；
   `dry_run:true` 只列计划、不发请求。
-- 每周一次：`refresh_exchange_sources({"mode":"full"})`（低峰，周末候选）。`full` **异步**：
-  调用立刻返回 `{"status":"running","run_id":…}`，抓取在本进程后台线程；用
-  `refresh_exchange_sources({"status_of":<run_id>})` 轮询到 `succeeded` 或 `failed` 再继续。
+- 每周一次：`refresh_exchange_sources({"mode":"full"})`（低峰，周末候选），放在当天
+  `run_market_update` **终态之后**（或单独在低峰跑），不要插在 `tail` 与 plan/run 之间。
+  `full` **异步**：调用立刻返回 `{"status":"running","run_id":…}`，抓取在本进程后台线程；
+  用 `refresh_exchange_sources({"status_of":<run_id>})` 轮询到 `succeeded` 或 `failed` 再继续。
   `running` 期间的计数是 0，不是进度（进度看 `status` 而不是计数）。`tail` 只覆盖开窗与
-  上一自然季度，不能单独让 `H` 闸门长期通过。
+  上一自然季度，不能单独让 `H` 闸门长期通过。`full` 终态后把 `run_id` 与起止时间写进报告：
+  `finished_at − started_at` 就是 G2 的 <60min 读数；per-table 的 `elapsed_ms` 不在
+  `status_of` 回包，由 operator 按 runbook 查 run 表。
 - 返回 `refresh_already_running`（已有运行中的刷新，含别的日更或 operator 起的）：读
   `details.run_id`，轮询**那个** run 到终态，不要再起新 run；`tail`/`full` 互斥，也不要在
   `full` 未结束时插 `tail`。
-- 全新数据库（fresh init）：首次日更前必须已跑一次 `full`；否则四个同源 item 以
-  `source_snapshot_not_found` 失败。
+- 全新数据库（fresh init）：**首次日更前必须已跑一次 `full`**（顺序：`full` → 首次 `tail` →
+  `plan`/`run`）；否则四个同源 item 以 `source_snapshot_not_found` 失败。
 - 若某次 refresh 的 `status` 不是 `succeeded`，或 `failed_windows > 0`：照常 plan/run，
   但把失败项连同 `run_id` 作为**来源刷新失败**报告；不要用 `update_data` 补来源数据。
 - 日更终态里四个同源 item 的 `source_refresh_overdue` / `source_snapshot_not_found` /
