@@ -390,9 +390,9 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
     let members = backend.read_source_refresh_run_members(&run_id).unwrap();
     assert_eq!(
         members.len(),
-        14,
-        "six cheap-table pages + four bulletin pages + two quiet suspension windows + \
-         two probe-triggered tables"
+        12,
+        "eight cheap-table/probe-triggered pages + four bulletin pages; a quiet \
+         suspension window selects no page"
     );
     assert!(
         members
@@ -427,9 +427,9 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         .unwrap();
     assert_eq!(
         second_members.len(),
-        12,
-        "six cheap-table pages + four bulletin pages + two quiet suspension windows; \
-         probes select nothing"
+        10,
+        "six cheap-table pages + four bulletin pages; probes and quiet windows select \
+         nothing"
     );
     assert!(
         second_members
@@ -446,7 +446,7 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
             .read_source_refresh_run_members(&run_id)
             .unwrap()
             .len(),
-        14,
+        12,
         "run membership is durable across a process restart"
     );
 }
