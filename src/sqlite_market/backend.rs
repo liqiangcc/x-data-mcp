@@ -497,12 +497,14 @@ impl MarketBackend {
     }
 
     /// Durable refresh-run history, for acceptance checks and operators.
+    #[allow(dead_code)]
     pub(crate) fn read_source_refresh_runs(
         &self,
     ) -> Result<Vec<super::refresh_runs::RunRow>, Error> {
         self.read(super::refresh_runs::read_runs)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn read_source_refresh_run_sources(
         &self,
         run_id: &str,
@@ -510,6 +512,7 @@ impl MarketBackend {
         self.read(|c| super::refresh_runs::read_sources(c, run_id))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn read_source_refresh_run_members(
         &self,
         run_id: &str,
