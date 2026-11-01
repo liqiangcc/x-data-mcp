@@ -121,6 +121,13 @@ A-1/A-2、A-3、`derived:risk_warnings`、`derived:security_names` 的请求都�
 （`Entry::with_cache`），不共享时行为与无缓存一致。校验仍在窗口结束时整体执行，
 缓存不会绕过 `truncated`/`unverified_zero` 判断。
 
+### 跨日复用与刷新周期（XDM-149）
+
+`RunCache` 只覆盖一次运行；跨日的“窗口复用 / 每周全量 / 陈旧闸门”由独立刷新任务
+`refresh_exchange_sources` 负责（tail 每日、full 每周），日更的四个派生 item 只读来源库。
+策略表、时间语义（`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
+[issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md)。
+
 ## 3. 冻结顺序与失败语义
 
 ```text
