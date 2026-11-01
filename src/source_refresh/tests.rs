@@ -67,6 +67,9 @@ struct RefreshFixture {
     /// Lets a test hold the first request open so a background run is provably
     /// still `running` while the test inspects it.
     hold: (Mutex<bool>, std::sync::Condvar),
+    /// Panic on this request number (1-based) instead of answering it: a
+    /// transport defect is an unwind, not an `Err`.
+    panic_at: Mutex<Option<usize>>,
 }
 
 impl RefreshFixture {
@@ -75,7 +78,12 @@ impl RefreshFixture {
             state: Mutex::new(State::default()),
             calls: Mutex::new(Vec::new()),
             hold: (Mutex::new(false), std::sync::Condvar::new()),
+            panic_at: Mutex::new(None),
         })
+    }
+
+    fn panic_at(&self, request: usize) {
+        *self.panic_at.lock().unwrap() = Some(request);
     }
 
     fn pause(&self) {
@@ -270,7 +278,16 @@ fn sse_page(page_count: u32, total: u64, revision: u64) -> Vec<u8> {
 impl Transport for RefreshFixture {
     fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
         self.wait_if_paused();
-        self.calls.lock().unwrap().push(request.url.clone());
+        let count = {
+            let mut calls = self.calls.lock().unwrap();
+            calls.push(request.url.clone());
+            calls.len()
+        };
+        // The guard is dropped before unwinding: a poisoned call log would make
+        // the test's own `calls()` assertion panic as well.
+        if *self.panic_at.lock().unwrap() == Some(count) {
+            panic!("fake transport panicked at request {count}");
+        }
         Ok(HttpResponse {
             status: 200,
             etag: None,
@@ -1095,6 +1112,101 @@ fn a_failing_background_full_reports_failed_without_a_verified_date() {
 }
 
 /// Poll the durable record until the background thread closes it.
+#[test]
+fn a_panicking_tail_is_closed_failed_and_releases_the_guard() {
+    let fixture = RefreshFixture::new();
+    fixture.panic_at(1);
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let client = client(&fixture);
+
+    // A panic in the acquisition is an unwind, not an `Err`: without the catch
+    // the row would stay `running` and no later start would be accepted.
+    let error = run(
+        &scenario.store(),
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        &request(RefreshMode::Tail, &[]),
+        INSTANCE,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "refresh_panicked");
+    let run_id = error
+        .run_id()
+        .expect("a panicked run names itself")
+        .to_string();
+
+    let row = backend.read_source_refresh_run(&run_id).unwrap().unwrap();
+    assert_eq!(row.status, "failed");
+    assert!(row.finished_at.is_some());
+    assert!(row.verified_through.is_none());
+    let detail = row.detail.expect("a failed run records why");
+    assert!(detail.contains("refresh_panicked"), "{detail}");
+    assert!(
+        detail.contains("fake transport panicked at request 1"),
+        "{detail}"
+    );
+    assert!(
+        backend
+            .latest_complete_verified_through("szse_listing")
+            .unwrap()
+            .is_none(),
+        "a panicked run advances no verified date"
+    );
+
+    // The guard is free again without a restart.
+    let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
+    assert_ne!(next.run_id, run_id);
+}
+
+#[test]
+fn a_panicking_background_full_reports_failed_without_a_verified_date() {
+    let fixture = RefreshFixture::new();
+    fixture.set_delisting_pages(2);
+    fixture.panic_at(2);
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    let started = super::start_full_in_background(
+        scenario.store(),
+        backend.clone(),
+        client(&fixture),
+        day(2026, 11, 2),
+        request(RefreshMode::Full, &["szse_delisting"]),
+        INSTANCE,
+    )
+    .unwrap();
+    let run_id = started.run_id.unwrap();
+
+    let report = wait_for_run(&backend, &run_id);
+    assert_eq!(report.status, RefreshStatus::Failed);
+    assert!(report.verified_through.is_none());
+    assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
+    assert_eq!(report.failures[0].source_id, "*");
+    assert_eq!(report.failures[0].code, "refresh_panicked");
+    assert!(
+        report.failures[0]
+            .detail
+            .contains("fake transport panicked at request 2"),
+        "{:?}",
+        report.failures[0]
+    );
+    assert!(
+        backend
+            .latest_complete_verified_through("szse_delisting")
+            .unwrap()
+            .is_none(),
+        "a panicked background run advances no verified date"
+    );
+    let row = backend.read_source_refresh_run(&run_id).unwrap().unwrap();
+    assert_eq!(row.status, "failed");
+    assert!(row.verified_through.is_none());
+
+    let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
+    assert_ne!(next.run_id, run_id);
+}
+
 fn wait_for_run(backend: &MarketBackend, run_id: &str) -> super::wire::RefreshReport {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {

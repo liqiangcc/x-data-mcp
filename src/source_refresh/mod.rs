@@ -21,6 +21,11 @@
 //! (`process_restarted`) by [`reclaim_abandoned`] when the next instance takes
 //! the database lease; attribution is the recorded owner instance id, never
 //! elapsed time, and such a run advances no `verified_through`.
+//!
+//! Every run that stays inside this process is closed by
+//! [`execute_and_settle`], which also catches a panic of the acquisition
+//! (`refresh_panicked`): a panic is not an `Err`, and without the catch the row
+//! would sit `running` until the next restart, refusing every later start.
 
 pub mod plan;
 pub mod wire;
@@ -60,6 +65,11 @@ pub enum RefreshError {
     /// The run row is already closed `failed`, so the caller may retry at once.
     #[error("refresh_start_failed: {0}")]
     StartFailed(String),
+    /// The acquisition panicked (a defect, not a source fault). The run is
+    /// closed `failed` with the same code, so the single-flight guard is
+    /// released without waiting for a restart.
+    #[error("refresh_panicked: run {run_id} panicked: {message}")]
+    Panicked { run_id: String, message: String },
     #[error(transparent)]
     Unconfigured(#[from] Unconfigured),
     #[error(transparent)]
@@ -79,6 +89,7 @@ impl RefreshError {
             Self::AlreadyRunning { .. } => "refresh_already_running",
             Self::NotFound { .. } => "refresh_run_not_found",
             Self::StartFailed(_) => "refresh_start_failed",
+            Self::Panicked { .. } => "refresh_panicked",
             Self::Unconfigured(error) => error.code(),
             Self::Acquire(error) => error.code(),
             Self::Store(error) => error.code(),
@@ -90,7 +101,9 @@ impl RefreshError {
     /// The run a single-flight rejection refers to, when the error names one.
     pub fn run_id(&self) -> Option<&str> {
         match self {
-            Self::AlreadyRunning { run_id } | Self::NotFound { run_id } => Some(run_id),
+            Self::AlreadyRunning { run_id }
+            | Self::NotFound { run_id }
+            | Self::Panicked { run_id, .. } => Some(run_id),
             _ => None,
         }
     }
@@ -362,9 +375,10 @@ pub fn reclaim_abandoned(
     Ok(backend.reclaim_source_refresh_runs(owner_instance, &finished_at, &detail)?)
 }
 
-/// Execute an opened run and, on a fault outside the per-request loop, close it
-/// `failed` instead of leaving it `running` (which would block the next start
-/// until a restart).
+/// Execute an opened run and close it on any fault, including a panic, instead
+/// of leaving it `running` (which would block every later start until a
+/// restart). Both the synchronous `tail` path and the background `full` thread
+/// go through here, so a defect in either one releases the single-flight guard.
 fn execute_and_settle(
     store: &SourceStore,
     backend: &MarketBackend,
@@ -373,12 +387,42 @@ fn execute_and_settle(
     started: StartedRun,
 ) -> Result<RefreshReport, RefreshError> {
     let run_id = started.run_id.clone();
-    match execute(store, backend, client, today, started) {
-        Ok(report) => Ok(report),
-        Err(error) => {
+    // `AssertUnwindSafe`: the acquisition owns everything it touches (`store`,
+    // `backend`, `client` are shared references), and a caught panic abandons
+    // the in-flight source loop entirely — nothing half-written is reused.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        execute(store, backend, client, today, started)
+    }));
+    match outcome {
+        Ok(Ok(report)) => Ok(report),
+        Ok(Err(error)) => {
             let _ = fail_run(backend, &run_id, error.code(), &error.to_string());
             Err(error)
         }
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            // Best effort: if the panic poisoned the write coordinator itself,
+            // no write can settle the row and only a restart can reclaim it.
+            let _ = fail_run(backend, &run_id, "refresh_panicked", &message);
+            Err(RefreshError::Panicked { run_id, message })
+        }
+    }
+}
+
+/// The message of a caught panic, bounded so a run record stays a record. A
+/// payload that is neither `&str` nor `String` is recorded as `unknown`.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    let text = if let Some(text) = payload.downcast_ref::<&str>() {
+        (*text).to_string()
+    } else if let Some(text) = payload.downcast_ref::<String>() {
+        text.clone()
+    } else {
+        "unknown".to_string()
+    };
+    if text.chars().count() > 200 {
+        format!("{}…", text.chars().take(200).collect::<String>())
+    } else {
+        text
     }
 }
 

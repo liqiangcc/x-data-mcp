@@ -28,6 +28,11 @@
   写入仍走写协调器（同一写队列）。full 是 1,941 个请求 ≈ 46 min，因此**不能**在单次
   MCP 调用里等完。客户端断开不中断后台 run；服务停止会杀掉线程，该 run 在下一次启动
   时按“回收”规则变成 `failed`。
+- **panic 当场结题**：`tail`（MCP 连接线程）与后台 full 走同一个执行入口，抓取过程
+  `catch_unwind`。发生 panic 时该 run 立即写成 `failed`（失败码 `refresh_panicked`，
+  detail 是 panic 文本，超长截到 200 字符，非 `&str`/`String` 载荷记 `unknown`），
+  `verified_through` 不推进，单飞闸门立刻释放，后续 `start` 不必等重启。只有**进程退出**
+  （含 `kill -9`、panic 落在写协调器内部导致无法写库）才依赖下一次启动回收。
 - **查询**：`{"status_of":"<run_id>"}` 读取 run 记录（mode/status/scope/起止时间/
   requests/reused/changed/failed_windows/unobserved_windows/`verified_through`/失败列表），
   不启动任何 run；未知 `run_id` 是 `refresh_run_not_found`，在 `details.run_id` 里回带该
@@ -40,11 +45,12 @@
   不按 mode 各放一个。检查与插入在同一个写事务里，两个并发开始不可能都成功。理由：
   两个 run 各按 1 req/s 各自限速，合起来就是 2 req/s，违反 XDM-143 的合规约束；
   单飞也让“单 Client 1 req/s”等于“全局 1 req/s”。
-- **回收**：`data_service` 拿到数据库租约启动时，把上一个进程实例留下的 `running` 行
-  标成 `failed`（detail 里的失败码 `process_restarted`，`source_id` 为 `*`），不推进
-  `verified_through`。归属判断只用 `source_refresh_runs.owner_instance`（进程实例 id，
-  即本进程的 run id），不用已过时间猜：同一进程里正在跑的 full 不会被自己的重启逻辑
-  回收。
+- **回收（仅进程退出留下的行）**：`data_service` 拿到数据库租约启动时，把上一个进程实例
+  留下的 `running` 行标成 `failed`（detail 里的失败码 `process_restarted`，`source_id`
+  为 `*`），不推进 `verified_through`。在跑的 run 不会走到这里：崩溃/停止之外的故障
+  （含 panic）由上面的“当场结题”处理。归属判断只用
+  `source_refresh_runs.owner_instance`（进程实例 id，即本进程的 run id），不用已过时间
+  猜：同一进程里正在跑的 full 不会被自己的重启逻辑回收。
 - `dry_run=true`：只返回计划，不发 HTTP、不写来源库、不写 run 记录。
 - 输出：run id、状态、scope、真实请求数（含重试与页 1 复核）、复用/变更计数、
   `revision` 列表（旧/新 snapshot、旧/新 `as_of`、页数、行数、窗口）、失败列表。
