@@ -30,6 +30,12 @@
 --    page and a table attempt that failed integrity are proposed but
 --    unconfirmed. None of those are written here.
 --
+--    `elapsed_ms` is the wall clock of one source's acquisition, from its first
+--    request to its last one (rounded up, so a source is never recorded as 0).
+--    G2 measures the per-table gate from it (D-67): a `tail` that triggers a
+--    whole table refreshes several sources whose total legitimately exceeds
+--    600 s, while each triggered table must stay under it.
+--
 --    `owner_instance` is the service instance that opened the run
 --    (`data_service`'s process run id, §5.6 R2b). Refresh is single-flight: a
 --    run may only be opened while no other run is `running`, which is checked
@@ -109,6 +115,7 @@ CREATE TABLE source_refresh_run_sources(
   changed INTEGER NOT NULL,
   unobserved_windows INTEGER NOT NULL,
   failed_windows INTEGER NOT NULL,
+  elapsed_ms INTEGER NOT NULL,
   verified_through TEXT,
   PRIMARY KEY(run_id, source_id)
 ) STRICT;

@@ -1113,6 +1113,47 @@ fn a_failing_background_full_reports_failed_without_a_verified_date() {
 
 /// Poll the durable record until the background thread closes it.
 #[test]
+fn every_source_records_its_own_wall_clock() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    // D-67: G2's per-table gate (`<600 s` for each triggered whole table) reads
+    // `source_refresh_run_sources.elapsed_ms`, so it must be the wall clock of
+    // that source alone, never the run's.
+    let started = std::time::Instant::now();
+    let report = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client,
+        RefreshMode::Full,
+        &[],
+    );
+    // Same rounding as the recorded column: `ceil` is monotone, so a source can
+    // never round above the run that contains it.
+    let total_ms = super::millis_ceil(started.elapsed());
+    let run_id = report.run_id.unwrap();
+    let source_rows = backend.read_source_refresh_run_sources(&run_id).unwrap();
+    assert_eq!(source_rows.len(), report.sources.len());
+    for row in &source_rows {
+        assert!(
+            row.elapsed_ms >= 1,
+            "{} recorded no wall clock",
+            row.source_id
+        );
+        assert!(
+            row.elapsed_ms <= total_ms,
+            "{} claims {} ms of a {} ms run",
+            row.source_id,
+            row.elapsed_ms,
+            total_ms
+        );
+    }
+}
+
+#[test]
 fn a_panicking_tail_is_closed_failed_and_releases_the_guard() {
     let fixture = RefreshFixture::new();
     fixture.panic_at(1);

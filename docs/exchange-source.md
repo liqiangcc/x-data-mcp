@@ -146,7 +146,9 @@ R1 的跨日复用读路径与 R2 的刷新任务（`refresh_exchange_sources` �
 `owner_instance` 回收为 `failed`（`process_restarted`，不推进 `verified_through`）。
 抓取过程 panic 由执行入口 `catch_unwind` 当场结题（`refresh_panicked`），单飞闸门立刻
 释放；只有进程退出留下的行才依赖下一次启动回收。
-`tail` 保持同步：28 个计划请求，探针触发整表时上限 549 个（约 13 min）。R3 的陈旧闸门与
+`tail` 保持同步：28 个计划请求，探针触发整表时上限 549 个（约 13 min）；G2 因此按表计量
+（D-67：未触发整表的 tail <300 s，触发后每张被触发的表各自 <600 s、run 总量不设门禁，
+读 `source_refresh_run_sources.elapsed_ms`）。R3 的陈旧闸门与
 按 run 成员重放、R5 的 `known_at`/coverage 尚未实现。参数、时间语义
 （`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
 [issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md) 与

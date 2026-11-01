@@ -401,6 +401,9 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
   回收后单飞闸门自动解开；`verified_through` 只能由完整的成功 run 推进
   （`latest_complete_verified_through` 只读 `succeeded` 且 `complete=1` 的来源行，
   被回收的 run 根本没有来源行）。
+- **每来源墙钟**：`source_refresh_run_sources.elapsed_ms` 记该来源从第一个请求到结束的
+  墙钟毫秒（向上取整），由 `execute` 按来源写入。G2 的每表门禁读这一列（D-67）：两表同日
+  触发合计约 780 s，按 run 总量记账会把正常成本判成违规。
 - **取舍**：异步 full 需要一条只能由服务自己恢复的“遗留 running”状态，因此新增
   `owner_instance` 列（026 未部署，直接改 026）；没有为状态查词另开读工具，而是复用同一工具的
   `status_of` 参数，避免多一个工具进 `tools/list` 预算与 Skill 白名单。`tail` 不做异步：它的
@@ -434,7 +437,8 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 
 1. 第 2 行拆成两个门禁，**门槛不放宽**：
    - **G1 日更写循环**：`run_market_update` 从 `created_at` 到终态，**不含**来源刷新任务；仍 <600 s。
-   - **G2 来源刷新**：`tail` 典型 <300 s、触发表刷新 <600 s；`full` <60 min（1,941 请求 × 1.42 s
+   - **G2 来源刷新**：`tail` 典型 <300 s、触发表刷新 <600 s（**按表计量见 §7 Q8/D-67**）；
+     `full` <60 min（1,941 请求 × 1.42 s
      ≈ 46 min，32 min 是 1 req/s 的理论下界）。每次刷新任务记录 `requests`/`changed`/
      `verified_through`。
 2. 来源 item 的**陈旧闸门**替代“获取必须发生在日更里”：`today - verified_through > 14 天` →
@@ -459,8 +463,9 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 | Q5 | 刷新入口做成新的 MCP 工具（ops 工具数 +1，capability revision 升一版），还是只做 CLI + systemd timer？ | **新工具**：写来源索引要数据库租约，CLI 方案得停服 46 min/周；且 Skill 只能通过 MCP 编排，刷新必须与 `run_market_update` 分开计时/审计。若契约必须冻结，退而求其次是在 `data_service` 里加一个**仅本机 maint socket** 的子命令（仍不停服、不进 ops 工具表），但 Skill 能否调 maint 要单独定。 |
 | Q6 | full 是否仍守 1 请求/秒（46 min），还是允许刷新任务短时 2 req/s（23 min）？ | **守 1 req/s**（XDM-143 合规优先）；46 min 在周末低峰可接受。提高速率是 owner 的合规决定，不是技术默认。 |
 | Q7 | 关闭窗口的修订发现后，是立即发布新数据集，还是等下一次日更？ | **等下一次日更**：刷新任务只写来源库/索引与 `revision` 证据，`run_market_update` 统一发布；保持“获取 vs 派生”分离，避免两个写入者。 |
+| Q8 | G2 的“触发整表 <600 s”按 run 总量还是按每张被触发的表记账？ | **按表**：每张被触发的表（`szse_listing`、`szse_short_name`）各自 <600 s，run 总量不设门禁；读 `source_refresh_run_sources.elapsed_ms`。依据：§3 实测 375 页 377.4 s、146 页 181.3 s 各自都在 600 s 内，而两表同日合计最多 549 请求、按 1.42 s/请求约 780 s，run 总量记账会把正常的叠加判成违规。 |
 
-**owner 裁决（2026-11-01）：Q1–Q7 全部按建议。**
+**owner 裁决（2026-11-01）：Q1–Q7 全部按建议。追加裁定（同日）：Q8 按表计量（[DECISIONS](../decisions.md) D-67）。**
 
 - **Q1 拆 G1/G2**：G1 日更写循环 <600s（`run_market_update`，不含来源刷新）；G2 来源刷新
   tail <300s、触发整表刷新 <600s、full <60min。**G1 保持 600s**；D-52 豁免保留，D-63 的连续
@@ -476,8 +481,11 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 - **Q6 守 1 请求/秒**；full 约 46 min。
 - **Q7 修订等下一次日更发布**：刷新任务只写来源库/索引与 `revision` 证据，`run_market_update`
   统一发布。
+- **Q8 触发的整表按表计量**：没触发整表的 tail 适用 <300s；触发后每张被触发的表各自
+  <600s，run 总时长不设门禁，读 `source_refresh_run_sources.elapsed_ms`；full <60min 不变。
 
-以上同步记录在 [DECISIONS](../decisions.md) D-66 与 [SLO](../SLO.md) 第 2 行；实现拆分见 §8。
+以上同步记录在 [DECISIONS](../decisions.md) D-66、D-67 与 [SLO](../SLO.md) 第 2 行；
+实现拆分见 §8。
 
 ## 8. 实现拆分
 

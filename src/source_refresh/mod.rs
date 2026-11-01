@@ -445,6 +445,12 @@ fn fail_run(
     Ok(backend.fail_source_refresh_run(run_id, &finished_at, &detail)?)
 }
 
+/// Milliseconds of wall clock, rounded **up**: a source that answered inside
+/// one millisecond still records 1 ms, so `0` only ever means "no measurement".
+fn millis_ceil(elapsed: std::time::Duration) -> u64 {
+    u64::try_from(elapsed.as_micros().div_ceil(1000)).unwrap_or(u64::MAX)
+}
+
 fn count(value: u64) -> Result<usize, RefreshError> {
     usize::try_from(value).map_err(|_| {
         RefreshError::Invalid(format!("run counter {value} exceeds this platform's usize"))
@@ -471,8 +477,13 @@ fn execute(
     let entry = Entry::new(store, backend, client).with_today(today);
     let mut accumulator = Accumulator::default();
     let mut sources = Vec::with_capacity(plans.len());
+    let mut elapsed = Vec::with_capacity(plans.len());
     for source in &plans {
         let requests_before = client.attempts();
+        // Per-source wall clock, started before this source's first request:
+        // G2's per-table gate reads it (D-67), because a probe-triggered whole
+        // table and the run that contains it do not share a time budget.
+        let source_started = std::time::Instant::now();
         let mut stats = SourceStats::new(source, request_mode);
         match refresh_source(
             &entry,
@@ -499,6 +510,7 @@ fn execute(
             }
         }
         stats.requests = client.attempts().saturating_sub(requests_before);
+        elapsed.push(millis_ceil(source_started.elapsed()));
         sources.push(stats.into_report(source));
     }
 
@@ -528,7 +540,8 @@ fn execute(
     let finished_at = crate::exchange_source::freeze::now();
     let source_rows = sources
         .iter()
-        .map(|source| {
+        .zip(&elapsed)
+        .map(|(source, elapsed_ms)| {
             let plan = plans
                 .iter()
                 .find(|plan| plan.source_id.as_str() == source.source_id.as_str())
@@ -543,6 +556,7 @@ fn execute(
                 changed: source.changed as u64,
                 unobserved_windows: source.unobserved_windows as u64,
                 failed_windows: source.failed_windows as u64,
+                elapsed_ms: *elapsed_ms,
                 verified_through: source.verified_through.clone(),
             }
         })

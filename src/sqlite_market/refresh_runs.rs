@@ -78,6 +78,9 @@ pub struct RunSourceRow {
     pub changed: u64,
     pub unobserved_windows: u64,
     pub failed_windows: u64,
+    /// Wall clock of this source's acquisition in milliseconds, from its first
+    /// request to its last one. G2's per-table gate reads this column (D-67).
+    pub elapsed_ms: u64,
     pub verified_through: Option<String>,
 }
 
@@ -237,8 +240,8 @@ pub(crate) fn finish(
         c.execute(
             "INSERT OR REPLACE INTO source_refresh_run_sources(\
                  run_id,source_id,class,complete,requests,snapshots,changed,\
-                 unobserved_windows,failed_windows,verified_through) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+                 unobserved_windows,failed_windows,elapsed_ms,verified_through) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
                 run_id,
                 source.source_id,
@@ -249,6 +252,7 @@ pub(crate) fn finish(
                 i64(source.changed)?,
                 i64(source.unobserved_windows)?,
                 i64(source.failed_windows)?,
+                i64(source.elapsed_ms)?,
                 source.verified_through,
             ],
         )
@@ -372,7 +376,7 @@ pub(crate) fn read_sources(c: &Connection, run_id: &str) -> Result<Vec<RunSource
     let mut statement = c
         .prepare(
             "SELECT run_id,source_id,class,complete,requests,snapshots,changed,\
-                    unobserved_windows,failed_windows,verified_through \
+                    unobserved_windows,failed_windows,verified_through,elapsed_ms \
              FROM source_refresh_run_sources WHERE run_id=?1 ORDER BY source_id",
         )
         .map_err(storage)?;
@@ -389,6 +393,7 @@ pub(crate) fn read_sources(c: &Connection, run_id: &str) -> Result<Vec<RunSource
                 r.get::<_, i64>(7)?,
                 r.get::<_, i64>(8)?,
                 r.get::<_, Option<String>>(9)?,
+                r.get::<_, i64>(10)?,
             ))
         })
         .map_err(storage)?
@@ -407,6 +412,7 @@ pub(crate) fn read_sources(c: &Connection, run_id: &str) -> Result<Vec<RunSource
                 unobserved_windows: u64(raw.7)?,
                 failed_windows: u64(raw.8)?,
                 verified_through: raw.9,
+                elapsed_ms: u64(raw.10)?,
             })
         })
         .collect()

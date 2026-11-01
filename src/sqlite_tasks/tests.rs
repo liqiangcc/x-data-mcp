@@ -1252,7 +1252,8 @@ fn compact_migration_chain_matches_schema_version() {
             && tail.contains("CREATE TABLE source_refresh_runs(")
             && tail.contains("CREATE TABLE source_refresh_run_sources(")
             && tail.contains("CREATE TABLE source_refresh_run_members(")
-            && tail.contains("owner_instance TEXT"),
+            && tail.contains("owner_instance TEXT")
+            && tail.contains("elapsed_ms INTEGER NOT NULL"),
         "the tail of the compact chain is not migration 026"
     );
     let previous = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 2];
