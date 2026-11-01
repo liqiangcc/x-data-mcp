@@ -95,9 +95,9 @@ for row in con.execute("""
 - **只看成功样本**：`status='succeeded'` 的 run 才是 G2 样本；`running`/`failed`/被
   `process_restarted` 回收的 run 不推进 `verified_through`，按失败处理，不拿它的耗时判门禁。
 - **`verified_through` 要看来源行**：`source_refresh_runs.verified_through` 只表示“这个 run
-  至少有一个来源完整”，窗口源在 `tail` 里只看了两个窗口（`complete=0`），不会推进它。
-  日更的 H=14 天闸门读的是 `source_refresh_run_sources` 里该来源 `complete=1` 的最新日期；
-  fresh init 后必须先有一次成功的 `full`，四个同源 item 才有输入。
+  至少有一个来源完整”，不能拿它当某个窗口源已完整。窗口源在 `tail` 里只看了两个窗口
+  （该来源行 `complete=0`），它的 H=14 天闸门读的是 `source_refresh_run_sources` 里该来源
+  `complete=1` 的最新日期；fresh init 后必须先有一次成功的 `full`，四个同源 item 才有输入。
 - **失败读取**：`source_refresh_runs.detail` 是失败列表 JSON（`source_id`、窗口、
   `code`、`detail`）；per-source 的 `failed_windows`/`unobserved_windows` 分别表示失败窗口与
   已观测的 0 行窗口（后者是覆盖 gap，不是失败）。不要用 `update_data` 补来源数据，也不要
