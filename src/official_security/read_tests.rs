@@ -749,8 +749,10 @@ fn a_needed_window_missing_from_the_store_fails_closed() {
 
 // ------------------------------------------------ R5: known_at (XDM-157) ---
 
-const FIRST_CAPTURE: &str = "2026-10-31";
-const SECOND_CAPTURE: &str = "2026-11-01";
+// Shanghai days. The store records UTC instants: 2026-10-31T18:43:40Z is
+// already 2026-11-01 in Beijing, and that is the day a row became known here.
+const FIRST_CAPTURE: &str = "2026-11-01";
+const SECOND_CAPTURE: &str = "2026-11-02";
 
 /// Write the admitted name set the way `derived:security_names` does: one
 /// generation binding, then the whole-table replace.
@@ -792,20 +794,24 @@ fn stored_names(scenario: &Scenario) -> Vec<crate::sqlite_market::security::Secu
 #[test]
 fn two_collection_rounds_date_new_rows_and_keep_the_first_day_for_unchanged_ones() {
     let scenario = Scenario::new();
-    let first_day = day(2026, 10, 31);
-    let second_day = day(2026, 11, 1);
+    let first_day = day(2026, 11, 1);
+    let second_day = day(2026, 11, 2);
 
     // Round 1: the table is captured for the first time.
-    freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES, "2026-10-31T02:00:00Z");
+    freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES, "2026-10-31T18:43:40Z");
     record_test_refresh_run(
         &scenario.market,
         SourceId::SzseShortName,
         FIRST_CAPTURE,
-        "2026-10-31T03:00:00Z",
+        "2026-10-31T18:50:00Z",
     );
     let first = security_names::read_table(&scenario.store, &scenario.market, first_day)
         .expect("the first round reads its frozen table");
-    assert_eq!(first.first_capture_day, Some(first_day));
+    assert_eq!(
+        first.first_capture_day,
+        Some(first_day),
+        "the store's acquired_at is a UTC instant: 18:43:40Z is 2026-11-01 in Shanghai"
+    );
     assert!(
         !first.set.rows.is_empty(),
         "the fixture admitted no name row"
@@ -824,12 +830,12 @@ fn two_collection_rounds_date_new_rows_and_keep_the_first_day_for_unchanged_ones
     assert!(before.iter().all(|row| row.known_at == Some(first_day)));
 
     // Round 2: same request, new bytes — one change row was appended.
-    freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES_ROUND2, "2026-11-01T02:00:00Z");
+    freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES_ROUND2, "2026-11-01T18:10:00Z");
     record_test_refresh_run(
         &scenario.market,
         SourceId::SzseShortName,
         SECOND_CAPTURE,
-        "2026-11-01T03:00:00Z",
+        "2026-11-01T18:20:00Z",
     );
     let second = security_names::read_table(&scenario.store, &scenario.market, second_day)
         .expect("the second round reads the newest complete table");
@@ -905,4 +911,31 @@ fn two_collection_rounds_date_new_rows_and_keep_the_first_day_for_unchanged_ones
             .map(|entry| entry.excluded_known_at_rows),
         Some(0)
     );
+}
+
+/// The knowledge day is a **Shanghai** day, not the UTC date of `acquired_at`
+/// (Claude review, XDM-157). A snapshot stored between 16:00Z and 24:00Z is
+/// already the next day in Beijing; dating it by the UTC day would let a
+/// `known_at` filter admit the row a day before we had it.
+#[test]
+fn a_snapshot_is_dated_in_shanghai_not_in_utc() {
+    for (fetched_at, expected) in [
+        // The production first capture: 02:43 Beijing time on 2026-11-01.
+        ("2026-10-31T18:43:40Z", day(2026, 11, 1)),
+        ("2026-11-01T15:59:59Z", day(2026, 11, 1)),
+        ("2026-11-01T16:00:00Z", day(2026, 11, 2)),
+    ] {
+        let scenario = Scenario::new();
+        freeze_sz_short_name_body(&scenario, SZSE_NAME_CHANGES, fetched_at);
+        let read = security_names::read_table(&scenario.store, &scenario.market, day(2026, 11, 2))
+            .expect("the frozen table reads");
+        assert_eq!(read.first_capture_day, Some(expected), "{fetched_at}");
+        assert!(
+            read.set
+                .rows
+                .iter()
+                .all(|row| row.known_at == Some(expected)),
+            "{fetched_at}"
+        );
+    }
 }

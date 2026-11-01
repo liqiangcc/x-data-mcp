@@ -329,8 +329,9 @@ for each plan (source_id, window/table):
 - `known_at`：深市简称/ST 行目前是 `NULL`（D-61：表只有变更日期，没有发布时间）。日更时滞后
   ≤1 天还可接受；改成每周全量后，**必须**把 `known_at` 填成“首次包含该行的快照入库日”，否则
   PIT 读取会一直排除这些行（有 `known_at` 过滤时 NULL 行被排除）。coverage 口径写成两句：
-  **有效时间历史从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日 2026-10-31 起**——
-  不要写成“简称历史从 2026-10-31 起可用”。这是诚实的，也是回填数据的固有限制。见 Q4。
+  **有效时间历史从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日起可用**——首次
+  采集日按上海日期是 **2026-11-01**（UTC `2026-10-31T18:43:40Z`），不要写成“简称历史从
+  2026-11-01 起可用”。这是诚实的，也是回填数据的固有限制。见 Q4。
 - **R5 落地（2026-11-01，XDM-157）**：`known_at` 的“首次包含该行的快照入库日”由适配器在
   解析后从来源库清单求出（`official_security::risk_warnings::resolve_known_at`：按
   `manifest.jsonl` 的 `acquired_at`（与快照 `as_of` 同一天）从旧到新读回 `szse_short_name` 冻结
@@ -341,6 +342,19 @@ for each plan (source_id, window/table):
   `metadata.verified_through`（取四个来源 item 输入来源的 `min`，无完整 run 则字段缺省），导出是
   `research-snapshot.v4` 的 `derived[].verified_through`（并补上 `security_names`/`risk_warnings`
   两个整表数据集身份）。解析器版本升到 `risk-warnings-v4` / `security-names-v3`，旧行不重写。
+- **Claude 审核裁定（2026-11-01，PR #498）**：
+  - `known_at` 与 `first_capture_day` 一律取**上海日期**：`acquired_at` 是 UTC 瞬时，来源库最早
+    的 `szse_short_name` 登记是 `2026-10-31T18:43:40Z`，即北京时间 **2026-11-01 02:43**。因此
+    首次采集日按上海日期是 **2026-11-01**，D-66 Q4 原文的 2026-10-31 是 UTC 日期（owner 已获
+    告知）；按 UTC 取日会把北京时间 00:00–08:00 入库的行记成前一天已知，PIT 查询提前看见它。
+    实现用 `crate::calendar::shanghai_date_of`（RFC3339 → 上海日期）；`index::observation_date`
+    的语义不变（它命名交易所的观测日，仍有别的调用方），证据里的 `known_at_pit` 由
+    `first_capture_day` 算出，不写死日期。
+  - 其余三项提案获准：`known_at` 以来源库清单的 `acquired_at` 为证明源（重放结果等于首次写入）；
+    数据集级 `verified_through` 取各输入的 `min`（与 R3 裁定同口径）；`v4` 只改清单、不改文件与列
+    结构。`src/sqlite_supply/m2.rs` 里 `security_names` 读路径仍是占位，**不在本 PR**，另开任务。
+  - 已知成本：`resolve_known_at` 每次日更从最早一份快照扫到最新一份，耗时随历史线性增长；本 PR
+    不改（见 PR「另外注意」）。
 
 ### 5.4 修订、全表位移与存储
 

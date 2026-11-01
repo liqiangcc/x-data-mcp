@@ -248,8 +248,8 @@ pub struct Admitted {
     /// sources (SZ table, SH window set), `verified_through` is the older
     /// refresh confirmation and `staleness_days` the larger of the two.
     pub freshness: Freshness,
-    /// The day the oldest registered short-name snapshot entered the store:
-    /// the start of the SZ rows' knowledge-time window (§5.3/Q4).
+    /// The **Shanghai** day the oldest registered short-name snapshot entered
+    /// the store: the start of the SZ rows' knowledge-time window (§5.3/Q4).
     pub first_capture_day: Option<NaiveDate>,
 }
 
@@ -303,9 +303,10 @@ impl Admitted {
             // day we first stored a snapshot, because that is what `known_at`
             // says.
             "known_at_coverage": {
-                "known_at_policy": "SZSE change rows carry known_at = the day the first \
-                    snapshot containing the row entered the source store; SSE event rows \
-                    carry the announcement day the source proves",
+                "known_at_policy": "SZSE change rows carry known_at = the Shanghai day on \
+                    which the first snapshot containing the row entered the source store \
+                    (acquired_at is a UTC instant); SSE event rows carry the announcement \
+                    day the source proves",
                 "effective_history": "effective-time ST state history is available from the \
                     source start (SZSE short-name table 1994-01-03; SSE bulletin index \
                     archive 2000-01, with every 2000-2003 quarter permanently not_observed)",
@@ -465,13 +466,15 @@ fn parse_sz_table(
 
 /// Every registered SZSE short-name snapshot, oldest first: `(day, sha256)`.
 ///
-/// `day` is the registration's own `acquired_at` day (the day those bytes were
-/// first obtained), not the day this call runs: re-reading the store never
-/// advances a fact's knowledge time. The source store manifest is the owner of
-/// that fact (`exchange_source_snapshots.as_of` is the same day, derived by
-/// `index::observation_date`), so the resolution also works for a replay that
-/// has a store but no market database — which is exactly the fresh-init deploy
-/// path. Re-registering identical bytes appends a line with a later
+/// `day` is the **Shanghai** day of the registration's own `acquired_at` (the
+/// day those bytes were first obtained here), not the day this call runs:
+/// re-reading the store never advances a fact's knowledge time. `acquired_at`
+/// is a UTC instant, so the conversion is `calendar::shanghai_date_of`, not
+/// `index::observation_date` (which names the exchange's UTC observation day);
+/// a snapshot stored at 18:43Z is already the next day in Beijing. The source
+/// store manifest is the owner of that fact, so the resolution also works for a
+/// replay that has a store but no market database — which is exactly the
+/// fresh-init deploy path. Re-registering identical bytes appends a line with a later
 /// `acquired_at`; the **minimum** per sha256 is the first arrival.
 fn short_name_arrival_days(store: &SourceStore) -> Result<Vec<(NaiveDate, String)>, Error> {
     let mut days: BTreeMap<String, NaiveDate> = BTreeMap::new();
@@ -479,18 +482,10 @@ fn short_name_arrival_days(store: &SourceStore) -> Result<Vec<(NaiveDate, String
         if record.source_id != SourceId::SzseShortName.as_str() {
             continue;
         }
-        let text = crate::exchange_source::index::observation_date(&record.acquired_at)
-            .ok_or_else(|| {
-                Error::invalid(format!(
-                    "source store record for szse_short_name snapshot {} has acquired_at={:?}, \
-                     which is not a day",
-                    record.sha256, record.acquired_at
-                ))
-            })?;
-        let day = NaiveDate::parse_from_str(&text, "%Y-%m-%d").map_err(|_| {
+        let day = crate::calendar::shanghai_date_of(&record.acquired_at).ok_or_else(|| {
             Error::invalid(format!(
                 "source store record for szse_short_name snapshot {} has acquired_at={:?}, \
-                 which is not a day",
+                 which is not a timestamp",
                 record.sha256, record.acquired_at
             ))
         })?;

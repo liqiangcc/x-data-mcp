@@ -324,14 +324,17 @@ T 日股票池 `universe(as_of=T)`。
 
 **简称与历史 ST 的知晓时间（XDM-157，代码已合并，未部署）**：深市简称/ST 行的 `known_at`
 不再是 NULL，而是“首次包含该行的快照入库日”（`issue-446` §5.3/Q4）：适配器解析后按来源库清单
-（`manifest.jsonl` 的 `acquired_at`，与快照索引 `as_of` 同一天）从旧到新读回冻结字节，取最早
-包含该行的一天（同一 sha 被重复登记时取最小值）；整表重写不改已记的日期，所以第二轮新增行取
+（`manifest.jsonl` 的 `acquired_at`）的**上海日期**（`crate::calendar::shanghai_date_of`；UTC
+时间戳在北京时间 00:00–08:00 会把日子记早一天）从旧到新读回冻结字节，取最早包含该行的一天
+（同一 sha 被重复登记时取最小值）；整表重写不改已记的日期，所以第二轮新增行取
 第二轮日期、未变行保留第一轮日期；没有任何已登记快照包含该行时 fail-closed。`--scope
 security_names`/`risk_warnings` 重放用同一个函数，且不需要数据库（入库日存在于来源库，2026-10
 的 fresh-init 重放因此与首次写入给出同一天，`--verify-only` 也能比对 `known_at`）。coverage 按两句写，不合成一句：**有效时间历史
-从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日 2026-10-31 起**。两句同时进
-数据集证据的 `known_at_coverage`（`effective_history` / `known_at_pit`），不写成“简称历史从
-2026-10-31 起可用”。数据集级还有 `manifest[].metadata.verified_through`：四个来源 item 的
+从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日起可用**——首次采集日按上海日期
+是 **2026-11-01**（UTC `2026-10-31T18:43:40Z`，北京时间 02:43；Claude 审核裁定 2026-11-01，
+D-66 Q4 原文的 2026-10-31 是 UTC 日期）。两句同时进数据集证据的 `known_at_coverage`
+（`effective_history` / `known_at_pit`，后者由 `first_capture_day` 算出，不写死日期），不写成
+“简称历史从首次采集日起可用”。数据集级还有 `manifest[].metadata.verified_through`：四个来源 item 的
 输入来源里最新的完整刷新确认日取 `min`（`source_refresh_run_sources` 里 `complete=1` 且 run
 `succeeded`），没有任何完整 run 时字段缺省，不用页面 `as_of` 猜；它属于数据集“确认到什么
 时候”，与行级 `as_of`/`known_at` 是三个字段。导出侧见 §5.3 的 `v4`。

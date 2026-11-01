@@ -121,8 +121,9 @@ pub struct Admitted {
     /// §5.3 freshness of the selected table: `as_of` is the oldest selected
     /// page, `verified_through` is the refresh run's confirmation date.
     pub freshness: Freshness,
-    /// The day the oldest registered short-name snapshot entered the store:
-    /// the start of the knowledge-time window in the evidence (§5.3/Q4).
+    /// The **Shanghai** day the oldest registered short-name snapshot entered
+    /// the store: the start of the knowledge-time window in the evidence
+    /// (§5.3/Q4).
     pub first_capture_day: Option<NaiveDate>,
 }
 
@@ -162,9 +163,10 @@ impl Admitted {
             // "names are available from <first capture>" would be a different,
             // false claim.
             "known_at_coverage": {
-                "known_at_policy": "SZ rows carry known_at = the day the first snapshot \
-                    containing the change row entered the source store; the table dates the \
-                    change but carries no publication time",
+                "known_at_policy": "SZ rows carry known_at = the Shanghai day on which the \
+                    first snapshot containing the change row entered the source store \
+                    (acquired_at is a UTC instant); the table dates the change but carries \
+                    no publication time",
                 "effective_history": format!("effective-time name history is available from the \
                     source start (SZSE SSGSGMXX/tab2, {})", history_start()),
                 "known_at_pit": format!("knowledge-time PIT (known_at filtering) is \
