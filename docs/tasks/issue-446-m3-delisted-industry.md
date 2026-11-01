@@ -1095,7 +1095,7 @@ maint import_source_store --index <archive-index.json> --blobs <dir> --tiers A,B
 - 退市股首次采集是**显式任务**（§4.4），不计入日更 plan；日更只做「新退市成员尾巴」与「不消失检查」。
 - 内部 item 之间无事务耦合：行业失败不阻塞日线；主表失败不阻塞已有行情（沿用 M2）。
 - 所有写 M3 表的 item 遵循 §9.4.1 顺序：先写来源库（blob + fsync + 清单），再写 DB 索引；中途失败只会留下可重放的证据，不会留下悬空索引。
-- 交易所快照在 item 内获取：同一日多个 item 共用一个 run 级缓存（按 `source_id + request_fingerprint`），不重复下载。
+- 交易所快照当前在 item 内获取：同一日多个 item 共用一个 run 级缓存（按 `source_id + request_fingerprint`），不重复下载。XDM-149 设计（[issue-446-exchange-refresh.md](issue-446-exchange-refresh.md)）把跨日复用、周期全量与陈旧闸门移到独立刷新任务（tail/full），item 改为只读来源库；落地后本节随之更新。
 
 ### 10.2 `as_of` / `known_at` 语义
 
