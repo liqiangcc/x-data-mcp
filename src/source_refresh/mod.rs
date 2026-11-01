@@ -97,6 +97,7 @@ impl RefreshError {
 }
 
 /// A run opened in the durable record but not finished.
+#[derive(Debug)]
 pub struct StartedRun {
     pub run_id: String,
     pub started_at: String,
@@ -236,6 +237,9 @@ pub fn start_full_in_background(
     }
     let started = start(&backend, today, mode, &request.sources, owner_instance)?;
     let reply = started.running_report();
+    // The thread takes its own backend handle; this one is kept for the
+    // spawn-failure path below.
+    let spawn_backend = backend.clone();
     let spawned = std::thread::Builder::new()
         .name("refresh-full".to_string())
         .spawn(move || {
@@ -261,7 +265,7 @@ pub fn start_full_in_background(
         // so it cannot block every later start until the next restart.
         let run_id = reply.run_id.clone().unwrap_or_default();
         let _ = fail_run(
-            &backend,
+            &spawn_backend,
             &run_id,
             "refresh_start_failed",
             &format!("the background thread could not start: {error}"),
