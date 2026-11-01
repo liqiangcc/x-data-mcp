@@ -66,8 +66,13 @@ pub(crate) fn record_test_refresh_run(
 ) -> String {
     use crate::sqlite_market::refresh_runs::{RunFinish, RunMemberRow, RunSourceRow, RunStart};
 
+    // A counter, not only the clock: `freeze::now()` has second resolution and
+    // one test records several runs (XDM-157's two rounds), so two calls in the
+    // same second would collide on the `source_refresh_runs.run_id` key.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let run_id = format!(
-        "refresh-test-{}-{}",
+        "refresh-test-{}-{}-{seq}",
         source.as_str(),
         crate::exchange_source::freeze::now()
     );
