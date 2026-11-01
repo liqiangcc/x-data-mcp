@@ -69,11 +69,38 @@ fn day_u32(days: i64) -> u32 {
         .parse()
         .unwrap()
 }
+/// `YYYYMMDD` as a calendar date. Subtracting days must happen here, not on
+/// the number: `20261101 - 2` is not `20261030` but the invalid `20261099`.
+fn calendar_day(day: u32) -> chrono::NaiveDate {
+    chrono::NaiveDate::parse_from_str(&day.to_string(), "%Y%m%d")
+        .expect("a fixture day is a calendar date")
+}
+fn day_number(day: chrono::NaiveDate) -> u32 {
+    day.format("%Y%m%d")
+        .to_string()
+        .parse()
+        .expect("a fixture day fits `YYYYMMDD`")
+}
 fn day_member(_code: &str, last_day: u32) -> Vec<u8> {
+    // Calendar arithmetic, not integer arithmetic on `YYYYMMDD`: `last_day - 2`
+    // only looked right while the window stayed inside one month, and on the
+    // first two days of a month it produced `2026MM99`-style invalid dates that
+    // failed every seed (latent fixture bug, exposed by a month rollover).
+    let last = calendar_day(last_day);
     [
-        day_record(last_day - 2, [1128, 1130, 1125, 1129], 0.0, 100),
-        day_record(last_day - 1, [1129, 1132, 1128, 1131], 0.0, 110),
-        day_record(last_day, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(
+            day_number(last - chrono::Duration::days(2)),
+            [1128, 1130, 1125, 1129],
+            0.0,
+            100,
+        ),
+        day_record(
+            day_number(last - chrono::Duration::days(1)),
+            [1129, 1132, 1128, 1131],
+            0.0,
+            110,
+        ),
+        day_record(day_number(last), [1131, 1135, 1130, 1134], 0.0, 120),
     ]
     .concat()
 }
@@ -86,9 +113,15 @@ fn fixture_day_member(code: &str, last_day: u32) -> Vec<u8> {
     if code != "000002" {
         return day_member(code, last_day);
     }
+    let last = calendar_day(last_day);
     [
-        day_record(last_day - 2, [1128, 1130, 1125, 1129], 0.0, 100),
-        day_record(last_day, [1131, 1135, 1130, 1134], 0.0, 120),
+        day_record(
+            day_number(last - chrono::Duration::days(2)),
+            [1128, 1130, 1125, 1129],
+            0.0,
+            100,
+        ),
+        day_record(day_number(last), [1131, 1135, 1130, 1134], 0.0, 120),
     ]
     .concat()
 }
