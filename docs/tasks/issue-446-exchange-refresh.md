@@ -1,12 +1,14 @@
 # 交易所来源刷新策略（窗口复用、周期全量与陈旧闸门）
 
-Refs #446（M3 交易所来源共用入口的后续）。XDM-149。设计文档，不含代码改动、不改 SLO 门槛、不改
-[DECISIONS](../decisions.md)；D-63 的修订建议在第 6 节，交 owner 拍板。**本文所有方案、参数与
-实现拆分均为待 owner 裁决的设计建议，尚未实现；现状见第 2 节。**
+Refs #446（M3 交易所来源共用入口的后续）。XDM-149。设计文档，不含代码改动；第 2 行拆分已按
+owner 2026-11-01 裁决写进 [SLO](../SLO.md) 与 [DECISIONS](../decisions.md) D-66（门槛不放宽）。
+**owner 已对第 7 节 Q1–Q7 全部按建议裁决（见 §7 末尾）；方案与参数已定，但实现尚未开始，
+现状见第 2 节。**
 
 ## 0. 结论摘要
 
-**推荐：A + B + D（测量口径拆分），C 暂不采用。**
+**owner 2026-11-01 已裁决：A + B + D（测量口径拆分），C 不采用（Q1–Q7 全部按建议，见 §7
+末尾）。实现未开始。**
 
 - **A 窗口级复用**：按 `request_fingerprint` 复用已冻结快照。窗口类来源（停复牌、公告索引）只重抓
   “开窗 + 上一个自然季度”，其余关闭窗口直接读来源库；全表类来源（上市/退市/简称）按整表快照复用，
@@ -45,7 +47,8 @@ Refs #446（M3 交易所来源共用入口的后续）。XDM-149。设计文档�
 - 不动 `generation_member`/`archive_import` 两类来源库记录：它们由 `source_store import` /
   `register-generation-member`（XDM-150）登记，不是 HTTP 刷新对象；`--scope exchange` 也不读它们。
 - 不改 1 请求/秒合规约束（XDM-143）。本设计的目标是**减少请求数**，不是提高速率。
-- 不改 `docs/SLO.md` 与 `docs/decisions.md`。第 6 节只是建议文本。
+- 不改代码；`docs/SLO.md` 第 2 行与 `docs/decisions.md` D-66 已按 owner 2026-11-01 裁决更新，
+  本文 §6 记录该文本。
 
 ## 2. 现状事实（2026-11-01 生产只读实测）
 
@@ -316,9 +319,9 @@ for each plan (source_id, window/table):
   后没有记录时，退化为 `min(selected as_of)`（保守），不假装验证过。
 - `known_at`：深市简称/ST 行目前是 `NULL`（D-61：表只有变更日期，没有发布时间）。日更时滞后
   ≤1 天还可接受；改成每周全量后，**必须**把 `known_at` 填成“首次包含该行的快照入库日”，否则
-  PIT 读取会一直排除这些行（有 `known_at` 过滤时 NULL 行被排除）。代价是历史行的可用性从
-  “1994 起”变成“首次采集日（2026-10-31）起”——这是诚实的，也是回填数据的固有限制，必须写进
-  coverage。见 Q4。
+  PIT 读取会一直排除这些行（有 `known_at` 过滤时 NULL 行被排除）。coverage 口径写成两句：
+  **有效时间历史从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日 2026-10-31 起**——
+  不要写成“简称历史从 2026-10-31 起可用”。这是诚实的，也是回填数据的固有限制。见 Q4。
 
 ### 5.4 修订、全表位移与存储
 
@@ -386,7 +389,7 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 | 每月字节 | ~190 MB（现在 ~693 MB） | −72% |
 | 来源库增长 | 修订页 + 位移整表；简称 ~2 MB/周、上市 0–3 MB/周 | 只增不删 |
 
-## 6. D-63 / SLO 第 2 行：修订建议（交 owner）
+## 6. D-63 / SLO 第 2 行：修订（owner 2026-11-01 已裁决）
 
 **现状**：D-63 的门禁是 `run_market_update` 的 `created_at` → `last_progress_at` <600 s，连续 3 次
 生产跨代日更；计数 0/3，owner 2026-11-01 裁定从 preview.41 上线后重新计数，本代不计入。SLO 第 2 行
@@ -395,7 +398,7 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 **问题**：这个数字同时装了三种成本——实体写入（552 s）、派生获取（2,400 s）、固定开销（54 s）。
 把获取优化掉之后，门禁仍红，而且红的原因与“日更要快”已经无关（实体路径）。
 
-**建议文本（给 owner 拍板）**：
+**已落地文本（[SLO](../SLO.md) 第 2 行、[DECISIONS](../decisions.md) D-66）：**
 
 1. 第 2 行拆成两个门禁，**门槛不放宽**：
    - **G1 日更写循环**：`run_market_update` 从 `created_at` 到终态，**不含**来源刷新任务；仍 <600 s。
@@ -410,20 +413,39 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
    660 s 或把起点挪到第一个实体 item（后者会得到 599.2 s，纯属噪声边缘）。
 4. D-63 的“连续 3 次”计数规则不变；本代与 11-02/11-03 两代按 owner 裁决不计入，不追溯。
 
-如果 owner 只接受“一个数字”，备选是把第 2 行定义为“**日更写循环 + 当日 tail**”，full 单独成行；
-但不推荐：tail 的 40 s 与 full 的 46 min 量级差 70 倍，混在一起没有解释力。
+备选（**未采用**）是把第 2 行定义为“**日更写循环 + 当日 tail**”，full 单独成行；
+不推荐：tail 的 40 s 与 full 的 46 min 量级差 70 倍，混在一起没有解释力。
 
-## 7. 给 owner 的问题（每条附建议）
+## 7. 给 owner 的问题与裁决（每条附建议）
 
 | # | 问题 | 建议 |
 |---|---|---|
 | Q1 | D-63 是否按 §6 拆成 G1/G2？G1 是否保持 600 s（明知本代 ~610 s 起、含本地解析更高）？ | **拆，G1 保持 600 s**；G1 转红转绿由实体路径任务决定，不用改门槛掩盖。 |
 | Q2 | 全量周期 P、tail 跨度 L、硬上限 H 取多少？ | **P=7 天、L=1 个自然季度、H=14 天**；full 放周末低峰。 |
 | Q3 | 简称/上市这类整表，是否接受“每周全量 + 每日 1 页探针 + 条件补全量”？简称探针只对 ST/退市标记当天补全量，普通简称变更等每周全量。 | **接受**。若要求普通简称也 ≤1 天可见，再加“头部页增量合并”（v1 不做，复杂度和 PIT 风险都高）。 |
-| Q4 | 深市简称/ST 的 `known_at` 是否回填为“首次包含该行的快照入库日”？coverage 起点是否改为首次采集日？ | **回填**；否则 `known_at` 过滤下这些行永远不可见。coverage 明确写“简称历史从 2026-10-31 首次采集起可用”，不假装 1994 起。 |
+| Q4 | 深市简称/ST 的 `known_at` 是否回填为“首次包含该行的快照入库日”？coverage 口径怎么写？ | **回填**；否则 `known_at` 过滤下这些行永远不可见。coverage 写两句：**有效时间历史从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日 2026-10-31 起**，不假装 1994 起。 |
 | Q5 | 刷新入口做成新的 MCP 工具（ops 工具数 +1，capability revision 升一版），还是只做 CLI + systemd timer？ | **新工具**：写来源索引要数据库租约，CLI 方案得停服 46 min/周；且 Skill 只能通过 MCP 编排，刷新必须与 `run_market_update` 分开计时/审计。若契约必须冻结，退而求其次是在 `data_service` 里加一个**仅本机 maint socket** 的子命令（仍不停服、不进 ops 工具表），但 Skill 能否调 maint 要单独定。 |
 | Q6 | full 是否仍守 1 请求/秒（46 min），还是允许刷新任务短时 2 req/s（23 min）？ | **守 1 req/s**（XDM-143 合规优先）；46 min 在周末低峰可接受。提高速率是 owner 的合规决定，不是技术默认。 |
 | Q7 | 关闭窗口的修订发现后，是立即发布新数据集，还是等下一次日更？ | **等下一次日更**：刷新任务只写来源库/索引与 `revision` 证据，`run_market_update` 统一发布；保持“获取 vs 派生”分离，避免两个写入者。 |
+
+**owner 裁决（2026-11-01）：Q1–Q7 全部按建议。**
+
+- **Q1 拆 G1/G2**：G1 日更写循环 <600s（`run_market_update`，不含来源刷新）；G2 来源刷新
+  tail <300s、触发整表刷新 <600s、full <60min。**G1 保持 600s**；D-52 豁免保留，D-63 的连续
+  3 次计数规则不变（从 preview.41 上线起重新计数）。本代 G1 仍约 609s，转绿依赖实体路径优化，
+  不因拆分而变绿。
+- **Q2 P=7 天、L=1 个自然季度、H=14 天**；full 放周末低峰。
+- **Q3 整表每日探针 + 条件补全量**；简称表只对 `ST`/`*ST`/`退` 标记当天补全量，普通简称变更
+  等每周 full。
+- **Q4 `known_at` 回填首次入库快照日**；coverage 口径：**有效时间历史从来源起点起可用；知识时间
+  PIT（`known_at` 过滤）从首次采集日 2026-10-31 起**。
+- **Q5 刷新入口为 ops 新增 MCP 工具**，capability revision 升一版；`tools/list` 预算以实现 PR 的
+  实测值为准，届时由 Claude 核对后报 owner。
+- **Q6 守 1 请求/秒**；full 约 46 min。
+- **Q7 修订等下一次日更发布**：刷新任务只写来源库/索引与 `revision` 证据，`run_market_update`
+  统一发布。
+
+以上同步记录在 [DECISIONS](../decisions.md) D-66 与 [SLO](../SLO.md) 第 2 行；实现拆分见 §8。
 
 ## 8. 实现拆分
 
@@ -435,8 +457,8 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 | **R2** 刷新任务 tail/full | 新任务 + `source_refresh_runs` 表（schema 26）+ 探针 + 全表完整性校验（页码/总数/末页回读 p1）+ revision 列表 | 只写来源库/索引/run 记录，不写业务表；`--dry-run` 只列计划 | tail 请求数 ≤28（夹具）；full 覆盖全部指纹；中途失败 → `snapshot_incomplete` 且不发布；重启后 run 记录可查；`verified_through` 只在成功时推进 | R1 |
 | **R3** 日更 item 只读 + 陈旧闸门 | 四个来源 item 去掉 `Client`，改用“读最新完整快照集”；`H` 超限 fail-closed；证据加 `verified_through`/`staleness_days` | 派生证据 `as_of` 按 §5.3 由被选快照算出（整表 min、窗口 max），不再用运行日 | 假 Client panic 也跑通（0 请求）；缺快照 → fail-closed；超 H → fail-closed；同输入两次 → 逐位相同 | R2 |
 | **R4** 重放选择一致 | `rebuild_risk_warnings` 同指纹取最新；`security_names` 取最后一次完整组；`--verify-only` 比对“live 选中的集合” | 修订窗口（同指纹两 sha）下 live 与 replay 同结果 | 两 sha 夹具：只算最新；旧 sha 不重复计事件；`--verify-only` match；不完整组 → `snapshot_incomplete` | — |
-| **R5** PIT 字段与 coverage | 深市简称/ST 行 `known_at` = 首次快照入库日；`coverage` 起点=首次采集日；导出/读面带上 `verified_through` | 只影响新写入与重放，不改旧行历史（fresh-init 后统一） | 两轮采集：第二轮新增行 `known_at`=第二轮日期；未变行保留第一轮；`known_at` 过滤结果符合预期 | R2、Q4 |
-| **R6** 文档、Skill 与运维 | SLO/DECISIONS（owner 批准后）、`docs/exchange-source.md`、`docs/daily-sync.md`、Skill 增加“tail → run_market_update →（每周）full”步骤、runbook | 不改代码 | 文档审阅；Skill 干跑；G2 记录可从 run 表查询 | R3、R4 |
+| **R5** PIT 字段与 coverage | 深市简称/ST 行 `known_at` = 首次快照入库日；`coverage` 按 §5.3 的两句口径写；导出/读面带上 `verified_through` | 只影响新写入与重放，不改旧行历史（fresh-init 后统一） | 两轮采集：第二轮新增行 `known_at`=第二轮日期；未变行保留第一轮；`known_at` 过滤结果符合预期 | R2、Q4 |
+| **R6** 文档、Skill 与运维 | 核对 SLO 第 2 行/D-66 与实现一致；更新 `docs/exchange-source.md`、`docs/daily-sync.md`、Skill 增加“tail → run_market_update →（每周）full”步骤、runbook | 不改代码 | 文档审阅；Skill 干跑；G2 记录可从 run 表查询 | R3、R4 |
 
 私有栈验收（部署前）：
 
@@ -500,5 +522,5 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
 - 本文跨 M2（主表/上市退市）和 M3（简称、ST、停牌）两类来源，M3 设计文档 §10.1 只描述“每日 item
   在 item 内获取”，把刷新策略塞进去会让那份已冻结的设计记录继续膨胀（已 2,000 行、14 个落地记录）。
 - 刷新策略还牵涉一个**新的原子任务**和一条**与 D-63 并列的 G2 门禁**，它不是 M3 的数据模型内容；
-  单独成文便于 owner 逐条拍板，也便于后续把 §6 的文本直接搬进 SLO/DECISIONS。
+  单独成文便于 owner 逐条裁决，也便于把裁决文本直接搬进 SLO/DECISIONS。
 - 在 M3 设计 §10.1 与 `docs/exchange-source.md` 各加一行指针，保持可发现性（本 PR 只动这三处文档）。
