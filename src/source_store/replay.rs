@@ -949,10 +949,19 @@ fn select_short_name_table<'a>(
         }
     }
     if page_count == 0 {
+        // A table the source declares empty (`pagecount=0`, `recordcount=0`) is
+        // a real answer — the writer then refuses to publish an empty name
+        // history. Rows without a page are the contradiction.
+        let rows: usize = by_page.values().map(|page| page.rows).sum();
+        let declared: u64 = by_page.values().filter_map(|page| page.record_count).sum();
+        if rows == 0 && declared == 0 {
+            return Ok(ShortNameTable::Complete(
+                by_page.values().map(|page| page.record).collect(),
+            ));
+        }
         return Ok(incomplete(format!(
-            "the pages declare pagecount 0 but {} page(s) carry {} row(s)",
-            by_page.len(),
-            by_page.values().map(|page| page.rows).sum::<usize>(),
+            "the pages declare pagecount 0 but {} page(s) carry {rows} row(s)",
+            by_page.len()
         )));
     }
     let missing: Vec<String> = (1..=page_count)

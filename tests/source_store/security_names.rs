@@ -104,6 +104,21 @@ fn name_rows(db: &Path) -> i64 {
         .unwrap()
 }
 
+/// The stored names, in `(code, effective_from)` order.
+fn names(db: &Path) -> Vec<String> {
+    let connection = rusqlite::Connection::open(db).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT name FROM security_name_history \
+             ORDER BY code, COALESCE(effective_to, 1 << 62)",
+        )
+        .unwrap();
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap();
+    rows.map(|row| row.unwrap()).collect()
+}
+
 fn registrations(db: &Path) -> i64 {
     let connection = rusqlite::Connection::open(db).unwrap();
     connection
@@ -502,8 +517,8 @@ fn rows_that_do_not_add_up_to_recordcount_are_snapshot_incomplete() {
 
 /// One fingerprint answered twice (the page was revised between runs): replay
 /// uses the newest answer, exactly like the live item that re-fetched it. The
-/// older page's chain must not resurface — it would open a risk-warning
-/// interval the revised table closes.
+/// older answer's rows must not resurface — the revised table withdrew a rename,
+/// and replaying both answers would keep a name the source no longer states.
 #[test]
 fn the_newest_answer_for_a_page_is_the_one_replayed() {
     let dir = tempfile::tempdir().unwrap();
@@ -518,12 +533,12 @@ fn the_newest_answer_for_a_page_is_the_one_replayed() {
     );
     let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
     assert_eq!(code, 0, "{report}");
-    // The old answer re-stamped the code to ST in 2001: two intervals.
+    // Two names: 深安达A from 1999, then 深安达 from 2001.
     assert_eq!(report["scopes"][0]["snapshots"], 2);
-    assert_eq!(name_rows(&db), 2);
+    assert_eq!(names(&db), ["深安达A", "深安达"]);
 
-    // The publisher revised the table: the 2001 change renames to a normal
-    // name instead of re-stamping ST.
+    // The publisher revised the table: the 2001 rename is gone, so 深安达A is
+    // the current name.
     let newest = frozen_page(
         &store,
         &fixture("szse-chain-revised-new.json"),
@@ -537,6 +552,7 @@ fn the_newest_answer_for_a_page_is_the_one_replayed() {
     assert_eq!(scope["rebuilt"], "rebuilt");
     assert_eq!(scope["database"], "match");
     assert_eq!(scope["snapshots"], 1, "only the revised page is counted");
+    assert_eq!(names(&db), ["深安达A"], "the withdrawn name is gone");
     let connection = rusqlite::Connection::open(&db).unwrap();
     let open: i64 = connection
         .query_row(
@@ -545,7 +561,7 @@ fn the_newest_answer_for_a_page_is_the_one_replayed() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(open, 0, "the revisited ST interval is gone");
+    assert_eq!(open, 1, "the current name has no end");
 
     // The record is still there (a revision adds an answer, it does not
     // overwrite the manifest), and `--verify-only` compares the live selection
