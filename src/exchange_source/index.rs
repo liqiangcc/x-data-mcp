@@ -82,7 +82,9 @@ pub fn drift(expected: &[SnapshotRow], stored: &[SnapshotRow], limit: usize) -> 
     // The row identity is the (byte, request) pair (schema 26): two windows
     // may legitimately share one response sha, so `snapshot_id` alone would
     // collapse them and hide a real difference.
-    let key = |row: &SnapshotRow| (row.snapshot_id.as_str(), row.request_fingerprint.as_str());
+    fn key(row: &SnapshotRow) -> (&str, &str) {
+        (row.snapshot_id.as_str(), row.request_fingerprint.as_str())
+    }
     let expected: BTreeMap<(&str, &str), &SnapshotRow> =
         expected.iter().map(|row| (key(row), row)).collect();
     let stored: BTreeMap<(&str, &str), &SnapshotRow> =

@@ -311,7 +311,7 @@ fn request(mode: RefreshMode, sources: &[&str]) -> RefreshRequest {
 }
 
 fn run_refresh(
-    fixture: &Arc<RefreshFixture>,
+    _fixture: &Arc<RefreshFixture>,
     scenario: &Scenario,
     backend: &MarketBackend,
     client: &Client,

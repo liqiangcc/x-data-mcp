@@ -735,7 +735,7 @@ struct PreviousSnapshots {
 
 impl PreviousSnapshots {
     fn load(backend: &MarketBackend) -> Result<Self, RefreshError> {
-        let mut rows = BTreeMap::new();
+        let mut rows: BTreeMap<(String, String), SnapshotRow> = BTreeMap::new();
         for row in backend.read_exchange_snapshots()? {
             let key = (row.source_id.clone(), row.request_fingerprint.clone());
             match rows.get(&key) {
