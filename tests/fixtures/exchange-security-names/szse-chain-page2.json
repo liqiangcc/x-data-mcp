@@ -1,0 +1,29 @@
+[
+  {
+    "metadata": {
+      "catalogid": "SSGSGMXX",
+      "name": "简称变更",
+      "tabkey": "tab2",
+      "pagesize": 20,
+      "pageno": 2,
+      "pagecount": 2,
+      "recordcount": 4
+    },
+    "data": [
+      {
+        "bgrq": "1998-04-28",
+        "zqdm": "000004",
+        "zqjc": "ST深安达",
+        "bgqzqjc": "深安达A",
+        "bghzqjc": "ST深安达"
+      },
+      {
+        "bgrq": "1998-04-28",
+        "zqdm": "200001",
+        "zqjc": "深物业B",
+        "bgqzqjc": "深物业B",
+        "bghzqjc": "ST物业B"
+      }
+    ]
+  }
+]

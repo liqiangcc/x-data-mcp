@@ -107,7 +107,8 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 重建 `exchange_source_snapshots`（见 [交易所来源入口](exchange-source.md) §4），
 `industry` 自 PR-6 起可重建 `industry_snapshots`/`industry_assignments`，
 `generation_facts` 自 PR-8 起重建设备退役门禁索引（行业成员 + 已绑定的派生事实），
-`risk_warnings` 自 PR-10 起可重建 `risk_warning_intervals`，`security_names`
+`risk_warnings` 自 PR-10 起可重建 `risk_warning_intervals`（选择与日更一致：
+同指纹取最新回答、简称表须为完整页集，XDM-154），`security_names`
 自 PR-12 起可重建 `security_name_history` 与它的 `derived_dataset_versions`
 登记（整表替换，走日更 item 的同一写入器）；`suspensions`（XDM-138）可重放
 停牌数据集，但它是**条件可重放**：装配还依赖该库的主表、交易日历和 bar_days，
@@ -137,12 +138,25 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 ### 4.1 `security_names`：可重放的 as-of
 
 `security_names` 只选 `store_kind=http_fetch` 且 `source_id=szse_short_name` 的
-登记，并且只重放**最近一次采集**的那组页（深交所简称表是整市场快照，不是追加
-日志；重放旧页集会把同一条变更链重复一遍）。一次多页抓取的所有页共用同一个
-`acquired_at`（PR-2 的 `freeze_bytes(fetched_at)`），所以一组就是一套完整页集。
-已知限制：清单没有「采集是否完整」字段，多页抓取在后面的页失败时，已冻结的前几页
-仍留在库里（先冻结后解析）且带同一个 `acquired_at`，重放无法把它与完整页集区分；
-日更写入端不会写这种半套结果。写入走 `derived:security_names`
+登记（深交所简称表是整市场快照，不是追加日志；重放旧页集会把同一条变更链重复
+一遍）。选择与日更 item 一致（XDM-154，设计 §5.5 AC-M3-9）：
+
+- **每个请求指纹取最新回答**：同一个 `origin`（页号是指纹的一部分）被回答两次，
+  就是来源修订了这个窗口，只取 `acquired_at` 最新的那一份；并列时按 `sha256`
+  定序，结果确定。旧回答仍然留在清单里，但不参与重放。
+- **必须是完整页集**（§5.4）：`1..=pagecount` 的每一页都有选中快照、各页
+  `pagecount` 一致、`recordcount` 一致且等于各页行数之和。任一条不成立就是
+  `snapshot_incomplete`（fail-closed），不写库、上一版仍可读。这一条替代了原先
+  「清单没有采集完整性字段、半套页集无法识别」的限制：半套页集不是更短的表，
+  不能写成更短的名史。
+- **残留限制**：清单同样无法标识「一次采集」——重新下载到相同字节的页按
+  `(sha256, source_id, origin)` 去重，一次抓取不会在库里留下同一 `acquired_at`
+  的一组页。所以重放只能按请求指纹组装「最新页集」，并用上面的计数校验发现中途
+  停止的抓取；它分不出「页 1 已改、页 2 尚未重抓」这种计数仍自洽的混合集。组身份
+  由刷新 run 记录提供（§5.4 R2 的 `source_refresh_runs`），届时 `--verify-only`
+  可改比为 run 记录里那一组。
+
+写入走 `derived:security_names`
 的同一写入器：一个事务里整表替换 `security_name_history`、登记
 `derived_dataset_versions`、绑定 generation。
 
@@ -287,7 +301,12 @@ CI 覆盖写序故障注入（fsync/rename 各失败点无悬空清单行）、�
 清库后重放得到逐位相同的摘要与登记证据（`evidence_digest` 相同）、
 `--verify-only` 为 `match`、篡改 blob → `source_store_corrupt`、未知
 `parser_version` → fail-closed、空库/无 `szse_short_name` 记录 →
-`store_empty`/`nothing_selected` 且不碰库、全程离线。测试全部使用
+`store_empty`/`nothing_selected` 且不碰库、全程离线。`risk_warnings` 与
+`security_names` 的选择（XDM-154）另有端到端测试
+（`tests/source_store/risk_warnings.rs`、`tests/source_store/security_names.rs`）：
+多页完整页集与单页快照重放出同一摘要、同指纹两份 sha 只算最新（旧页事件不重复
+计入）、缺页或行数与 `recordcount` 不符 → `snapshot_incomplete` 且上一版仍可读、
+`--verify-only` 与同一选择比对为 `match`、旧 v2 扁平公告页仍可重放。测试全部使用
 临时目录与合成归档，不联网、不依赖本机路径。
 
 真实归档导入、`docs/STATUS.md` 的批次留痕和 fresh-init 后的

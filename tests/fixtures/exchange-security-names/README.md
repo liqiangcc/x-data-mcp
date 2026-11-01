@@ -13,6 +13,9 @@ directory adds rows, not a second parser.
 | `szse-same-day.json` | Two changes for one code on one day | Same-day multiple changes fail closed (`source_invalid`), no row is written |
 | `szse-empty.json` | Envelope with `data: []` and `recordcount: 0` | A zero-row table is *not* an empty name history: zero rows are assembled with only the `not_observed` windows, and the live item refuses to write them |
 
+| `szse-chain-page1.json`, `szse-chain-page2.json` | The four rows of `szse-chain.json` split over a two-page fetch (`pagecount=2`, `recordcount=4`), one request fingerprint per page | The table is one snapshot over several pages: a complete page set replays to the same history as the one-page snapshot (XDM-154); the page number is part of the fingerprint, so the pages must be selected as a set |
+| `szse-chain-revised-old.json`, `szse-chain-revised-new.json` | One page answering one fingerprint twice: the old answer has the 1999 change and a 2001 rename, the new answer has the 1999 change only (`pagecount=1`, `recordcount=2` resp. `1`) | The newest answer per fingerprint is the live selection; the withdrawn 2001 name must not survive as a stored row |
+
 Field names and the envelope shape are copied from the public 2026-10-30
 response (the same shape PR-10 froze); names and dates are a short illustrative
 chain, not a market snapshot.

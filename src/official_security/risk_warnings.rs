@@ -904,9 +904,12 @@ fn parse_day(text: &str, field: &str) -> Result<NaiveDate, Error> {
 /// store and rebuild the domain set without any HTTP request.
 ///
 /// `pages` are `(source_id, snapshot_id, bytes)` in manifest order. The
-/// caller chooses which SZ short-name table snapshot is current; SSE bulletin
-/// pages are parsed document by document and de-duplicated by
-/// `(announcement id, event)`, like the live path.
+/// caller chooses which snapshots the live item would have read (XDM-154):
+/// the newest answer per request fingerprint, and — for the SZSE whole-table
+/// snapshot — only a complete page set (§5.4). SSE bulletin pages are parsed
+/// document by document and de-duplicated by `(announcement id, event)`, like
+/// the live path; that de-duplication is keyed on the announcement, not the
+/// window, so this function cannot undo a revised window by itself.
 pub fn replay(
     pages: &[(&str, String, Vec<u8>)],
     gaps: &[(NaiveDate, NaiveDate)],
