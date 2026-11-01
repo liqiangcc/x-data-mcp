@@ -92,7 +92,7 @@ pub(crate) fn read_for_fingerprint(
     source_id: &str,
     request_fingerprint: &str,
 ) -> Result<Vec<SnapshotRow>, Error> {
-    let params: [&dyn rusqlite::ToSql; 2] = [source_id, request_fingerprint];
+    let params: [&dyn rusqlite::ToSql; 2] = [&source_id, &request_fingerprint];
     query(
         c,
         &format!(
