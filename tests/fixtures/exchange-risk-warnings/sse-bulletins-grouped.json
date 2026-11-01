@@ -1,0 +1,90 @@
+{
+  "pageHelp": {
+    "beginPage": 1,
+    "endPage": 1,
+    "pageNo": 1,
+    "pageSize": 100,
+    "pageCount": 1,
+    "total": 3,
+    "data": [
+      [
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2022",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "8445752887795497",
+          "ORG_FILE_TYPE": 0,
+          "SECURITY_CODE": "600242",
+          "SECURITY_NAME": "*ST中昌",
+          "SSEDATE": "2022-06-25",
+          "TITLE": "中昌大数据股份有限公司关于公司股票被实施退市风险警示的补充公告",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2022-06-25/600242_20220625_3_cmXw3Dac.pdf"
+        },
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2022",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "8445752887795497",
+          "ORG_FILE_TYPE": 1,
+          "SECURITY_CODE": "600242",
+          "SECURITY_NAME": "*ST中昌",
+          "SSEDATE": "2022-06-25",
+          "TITLE": "中昌大数据股份有限公司2021年度营业收入扣除情况的专项审核意见",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2022-06-25/600242_20220625_4_IliA9rHr.pdf"
+        }
+      ],
+      [
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2022",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "8445752887518267",
+          "ORG_FILE_TYPE": 0,
+          "SECURITY_CODE": "601113",
+          "SECURITY_NAME": "ST华鼎",
+          "SSEDATE": "2022-06-24",
+          "TITLE": "义乌华鼎锦纶股份有限公司关于公司股票撤销其他风险警示暨停牌的公告",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2022-06-24/601113_20220624_1_4cpen0Za.pdf"
+        }
+      ],
+      [
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2022",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "8245752881083683",
+          "ORG_FILE_TYPE": 0,
+          "SECURITY_CODE": "601113",
+          "SECURITY_NAME": "ST华鼎",
+          "SSEDATE": "2022-06-22",
+          "TITLE": "义乌华鼎锦纶股份有限公司关于申请撤销对公司股票实施其他风险警示的公告",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2022-06-22/601113_20220622_4_FM9bbUtl.pdf"
+        },
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2022",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "8245752881083683",
+          "ORG_FILE_TYPE": 1,
+          "SECURITY_CODE": "601113",
+          "SECURITY_NAME": "ST华鼎",
+          "SSEDATE": "2022-06-22",
+          "TITLE": "北京金杜（杭州）律师事务所关于义乌华鼎锦纶股份有限公司违规担保相关事项之法律意见书",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2022-06-22/601113_20220622_5_ZdY8FWyy.pdf"
+        },
+        {
+          "BULLETIN_TYPE_DESC": "风险警示",
+          "BULLETIN_YEAR": "2022",
+          "IS_HOLDER_DISCLOSE": "0",
+          "ORG_BULLETIN_ID": "8245752881083683",
+          "ORG_FILE_TYPE": 1,
+          "SECURITY_CODE": "601113",
+          "SECURITY_NAME": "ST华鼎",
+          "SSEDATE": "2022-06-22",
+          "TITLE": "义乌华鼎锦纶股份有限公司独立董事关于申请撤销公司股票其他风险警示的独立意见",
+          "URL": "/disclosure/listedinfo/announcement/c/new/2022-06-22/601113_20220622_6_oeFXGiBW.pdf"
+        }
+      ]
+    ]
+  }
+}

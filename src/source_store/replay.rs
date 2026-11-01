@@ -704,8 +704,9 @@ fn rebuild_exchange(
         crate::exchange_source::rebuild(store, records).map_err(|error| error.to_string())?;
     let summary = rebuild.summary();
     let expected = format!(
-        "a registered envelope parser ({}, {})",
+        "a registered envelope parser ({}, {}, {})",
         crate::exchange_source::request::SSE_PARSER_VERSION,
+        crate::exchange_source::request::SSE_BULLETIN_PARSER_VERSION,
         crate::exchange_source::request::SZSE_PARSER_VERSION
     );
     let mut outcome = ExchangeOutcome {

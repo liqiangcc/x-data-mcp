@@ -31,15 +31,26 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
 - 指纹是请求本身的规范 JSON：`version` + `source_id` + URL + 排序后的参数（含分页与
   分段参数，值为**原始文本**，不含出站百分号编码，见下）。相同指纹 + 相同响应 sha256
   只登记一次（§6.3）。
-- 分页方言按来源固定：沪名单与公告索引用 `pageHelp.pageNo`（名单同时发
-  `pageHelp.pageSize=2000`；公告索引的 `pageSize` 仍是它的自有参数），深交所用 `PAGENO`，
-  `commonSoaQuery` 用 `pageHelp.pageNo` + 固定 `pageSize=25`（PR-11 实测）。名单端点不再发
-  `beginPage`/`endPage`：2026-10-30 实测两种写法都只回第 1 页同一批 50 行（分页失效），
-  而 `pageHelp.pageNo=1&pageHelp.pageSize=2000` 一次返回全部 1,845 行（`pageCount=1`、
-  `total=1,845`，自洽）。
+- 分页方言按**端点**固定，不能按「交易所」固定（XDM-151）：
+  - 沪名单（A-1/A-2，`commonQuery.do`）用 `pageHelp.pageNo` + `pageHelp.pageSize=2000`。
+    名单端点不再发 `beginPage`/`endPage`：2026-10-30 实测两种写法都只回第 1 页同一批 50 行
+    （分页失效），而 `pageHelp.pageNo=1&pageHelp.pageSize=2000` 一次返回全部 1,845 行
+    （`pageCount=1`、`total=1,845`，自洽）。
+  - 沪公告索引（`queryCompanyBulletinNew.do`，历史 ST）**不认**上述两个参数：
+    `pageHelp.pageSize=2000` 被静默降为服务端默认 25（上限实测 100），`pageHelp.pageNo`
+    只被回显、返回的仍是第 1 页。能翻页的是 `pageHelp.beginPage`/`pageHelp.endPage`
+    （实测 `beginPage=2&endPage=2` 的 id 与第 1 页交集 0，逐页合计 = `total`），且必须与
+    `pageHelp.pageNo` 一起发，否则回显 `pageNo=1` 会触发入口的页号守卫。方言是
+    `PagingFormat::SsePageHelpBeginPage`，每页写
+    `pageSize=100&pageNo=<n>&beginPage=<n>&endPage=<n>`；100 只在方言里写一次。
+    **不要**把公告计划改成 `single_page_only()`：11 个窗口 `total>100`（最大 215）。
+  - 深交所用 `PAGENO`；`commonSoaQuery`（A-3）用 `pageHelp.pageNo` + 固定 `pageSize=25`
+    （PR-11 实测）。
 - 信封解析（`PagingFormat`）只读分页计数，不解释业务字段：
-  - `exchange-sse-page-v2`：`pageHelp.pageNo`（缺失回退 `beginPage`）/ `pageHelp.pageCount`
-    / `pageHelp.total` / `pageHelp.data`；
+  - `exchange-sse-page-v2` / `exchange-sse-bulletin-page-v1`（公告索引）：`pageHelp.pageNo`
+    （缺失回退 `beginPage`）/ `pageHelp.pageCount` / `pageHelp.total` / `pageHelp.data`。
+    两者字段相同，版本号分开只是为了让清单能说出「这一页属于哪个端点的分页方言」；重放读的
+    字段一致。
   - `exchange-szse-page-v3`：按**请求声明的 `TABKEY`** 选中块（不区分大小写）；没有声明
     时只接受唯一有非空 `data` 的块，单个 block 的旧形状仍可读；声明了但没有任何块携带
     该 `tabkey`、或多个块都有数据而没有声明时 fail-closed。块的 `pageNo`/`pageno`、
@@ -55,6 +66,8 @@ acquire 进程调用，因此不新增 systemd 单元、socket 或沙箱规则�
   这些版本号写进清单的 `parser_version`，重放用同一版本重算行数/页数；名单信封换过三次
   （`exchange-sse-page-v1` → `v2`，`exchange-szse-page-v1` → `v2` → `v3`），旧快照仍按
   登记的旧版本重放（SZSE v1 保持「第一个 block」、v2 保持「`tab2` 优先」的旧语义）。
+  公告索引自 XDM-151 起登记 `exchange-sse-bulletin-page-v1`；它与 `exchange-sse-page-v2`
+  解析同一份 `pageHelp`，所以两种旧/新快照都能重放，只是清单上可区分端点。
 - 分段：公告索引下界 `2000-01-01`，单请求区间 ≤93 天且按自然季度对齐
   （`quarter_segments`）。超过 93 天的区间在构造时即被拒（`segment_too_long`），
   不会发出请求。
@@ -202,7 +215,8 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
 additive）。
 
 `parser_version` 现在记录信封解析器版本（`exchange-sse-page-v2` /
-`exchange-szse-page-v3`；旧快照的 SZSE `v2`/`v1` 仍可重放），重放据此重算行数与页数。
+`exchange-sse-bulletin-page-v1` / `exchange-szse-page-v3`；旧快照的 SZSE `v2`/`v1` 仍可重放），
+重放据此重算行数与页数。
 具体来源 parser 从 PR-3 起登记自己的版本；未登记的版本按 §9.4.1 一律 fail-closed（`unknown_parser`，
 scope 不重建），不会用「不认识就跳过」掩盖字节。
 
@@ -262,6 +276,26 @@ risk_warnings|security_names` 读同一个声明值，所以同一份冻结字�
 （空 `tab1` 不再把整表读成 0 行）。业务字段 parser 版本 `risk-warnings-v1` →
 `risk-warnings-v2`、`security-names-v1` → `security-names-v2`：解析语义变了，旧证据
 仍可区分，不按新选块语义重放。
+
+沪市公告部分自 XDM-151（`risk-warnings-v2` → `v3`）起：
+
+- **行形状**：真实响应的 `pageHelp.data` 是**公告分组** `[[正文, 附件…], [正文], …]`
+  （一个 `ORG_BULLETIN_ID` 一个分组），不是行对象数组。v2 把分组当行，在第一个非空窗口
+  （2004Q1）就报 `source_invalid: row has no string field SECURITY_CODE`。v3 逐文档拍平并
+  逐文档分类，附件按标题自然被忽略；旧扁平快照（v2 时期）仍按「一行一个公告」重放，
+  `pageHelp.data` 缺失仍是 `source_invalid`。
+- **去重**：按 `(ORG_BULLETIN_ID, 事件)` 去重，不再是「公告 id 的第一个文档胜出」：正文排在
+  附件之后、或同一公告含两个事件时，事件不会被丢掉。证据新增
+  `sh_docs_per_bulletin`（`documents_read` / `distinct_bulletins` /
+  `multi_document_bulletins` / `max`）。
+- **分页**：公告计划改用 `PagingFormat::SsePageHelpBeginPage`（见 §2）。同一窗口内再次出现
+  已读过的公告 id 时 item 以 `truncated` 失败：当重复页恰好满足
+  `total = 行数 × pageCount` 时，行数/页数校验看不出来。
+- **覆盖事实**：公告索引归档起点是 2000-01，但按 `TITLE=风险警示|特别处理` 过滤时
+  2000–2003 八个窗口/年全为 `pageCount=0`，沪市 ST 事件链实际自 **2004Q1** 开始，
+  2000–2003 永久是 `not_observed`，不得写成「2000 年起覆盖」。真实数据里
+  生效日全部取自公告日 `SSEDATE`（全库标题没有一条带显式日期），标题显式日分支在真实
+  数据上从未被行使。
 
 ### A-3 停复牌消费者（`derived:suspensions`）
 

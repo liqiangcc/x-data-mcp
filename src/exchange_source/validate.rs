@@ -169,7 +169,7 @@ pub fn parse_page(
         detail: format!("not JSON: {error}"),
     })?;
     match format {
-        PagingFormat::SsePageHelp => parse_sse(&value),
+        PagingFormat::SsePageHelp | PagingFormat::SsePageHelpBeginPage => parse_sse(&value),
         PagingFormat::SseSoaPageNo => parse_sse_soa(&value),
         PagingFormat::SzseMetadata => parse_szse(&value, declared_tabkey),
         PagingFormat::SzseMetadataV2 => parse_szse_v2(&value),
@@ -228,8 +228,11 @@ fn parse_sse(value: &Value) -> Result<PageEnvelope, ValidateError> {
         .ok_or_else(|| ValidateError::Format {
             detail: "pageHelp.data is not an array".to_string(),
         })?;
-    // The list services answer with `pageHelp.pageNo` (2026-10-30 evidence);
-    // `beginPage` is only a fallback for older frozen snapshots.
+    // The envelope carries `pageHelp.pageNo` on every SSE endpoint sampled so
+    // far (2026-10-30 lists, 2026-11-01 bulletin index); `beginPage` is only a
+    // fallback for older frozen snapshots. On the bulletin index `pageNo` is an
+    // echo of the request rather than the selector, so the plan must send
+    // `beginPage`/`endPage` too (XDM-151 §3); this parser only reads the count.
     let page = help
         .get("pageNo")
         .and_then(number)

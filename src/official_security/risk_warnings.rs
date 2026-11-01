@@ -21,11 +21,16 @@
 //!
 //! - SZ: the dated `SSGSGMXX`/`tab2` short-name change table is
 //!   `APPROVED_SOURCE`; its change date opens/closes the interval.
-//! - SH: the 2000-01+ announcement index is `APPROVED_SOURCE` at the event
-//!   level (implementation/revocation + announcement day). The effective day
-//!   is owner-risk: an explicit date in the title when present, otherwise the
-//!   announcement day. It is recorded as `OWNER_RISK_ACCEPTED` in the item
-//!   evidence, never claimed as a dated name history.
+//! - SH: the announcement index is `APPROVED_SOURCE` at the event level
+//!   (implementation/revocation + announcement day). The index archive starts
+//!   2000-01, but a title-filtered query only starts matching in **2004Q1**:
+//!   every 2000–2003 quarter answers `pageCount=0`, so those years stay
+//!   `not_observed` permanently instead of being claimed as covered
+//!   (XDM-151 §7). The effective day is owner-risk: an explicit date in the
+//!   title when present, otherwise the announcement day. Real data uses the
+//!   announcement day for all events (no title carries an explicit date); it is
+//!   recorded as `OWNER_RISK_ACCEPTED` in the item evidence, never claimed as a
+//!   dated name history.
 //! - SH before 2000-01 and BJ are not requested and not inferred.
 //!
 //! ## 0 rows
@@ -68,8 +73,13 @@ use crate::sqlite_market::backend::MarketBackend;
 /// the SZSE rows come from the block the request declared (`TABKEY=tab2`)
 /// instead of the first block with a `data` array, so a page with an empty
 /// `tab1` no longer parses as an empty table; old evidence stays
-/// distinguishable and is not replayed under the new meaning.
-pub const PARSER_VERSION: &str = "risk-warnings-v2";
+/// distinguishable and is not replayed under the new meaning. v2 → v3: the SSE
+/// bulletin `pageHelp.data` elements are announcement *groups* (`[[doc,…],…]`)
+/// as well as the old flat rows, so a page is read document by document and
+/// events are de-duplicated by `(bulletin id, event)` instead of the first
+/// document of a bulletin winning (XDM-151 §4/§7). Flat v2 snapshots still
+/// parse: one object is one group.
+pub const PARSER_VERSION: &str = "risk-warnings-v3";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -131,13 +141,15 @@ pub fn plans() -> Vec<(Kind, AcquisitionPlan)> {
     .param("CATALOGID", SZSE_SHORT_NAME_CATALOG)
     .param("TABKEY", SZSE_SHORT_NAME_TABKEY);
     let bulletin = |kind: Kind, title: &str| {
+        // The bulletin index is the one SSE endpoint that pages by
+        // `pageHelp.beginPage`/`endPage` and only accepts `pageSize<=100`
+        // (XDM-151 §3); the page size is written by the dialect, once.
         let plan = AcquisitionPlan::new(
             SourceId::SseBulletin,
             SSE_BULLETIN_URL,
-            PagingFormat::SsePageHelp,
+            PagingFormat::SsePageHelpBeginPage,
         )
         .param("isPagination", "true")
-        .param("pageHelp.pageSize", "100")
         .param("TITLE", title);
         (kind, plan)
     };
@@ -194,9 +206,16 @@ pub struct Admitted {
     pub snapshot_ids: BTreeMap<&'static str, Vec<String>>,
     pub sz_rows: usize,
     pub sz_skipped_codes: usize,
+    /// Bulletin documents read (attachments included).
     pub sh_rows: usize,
     pub sh_events: usize,
     pub sh_ignored_rows: usize,
+    /// Distinct announcement ids among the documents read.
+    pub sh_bulletins: usize,
+    /// Announcement ids that carry more than one document (body + attachment).
+    pub sh_multi_doc_bulletins: usize,
+    /// Largest document count of one announcement.
+    pub sh_max_docs_per_bulletin: usize,
 }
 
 impl Admitted {
@@ -211,6 +230,16 @@ impl Admitted {
             "sh_bulletin_rows": self.sh_rows,
             "sh_status_events": self.sh_events,
             "sh_ignored_rows": self.sh_ignored_rows,
+            // XDM-151 §7: one announcement is one index entry that may carry
+            // its body plus attachments. Recording the shape lets an operator
+            // tell "the endpoint stopped grouping" from "the attachment titles
+            // changed" when the event count moves.
+            "sh_docs_per_bulletin": {
+                "documents_read": self.sh_rows,
+                "distinct_bulletins": self.sh_bulletins,
+                "multi_document_bulletins": self.sh_multi_doc_bulletins,
+                "max": self.sh_max_docs_per_bulletin,
+            },
             "interval_rows": self.set.rows.len(),
             "observed_windows": self.set.observed_windows(),
             "not_observed_windows": self.set.not_observed_windows(),
@@ -384,7 +413,13 @@ fn acquire_today(
     let mut sh_rows = 0usize;
     let mut sh_ignored = 0usize;
     let mut sh_events = Vec::new();
-    let mut seen_bulletins = BTreeSet::new();
+    // De-duplication is by `(bulletin id, event)`, not by bulletin id alone: a
+    // bulletin may carry more than one event document, and the same bulletin
+    // legitimately matches both title filters (XDM-151 §7).
+    let mut seen_events: BTreeSet<ShEventKey> = BTreeSet::new();
+    // `id → documents`, merged across pages and both title filters; the max of
+    // one id is what says "body + attachments".
+    let mut docs_per_bulletin: BTreeMap<String, usize> = BTreeMap::new();
     let mut quarter_rows: BTreeMap<(NaiveDate, NaiveDate), usize> = BTreeMap::new();
     let mut quarter_observed: BTreeSet<(NaiveDate, NaiveDate)> = BTreeSet::new();
     let mut quarter_failures: BTreeMap<(NaiveDate, NaiveDate), String> = BTreeMap::new();
@@ -393,23 +428,53 @@ fn acquire_today(
     for (kind, plan) in plans().into_iter().filter(|(kind, _)| kind.sse()) {
         for window in &windows {
             let key = (window.start(), window.end());
+            // Bulletins already read in *this* window and title filter. The
+            // bulletin index that ignored `beginPage` answered page 1 again
+            // with the page number echoed; when that repeated page also made
+            // `total = rows × pageCount` the count check cannot see it, so a
+            // repeated announcement is the evidence that page N was not page N
+            // (XDM-151 §2/§3).
+            let mut window_bulletins = BTreeSet::new();
             match entry.acquire_window(&plan, *window, "START_DATE", "END_DATE") {
                 Ok(outcome) => {
                     quarter_observed.insert(key);
                     for snapshot in &outcome.snapshots {
                         let bytes = store.read_verified(snapshot.snapshot_id())?;
-                        let mut parsed = parse_sh_page(&bytes, snapshot.snapshot_id())?;
-                        sh_rows += parsed.1;
-                        sh_ignored += parsed.2;
-                        for event in &mut parsed.0 {
-                            if seen_bulletins.insert(event.source_record_id.clone()) {
+                        let page = parse_sh_page(&bytes, snapshot.snapshot_id())?;
+                        if let Some(repeated) = page
+                            .docs_per_bulletin
+                            .keys()
+                            .find(|id| window_bulletins.contains(*id))
+                        {
+                            return Err(Error::Invalid {
+                                code: "truncated",
+                                detail: format!(
+                                    "{} window {}..{}: snapshot {} repeats bulletin {repeated} \
+                                     already read in this window; the endpoint answered a \
+                                     repeated page instead of the requested page",
+                                    kind.label(),
+                                    window.start(),
+                                    window.end(),
+                                    snapshot.snapshot_id()
+                                ),
+                            });
+                        }
+                        window_bulletins.extend(page.docs_per_bulletin.keys().cloned());
+                        sh_rows += page.documents;
+                        sh_ignored += page.ignored;
+                        for (id, documents) in &page.docs_per_bulletin {
+                            let seen = docs_per_bulletin.entry(id.clone()).or_default();
+                            *seen = (*seen).max(*documents);
+                        }
+                        for event in &page.events {
+                            if seen_events.insert(sh_event_key(event)) {
                                 sh_events.push(event.clone());
                             }
                         }
                         quarter_rows
                             .entry(key)
-                            .and_modify(|count| *count += parsed.0.len())
-                            .or_insert(parsed.0.len());
+                            .and_modify(|count| *count += page.events.len())
+                            .or_insert(page.events.len());
                         snapshot_ids
                             .entry(kind.label())
                             .or_default()
@@ -489,6 +554,11 @@ fn acquire_today(
         }
     }
     bindings.sort_by(|left, right| left.source_id.cmp(&right.source_id));
+    let multi_document_bulletins = docs_per_bulletin
+        .values()
+        .filter(|documents| **documents > 1)
+        .count();
+    let max_docs_per_bulletin = docs_per_bulletin.values().copied().max().unwrap_or(0);
     Ok(Admitted {
         set,
         bindings,
@@ -498,6 +568,9 @@ fn acquire_today(
         sh_rows,
         sh_events: sh_events.len(),
         sh_ignored_rows: sh_ignored,
+        sh_bulletins: docs_per_bulletin.len(),
+        sh_multi_doc_bulletins: multi_document_bulletins,
+        sh_max_docs_per_bulletin: max_docs_per_bulletin,
     })
 }
 
@@ -575,76 +648,157 @@ fn sz_rows(value: &Value, declared_tabkey: Option<&str>) -> Result<Vec<Value>, E
         .ok_or_else(|| Error::invalid("SZSE short-name page has no data row array"))
 }
 
-/// Parse one SSE bulletin page: `(events, rows_read, ignored_rows)`.
-fn parse_sh_page(
-    bytes: &[u8],
-    snapshot_id: &str,
-) -> Result<(Vec<RiskWarningStatusEvent>, usize, usize), Error> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|error| Error::invalid(format!("SSE bulletin page is not JSON: {error}")))?;
-    let rows = sh_rows(&value)?;
-    let total = rows.len();
-    let mut events = Vec::new();
-    let mut ignored = 0usize;
-    for row in rows {
-        let code = text_field(&row, "SECURITY_CODE")?;
-        if !is_sh_a_code(&code) {
-            ignored += 1;
-            continue;
-        }
-        let title = text_field(&row, "TITLE")?;
-        let Some((action, status)) = classify_title(&title) else {
-            ignored += 1;
-            continue;
-        };
-        let announced = parse_day(&text_field(&row, "SSEDATE")?, "SSEDATE")?;
-        let effective = explicit_effective_day(&title).unwrap_or(announced);
-        let record_id = row
-            .get("ORG_BULLETIN_ID")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                row.get("URL")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
-            })
-            .ok_or_else(|| {
-                Error::invalid(format!("SSE bulletin row {code} {announced} has no id"))
-            })?;
-        events.push(RiskWarningStatusEvent {
-            code,
-            day: effective,
-            action,
-            status,
-            announced_at: Some(announced.to_string()),
-            known_at: Some(announced),
-            raw_status_code: match (action, status) {
-                (RiskWarningAction::Implement, Some(status)) => {
-                    format!("implement:{}", status.as_str())
-                }
-                (RiskWarningAction::Revoke, _) => "revoke".into(),
-                _ => return Err(Error::invalid("an implementation event has no status")),
-            },
-            source_kind: "exchange_announcement".into(),
-            source_record_id: record_id,
-            source_document_sha256: snapshot_id.to_string(),
-        });
-    }
-    Ok((events, total, ignored))
+/// What one frozen SSE bulletin page yielded.
+#[derive(Debug, Default)]
+struct ShPage {
+    events: Vec<RiskWarningStatusEvent>,
+    /// Documents read, the attachments of a bulletin included.
+    documents: usize,
+    /// Documents that are not an admitted event (no A-share code, or a title
+    /// that is not an implementation/revocation).
+    ignored: usize,
+    /// Documents per announcement id: one index entry is one announcement and
+    /// may carry its body plus attachments (XDM-151 §4). The keys are also the
+    /// page's bulletin ids.
+    docs_per_bulletin: BTreeMap<String, usize>,
 }
 
-fn sh_rows(value: &Value) -> Result<Vec<Value>, Error> {
+/// `(bulletin id, event)` is one admitted event. The id alone is not: one
+/// announcement may carry several event documents, and de-duplicating on the
+/// id would keep the first one and drop the rest (XDM-151 §7).
+type ShEventKey = (String, RiskWarningAction, Option<RiskStatus>);
+
+fn sh_event_key(event: &RiskWarningStatusEvent) -> ShEventKey {
+    (event.source_record_id.clone(), event.action, event.status)
+}
+
+/// Parse one SSE bulletin page document by document.
+///
+/// `pageHelp.data` holds announcement **groups** in the real response
+/// (`[[doc, doc], [doc], …]`, one group per `ORG_BULLETIN_ID`) and held flat
+/// row objects in the snapshots frozen before XDM-151; both shapes parse, one
+/// object being one group. Every document is classified on its own before
+/// anything is de-duplicated, so a body that follows its attachment still
+/// yields its event and two different events of one bulletin both survive.
+fn parse_sh_page(bytes: &[u8], snapshot_id: &str) -> Result<ShPage, Error> {
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| Error::invalid(format!("SSE bulletin page is not JSON: {error}")))?;
+    let groups = sh_groups(&value)?;
+    let mut page = ShPage::default();
+    // Within a page the same `(id, event)` is read once: both title filters
+    // match the same bulletin in some years, and a frozen page can repeat a row.
+    let mut seen: BTreeSet<ShEventKey> = BTreeSet::new();
+    for group in groups {
+        let Some(first) = group.first() else {
+            return Err(Error::invalid(
+                "SSE bulletin page has an empty announcement group",
+            ));
+        };
+        let bulletin = bulletin_id(first).ok_or_else(|| {
+            Error::invalid("SSE bulletin announcement group has no ORG_BULLETIN_ID or URL")
+        })?;
+        // Stated separately so the map borrow ends before the events below are
+        // pushed: both live in `page`.
+        *page.docs_per_bulletin.entry(bulletin).or_insert(0) += group.len();
+        for document in &group {
+            page.documents += 1;
+            let Some(event) = sh_document_event(document, snapshot_id)? else {
+                page.ignored += 1;
+                continue;
+            };
+            if seen.insert(sh_event_key(&event)) {
+                page.events.push(event);
+            }
+        }
+    }
+    Ok(page)
+}
+
+/// One announcement document as an event, or `None` when it is not one.
+fn sh_document_event(
+    row: &Value,
+    snapshot_id: &str,
+) -> Result<Option<RiskWarningStatusEvent>, Error> {
+    let code = text_field(row, "SECURITY_CODE")?;
+    if !is_sh_a_code(&code) {
+        return Ok(None);
+    }
+    let title = text_field(row, "TITLE")?;
+    let Some((action, status)) = classify_title(&title) else {
+        return Ok(None);
+    };
+    let announced = parse_day(&text_field(row, "SSEDATE")?, "SSEDATE")?;
+    let effective = explicit_effective_day(&title).unwrap_or(announced);
+    let record_id = bulletin_id(row)
+        .ok_or_else(|| Error::invalid(format!("SSE bulletin row {code} {announced} has no id")))?;
+    Ok(Some(RiskWarningStatusEvent {
+        code,
+        day: effective,
+        action,
+        status,
+        announced_at: Some(announced.to_string()),
+        known_at: Some(announced),
+        raw_status_code: match (action, status) {
+            (RiskWarningAction::Implement, Some(status)) => {
+                format!("implement:{}", status.as_str())
+            }
+            (RiskWarningAction::Revoke, _) => "revoke".into(),
+            _ => return Err(Error::invalid("an implementation event has no status")),
+        },
+        source_kind: "exchange_announcement".into(),
+        source_record_id: record_id,
+        source_document_sha256: snapshot_id.to_string(),
+    }))
+}
+
+/// The stable id of one document's announcement: `ORG_BULLETIN_ID`, or the
+/// `URL` when the id is absent (old frozen rows).
+fn bulletin_id(row: &Value) -> Option<String> {
+    row.get("ORG_BULLETIN_ID")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            row.get("URL")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+}
+
+/// The announcement groups of one `pageHelp.data` page.
+///
+/// Missing `pageHelp.data` stays `source_invalid`: an absent row array is a
+/// different answer from an empty one, and the entry's envelope parser has
+/// already refused it before this function runs on the live path (replay can
+/// reach a frozen page directly, so it is checked here too).
+fn sh_groups(value: &Value) -> Result<Vec<Vec<Value>>, Error> {
     let data = value
         .get("pageHelp")
         .and_then(|help| help.get("data"))
         .and_then(Value::as_array)
         .or_else(|| value.get("data").and_then(Value::as_array));
-    data.cloned()
-        .ok_or_else(|| Error::invalid("SSE bulletin page has no data row array"))
+    let data = data
+        .cloned()
+        .ok_or_else(|| Error::invalid("SSE bulletin page has no data row array"))?;
+    let mut groups = Vec::with_capacity(data.len());
+    for element in data {
+        match element {
+            // Real shape: one announcement with its body and attachments.
+            Value::Array(documents) => groups.push(documents),
+            // v2 flat shape: one row object is one announcement.
+            object @ Value::Object(_) => groups.push(vec![object]),
+            _ => {
+                return Err(Error::invalid(
+                    "SSE bulletin page has a data element that is neither a row object \
+                     nor a document group",
+                ));
+            }
+        }
+    }
+    Ok(groups)
 }
 
 fn classify_title(title: &str) -> Option<(RiskWarningAction, Option<RiskStatus>)> {
@@ -750,8 +904,9 @@ fn parse_day(text: &str, field: &str) -> Result<NaiveDate, Error> {
 /// store and rebuild the domain set without any HTTP request.
 ///
 /// `pages` are `(source_id, snapshot_id, bytes)` in manifest order. The
-/// caller chooses which SZ short-name table snapshot is current; all SSE
-/// bulletin pages are de-duplicated by their announcement id.
+/// caller chooses which SZ short-name table snapshot is current; SSE bulletin
+/// pages are parsed document by document and de-duplicated by
+/// `(announcement id, event)`, like the live path.
 pub fn replay(
     pages: &[(&str, String, Vec<u8>)],
     gaps: &[(NaiveDate, NaiveDate)],
@@ -762,7 +917,8 @@ pub fn replay(
     let declared_tabkey = szse_declared_tabkey();
     let mut sz_changes = Vec::new();
     let mut sh_events = Vec::new();
-    let mut seen_bulletins = BTreeSet::new();
+    // Same key as the live path: `(bulletin id, event)` (XDM-151 §7).
+    let mut seen_events: BTreeSet<ShEventKey> = BTreeSet::new();
     for (source_id, snapshot_id, bytes) in pages {
         match *source_id {
             "szse_short_name" => {
@@ -771,9 +927,9 @@ pub fn replay(
                 sz_changes.append(&mut changes);
             }
             "sse_bulletin" => {
-                let (events, _, _) = parse_sh_page(bytes, snapshot_id)?;
-                for event in events {
-                    if seen_bulletins.insert(event.source_record_id.clone()) {
+                let page = parse_sh_page(bytes, snapshot_id)?;
+                for event in page.events {
+                    if seen_events.insert(sh_event_key(&event)) {
                         sh_events.push(event);
                     }
                 }
@@ -930,24 +1086,176 @@ mod tests {
         );
     }
 
+    /// (d) XDM-151 §7: snapshots frozen under `risk-warnings-v2` hold flat row
+    /// objects, one per announcement. The v3 parser must replay them unchanged:
+    /// one object is one group.
     #[test]
-    fn sh_page_parses_only_actual_status_events() {
-        let (events, rows, ignored) =
-            parse_sh_page(&fixture("sse-bulletins.json"), "b").expect("fixture parses");
-        assert_eq!(rows, 5);
-        assert_eq!(events.len(), 3);
+    fn a_v2_flat_snapshot_still_replays() {
+        let page = parse_sh_page(&fixture("sse-bulletins.json"), "b").expect("fixture parses");
+        assert_eq!(page.documents, 5);
+        assert_eq!(page.documents, page.events.len() + page.ignored);
+        assert_eq!(page.events.len(), 3);
         assert_eq!(
-            ignored, 2,
+            page.ignored, 2,
             "a proposal and an unrelated bulletin are ignored"
         );
+        assert_eq!(
+            page.docs_per_bulletin.len(),
+            5,
+            "a flat row is its own announcement"
+        );
+        assert_eq!(page.docs_per_bulletin.values().copied().max(), Some(1));
     }
 
     #[test]
     fn explicit_title_date_wins_over_announcement_day() {
-        let (events, _, _) =
-            parse_sh_page(&fixture("sse-bulletins.json"), "b").expect("fixture parses");
-        assert_eq!(events[0].day, NaiveDate::from_ymd_opt(2024, 5, 6).unwrap());
-        assert_eq!(events[0].announced_at.as_deref(), Some("2024-04-30"));
+        let page = parse_sh_page(&fixture("sse-bulletins.json"), "b").expect("fixture parses");
+        assert_eq!(
+            page.events[0].day,
+            NaiveDate::from_ymd_opt(2024, 5, 6).unwrap()
+        );
+        assert_eq!(page.events[0].announced_at.as_deref(), Some("2024-04-30"));
+    }
+
+    /// (a) The real shape: `pageHelp.data` is a list of announcement groups,
+    /// each holding the body and its attachments. Every document is classified
+    /// on its own, attachments fall out by their titles, and the group is one
+    /// announcement for the per-bulletin evidence.
+    #[test]
+    fn a_grouped_page_is_parsed_document_by_document() {
+        let page = parse_sh_page(&fixture("sse-bulletins-grouped.json"), "c")
+            .expect("the grouped fixture parses");
+        assert_eq!(page.documents, 6, "three groups: 2 + 1 + 3 documents");
+        assert_eq!(
+            page.events.len(),
+            2,
+            "the implementation and the revocation"
+        );
+        assert_eq!(
+            page.ignored, 4,
+            "an audit attachment, an application and its two attachments"
+        );
+        assert_eq!(page.docs_per_bulletin.len(), 3);
+        assert_eq!(
+            page.docs_per_bulletin.values().copied().max(),
+            Some(3),
+            "the application carries two attachments"
+        );
+        assert_eq!(page.events[0].code, "600242");
+        assert_eq!(page.events[0].action, RiskWarningAction::Implement);
+        assert_eq!(
+            page.events[0].status,
+            Some(RiskStatus::DelistingRiskWarning)
+        );
+        assert_eq!(page.events[1].code, "601113");
+        assert_eq!(page.events[1].action, RiskWarningAction::Revoke);
+    }
+
+    /// (e) Classification happens before de-duplication: an attachment that
+    /// precedes the body must not shadow the body's event, and two different
+    /// events of one bulletin are two events (XDM-151 §7).
+    #[test]
+    fn a_body_after_its_attachment_keeps_its_event() {
+        let body = r#"{"pageHelp":{"pageNo":1,"pageCount":1,"total":2,"data":[
+          [
+            {"SSEDATE":"2024-06-01","SECURITY_CODE":"600010",
+             "TITLE":"示例十关于撤销公司股票其他风险警示的补充说明",
+             "ORG_BULLETIN_ID":"attach-first-1"},
+            {"SSEDATE":"2024-06-01","SECURITY_CODE":"600010",
+             "TITLE":"示例十关于公司股票被实施其他风险警示的公告",
+             "ORG_BULLETIN_ID":"attach-first-1"}
+          ],
+          [
+            {"SSEDATE":"2024-06-02","SECURITY_CODE":"600011",
+             "TITLE":"示例十一关于公司股票被实施退市风险警示的专项审核意见",
+             "ORG_BULLETIN_ID":"attach-first-2"},
+            {"SSEDATE":"2024-06-02","SECURITY_CODE":"600011",
+             "TITLE":"示例十一关于公司股票被实施退市风险警示的公告",
+             "ORG_BULLETIN_ID":"attach-first-2"}
+          ]
+        ]}}"#
+            .as_bytes();
+        let page = parse_sh_page(body, "d").expect("the page parses");
+        assert_eq!(page.documents, 4);
+        assert_eq!(
+            page.events.len(),
+            3,
+            "the revoke and the implementation of the first bulletin, plus the \
+             second bulletin's implementation"
+        );
+        let actions: Vec<_> = page.events.iter().map(|event| event.action).collect();
+        assert_eq!(
+            actions,
+            vec![
+                RiskWarningAction::Revoke,
+                RiskWarningAction::Implement,
+                RiskWarningAction::Implement
+            ]
+        );
+        // The second group's attachment also classifies as an implementation;
+        // de-duplication by `(id, event)` keeps one event for it.
+        assert_eq!(page.events[1].code, "600010");
+        assert_eq!(page.events[1].status, Some(RiskStatus::OtherRiskWarning));
+        assert_eq!(page.events[2].code, "600011");
+        assert_eq!(
+            page.events[2].status,
+            Some(RiskStatus::DelistingRiskWarning)
+        );
+    }
+
+    /// A page without `pageHelp.data` is still `source_invalid`: an absent row
+    /// array is not an empty announcement list.
+    #[test]
+    fn a_page_without_page_help_data_fails_closed() {
+        let body = br#"{"pageHelp":{"pageNo":1,"pageCount":0,"total":0}}"#;
+        let error = parse_sh_page(body, "e").expect_err("a missing data array is refused");
+        assert_eq!(error.code(), "source_invalid");
+        assert!(
+            error.to_string().contains("no data row array"),
+            "the reason names the missing array: {error}"
+        );
+    }
+
+    /// B. The bulletin index takes `pageHelp.beginPage`/`endPage` with
+    /// `pageSize=100`; `pageNo` must travel with them so the envelope's page
+    /// number stays truthful. The page size is written by the dialect only —
+    /// a plan-level `pageHelp.pageSize` would be overridden again.
+    #[test]
+    fn the_bulletin_plans_page_by_begin_page_with_a_page_size_of_100() {
+        let mut sse_plans = 0;
+        for (kind, plan) in plans().into_iter().filter(|(kind, _)| kind.sse()) {
+            sse_plans += 1;
+            assert_eq!(plan.format, PagingFormat::SsePageHelpBeginPage);
+            assert!(
+                !plan.params.contains_key("pageHelp.pageSize"),
+                "{}: the page size belongs to the dialect, not the plan",
+                kind.label()
+            );
+            let first = plan.request(1, None, "START_DATE", "END_DATE");
+            for (name, value) in [
+                ("pageHelp.pageSize", "100"),
+                ("pageHelp.pageNo", "1"),
+                ("pageHelp.beginPage", "1"),
+                ("pageHelp.endPage", "1"),
+            ] {
+                assert_eq!(
+                    first.params.get(name).map(String::as_str),
+                    Some(value),
+                    "{}: {name}",
+                    kind.label()
+                );
+            }
+            let third = plan.request(3, None, "START_DATE", "END_DATE");
+            for name in ["pageHelp.pageNo", "pageHelp.beginPage", "pageHelp.endPage"] {
+                assert_eq!(
+                    third.params.get(name).map(String::as_str),
+                    Some("3"),
+                    "{}: {name}",
+                    kind.label()
+                );
+            }
+        }
+        assert_eq!(sse_plans, 2, "both title filters use the bulletin dialect");
     }
 
     #[test]
@@ -994,18 +1302,20 @@ mod tests {
     /// The real empty-window shape of the SSE announcement index: 2000Q1
     /// answers `pageCount:0`, `data:[]`, `total:0` (XDM-139 §5, reproduced with
     /// curl against the live source).
-    const EMPTY_QUARTER: &[u8] =
-        br#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":0,"total":0,"data":[]}}"#;
+    const EMPTY_QUARTER: &[u8] = br#"{"pageHelp":{"beginPage":1,"endPage":1,"pageNo":1,
+      "pageSize":100,"pageCount":0,"total":0,"data":[]}}"#;
     /// One implementation announcement in 2000Q2, minimal row shape.
-    const ONE_EVENT_QUARTER: &[u8] = r#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":1,
-      "total":1,"data":[{"SSEDATE":"2000-05-08","SECURITY_CODE":"600001",
+    const ONE_EVENT_QUARTER: &[u8] = r#"{"pageHelp":{"beginPage":1,"endPage":1,"pageNo":1,
+      "pageSize":100,"pageCount":1,"total":1,
+      "data":[{"SSEDATE":"2000-05-08","SECURITY_CODE":"600001",
       "SECURITY_NAME":"示例一","TITLE":"示例一关于公司股票被实施其他风险警示的公告",
       "BULLETIN_TYPE_DESC":"风险警示","ORG_BULLETIN_ID":"risk-1",
       "URL":"/disclosure/listedinfo/announcement/c/new/2000-05-08/600001_1.pdf"}]}}"#
         .as_bytes();
     /// The revocation of the same warning in 2000Q4.
-    const ONE_REVOKE_QUARTER: &[u8] = r#"{"pageHelp":{"pageNo":1,"pageSize":2000,"pageCount":1,
-      "total":1,"data":[{"SSEDATE":"2000-10-11","SECURITY_CODE":"600001",
+    const ONE_REVOKE_QUARTER: &[u8] = r#"{"pageHelp":{"beginPage":1,"endPage":1,"pageNo":1,
+      "pageSize":100,"pageCount":1,"total":1,
+      "data":[{"SSEDATE":"2000-10-11","SECURITY_CODE":"600001",
       "SECURITY_NAME":"示例一","TITLE":"示例一关于撤销其他风险警示的公告",
       "BULLETIN_TYPE_DESC":"风险警示","ORG_BULLETIN_ID":"risk-1-revoke",
       "URL":"/disclosure/listedinfo/announcement/c/new/2000-10-11/600001_2.pdf"}]}}"#
@@ -1049,9 +1359,9 @@ mod tests {
         }
     }
 
-    struct SharedBulletins(Arc<BulletinPages>);
+    struct Shared<T>(Arc<T>);
 
-    impl Transport for SharedBulletins {
+    impl<T: Transport> Transport for Shared<T> {
         fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
             self.0.get(request)
         }
@@ -1061,13 +1371,13 @@ mod tests {
     /// through the real entry (freeze, index, validate) and the real domain
     /// assembly. `today` bounds the quarter loop, so a test stays at a handful
     /// of windows.
-    fn acquire_quarters(
+    fn acquire_quarters<T: Transport + 'static>(
         store: &SourceStore,
         market: &MarketBackend,
-        pages: &Arc<BulletinPages>,
+        pages: &Arc<T>,
         today: NaiveDate,
     ) -> Result<Admitted, Error> {
-        let client = Client::with_transport(SharedBulletins(pages.clone()))
+        let client = Client::with_transport(Shared(pages.clone()))
             .with_policy(RetryPolicy::single())
             .without_sleep();
         acquire_today(store, market, &client, today, Arc::new(RunCache::new()))
@@ -1172,5 +1482,150 @@ mod tests {
         // page is frozen even when its window is empty.
         assert_eq!(pages.requests.lock().unwrap().len(), 9);
         assert_eq!(store.records().unwrap().len(), 9);
+    }
+
+    /// One non-empty window (`END_DATE=2000-03-31`) that answers two pages
+    /// selected by `pageHelp.beginPage`, plus the empty shape everywhere else.
+    struct TwoPageWindow {
+        requests: Mutex<Vec<String>>,
+        first: &'static [u8],
+        second: &'static [u8],
+    }
+
+    impl Transport for TwoPageWindow {
+        fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+            self.requests.lock().unwrap().push(request.url.clone());
+            let body = if request.url.contains("CATALOGID=") {
+                SHORT_NAME_TABLE.to_vec()
+            } else if request.url.contains("END_DATE=2000-03-31") {
+                if request.url.contains("pageHelp.beginPage=2") {
+                    self.second.to_vec()
+                } else {
+                    self.first.to_vec()
+                }
+            } else {
+                EMPTY_QUARTER.to_vec()
+            };
+            Ok(HttpResponse {
+                status: 200,
+                etag: None,
+                last_modified: None,
+                body,
+            })
+        }
+    }
+
+    /// 2000Q1 page 1 of 2: two announcements of one document each, `total=3`.
+    const MULTI_PAGE_FIRST: &[u8] = r#"{"pageHelp":{"beginPage":1,"endPage":1,"pageNo":1,
+      "pageSize":100,"pageCount":2,"total":3,"data":[
+      [{"SSEDATE":"2000-02-01","SECURITY_CODE":"600001",
+        "TITLE":"示例一关于公司股票被实施其他风险警示的公告",
+        "ORG_BULLETIN_ID":"page-1-a"}],
+      [{"SSEDATE":"2000-02-02","SECURITY_CODE":"600002",
+        "TITLE":"示例二关于公司股票被实施退市风险警示的公告",
+        "ORG_BULLETIN_ID":"page-1-b"}]]}}"#
+        .as_bytes();
+    /// 2000Q1 page 2 of 2: one further announcement; 2 + 1 = `total`.
+    const MULTI_PAGE_SECOND: &[u8] = r#"{"pageHelp":{"beginPage":2,"endPage":2,"pageNo":2,
+      "pageSize":100,"pageCount":2,"total":3,"data":[
+      [{"SSEDATE":"2000-03-01","SECURITY_CODE":"600003",
+        "TITLE":"示例三关于公司股票被实施其他风险警示的公告",
+        "ORG_BULLETIN_ID":"page-2-c"}]]}}"#
+        .as_bytes();
+    /// A two-page window whose second page repeats the first one's announcement
+    /// and echoes the requested page number; the counts still add up
+    /// (`1 + 1 = total 2`), so only the repeated id can tell.
+    const REPEATED_FIRST: &[u8] = r#"{"pageHelp":{"beginPage":1,"endPage":1,"pageNo":1,
+      "pageSize":100,"pageCount":2,"total":2,"data":[
+      [{"SSEDATE":"2000-02-01","SECURITY_CODE":"600001",
+        "TITLE":"示例一关于公司股票被实施其他风险警示的公告",
+        "ORG_BULLETIN_ID":"repeated-1"}]]}}"#
+        .as_bytes();
+    const REPEATED_SECOND: &[u8] = r#"{"pageHelp":{"beginPage":2,"endPage":2,"pageNo":2,
+      "pageSize":100,"pageCount":2,"total":2,"data":[
+      [{"SSEDATE":"2000-02-01","SECURITY_CODE":"600001",
+        "TITLE":"示例一关于公司股票被实施其他风险警示的公告",
+        "ORG_BULLETIN_ID":"repeated-1"}]]}}"#
+        .as_bytes();
+
+    fn two_page_fixture(
+        first: &'static [u8],
+        second: &'static [u8],
+    ) -> (
+        tempfile::TempDir,
+        SourceStore,
+        MarketBackend,
+        Arc<TwoPageWindow>,
+    ) {
+        let (dir, market) = crate::official_security::compact_market_fixture();
+        let store = SourceStore::new(dir.path().join("source-store"));
+        let pages = Arc::new(TwoPageWindow {
+            requests: Mutex::new(Vec::new()),
+            first,
+            second,
+        });
+        (dir, store, market, pages)
+    }
+
+    /// (b) A multi-page window: page 2 is fetched with
+    /// `pageHelp.beginPage=2`/`endPage=2` (and `pageNo=2`, so the envelope
+    /// agrees) and carries announcements page 1 does not; the pages together
+    /// equal the declared `total` (XDM-151 §3).
+    #[test]
+    fn a_multi_page_window_collects_every_page_by_begin_page() {
+        let (_dir, store, market, pages) = two_page_fixture(MULTI_PAGE_FIRST, MULTI_PAGE_SECOND);
+        let admitted = acquire_quarters(&store, &market, &pages, day(2000, 3, 31))
+            .expect("both pages are collected");
+        assert_eq!(admitted.sh_events, 3, "one event per announcement");
+        assert_eq!(
+            admitted.sh_rows, 6,
+            "three documents read by each of the two title filters"
+        );
+        assert_eq!(admitted.sh_bulletins, 3);
+        assert_eq!(admitted.sh_max_docs_per_bulletin, 1);
+        assert_eq!(admitted.sh_multi_doc_bulletins, 0);
+        let evidence = admitted.evidence();
+        assert_eq!(
+            evidence["sh_docs_per_bulletin"]["documents_read"], 6,
+            "the evidence records docs_per_bulletin: {evidence}"
+        );
+        assert_eq!(evidence["sh_docs_per_bulletin"]["distinct_bulletins"], 3);
+        assert_eq!(evidence["sh_docs_per_bulletin"]["max"], 1);
+        let requests = pages.requests.lock().unwrap().clone();
+        assert_eq!(
+            requests.len(),
+            5,
+            "one SZSE table plus two pages × two filters"
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|url| url.contains("pageHelp.beginPage=2"))
+                .count(),
+            2,
+            "each title filter asks for page 2 explicitly: {requests:?}"
+        );
+        assert!(requests.iter().all(|url| {
+            url.contains("CATALOGID=")
+                || (url.contains("pageHelp.pageSize=100")
+                    && url.contains("pageHelp.beginPage=")
+                    && url.contains("pageHelp.endPage="))
+        }));
+    }
+
+    /// (c) If the endpoint ignores the page parameter and answers page 1 again,
+    /// the item must fail instead of counting the repeated announcements twice.
+    /// The counts alone cannot see it here (`1 + 1 = total 2`), so the repeated
+    /// `ORG_BULLETIN_ID` is the verdict.
+    #[test]
+    fn a_repeated_page_fails_the_item_instead_of_inflating_the_row_count() {
+        let (_dir, store, market, pages) = two_page_fixture(REPEATED_FIRST, REPEATED_SECOND);
+        let error = acquire_quarters(&store, &market, &pages, day(2000, 3, 31))
+            .expect_err("a repeated page is not a second page");
+        assert_eq!(error.code(), "truncated");
+        assert!(
+            error.to_string().contains("repeats bulletin repeated-1"),
+            "the reason names the repeated announcement: {error}"
+        );
     }
 }

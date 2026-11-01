@@ -15,14 +15,25 @@
 //! outbound caller uses that one function, so no request path can send raw
 //! non-ASCII text to the stdlib helper.
 //!
-//! Paging quirks that the entry encodes instead of leaving to consumers:
+//! Paging quirks that the entry encodes instead of leaving to consumers. SSE
+//! spells paging three different ways depending on the endpoint, so a plan must
+//! pick the dialect of *its* endpoint; there is no single "SSE paging":
 //!
-//! - SSE list services (`commonQuery.do`) ignore `beginPage`/`endPage` — both
-//!   spellings answer the same first 50 rows — and instead honour
-//!   `pageHelp.pageNo`/`pageHelp.pageSize` (2026-10-30 evidence: one request with
-//!   `pageHelp.pageSize=2000` returned all 1,845 rows, `pageCount=1`), which is
-//!   [`PagingFormat::SsePageHelp`]. The older `commonSoaQuery` services are the
-//!   same way round (PR-11 evidence), which is [`PagingFormat::SseSoaPageNo`].
+//! - SSE **list** services (`sseQuery/commonQuery.do`: the A-1/A-2 listing and
+//!   delisting lists) ignore `beginPage`/`endPage` — both spellings answer the
+//!   same first 50 rows — and instead honour `pageHelp.pageNo`/`pageHelp.pageSize`
+//!   (2026-10-30 evidence: one request with `pageHelp.pageSize=2000` returned all
+//!   1,845 rows, `pageCount=1`), which is [`PagingFormat::SsePageHelp`].
+//! - The older `commonSoaQuery.do` services (A-3 suspensions) are the same way
+//!   round but with a page size of 25 (PR-11 evidence), which is
+//!   [`PagingFormat::SseSoaPageNo`].
+//! - The **company-bulletin index** (`queryCompanyBulletinNew.do`, historical ST)
+//!   is the opposite: it silently downgrades `pageHelp.pageSize` to 25 above 100
+//!   and ignores `pageHelp.pageNo` for the data it returns (it only echoes it).
+//!   The page is selected by `pageHelp.beginPage`/`endPage`, which must be sent
+//!   together with `pageHelp.pageNo` so the envelope's page number and the
+//!   returned rows agree (XDM-151 2026-11-01 evidence); that is
+//!   [`PagingFormat::SsePageHelpBeginPage`].
 //! - SZSE pages by `PAGENO`; its `pageSize` is not adopted (design §17 item 10).
 //! - The SSE bulletin index archive starts 2000-01-01 and one request may span
 //!   at most one quarter, asserted as ≤ [`MAX_SEGMENT_DAYS`] days (§6.4).
@@ -228,7 +239,20 @@ pub enum PagingFormat {
     /// endpoint ignores `beginPage`/`endPage` (2026-10-30 evidence: both
     /// spellings answered the same first 50 rows) but honours
     /// `pageHelp.pageSize`; the lists are small enough to arrive in one page.
+    ///
+    /// This dialect is *not* the bulletin index's: see
+    /// [`PagingFormat::SsePageHelpBeginPage`].
     SsePageHelp,
+    /// SSE company-bulletin index (`queryCompanyBulletinNew.do`), paged by
+    /// `pageHelp.beginPage`/`endPage` with a page size of
+    /// [`SSE_BULLETIN_PAGE_SIZE`]. This endpoint downgrades a larger
+    /// `pageHelp.pageSize` to its default 25 and ignores `pageHelp.pageNo` for
+    /// the rows it returns (it echoes the parameter but always answers page 1),
+    /// so the page number is written to all three parameters: `beginPage` picks
+    /// the data, `pageNo` keeps the envelope's page number truthful (the entry
+    /// refuses a page whose envelope reports another number), and `endPage`
+    /// closes the range (XDM-151 2026-11-01 evidence).
+    SsePageHelpBeginPage,
     /// SSE `commonSoaQuery.do` services (A-3 suspension events), paged by
     /// `pageHelp.pageNo` with a fixed page size of [`SSE_SOA_PAGE_SIZE`]; the
     /// same endpoint ignores `beginPage`/`endPage` and always reports
@@ -257,6 +281,11 @@ pub const SSE_PARSER_VERSION: &str = "exchange-sse-page-v2";
 pub const SSE_PARSER_VERSION_V1: &str = "exchange-sse-page-v1";
 /// Parser version recorded for SSE `commonSoaQuery.do` envelopes.
 pub const SSE_SOA_PARSER_VERSION: &str = "exchange-sse-soa-page-v1";
+/// Parser version recorded for SSE company-bulletin index envelopes. The
+/// `pageHelp` shape is the same as [`SSE_PARSER_VERSION`]; the version is
+/// separate so a frozen line says which endpoint's paging dialect wrote it,
+/// and replay reads the page from the same field either way.
+pub const SSE_BULLETIN_PARSER_VERSION: &str = "exchange-sse-bulletin-page-v1";
 /// Parser version recorded for SZSE `metadata` envelopes. v3 selects the
 /// block the request declared (`TABKEY`), otherwise the only non-empty block;
 /// several non-empty blocks fail closed (#446 D1: `CATALOGID=1110` answers four
@@ -275,11 +304,17 @@ pub const SZSE_PARSER_VERSION_V1: &str = "exchange-szse-page-v1";
 pub const SSE_PAGE_SIZE: u32 = 2000;
 /// `pageHelp.pageSize` the SSE `commonSoaQuery.do` services answer with.
 pub const SSE_SOA_PAGE_SIZE: u32 = 25;
+/// `pageHelp.pageSize` the SSE company-bulletin index accepts. It is the
+/// measured ceiling: 25/50/100 are honoured, while 150 and above are silently
+/// answered as the server default 25 (XDM-151 §3), which is what used to make a
+/// 2,000-row request look like a one-page window of 25 groups.
+pub const SSE_BULLETIN_PAGE_SIZE: u32 = 100;
 
 impl PagingFormat {
     pub fn parser_version(self) -> &'static str {
         match self {
             Self::SsePageHelp => SSE_PARSER_VERSION,
+            Self::SsePageHelpBeginPage => SSE_BULLETIN_PARSER_VERSION,
             Self::SseSoaPageNo => SSE_SOA_PARSER_VERSION,
             Self::SzseMetadata => SZSE_PARSER_VERSION,
             Self::SzseMetadataV2 => SZSE_PARSER_VERSION_V2,
@@ -290,6 +325,7 @@ impl PagingFormat {
     pub fn from_parser_version(value: &str) -> Option<Self> {
         match value {
             SSE_PARSER_VERSION | SSE_PARSER_VERSION_V1 => Some(Self::SsePageHelp),
+            SSE_BULLETIN_PARSER_VERSION => Some(Self::SsePageHelpBeginPage),
             SSE_SOA_PARSER_VERSION => Some(Self::SseSoaPageNo),
             SZSE_PARSER_VERSION => Some(Self::SzseMetadata),
             SZSE_PARSER_VERSION_V2 => Some(Self::SzseMetadataV2),
@@ -300,14 +336,29 @@ impl PagingFormat {
 
     /// Parameters that select one page. SSE list services take
     /// `pageHelp.pageNo` with [`SSE_PAGE_SIZE`] (`beginPage`/`endPage` are
-    /// ignored); `commonSoaQuery` takes the same pair with
-    /// [`SSE_SOA_PAGE_SIZE`]; SZSE uses `PAGENO`.
+    /// ignored); the bulletin index takes `pageHelp.beginPage`/`endPage` with
+    /// [`SSE_BULLETIN_PAGE_SIZE`] *and* the same `pageHelp.pageNo`;
+    /// `commonSoaQuery` takes `pageHelp.pageNo` with [`SSE_SOA_PAGE_SIZE`];
+    /// SZSE uses `PAGENO`.
+    ///
+    /// The page size lives here and only here: a plan that also writes
+    /// `pageHelp.pageSize` is silently overridden, which is how a dead `100`
+    /// next to a hard-coded `2000` stayed unnoticed (XDM-151 §5).
     pub fn apply_page(self, params: &mut BTreeMap<String, String>, page: u32) {
         let page = page.to_string();
         match self {
             Self::SsePageHelp => {
                 params.insert("pageHelp.pageSize".to_string(), SSE_PAGE_SIZE.to_string());
                 params.insert("pageHelp.pageNo".to_string(), page);
+            }
+            Self::SsePageHelpBeginPage => {
+                params.insert(
+                    "pageHelp.pageSize".to_string(),
+                    SSE_BULLETIN_PAGE_SIZE.to_string(),
+                );
+                params.insert("pageHelp.pageNo".to_string(), page.clone());
+                params.insert("pageHelp.beginPage".to_string(), page.clone());
+                params.insert("pageHelp.endPage".to_string(), page);
             }
             Self::SseSoaPageNo => {
                 params.insert(
