@@ -13,6 +13,8 @@
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir>
 //!                     [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+//! source_store register-generation-member --store <dir> --generation <manifest sha> \
+//!                     --generation-dir <installed generation directory>
 //! source_store exempt --db <market.sqlite> --generation <manifest sha> \
 //!                     --missing <key> --reason <text> --recorded-by <who> \
 //!                     [--owner-approve-evidence]
@@ -30,7 +32,11 @@
 //! trading calendar and bar days, assembles the dataset with the daily item's
 //! own function and fails closed with `suspension_replay_not_ready` when those
 //! inputs are absent; it is run explicitly after they exist (not by
-//! `--scope all`). Without `--db` a
+//! `--scope all`). `register-generation-member` (XDM-150) is the retroactive
+//! evidence repair for a generation acquired before the source store existed:
+//! it reads that generation's `tdxhy.cfg`/`incon.dat` out of the installed
+//! directory and registers them under `generation:<manifest sha>`, which is
+//! what the retirement gate looks for. Without `--db` a
 //! scope only computes and reports its summary, so a read never touches a
 //! database or creates the store. `verify` always compares, even if
 //! `--verify-only` is also given.
@@ -42,7 +48,7 @@
 use std::path::PathBuf;
 
 use x_data_mcp::generation_gate::{RetireExemption, timestamp};
-use x_data_mcp::source_store::{SourceStore, import, replay};
+use x_data_mcp::source_store::{SourceStore, generation_member, import, replay};
 
 const USAGE: &str = "\
 usage:
@@ -54,6 +60,8 @@ usage:
 [--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
 [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+  source_store register-generation-member --store <dir> --generation <manifest sha> \
+--generation-dir <installed generation directory>
   source_store exempt --db <market.sqlite> --generation <manifest sha> \
 --missing <key> --reason <text> --recorded-by <who> [--owner-approve-evidence]";
 
@@ -77,7 +85,10 @@ fn run(args: &[String]) -> Result<i32, String> {
         println!("{USAGE}");
         return Ok(0);
     }
-    if !matches!(command, "replay" | "verify" | "import" | "exempt") {
+    if !matches!(
+        command,
+        "replay" | "verify" | "import" | "exempt" | "register-generation-member"
+    ) {
         return Err(format!("unknown command {command}"));
     }
     let mut store: Option<PathBuf> = None;
@@ -91,6 +102,7 @@ fn run(args: &[String]) -> Result<i32, String> {
     let mut batch: Option<String> = None;
     let mut dry_run = false;
     let mut generation: Option<String> = None;
+    let mut generation_dir: Option<PathBuf> = None;
     let mut missing: Option<String> = None;
     let mut reason: Option<String> = None;
     let mut recorded_by: Option<String> = None;
@@ -120,6 +132,7 @@ fn run(args: &[String]) -> Result<i32, String> {
             "--verify-only" => verify_only = true,
             "--dry-run" => dry_run = true,
             "--generation" => generation = Some(value(args, position + 1)?),
+            "--generation-dir" => generation_dir = Some(PathBuf::from(value(args, position + 1)?)),
             "--missing" => missing = Some(value(args, position + 1)?),
             "--reason" => reason = Some(value(args, position + 1)?),
             "--recorded-by" => recorded_by = Some(value(args, position + 1)?),
@@ -140,6 +153,15 @@ fn run(args: &[String]) -> Result<i32, String> {
             reason.ok_or_else(|| "--reason is required".to_string())?,
             recorded_by.ok_or_else(|| "--recorded-by is required".to_string())?,
             owner_approve_evidence,
+        );
+    }
+    if command == "register-generation-member" {
+        return register_generation_member(
+            store
+                .clone()
+                .ok_or_else(|| "--store is required".to_string())?,
+            generation.ok_or_else(|| "--generation is required".to_string())?,
+            generation_dir.ok_or_else(|| "--generation-dir is required".to_string())?,
         );
     }
     let store_path = store.ok_or_else(|| "--store is required".to_string())?;
@@ -178,6 +200,33 @@ fn run(args: &[String]) -> Result<i32, String> {
             }
         }
         other => Err(format!("unknown command {other}")),
+    }
+}
+
+/// Register one installed generation's industry members under
+/// `generation:<manifest sha>` (XDM-150, scheme A of the legacy-generation
+/// retirement report §4.3/§8.0).
+///
+/// This is the only supported way to add `generation:<sha>` evidence after the
+/// fact: `import`'s origin shape is `batch:container!suffix` and cannot produce
+/// it. The command writes the source store only — never the market database —
+/// but `data_service`/`acquire` still hold the store's read lock, so it runs in
+/// the same stopped window as the rest of the retirement sequence.
+fn register_generation_member(
+    store: PathBuf,
+    generation: String,
+    generation_dir: PathBuf,
+) -> Result<i32, String> {
+    let store = SourceStore::new(store);
+    match generation_member::register_generation_member(&store, &generation, &generation_dir) {
+        Ok(report) => {
+            print_json(&report)?;
+            Ok(0)
+        }
+        Err(error) => {
+            print_failure(error.code(), &error.to_string())?;
+            Ok(1)
+        }
     }
 }
 
@@ -257,6 +306,7 @@ fn needs_value(flag: &str) -> bool {
             | "--kind"
             | "--batch"
             | "--generation"
+            | "--generation-dir"
             | "--missing"
             | "--reason"
             | "--recorded-by"
