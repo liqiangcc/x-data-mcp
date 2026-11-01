@@ -2,9 +2,9 @@
 //! and a current compact-schema database. Everything is a fixture: no network, no host path.
 //!
 //! The four design claims exercised here are §6.3's ("freeze before parse",
-//! "one row per response byte identity", "0 rows is a failure", bounded
-//! pagination) and §9.4.2's ("replay rebuilds the index from the store alone
-//! and the summary matches").
+//! "one index row per (byte identity, request identity)", "0 rows is a
+//! failure", bounded pagination) and §9.4.2's ("replay rebuilds the index from
+//! the store alone and the summary matches").
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};

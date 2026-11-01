@@ -411,8 +411,8 @@ impl MarketBackend {
     /// Insert the `exchange_source_snapshots` rows of a frozen window (M3
     /// PR-2, `#446` §6.3). The caller has already published the blobs and their
     /// manifest lines, so "index row present, blob unreadable" cannot originate
-    /// here; a snapshot id already stored is left untouched (one row per
-    /// response byte identity).
+    /// here; an already stored `(snapshot id, request fingerprint)` pair is
+    /// left untouched (schema 26's row identity).
     pub(crate) fn write_exchange_snapshots(
         &self,
         rows: &[crate::exchange_source::SnapshotRow],

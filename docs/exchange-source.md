@@ -197,9 +197,9 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
 3. 用清单登记的 `parser_version` 重算行数/页数，重建
    `exchange_source_snapshots`（先清空、再插入，单事务）；
 4. 与写完后回读的摘要比较，`match` 才算成功；`--verify-only` 只重算并比较，输出
-   `match` / `drift` + 前 20 条差异 `snapshot_id`。
+   `match` / `drift` + 前 20 条差异 `(snapshot_id, request_fingerprint)`。
 
-重放与获取写出的行集合相同：能解析出信封的冻结响应都有一行，解析不出的都没有。
+重放与获取写出的行集合相同：能解析出信封的每个 `(字节,请求)` 注册都有一行，解析不出的都没有。
 因此 `truncated` / `unverified_zero` 窗口留下的字节在重放后仍只产生 0 行快照，
 不会凭空多出「看起来可用」的数据，也不会让摘要对不上。
 
