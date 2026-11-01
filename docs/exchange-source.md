@@ -144,7 +144,8 @@ R1 的跨日复用读路径与 R2 的刷新任务（`refresh_exchange_sources` �
 `full` **异步**（立即返回 `running`，抓取在本进程后台线程，用 `{status_of: run_id}` 查询；
 客户端断开不影响），进程停止留下的 `running` 行由下次 `data_service` 启动按
 `owner_instance` 回收为 `failed`（`process_restarted`，不推进 `verified_through`）。
-`tail` 保持同步：28 个计划请求，探针触发整表时上限 549 个（约 13 min）。R3 的陈旧闸门与按 run 成员重放、R5 的 `known_at`/coverage 尚未实现。参数、时间语义
+`tail` 保持同步：28 个计划请求，探针触发整表时上限 549 个（约 13 min）。R3 的陈旧闸门与
+按 run 成员重放、R5 的 `known_at`/coverage 尚未实现。参数、时间语义
 （`as_of`/`known_at`/`verified_through`）、重放选择与 D-63 影响见
 [issue-446-exchange-refresh.md](tasks/issue-446-exchange-refresh.md) 与
 [generic-data-v9](contracts/generic-data-v9.md)。

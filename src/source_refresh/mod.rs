@@ -280,7 +280,9 @@ pub fn start_full_in_background(
 /// Read one durable run record. `status` is `running`, `succeeded` or
 /// `failed`; `sources`, `planned` and `revisions` are empty because only the
 /// run row and its failure list are durable (per-source rows are read from the
-/// database by R3, not re-derived here).
+/// database by R3, not re-derived here). The counters are written once when
+/// the run settles, so a `running` record reports zero requests: it says who is
+/// running and since when, it is not a progress meter.
 pub fn status_of(backend: &MarketBackend, run_id: &str) -> Result<RefreshReport, RefreshError> {
     let row = backend
         .read_source_refresh_run(run_id)?

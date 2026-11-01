@@ -387,7 +387,9 @@ refresh_exchange_sources --mode tail|full [--source <id>...] [--dry-run]
   服务停止会中断它（下次启动按下面的回收规则处理）。
 - **查询**：同一个工具的 `{"status_of":"<run_id>"}`，返回 run 记录
   （mode/status/scope/起止时间/requests/reused/changed/failed_windows/`verified_through`/
-  失败列表），不启动任何 run；未知 id 为 `refresh_run_not_found`。
+  失败列表），不启动任何 run；未知 id 为 `refresh_run_not_found`。计数与
+  `verified_through` 只在 run 结题时一次写入，所以 `running` 回包里的计数恒为 0：它是
+  “谁在跑、跑到什么时候”的记录，不是进度条。per-source 行在库里，R3 直接读。
 - **回收遗留 running 行**：`data_service` 拿到数据库租约启动时，把上一个进程实例留下的
   `running` 行标成 `failed`（失败码 `process_restarted`），**不**推进 `verified_through`。
   归属判断用进程实例 id（`source_refresh_runs.owner_instance`，即本进程的 run id），

@@ -32,7 +32,9 @@
   requests/reused/changed/failed_windows/unobserved_windows/`verified_through`/失败列表），
   不启动任何 run；未知 `run_id` 是 `refresh_run_not_found`，在 `details.run_id` 里回带该
   值。`status_of` 不能与 `mode`/`sources`/`dry_run` 同时给出（`invalid_arguments`）。
-  状态为 `running`/`succeeded`/`failed`；`running` 时 `finished_at` 缺省。
+  状态为 `running`/`succeeded`/`failed`；`running` 时 `finished_at` 缺省。计数器与
+  `verified_through` 只在 run 结题时一次写入，所以 `running` 回包的计数恒为 0，它不是
+  进度条：进行中的 run 只能看到计划范围、`started_at` 与状态。
 - **单飞**：同一时刻只允许一个 run。开始新 run 时若已有 `running` 记录，返回
   `refresh_already_running`，`details.run_id` 指向那个 run；`tail`/`full` **互斥**，
   不按 mode 各放一个。检查与插入在同一个写事务里，两个并发开始不可能都成功。理由：
