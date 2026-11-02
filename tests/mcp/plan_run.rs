@@ -1661,8 +1661,8 @@ fn yearly_batch_resumes_after_interruption() {
         .expect("compact backend carries the yearly batch");
     let live = r.tasks.read_task(&task_id).unwrap().unwrap();
     assert_eq!(live.task.status, x_data_mcp::task_control::Status::Running);
-    assert_eq!(live.task.counts.finished, 100);
-    assert_eq!(live.task.counts.pending, 50);
+    assert_eq!(live.head().counts.finished, 100);
+    assert_eq!(live.head().counts.pending, 50);
     let committed: std::collections::BTreeMap<String, String> = yearly_signature(&r)
         .into_iter()
         .filter_map(|line| {
@@ -1688,8 +1688,8 @@ fn yearly_batch_resumes_after_interruption() {
         closed.task.status,
         x_data_mcp::task_control::Status::Interrupted
     );
-    assert_eq!(closed.task.counts.finished, 100);
-    assert_eq!(closed.task.counts.pending, 50);
+    assert_eq!(closed.head().counts.finished, 100);
+    assert_eq!(closed.head().counts.pending, 50);
 
     // Resume through the documented path: re-plan excludes the 100 fresh
     // heads and runs only the remainder.
@@ -1708,7 +1708,7 @@ fn yearly_batch_resumes_after_interruption() {
         done.task.status,
         x_data_mcp::task_control::Status::Succeeded
     );
-    assert_eq!(done.task.counts.finished, 50);
+    assert_eq!(done.head().counts.finished, 50);
 
     let all: std::collections::BTreeMap<String, String> = yearly_signature(&r)
         .into_iter()
