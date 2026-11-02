@@ -1230,14 +1230,14 @@ fn is_third_party_document(title: &str) -> bool {
         .any(|marker| title.contains(marker))
 }
 
-fn first_marker<'a>(text: &str, markers: &[&'a str]) -> Option<(usize, usize)> {
+fn first_marker(text: &str, markers: &[&str]) -> Option<(usize, usize)> {
     markers
         .iter()
         .filter_map(|marker| text.find(marker).map(|start| (start, start + marker.len())))
         .min_by_key(|(start, _)| *start)
 }
 
-fn last_marker<'a>(text: &str, markers: &[&'a str]) -> Option<(usize, usize)> {
+fn last_marker(text: &str, markers: &[&str]) -> Option<(usize, usize)> {
     markers
         .iter()
         .filter_map(|marker| {
