@@ -32,6 +32,19 @@ pub trait YearlyRepository: MarketRepository {
         change: crate::task_control::Change,
     ) -> Result<crate::task_control::TaskSnapshot, Error>;
     fn commit_yearly(&self, plan: &YearlyResultPlan) -> Result<Receipt, Error>;
+    /// Commit a prepared yearly chunk with the task-row bookkeeping
+    /// deferred to one `persist_head` per chunk (plan-run yearly items).
+    /// `Ok(None)` means the backend has no batch surface; callers keep the
+    /// authoritative per-item `run_item` path. Item failures roll that
+    /// item's savepoint back and are returned in place, so the caller can
+    /// replay them through `run_item` with the original semantics.
+    fn commit_yearly_batch(
+        &self,
+        _task_id: &str,
+        _plans: &mut [YearlyResultPlan],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        Ok(None)
+    }
     fn yearly_receipt(&self, id: &str) -> Result<Option<Receipt>, Error>;
     fn yearly_item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error>;
 }

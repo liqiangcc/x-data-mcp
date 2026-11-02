@@ -162,8 +162,24 @@ pub fn run_once(
                 Some(_) => &generation,
                 None => &env,
             };
-        for item in &candidate.items {
-            runner.run_item(&candidate.task.task_id, &item.spec.item_id, verifier)?;
+        // Plan-run yearly uses the same chunked bookkeeping as the daily
+        // plan-run path: one task-row write per chunk instead of two per
+        // item. Explicit yearly contracts keep the per-item path unchanged.
+        let plan_run =
+            candidate.task.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION;
+        let item_ids: Vec<String> = candidate
+            .items
+            .iter()
+            .map(|item| item.spec.item_id.clone())
+            .collect();
+        if !plan_run
+            || runner
+                .run_items(&candidate.task.task_id, &item_ids, verifier)?
+                .is_none()
+        {
+            for item in &candidate.items {
+                runner.run_item(&candidate.task.task_id, &item.spec.item_id, verifier)?;
+            }
         }
         return Ok(Some(control.read_task(&candidate.task.task_id)?));
     }
