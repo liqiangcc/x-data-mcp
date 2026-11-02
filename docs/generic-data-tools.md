@@ -4,12 +4,12 @@
 
 2026-09-12 用户要求现在考虑扩展，并授权按“工具按业务动作稳定、数据类别通过类型化参数扩展”
 开始设计。本设计承接 #75 / PR #76，是通用工具的目标契约。当前部署：一个 `data_service`
-进程服务三个 socket；`mcp.sock` 的 `ops` 入口 15 data tools（部署面
-capability revision 为 `generic-data-v8`；含只读 `get_yearly_base_years` 与
-`plan_market_update`/`run_market_update`，文本模式 `full`，market 单版本序列：
-version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口（只读研究面，工具数 5），
-`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；acquire socket 注册
-10 acquisition tools；隧道仍指 `mcp.sock`。
+进程服务三个 socket；`mcp.sock` 的 `ops` 入口 16 data tools（部署面
+capability revision 为 `generic-data-v9`；含只读 `get_yearly_base_years`、
+`plan_market_update`/`run_market_update` 与 `refresh_exchange_sources`，文本模式 `full`，
+market 单版本序列：version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口
+（只读研究面，工具数 5），`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
+acquire socket 注册 10 acquisition tools；隧道指 `research.sock`（2026-11-02 起）。
 代码（main）注册 25 data tools（三个入口；`ops` 16），R2 的 `refresh_exchange_sources` 随
 `generic-data-v9` 未部署；已部署实例为 compact schema 25，代码（main）为 schema 26（未部署）
 （M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026）。部署版本、

@@ -1,9 +1,10 @@
 # generic-data-v8 部署日切换清单
 
 **状态**：已执行（2026-10-27，最小切换；2026-10-28 preview.38 起单进程三 socket，见 §9.7）。
-当前部署为 `generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
-入口与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 25（见 [STATUS](../STATUS.md)）；
-隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），结论见 §2.3。
+本清单描述的历史状态：`generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock`
+的 `research` 入口与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 25。当前部署已由
+`generic-data-v9` / schema 26 取代（见 [STATUS](../STATUS.md) 与 [v9 契约](generic-data-v9.md)）；
+隧道改指 `research.sock`（Ops-D）已于 2026-11-02 preview.42 部署窗口执行；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），结论见 §2.3。
 契约本身见 [generic-data-v8](generic-data-v8.md)。
 
 已合并并随 preview.38 部署：`data_service --entry research|ops|maint`（缺省 `ops`）、
@@ -420,7 +421,7 @@ XDM-73 备忘（仓库外，2026-10-28）§6 的实施顺序已获批准，从�
 | 4 | Ops-A：私有栈单进程三 socket 的内存实测（§2.6） | 已完成（XDM-84，2026-10-28；报告在仓库外） |
 | 5 | Ops-B：生产同进程三 socket，隧道不动 | 已执行（2026-10-28，随 preview.38，见 §9.7） |
 | 6 | Ops-C：AI 客户端实测（§2.3；Devin 不可用，改用 pi） | 已完成（2026-10-28；结论：`summary` 不可作缺省；代码缺省已改为 `full`（PR #447），`summary` 改为显式选项） |
-| 7 | Ops-D：隧道改指 `research.sock`（另行批准） | 未开始 |
+| 7 | Ops-D：隧道改指 `research.sock`（另行批准） | **已执行**（2026-11-02，preview.42 窗口；证据见 [STATUS](../STATUS.md)「服务」表的 tunnel 行与 XDM-165 报告） |
 | 8 | Ops-E：maint 启用（仅本机 operator） | 未开始 |
 
 PR-1 的旧单 socket 调用方式（`data_service <db> <socket> [--entry k]`）保持可用，回退只需用旧

@@ -1,15 +1,14 @@
 # generic-data-v8 契约（入口拆分、列式 v2、任务面 v2）
 
-**状态**：已部署（2026-10-27，v8 最小切换；2026-10-28 preview.38 起单进程服务三个 socket）。
-当前部署为 `generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock` 的 `research`
-入口（只读研究面）与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 25
-（见 [STATUS](../STATUS.md)）。
+**状态**：已被 [generic-data-v9](generic-data-v9.md) 取代（2026-11-02，preview.42）；历史：2026-10-27 v8 最小切换，
+2026-10-28 preview.38 起单进程服务三个 socket。v8 的读取面/任务面/错误码仍是 v9 的基础，
+当前部署为 `generic-data-v9` / compact schema 26（见 [STATUS](../STATUS.md)）。
 M2 的 6 个解析事实数据集（§4.6 矩阵，`market.security_master` 等）已随 preview.37
 （历史：2026-10-27 部署窗口）在**同一 `capability_revision`** 下上线：M2 不加工具、不升
 revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 [#391](../tasks/issue-391-m2-security-master.md) §12.5）。
-隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（结论见 [v8 切换清单](v8-switch-checklist.md) §2.3），
-见 [v8-switch-checklist](v8-switch-checklist.md) §9。
+隧道改指 `research.sock`（Ops-D）已于 2026-11-02 preview.42 部署窗口执行（见 [v8 切换清单](v8-switch-checklist.md) §4）；
+Ops-C 已由 AI 客户端（pi）实测（结论见 [v8 切换清单](v8-switch-checklist.md) §2.3）。
 
 设计依据：v8 设计 [#387](../tasks/issue-387-v8-ai-tool-surface.md)。凡本文标注「实现已核」的
 论断都附 `文件:行号`（行号取自 main `84b6657`）；未标注的是契约目标或未验证项。
@@ -45,7 +44,7 @@ revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计
 | 入口 | `--entry` | socket | 工具数 | 隧道暴露 |
 |---|---|---|---|---|
 | 研究 | `research` | `run/research.sock`（新增） | 5 | **是（唯一）** |
-| 编排 | `ops` | `run/mcp.sock`（沿用） | 15（部署；代码 16，未部署） | 否 |
+| 编排 | `ops` | `run/mcp.sock`（沿用） | 15（v8 历史；v9 起 16，已部署） | 否 |
 | 运维/取证 | `maint` | `run/maint.sock`（新增） | 9 | 否 |
 | 来源接入 | — | `run/acquire.sock`（不变） | 10 | 否 |
 

@@ -10,13 +10,13 @@
 
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
 - `x-data-mcp`：任务、版本、发布、查询、核实和计算。一个 `data_service` 进程服务三个
-  socket：`mcp.sock` 的 `ops` 入口（编排入口，15 data tools，含只读
-  `get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，x 与日更 Skill
-  的连接不变）、`research.sock` 的 `research` 入口（只读研究面，工具数 5）、
-  `maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；capability revision
-  `generic-data-v8`（market 单版本序列：version_id=内容 hex，latest-only），文本模式
-  `full`；strict Skill 会话遇 revision 不匹配即停止。日更 Skill 仍连 `mcp.sock`。
-  代码（main）的 `ops` 入口为 16（`generic-data-v9`，未部署）；线上仍是 v8/15。
+  socket：`mcp.sock` 的 `ops` 入口（编排入口，16 data tools，含只读
+  `get_yearly_base_years`、`plan_market_update`/`run_market_update` 与
+  `refresh_exchange_sources`，x 与日更 Skill 的连接不变）、`research.sock` 的 `research` 入口
+  （只读研究面，工具数 5）、`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
+  capability revision `generic-data-v9`（market 单版本序列：version_id=内容 hex，latest-only），
+  文本模式 `full`；strict Skill 会话遇 revision 不匹配即停止。日更 Skill 仍连 `mcp.sock`；
+  隧道自 2026-11-02 起连 `research.sock`（只读研究面）。
 
 M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 `market.security_master`、`market.risk_warnings`、`market.suspensions`、
@@ -31,8 +31,8 @@ M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 涨跌停规则原文未接入时仍按 `pending_source` 记录、`trading_rules` 写 0 行。因此日更成功后，M2 数据集的新鲜度与日线同步，
 不需要单独跑任务（详见 [STATUS](STATUS.md)「数据」段的 M2 数据集行）。
 
-已部署实例为 fresh compact schema 25；代码（main）为 schema 26（M1 的 schema 22 +
-M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026，未部署），三个入口合计
+已部署实例为 fresh compact schema 26（2026-11-02 fresh init；M1 的 schema 22 +
+M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026），三个入口合计
 去重后注册 25 项 data 工具；
 显式 init 的新库按代码的 schema 建立；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
@@ -319,8 +319,10 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
 - 预算：`tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设
   门禁，按表读 `source_refresh_run_sources.elapsed_ms`）、`full` <60min；1 req/s 不变。
 - **全新数据库（fresh init）**：**首次日更前先跑一次 `full`**（顺序：`full` → 首次 `tail` →
-  `plan`/`run`）。否则四个同源 item 以 `source_snapshot_not_found` 失败——这是配置/首次顺序
-  问题，不是数据缺陷。
+  `plan`/`run`）。理由不是避免 `source_snapshot_not_found`（fresh init 的 `replay --scope all`
+  已把交易所索引写回，item 走 fallback 选择），而是**页集身份**与诚实的 `verified_through`：
+  没有刷新 run 记录时，选择器按页号跨抓取日拼接，只有 `full` 的 run 成员表能固定页集身份，
+  并把 `verified_through` 推进到本次实际抓取日。
 - 这四个 item **零请求、零探针**（含深市上市/简称的页 1 探针）：整表身份来自刷新 run 的
   成员页，日更不得与刷新任务叠加出 2 req/s。刷新任务的单飞闸门只看刷新，看不到日更
   worker，所以这条由回归用例守（计数假传输断言日更跑完 0 次尝试）。
@@ -347,7 +349,8 @@ verified active generation
 ```
 
 v9 下首次日更 `run_market_update` 前还要先跑一次
-`refresh_exchange_sources {"mode":"full"}`（见上文「来源刷新」）；v8 没有该工具，本步跳过。
+`refresh_exchange_sources {"mode":"full"}`（见上文「来源刷新」）。preview.42 的 fresh init 顺序即
+`full` → catalog → `market.daily` → 首次 `tail` → `plan`/`run` → listed_ever → 年线（XDM-165）。
 
 ### 退市股一次性首采（操作员发起，非日更步骤）
 

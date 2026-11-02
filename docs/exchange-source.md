@@ -1,10 +1,9 @@
 # 交易所来源共用入口与刷新（M3 PR-2 / XDM-149）
 
-**状态（R6，2026-11-02）：已实现（未部署）。** 入口（M3 PR-2）与刷新策略 R1–R5
+**状态（2026-11-02）：已部署。** 入口（M3 PR-2）与刷新策略 R1–R5
 （XDM-149：窗口计划、`refresh_exchange_sources` 的 tail/full、日更只读与陈旧闸门、
-重放选择、`known_at`/coverage）的代码都在 main，随 `generic-data-v9` / compact schema 26
-**一起部署**；生产仍是 `generic-data-v8` / schema 25（见 [STATUS](STATUS.md)），四个同源日更 item
-目前仍在 item 内发请求。本文记录**代码实际行为**；部署后要按实测回填 [STATUS](STATUS.md)
+重放选择、`known_at`/coverage）随 preview.42 的 `generic-data-v9` / compact schema 26
+于 2026-11-02T06:04Z 上线（见 [STATUS](STATUS.md)）；四个同源日更 item 改读刷新任务冻结的页集。本文记录**代码实际行为**；部署后要按实测回填 [STATUS](STATUS.md)
 与 [SLO](SLO.md)，G2 的查询步骤见[来源刷新 runbook](source-refresh-runbook.md)。
 
 五个使用方（A-1 上市名单、A-2 终止上市名单、历史 ST、A-3 停复牌、S-6 简称历史）共用

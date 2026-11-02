@@ -5,16 +5,15 @@
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
 当前部署为双 MCP server：一个 `data_service` 进程服务三个 socket——`mcp.sock` 的 `ops` 入口
-15 data tools（部署面 capability revision 为 `generic-data-v8`；含只读
-`get_yearly_base_years` 与 `plan_market_update`/`run_market_update`，文本模式 `full`，
-market 单版本序列：version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口（只读研究面，
-工具数 5）、`maint.sock` 的 `maint` 入口（仅本机运维使用，不经隧道，工具数 9）；
-acquire socket 提供 10 acquisition tools；隧道仍指 `mcp.sock`。
-代码（main）注册 25 data tools（三个入口；`ops` 16），R2 的 `refresh_exchange_sources` 随
-`generic-data-v9` 未部署；已部署实例为 compact schema 25，代码（main）为 schema 26（未部署）
-（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026）。
+16 data tools（部署面 capability revision 为 `generic-data-v9`；含只读
+`get_yearly_base_years`、`plan_market_update`/`run_market_update` 与 `refresh_exchange_sources`，
+文本模式 `full`，market 单版本序列：version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口
+（只读研究面，工具数 5）、`maint.sock` 的 `maint` 入口（仅本机运维使用，不经隧道，工具数 9）；
+acquire socket 提供 10 acquisition tools；隧道指 `research.sock`（2026-11-02 起）。
+注册 25 data tools（三个入口；`ops` 16）；已部署实例为 compact schema 26（M1 的 schema 22 +
+M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026）。
 `market.daily` 前复权价的精度随 schema 22 起的 `qfq-exact-v1` 为**最多 6 位小数**
-（精确有理数链、末次一次舍入，尾随零不补）；部署已到 schema 25，不再有 schema 21 的
+（精确有理数链、末次一次舍入，尾随零不补）；部署已到 schema 26，不再有 schema 21 的
 2 位小数实例（历史数值可能与旧 2dp 在"恰好落在半分位"的 bar 上差 1 分——这不是回归，
 是旧 2dp 本身依赖中间精度、不可跨实现复现，[issue-383 设计](tasks/issue-383-m1-research-data.md)
 §4.3）。部署版本、
