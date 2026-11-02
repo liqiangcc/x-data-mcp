@@ -22,13 +22,20 @@ use std::time::Duration;
 /// Fixed marker so audit lines stay greppable in a journal that also carries
 /// startup warnings and periodic progress lines.
 pub const PREFIX: &str = "XDM_CALL ";
-/// Ceiling for one line (task XDM-167 §2). The field set and the identifier
-/// cap are chosen so this never truncates a well-formed line.
+/// Ceiling for one line (task XDM-167 §2). [`ID_LIMIT`] is derived from it, so
+/// the ceiling holds by construction for arbitrary input, not just for today's
+/// identifiers.
 pub const MAX_LINE_BYTES: usize = 300;
-/// Identifier cap. Real request/task ids are short (`daily-20261101-…`,
-/// `task-<32 hex>`); a hostile or accidental long id must not push the line
-/// past [`MAX_LINE_BYTES`] or inject line breaks.
-const ID_LIMIT: usize = 48;
+/// Cap for every string field (`entry`, `tool`, identifiers, `outcome`).
+///
+/// Worst-case line with all five fields at the cap and `elapsed_ms = u64::MAX`:
+/// prefix 9 + `{` 1 + `"elapsed_ms":<20 digits>` 33 + entry 49 + tool 48 +
+/// `request_id` 54 + `task_id` 51 + `outcome` 51 + `}` 1 = **297 B** ≤ 300.
+/// All characters are filtered to an alphabet that JSON never escapes, so no
+/// field can grow past its cap. With a real entry (`research`, 8 B) the widest
+/// line is 267 B. Real identifiers still fit: `task-<32 hex>` is 37,
+/// `daily-20261101-xdm139-activate` is 29, a UUID is 36.
+const ID_LIMIT: usize = 38;
 
 /// Emits one audit line. `entry` is the serving surface (`ops`, `research`,
 /// `maint`, `acquire`; stdio/dev surfaces report `stdio`).
@@ -160,6 +167,34 @@ mod tests {
             "ok",
             0,
         ));
+    }
+
+    #[test]
+    fn every_field_at_its_cap_still_fits_the_byte_ceiling() {
+        // `research` is the longest serving entry; the other four fields are
+        // pushed to the cap and the elapsed value to u64::MAX, i.e. the widest
+        // line this module can produce.
+        let cap = "x".repeat(ID_LIMIT);
+        let raw = line("research", &cap, Some(&cap), Some(&cap), &cap, u64::MAX);
+        assert!(
+            raw.len() <= MAX_LINE_BYTES,
+            "{} bytes at cap {}: {}",
+            raw.len(),
+            ID_LIMIT,
+            raw
+        );
+        let parsed = parse(&raw);
+        assert_eq!(parsed["entry"], "research");
+        assert_eq!(parsed["tool"].as_str().unwrap().len(), ID_LIMIT);
+        // Even a hypothetical cap-length entry keeps the construction bound.
+        let widest = line(&cap, &cap, Some(&cap), Some(&cap), &cap, u64::MAX);
+        assert!(
+            widest.len() <= MAX_LINE_BYTES,
+            "{} bytes with every field at cap {}: {}",
+            widest.len(),
+            ID_LIMIT,
+            widest
+        );
     }
 
     #[test]

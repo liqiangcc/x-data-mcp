@@ -25,7 +25,7 @@ XDM_CALL {"elapsed_ms":87,"entry":"ops","outcome":"ok","task_id":"task-9793e128c
 | `outcome` | `ok` 或稳定错误码 | 失败时是 `structuredContent.code` 的值，如 `task_not_found`、`invalid_arguments`、`unknown_dataset`、`storage_error` |
 | `elapsed_ms` | 整数毫秒 | 从收到 `tools/call` 到响应构造完成（含响应序列化）的墙钟时间 |
 
-`request_id` / `task_id` 只是**标识符**，不是参数内容：长度截到 48 字符，只保留
+`request_id` / `task_id` 只是**标识符**，不是参数内容：长度截到 38 字符，只保留
 `A-Za-z0-9._:/@?-`，其它字符（含引号、反斜杠、换行）写成 `_`。因此一行最多 300 B（含高频的
 `query_data`），也不会被换行注入。代价：异常长的 id 无法逐字对照，按前缀核对即可。
 
