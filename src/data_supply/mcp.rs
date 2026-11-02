@@ -1366,6 +1366,14 @@ impl ToolHandler for DataApi {
     fn tools(&self) -> Value {
         self.public_tools()
     }
+    /// XDM-167: the audit line names the socket's entry, which is how a
+    /// research (tunnel) call is told apart from an ops/maint one.
+    fn audit_entry(&self) -> &'static str {
+        match self.entry {
+            Some(entry) if entry != super::registry::EntryKind::All => entry.name(),
+            _ => "stdio",
+        }
+    }
     /// text grading (v8 §5.4, AC-V8-12, D-36): every entry sends the full
     /// JSON in `text` by default. The environment switch overrides that default
     /// (`summary` stays an explicit opt-in); `data_service` refuses to start

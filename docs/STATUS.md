@@ -178,6 +178,11 @@ this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮
 2026-11-02T06:04:39/06:04:40Z、tunnel 自 06:04:40Z（preview.42 部署窗口结束后启动；窗口前
 三者均被 stop，`ActiveEnterTimestamp` 证明没有遗留重启）。
 
+每次 `tools/call` 结束都会在 stderr 留一行 `XDM_CALL {json}`（`entry`/`tool`/`request_id`/
+`task_id`/`outcome`/`elapsed_ms`；参数值与返回数据不落日志），由 journald 收集；字段含义、
+`journalctl` 过滤与日志量估算见[调用日志](call-log.md)。代码已实现（XDM-167），随下个 release
+部署——已部署实例暂无该行。
+
 访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
 
 运行面（2026-10-28 owner 批准，现行）：`ExecStart` 带 `--poll-ms 1000`——原默认 100 ms 的空闲轮询
