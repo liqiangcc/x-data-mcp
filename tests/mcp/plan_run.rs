@@ -1606,7 +1606,7 @@ fn yearly_batch_matches_per_item_and_scales_task_row_writes() {
     let old_signature = yearly_signature(&old);
 
     // Arm B: the chunked path.
-    let new = yearly_batch_fixture(710_000);
+    let new = yearly_batch_fixture(700_000);
     let new_plan = yearly_comparison_plan(&new);
     let _new_env = install_yearly_source(&new);
     let new_task = run(&new.api, "market.yearly", "run-y2", &new_plan)["task_id"]
