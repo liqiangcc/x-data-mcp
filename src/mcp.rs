@@ -670,19 +670,50 @@ pub fn handle_json<H: ToolHandler>(api: &H, input: &str) -> Option<String> {
 }
 
 fn handle_tool_call<H: ToolHandler>(api: &H, id: Value, params: Value) -> Value {
-    let Some(name) = params.get("name").and_then(Value::as_str) else {
-        return rpc_error(id, -32602, "invalid_tool_call", "missing tool name");
-    };
+    let started = std::time::Instant::now();
     let args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    let Some(name) = params.get("name").and_then(Value::as_str) else {
+        let response = rpc_error(id, -32602, "invalid_tool_call", "missing tool name");
+        crate::call_log::record(
+            api.audit_entry(),
+            "?",
+            None,
+            None,
+            "invalid_tool_call",
+            started.elapsed(),
+        );
+        return response;
+    };
+    // XDM-167: identifiers only — every other argument value stays out of the
+    // audit line, and only the success payload is looked at for `task_id`.
+    let (mut request_id, mut task_id) = crate::call_log::identifiers(Some(&args), None);
     let result = api.call(name, args);
+    if let Ok(value) = &result {
+        let (result_request_id, result_task_id) = crate::call_log::identifiers(None, Some(value));
+        request_id = request_id.or(result_request_id);
+        task_id = task_id.or(result_task_id);
+    }
     let mode = api.text_mode();
-    match result {
+    let outcome = match &result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => error.code.clone(),
+    };
+    let response = match result {
         Ok(value) => tool_result(id, value, false, name, mode),
         Err(error) => tool_result(id, serde_json::to_value(error).unwrap(), true, name, mode),
-    }
+    };
+    crate::call_log::record(
+        api.audit_entry(),
+        name,
+        request_id.as_deref(),
+        task_id.as_deref(),
+        &outcome,
+        started.elapsed(),
+    );
+    response
 }
 
 /// How the model-visible `content[0].text` is built (v8 §5.4, AC-V8-12).
@@ -918,6 +949,13 @@ fn query_error(error: crate::query::QueryError) -> ApiError {
 pub trait ToolHandler {
     fn tools(&self) -> Value;
     fn call(&self, name: &str, args: Value) -> Result<Value, ApiError>;
+    /// Serving surface named in the per-call audit line (XDM-167). Deployed
+    /// data sockets report their `--entry` (`ops`/`research`/`maint`), the
+    /// acquire daemon reports `acquire`, and the stdio/dev surfaces report
+    /// `stdio`.
+    fn audit_entry(&self) -> &'static str {
+        "stdio"
+    }
     /// Model-visible text policy for this surface; the default keeps the
     /// pre-v8 behavior (full JSON in `content[0].text`).
     fn text_mode(&self) -> TextMode {

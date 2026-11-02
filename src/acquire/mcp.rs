@@ -157,6 +157,12 @@ impl ToolHandler for AcquireApi {
                 .collect(),
         )
     }
+    /// XDM-167: `acquire_service` is a separate unit, so its audit lines
+    /// carry their own entry name and are found with
+    /// `journalctl -u x-data-mcp-acquire`.
+    fn audit_entry(&self) -> &'static str {
+        "acquire"
+    }
     fn call(&self, name: &str, input: Value) -> Result<Value, ApiError> {
         if input.get("contract_version").is_some_and(|v| v != "v1") {
             return Err(ApiError::new(
