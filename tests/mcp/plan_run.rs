@@ -2593,6 +2593,220 @@ fn run_items_chunk_failure_isolates_and_recovered_items_record() {
         "first chunk's receipts must survive the later chunk's rollback"
     );
 }
+/// Typed acquisition that appends one bar at the base head's own day, which
+/// the chunk commit rejects (`append upserts are not tail-only`). That is a
+/// *per-item* batch failure — the commit records the `FinishItem` itself and
+/// rolls back only the item's savepoint — so the chunk's per-item fallback
+/// reaches `run_item` with an already-`Finished` item (XDM-172).
+///
+/// `bad_symbol: None` fails every item; `Some(symbol)` fails only that one so
+/// a test can choose which position of the chunk fails.
+struct HeadOverlapProvider {
+    bad_symbol: Option<String>,
+}
+fn bar_on_day(day: chrono::NaiveDate) -> x_data_mcp::market_data::Bar {
+    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    x_data_mcp::compact_market::CompactBar {
+        trade_day: day.signed_duration_since(epoch).num_days(),
+        open_units: 1000,
+        high_units: 1010,
+        low_units: 990,
+        close_units: 1005,
+        volume: Some(100),
+        amount: Some("1000".into()),
+        r7_raw: Some(7),
+    }
+    .to_bar(
+        x_data_mcp::market_data::Period::Day,
+        x_data_mcp::compact_market::PRICE_SCALE_CENTS,
+    )
+    .unwrap()
+}
+impl x_data_mcp::market_update::runner::RangeProvider for HeadOverlapProvider {
+    fn acquire(
+        &self,
+        _base: &x_data_mcp::market_storage::compat::CheckedRecord,
+        _range: &x_data_mcp::market_update::DateRange,
+        _candidate_id: &str,
+    ) -> Result<x_data_mcp::market_update::runner::Acquisition, x_data_mcp::market_data::SourceError>
+    {
+        Err(x_data_mcp::market_data::SourceError::NotVerified(
+            "fixture: envelope path unused".into(),
+        ))
+    }
+    fn acquire_typed(
+        &self,
+        facts: &x_data_mcp::market_update::UpdateBaseFacts,
+        _base_window: &[x_data_mcp::market_data::Bar],
+        range: &x_data_mcp::market_update::DateRange,
+    ) -> Result<
+        Option<x_data_mcp::market_update::runner::TypedAcquisition>,
+        x_data_mcp::market_data::SourceError,
+    > {
+        let bad = self
+            .bad_symbol
+            .as_deref()
+            .is_none_or(|symbol| symbol == facts.symbol);
+        Ok(Some(x_data_mcp::market_update::runner::TypedAcquisition {
+            decision: if bad {
+                x_data_mcp::market_update::runner::TypedDecision::Append {
+                    upserts: vec![bar_on_day(facts.last_day)],
+                    metadata: None,
+                }
+            } else {
+                x_data_mcp::market_update::runner::TypedDecision::Unchanged
+            },
+            evidence: x_data_mcp::market_update::Evidence {
+                base_version_id: facts.version_id.clone(),
+                base_integrity_sha256: facts.integrity_sha256.clone(),
+                candidate_sha256: "fixture:candidate".into(),
+                range: range.clone(),
+                same_qfq_basis_ref: "fixture:basis".into(),
+                revision_ref: None,
+                continuity: None,
+            },
+            raw: None,
+        }))
+    }
+}
+/// The symbol a plan item of the accepted task targets.
+fn item_symbol(r: &Rig, task_id: &str, index: usize) -> String {
+    r.tasks.read_task(task_id).unwrap().unwrap().items[index]
+        .spec
+        .target["symbol"]
+        .as_str()
+        .expect("a daily plan item targets a symbol")
+        .to_string()
+}
+
+/// XDM-172: a batch item failure is recorded by the chunk commit itself, so
+/// the chunk's fallback re-enters `run_item` for an item that is already
+/// `Finished` and returns `not_published`. Nothing then closed the execution:
+/// when the failed item is the task's last one, the head stayed `running`
+/// until a restart reconciled it. The run must end terminal
+/// (`partially_failed` here) exactly like the per-item path.
+#[test]
+fn run_items_last_item_batch_failure_closes_the_execution() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 3);
+    let spy = Spy::wrap(&r.backend);
+    let provider = HeadOverlapProvider {
+        bad_symbol: Some(item_symbol(&r, &task_id, 2)),
+    };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        spy.commit_sizes(),
+        vec![3],
+        "all three items go through one chunk commit"
+    );
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    let last = task.items[2]
+        .outcome
+        .as_ref()
+        .expect("the last item carries its batch-recorded failure");
+    assert!(!last.success, "the last item must fail: {last:?}");
+    assert!(
+        last.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("tail-only"),
+        "unexpected last-item failure: {:?}",
+        last.error
+    );
+    assert!(
+        task.items[..2]
+            .iter()
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "the rest of the chunk commits"
+    );
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::PartiallyFailed,
+        "a running head means the skill can never see a terminal state"
+    );
+    let result = task
+        .task
+        .result
+        .as_ref()
+        .expect("terminal run keeps counts");
+    assert_eq!(result["finished_items"], 3);
+    assert_eq!(result["successful_items"], 2);
+}
+
+/// The same failure in the middle of a chunk: the last item's success closes
+/// the run, so this already worked before the fix — kept as the control that
+/// the fix does not disturb the terminal-status classification.
+#[test]
+fn run_items_middle_item_batch_failure_ends_partially_failed() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 3);
+    let spy = Spy::wrap(&r.backend);
+    let provider = HeadOverlapProvider {
+        bad_symbol: Some(item_symbol(&r, &task_id, 1)),
+    };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(
+        !task.items[1].outcome.as_ref().is_some_and(|o| o.success),
+        "the middle item must fail"
+    );
+    assert!(
+        task.items[..1]
+            .iter()
+            .chain(task.items[2..].iter())
+            .all(|i| i.outcome.as_ref().is_some_and(|o| o.success)),
+        "the rest of the chunk commits"
+    );
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::PartiallyFailed
+    );
+}
+
+/// Every item of the chunk fails and the last one is the task's last item:
+/// the terminal status must be `failed` (nothing succeeded), the same
+/// classification the per-item `FinishExecution` path produces — not
+/// `partially_failed` just because the batch recorded the last failure.
+#[test]
+fn run_items_last_item_batch_failure_without_success_ends_failed() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let (task_id, item_ids) = run_task_with_members(&r, 2);
+    let spy = Spy::wrap(&r.backend);
+    let provider = HeadOverlapProvider { bad_symbol: None };
+    runner(&spy)
+        .run_items(&task_id, &item_ids, &provider)
+        .unwrap()
+        .unwrap();
+    let task = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert!(
+        task.items
+            .iter()
+            .all(|i| !i.outcome.as_ref().is_some_and(|o| o.success)),
+        "every item fails"
+    );
+    assert_eq!(
+        task.task.status,
+        x_data_mcp::task_control::Status::Failed,
+        "no successful item must classify `failed`, not `partially_failed`"
+    );
+    assert_eq!(
+        task.task
+            .result
+            .as_ref()
+            .expect("terminal run keeps counts")["successful_items"],
+        0
+    );
+}
+
 #[test]
 fn run_items_cancel_between_chunks_preserves_committed_receipts() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

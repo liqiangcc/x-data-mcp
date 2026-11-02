@@ -227,6 +227,25 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                     "successful range item has no receipt".into(),
                 ));
             }
+            // A chunk commit records a per-item failure itself (`FinishItem`
+            // inside the item's savepoint), so the chunk's fallback reaches
+            // this point with the item already `Finished`. When that item is
+            // the task's last one, nothing else would close the execution any
+            // more: the head stayed `running` until a restart reconciled it
+            // (XDM-172). Close it here with the same `FinishExecution` the
+            // per-item failure path uses, so `failed`/`partially_failed` is
+            // computed from the counters exactly as it is there.
+            if !binding.head.status.terminal()
+                && binding.head.counts.running == 0
+                && binding.head.counts.finished == binding.head.counts.total
+            {
+                self.repository.transition_task_head(
+                    &mut binding.head,
+                    None,
+                    &self.run_id,
+                    Change::FinishExecution,
+                )?;
+            }
             return self.not_published(task_id);
         }
         if binding.head.status == Status::CancelRequested {
