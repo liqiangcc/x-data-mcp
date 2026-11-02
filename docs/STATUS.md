@@ -6,15 +6,15 @@
 
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
-最后核实：2026-11-01（preview.41 只换二进制 + 遗留代退役之后的实测值回填，XDM-159/XDM-160）。
+最后核实：2026-11-02（preview.42 fresh init：schema 26 + `generic-data-v9` + ops 16 工具 + 隧道改指 `research.sock`，XDM-165）。
 本轮实测来源：
 
-- `/opt/x-data-mcp-preview/reports/preview41-switch-20261101T101825Z.json`（`switch_binary.sh
-  --execute`，P/S1–S7 逐项 `elapsed_ms` + `evidence` + 就绪探针）。该报告的 S6 只探了 `ops`
-  一个 socket（脚本读的是基础单元的 `ExecStart`，漏了 `exec-start.conf` 的三 socket 布局，
-  XDM-160）；research/maint 的工具数与探针在本窗口手工核对，见「服务」段。
-- XDM-159 报告（preview.41 发布/切换/维护窗口/退役记录，报告在仓库外）：维护窗口
-  2026-11-01T10:25:19→10:26:06Z（47 s）、退役两代与 6 条豁免、来源库 1,853 行。
+- `/opt/x-data-mcp-preview/reports/preview42-phaseg-deployment.json`（`deploy_phase_g.sh
+  v0.2.0-preview.42 --force-git-transport`，`status=DEPLOYED`、`before.schema=25`、
+  `source_store_replay.status=ok`、逐 socket 就绪探针）。
+- XDM-165 报告（preview.42 发布/部署/重建/验收，报告在仓库外）：部署窗口
+  2026-11-02T06:04:22→06:04:42Z、重建耗时、`MemAvailable`/WAL 采样、豁免记录。
+- 历史：`reports/preview41-switch-20261101T101825Z.json`（preview.41 只换二进制）与 XDM-159 报告。
 - `/opt/x-data-mcp-preview/reports/preview40-switch-20261101T003814Z.json` 与
   `preview39-phaseg-deployment.json`
   （历史对照：preview.40 只换二进制、preview.39 fresh init）。
@@ -38,19 +38,22 @@ preview.40 及更早的实测值保留为「历史」对照；本轮未重新测
 | 系统 | Ubuntu 26.04 LTS，kernel 7.0.0-1014-aws | `/etc/os-release`、`uname -r` |
 | 资源 | 2 vCPU（1 个物理核 × 2 超线程，Xeon Platinum 8259CL @ 2.50GHz；`/proc/cpuinfo` 无 `sha_ni`），MemTotal 1,905,872 kB（约 1.82GiB）+ 8GiB swap；本轮采样 used 1,278–1,350MB / available 554–626MB、swap used 3,668–3,705MB，根盘 77G（已用 54G、余 24G），`/tmp` 953MB tmpfs（已用 101MB） | `lscpu`、`grep -c processor /proc/cpuinfo`、`grep sha_ni /proc/cpuinfo`（无匹配）、`free -m`、`swapon --show`、`df -h / /tmp` |
 | 本机工具链 | 本机禁止本地 Rust 编译：执行 `rustc --version` 被主机策略拦截并返回「Local Rust compilation is forbidden on this host (1.9 GB RAM)」，仅允许 `cargo fmt`。因此本机工具链版本未复核；部署二进制的构建版本见「构建」行 | 实测拦截提示 |
-| 部署版本 | `v0.2.0-preview.41`，二进制 `git_sha 98a4dbe2a6ca4c44233da0d7fcf7bcd8f65a88a1`（`current/manifest.json`：包 0.2.0-preview.41、`features [export]`、`production NOT_PRODUCTION_READY`、`target x86_64-unknown-linux-gnu`） | `current/manifest.json`、`readlink -f current` |
-| 部署版本的 tag/release 对应 | tag `v0.2.0-preview.41`、GitHub release（prerelease，assets `*-linux-x86_64.tar.gz` + `.sha256` + `smoke-report.json`）与 `current/manifest.json` 三者指向同一个提交 `98a4dbe…`（main #490 squash）；资产来自 workflow_dispatch run **41296420664**（headSha `98a4dbe…`），tarball sha256 `39097de5b289ec3c8b5ec24b1b87427938dbe733d2078394f5ab461455cb7b1d`，包内 `manifest.git_sha=98a4dbe…` 与 release 下载复核一致。release 创建触发的 `Release` workflow run 41296695105 在上传步骤前被取消，未覆盖资产 | `git ls-remote refs/tags/v0.2.0-preview.41`、`gh release view v0.2.0-preview.41`、`gh run view 41296420664`、下载后 `sha256sum -c` 与包内 `manifest.json` |
-| 部署时间 | **2026-11-01T10:18:25→10:18:55Z**，`scripts/switch_binary.sh v0.2.0-preview.41 98a4dbe… --execute`，P/S1–S7 全 PASS：P 872ms、S1 3,902ms（tarball sha256 + smoke-report + `SHA256SUMS` + `mcp_data --version`）、S2 私有 smoke 34,199ms、S3 安装目录 2,153ms、S4 停单元 5,684ms、S5 原子 symlink 切换 8ms、S6 起单元并就绪 5,011ms。**只换二进制**：不重建库、不归档、不改 schema（`user_version` = **25**）。停机 **10:18:52→10:18:55Z（约 3 s）**：data socket 10:18:54 就绪（4,775ms，`plan_market_update`，15 个工具），acquire 6ms（10 个工具）。**该报告的 S6 只探了 `ops`**（脚本读基础单元 `ExecStart` 的缺陷，XDM-160），research 5 / maint 9 由本窗口手工探针核对 | `reports/preview41-switch-20261101T101825Z.json`（P/S1–S7、`readiness_probe`、`previous_release=441185bb…`）、XDM-159 报告（手工探针与 `journalctl` 启动段） |
+| 部署版本 | `v0.2.0-preview.42`，二进制 `git_sha 803b35cf7b17e13d6bc90d5b11b5b487bd013e65`（`current/manifest.json`：包 0.2.0-preview.42、`features [export]`、`production NOT_PRODUCTION_READY`、`target x86_64-unknown-linux-gnu`） | `current/manifest.json`、`readlink -f current` |
+| 部署版本（历史 preview.41） | `v0.2.0-preview.41`，`git_sha 98a4dbe2a6ca4c44233da0d7fcf7bcd8f65a88a1`（只换二进制，schema 仍 25；目录保留作回滚点） | `releases/98a4dbe…`、XDM-159 报告 |
+| 部署版本的 tag/release 对应 | tag `v0.2.0-preview.42`、GitHub release（prerelease，assets `*-linux-x86_64.tar.gz` + `.sha256` + `smoke-report.json`）与 `current/manifest.json` 三者指向同一个提交 `803b35c…`（main #501 squash）；资产来自 workflow_dispatch run **41396601977**（headSha `803b35c…`），tarball sha256 `a855697622954d8c5c374af61a95a6188f3a9617767d3dce279a6571b578c3ba`，包内 `manifest.git_sha=803b35c…` 与 release 下载复核一致；本机 `scripts/smoke_release.py` 14 项 PASS（34.3 s，`binary_sha256=61564de0…`，与 CI 一致）。release 创建触发的 `Release` workflow run 41397022938 在上传步骤前被取消，未覆盖资产；`refs/dist/v0.2.0-preview.42`（`eb4be455…`）绑定同一 tag_sha + tarball sha256 | `git ls-remote refs/tags/v0.2.0-preview.42`、`gh release view v0.2.0-preview.42`、`gh run view 41396601977`、下载后 `sha256sum -c` 与包内 `manifest.json` |
+| 部署版本的 tag/release 对应（历史 preview.41） | tag `v0.2.0-preview.41` → `98a4dbe…`，run 41296420664，tarball sha256 `39097de5…`；`Release` run 41296695105 已在上传前取消 | 历史行，XDM-159 报告 |
+| 部署时间 | **2026-11-02T06:04:22→06:04:42Z**（全程 **20 s**），`scripts/deploy_phase_g.sh v0.2.0-preview.42 --force-git-transport`：停 tunnel→acquire→data → 归档 schema 25 库为 `state/preview.sqlite.v25-archived-20261102T060432Z` → `task_sqlite init21` 全新 schema 26 库 → `source_store replay --scope all`（`status=ok`：industry 7 快照 / 5,235 assignments、exchange 1,836、generation_facts 12、risk_warnings 1,289、security_names 7,344，五个 scope 全部 `database=match`）→ 切 `current` → 起 data→acquire→tunnel。就绪探针：research 219ms / 5、ops 23ms / 16、maint 16ms / 9、acquire 10ms / 10。**fresh init，不原地升级**；`user_version` = **26** | `reports/preview42-phaseg-deployment.json`、XDM-165 报告、`journalctl` 启动段 |
+| 部署时间（历史 preview.41） | 2026-11-01T10:18:25→10:18:55Z，`scripts/switch_binary.sh v0.2.0-preview.41 98a4dbe… --execute`，P/S1–S7 全 PASS，停机约 3 s；只换二进制，schema 仍 25。该报告的 S6 只探了 `ops`（XDM-160 已修），research 5 / maint 9 由 XDM-159 手工探针核对 | `reports/preview41-switch-20261101T101825Z.json` |
 | 部署时间（历史 preview.40） | 2026-11-01T00:38:14→00:38:55Z，`scripts/switch_binary.sh --execute`：P/S1–S7 全 PASS，停机约 3 s（00:38:52→00:38:55Z），探针 `ops` 15 / `research` 5 / `maint` 9、acquire 10。只换二进制，schema 仍 25。同窗口的第一次运行失败在 S2（私有 smoke 退出非 0，`rollback_outcome: not_needed`）。当时部署的二进制是 PR 分支提交 `441185b` 经 workflow_dispatch 构建的包，release tag `v0.2.0-preview.40` 指向 main `7a48749`，`git diff --stat 441185b 7a48749` 仅 `docs/tasks/issue-446-m3-delisted-industry.md` 不同（1 file changed, 189 insertions(+)） | `preview40-switch-20261101T003814Z.json`、`preview40-switch-20261101T003800Z.json` |
 | 维护窗口（历史 preview.41 退役） | 2026-11-01T10:25:19→10:26:06Z（**47 s**，含 tunnel 临时停服），三单元全 inactive → 全 active；未改任何 systemd 单元。窗口内先做 `source_store replay --scope all --verify-only` 基线，再 `register-generation-member` + `replay --scope generation_facts` 重建 `generation_facts`（18 行），再经 acquire MCP `retire_generation` 退役两代 | XDM-159 报告、`retire_exemptions`/`generation_facts` 只读查询 |
 | preview.40 及更早 | 历史：preview.40 @ `441185bb3dcaf5bfa8a821db7914f2c38a39e379`（目录保留作回滚点）、preview.39 @ `8173991d6780032c43038bc1922bf6a042a4b904`（2026-10-31 phase-g fresh init）、preview.38 @ `6ac5c963fdb6fb2e0f20b3963faf1fcfdf9bb3a5`、preview.37 @ `49422db26be2da79ff39c7522897d25fcb6055bb`、preview.36 @ `fcb86ab065e87f9ef7655fd87b8e224517bd8f1b` | 各自部署报告与 `releases/` 目录 |
 | 部署时间（历史 preview.39） | 2026-10-31T18:27:55Z（data/acquire 同时 stop）→ 18:28:07Z 起单元，`scripts/deploy_phase_g.sh`：归档 schema 24 库到 `state/preview.sqlite.v24-archived-20261031T182806Z` → 从 release 提交读期望 schema 后 `task_sqlite init` 全新 schema 25 库 → 起两个单元 → 来源库重放（`--scope all`：industry `ok`，7 快照 / 5,235 assignments / 7 boundaries / 9 entries，其余 scope `store_empty`）→ 写部署报告（`status: DEPLOYED`、`before.schema=24`、`previous_release=releases/6ac5c963…`、`production: NOT_PRODUCTION_READY`）。**fresh init，不做原地升级**；停机 ≈12 s。部署后当日晚间重建（catalog + 5,223 实体日线 + 5,223 年线 + 338 条 listed-ever 序列）见「数据」段 | `preview39-phaseg-deployment.json`、`journalctl -u x-data-mcp-data/-acquire`、`releases/`/`state/` 目录 |
 | 部署时间（历史 preview.37） | 2026-10-28T00:21:26Z（UTC），`scripts/deploy_phase_g.sh --force-git-transport`：停 data/acquire → 归档旧 schema 24 库 → 从 release 提交读取期望 schema 后 `task_sqlite init` 全新库 → 起两个单元 → socket/工具数/schema 检查 → 写部署报告 `/opt/x-data-mcp-preview/reports/preview37-phaseg-deployment.json`（`status: DEPLOYED`，`before.schema=24`，`production: NOT_PRODUCTION_READY`）。**fresh init，不做原地升级**；部署窗口的设置：`X_DATA_MCP_TEXT_MODE=full`、`X_DATA_MCP_RUN_PREPARE_WORKERS=1`（v2 日更的准备线程串行，放开条件见 [M2 部署清单](tasks/m2-deploy-checklist.md) §1，待独占实测） | 部署报告 JSON、`journalctl -u x-data-mcp-data/-acquire`、`readlink`/`stat` |
 | 部署时间（历史 preview.36） | 2026-10-27T12:15:43Z，`scripts/deploy_phase_g.sh --force-git-transport`（本机 gh 2.62 读不到 release asset digest，改走 `refs/dist` 的 git transport，与历次一致）：停 data/acquire → 归档 schema 21 库 → `task_sqlite init21` 全新 init 到 schema 24 → 起两个单元 → socket/工具数/schema 检查 → 写报告 `reports/preview36-phaseg-deployment.json`。每个已部署的发布目录按完整 SHA 命名，旧目录保留作回滚点。本次是全新库部署，不是热切换 | 部署报告 JSON、`readlink`/`stat`、`journalctl` |
-| 数据库 schema | 已部署：schema 25（由 2026-10-31 的 phase-g 部署从 release 提交读期望 schema 后 fresh init；preview.40、preview.41 都只换二进制、未重建也未归档：`pragma user_version` 读回 **25**，`journal_mode=wal`）；代码：schema 26（M3 的 025 已部署；026 为 R2 的 `source_refresh_runs`/成员表与快照索引主键 `(snapshot_id, request_fingerprint)`，未部署；M1 的 022 加口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 的 023 建证券主表/代码迁移/简称历史/股本事件/风险警示区间/停牌区间与两张规则表并扩展 `derived_dataset_versions.dataset_kind`，024 重建 `capital_events` 把 `category` CHECK 扩到 2/3/5/7/8/9/10；M3 的 `025_m3_index_tables.sql` 建来源库 5 张索引表 `industry_snapshots`/`industry_assignments`/`exchange_source_snapshots`/`generation_facts`/`retire_exemptions` 并给 `price_limit_rules` 加可空列 `min_band_ticks`） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION` 常量、phase-g 报告 `preview39-phaseg-deployment.json`、#383/#391/#446 设计段 |
+| 数据库 schema | 已部署：schema 26（2026-11-02 的 phase-g 部署从 release 提交读期望 schema 后 fresh init；`pragma user_version` 读回 **26**，`journal_mode=wal`）；代码：schema 26（已部署；026 为 R2 的 `source_refresh_runs`/成员表与快照索引主键 `(snapshot_id, request_fingerprint)`；M1 的 022 加口径/精度列、双序列写入、因子事件表与派生数据集版本登记、指数序列与逐指数口径元数据、交易日历、日更内部派生 item、研究快照导出；M2 的 023 建证券主表/代码迁移/简称历史/股本事件/风险警示区间/停牌区间与两张规则表并扩展 `derived_dataset_versions.dataset_kind`，024 重建 `capital_events` 把 `category` CHECK 扩到 2/3/5/7/8/9/10；M3 的 `025_m3_index_tables.sql` 建来源库 5 张索引表 `industry_snapshots`/`industry_assignments`/`exchange_source_snapshots`/`generation_facts`/`retire_exemptions` 并给 `price_limit_rules` 加可空列 `min_band_ticks`） | `pragma user_version`（只读）、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION` 常量、phase-g 报告 `preview39-phaseg-deployment.json`、#383/#391/#446 设计段 |
 | 构建 | rustc 1.99.1 (58cf8f9c3 2026-10-13)，ubuntu-24.04，最低 glibc 2.39 | `current/manifest.json` |
-| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/98a4dbe2a6ca4c44233da0d7fcf7bcd8f65a88a1`；5 个发布目录共 **352,642,038 B**：`98a4dbe`（当前，75,490,085 B）、`441185b`（preview.40）、`8173991`（preview.39）、`6ac5c963`（preview.38）、`49422db`（preview.37）；未删任何目录 | `readlink -f current`、`ls -l releases/`、`du -sb releases` |
-| 回滚点 | 回滚 preview.41→preview.40：只换二进制（`releases/441185bb…`，同一个 schema 25 库，不用换库；`switch_binary.sh v0.2.0-preview.40 441185bb… --execute` 或手工 symlink）。再往回到 preview.38（`releases/6ac5c963…`，schema 24）：**必须同时换库**——current 指回该目录 + 恢复归档库 `state/preview.sqlite.v24-archived-20261031T182806Z`（1,878,384,640 B），并移除 acquire 的 `market-db.conf`（preview.38 的二进制不认 `--market-db`，见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §7A）；只退二进制会因 schema 不匹配拒绝启动。**退役不可逆**：两代的 base/gbbq/hsjday 字节已删，回滚只恢复软硬件面，不能撤销退役 | `releases/`、`state/` 目录、`preview39-phaseg-deployment.json` 的 `archived_db`、XDM-159 报告「回滚方法」 |
+| 部署目录 | `/opt/x-data-mcp-preview/current` → `releases/803b35cf7b17e13d6bc90d5b11b5b487bd013e65`；6 个发布目录共 **429,830,872 B**：`803b35c`（当前，77,188,834 B）、`98a4dbe`（preview.41，75,490,085 B）、`441185b`（preview.40）、`8173991`（preview.39）、`6ac5c963`（preview.38）、`49422db`（preview.37）；未删任何目录 | `readlink -f current`、`ls -l releases/`、`du -sb releases` |
+| 回滚点 | 回滚 preview.42→preview.41：**必须同时换库**——停 tunnel→acquire→data，`current` 指回 `releases/98a4dbe…`（schema 25 二进制），把 schema 26 库 `mv` 到 `state/preview.sqlite.v26-failed-<UTC>`（留取证，不 `rm`），再把 `state/preview.sqlite.v25-archived-20261102T060432Z`（2,013,822,976 B）`mv` 回 `state/preview.sqlite`，然后起 data→acquire→tunnel。只退二进制会因 schema 26 不可读拒绝启动（`check_schema` 对 `version > COMPACT_SCHEMA_VERSION` 直接拒绝）。再往回到 preview.38（`releases/6ac5c963…`，schema 24）：同样要换库（`state/preview.sqlite.v24-archived-20261031T182806Z`，1,878,384,640 B）并移除 acquire 的 `market-db.conf`（preview.38 的二进制不认 `--market-db`，见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §7A）。**退役不可逆**：各代 base/gbbq/hsjday 字节已删，回滚只恢复软硬件面 | `releases/`、`state/` 目录、`preview42-phaseg-deployment.json` 的 `archived_db`、XDM-165 报告「回滚方法」 |
 | 迁移 | 2026-10-09 从 ecs-node 迁到 aws-node；全新部署后重新采集，未迁移 DB | `/opt/x-data-mcp-preview/reports/migration-to-aws-20261009.json` |
 | ecs-node | 服务已 stop 并 disable，数据保留为冷备（含 generation `a49c314b…` 的字节） | 同上 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `current/manifest.json` 的 `production: NOT_PRODUCTION_READY`（本轮未重新调用 `get_data_capabilities`） |
@@ -129,8 +132,8 @@ PR-6/8/10/12 与 A-1/A-2、A-3、S-6 已把大部分 `pending_source` 接上，�
 |---|---|---|
 | `market.security_master` | 日更 run 的 `derived:security_master` item（TDX `base.dbf` + `infoharbor_spec.cfg` + `gbbq`，再叠加 A-1/A-2 交易所名单） | **5,565** 行；`listed_ever` 去重实体 **5,564**；`listing_date` unknown 0（`listing_source` exchange_list 5,559 / tdx_ssdate 6）；`delisting_date` 有值 **337**（来源全 `exchange_list`）；`listing_conflict` 2 / `delisting_conflict` 15；`issuer_resolution` code_date 5,564 / ambiguous 1；退市原因分类仍全 `unknown`（未接入）；`duplicates_collapsed` 2 组（`000020`、`200020`） |
 | `market.capital_events` | 日线提交的同事务写入（`gbbq` 非 cat1 类别）；全量采集与日更都走这条路径 | **128,338** 行 / 5,558 实体；`category` 2: 4,497、3: 3,741、5: 112,063、7: 18、8: 146、9: 7,569、10: 304 |
-| `market.suspensions` | 日更 run 的 `derived:suspensions` item（A-3 停复牌公告） | **79,442** 段：`confirmed` **20,420**（`exchange_announcement`）+ `unresolved_gap` **59,022**（`missing_bar_no_event`）；另有 4 条 `deferred_beyond_calendar`（区间尾越过已知交易日历，如 `sh.601326`、`sh.605258`）；耗时 1,839,810 ms |
-| `market.risk_warnings` | 日更 run 的 `derived:risk_warnings` item（#308 历史 ST 写入器） | **0 行**：第 1 代日更该项失败（`source_invalid: page_count is 0`，空季度 `pageCount=0`）。修复 #485（XDM-148）与 #489（XDM-152）已随 preview.41 部署，但库要等下次日更（11-02）重建才写入；未登记版本，读取仍 `manifest.status=absent` |
+| `market.suspensions` | 日更 run 的 `derived:suspensions` item（A-3 停复牌公告） | **70,626** 段（2026-11-02 重建 run）；历史（preview.41）：79,442 段 = `confirmed` 20,420 + `unresolved_gap` 59,022，另有 4 条 `deferred_beyond_calendar`，耗时 1,839,810 ms |
+| `market.risk_warnings` | 日更 run 的 `derived:risk_warnings` item（#308 历史 ST 写入器） | **1,289 行**（2026-11-02 fresh init 的 `source_store replay --scope risk_warnings` 写入，全部 `known_at=2026-11-01`；SSE 覆盖只到 2000Q1），已登记 `derived_dataset_versions`。**`derived:risk_warnings` 自首次 `full` 起 fail-closed**：`sh.600734`（2022-01-29）的两个公告落在同一公告日，`classify_title` 把「…因财务类退市指标被实施退市风险警示情形预计将消除的预审计情况专项说明」误判为实施、与真实撤销公告组成同日实施+撤销（`SameDayActionConflict`）；线上读面因此仍是重放写入的 1,289 行，修复另开任务。历史（第 1 代日更）：0 行、`source_invalid: page_count is 0`，修复 #485/#489 随 preview.41 部署 |
 | `market.price_limit_rules` | 日更 run 的 `derived:trading_rules` item | **27** 行（`sh`/`sz` 主板、创业板、科创板；`basis_status` 全 `verified`，最早生效日 9,846）+ `min_tick_rules` **2** 行（交易所成对，`verified`） |
 | `market.security_names` | 日更 run 的 `derived:security_names` item（S-6，D-61：仅深交所 `SSGSGMXX`/`tab2` 准入） | **7,344** 行：`interval` 4,261 / `unbounded` 3,083；覆盖窗口 3、`not_observed` 窗口 2；沪市/北交所仍 `NOT_AVAILABLE`；耗时 377,444 ms |
 
@@ -139,9 +142,10 @@ PR-6/8/10/12 与 A-1/A-2、A-3、S-6 已把大部分 `pending_source` 接上，�
 `derived:security_names`/`derived:industry_snapshot`/`derived:delisted_series_check`，见
 [日更说明](daily-sync.md) 与 `src/task_control/derived.rs`）。`security_master`/`suspensions`/
 `security_names`/`price_limit_rules` 各登记 1 个版本（`derived_dataset_versions` 共 **11,024** 行，其中
-`capital_events` 5,558、`adjustment_events` 5,461 是 per-entity 版本）；`derived:risk_warnings` 第 1 代
-日更失败、写 0 行、不登记版本（修复已在 preview.41 二进制里，等下次日更重建），读取仍是
-`manifest.status=absent` 而不是「空数据集」。研究快照导出
+`capital_events` 5,558、`adjustment_events` 5,461 是 per-entity 版本）；`derived:risk_warnings` 与
+`derived:security_names` 的登记由 2026-11-02 的 fresh init 重放写入（`derived_dataset_versions`
+`('risk_warnings','a_share')`、`('security_names','a_share')` 各 1 行）。历史（第 1 代日更）：`derived:risk_warnings`
+写 0 行、不登记版本，读取为 `manifest.status=absent`。研究快照导出
 （`research-snapshot.v3`，含 `industry_assignments.parquet`/`code_migrations.parquet`）已随 M3 PR-9 上线。
 
 **M2/M3 已知限制（本轮实测；括号里是历史 XDM-74 补测值）**：
@@ -163,15 +167,15 @@ PR-6/8/10/12 与 A-1/A-2、A-3、S-6 已把大部分 `pending_source` 接上，�
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service`（单进程、三 socket） | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 15 / 5 / 9 | capability `generic-data-v8`（含只读 `get_yearly_base_years`；本轮 preview.41 实测 15 / 5 / 9。main 代码的 R2 allowlist 为 ops 16、去重 25，未部署）；6 个 drop-in 全列：`exec-start.conf`（三 socket `ExecStart`，尾部 `--poll-ms 1000`）、`generation.conf`（`X_DATA_MCP_GENERATION_ROOT=/opt/x-data-mcp-preview/generations`，并把该目录加进 `ReadWritePaths`）、`memory.conf`（`MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`，`systemctl show` 读回 402,653,184/671,088,640/536,870,912 B）、`prepare-workers.conf`（`X_DATA_MCP_RUN_PREPARE_WORKERS=1`，XDM-64/#429）、`source-store.conf`（`X_DATA_MCP_SOURCE_STORE=/opt/x-data-mcp-preview/state/source-store`，preview.39 起）、`text-mode.conf`（`X_DATA_MCP_TEXT_MODE=full`）；`poll-interval.conf` 已不存在（`--poll-ms 1000` 由 `exec-start.conf` 带到）；`maint` 只在本机使用、不经隧道 |
+| `x-data-mcp-data` | `data_service`（单进程、三 socket） | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 16 / 5 / 9 | capability `generic-data-v9`（含只读 `get_yearly_base_years` 与 `refresh_exchange_sources`；本轮 preview.42 实测 16 / 5 / 9，ops 的 `tools/list` 实测 **30,159 B** ≤ 30,800 B 预算。代码 allowlist ops 16、三入口去重 25，已部署）；6 个 drop-in 全列：`exec-start.conf`（三 socket `ExecStart`，尾部 `--poll-ms 1000`）、`generation.conf`（`X_DATA_MCP_GENERATION_ROOT=/opt/x-data-mcp-preview/generations`，并把该目录加进 `ReadWritePaths`）、`memory.conf`（`MemoryHigh=384M`/`MemoryMax=640M`/`MemorySwapMax=512M`，`systemctl show` 读回 402,653,184/671,088,640/536,870,912 B）、`prepare-workers.conf`（`X_DATA_MCP_RUN_PREPARE_WORKERS=1`，XDM-64/#429）、`source-store.conf`（`X_DATA_MCP_SOURCE_STORE=/opt/x-data-mcp-preview/state/source-store`，preview.39 起）、`text-mode.conf`（`X_DATA_MCP_TEXT_MODE=full`）；`poll-interval.conf` 已不存在（`--poll-ms 1000` 由 `exec-start.conf` 带到）；`maint` 只在本机使用、不经隧道 |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 单元级 `X_DATA_MCP_TDX_FETCH=/opt/x-data-mcp-preview/current/scripts/tdx_fetch.py`；drop-in `market-db.conf`（preview.39 起）把 `ExecStart` 换成追加 `--market-db /opt/x-data-mcp-preview/state/preview.sqlite`（退役 gate 只读连接）并把 `state` 加进 `ReadWritePaths`；回滚到 preview.38 前必须移除它 |
-| `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/mcp.sock` | — | 只转发 data server，不转发 acquire；drop-in 给该单元加上 `Wants=`/`After=x-data-mcp-data.service`，单元为 `Restart=always` / `RestartSec=10`。**2026-11-01 实测**：只停 data+acquire 的窗口里，tunnel 的 stdio 子进程随 data 退出、tunnel-client 请求重启，systemd 10 s 后重启 tunnel 并由 `Wants=` 把 data 拉起（10:22:19Z），所以停服窗口必须把 tunnel 一起停，且先停 tunnel、最后起它（`scripts/switch_binary.sh`/`deploy_phase_g.sh` 的停/起顺序与回滚路径已按此改，XDM-160）；历史（未复核）：`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 120s（2026-10-24T16:56:58Z 由 10s 改为 120s；但单元未设 `TimeoutStartSec`，systemd 默认 90s 也覆盖 `ExecStartPre`，所以实际生效上限是 90s） |
+| `x-data-mcp-tunnel` | OpenAI `tunnel-client`（profile `x-data-mcp`） | 转发到 `run/research.sock`（`--entry research`） | — | **2026-11-02 起（D-35 的 Ops-D 已执行，XDM-166 方案 (a)）**：profile 的 `mcp.commands[0].command` 与 drop-in 的 `ExecStartPre` 都指向 `run/research.sock`，drop-in 同时设 `TimeoutStartSec=180` 并用仓库探针 `current/scripts/wait_service_ready.py --entry research --expect-tool query_data`（原 `/opt` 旁路脚本 `wait-data-service.py` 退役）。启动摘要 `mcp_target_value` 读回 `mcp_connect …/run/research.sock`；远端工具面由 ops 的 16 项降到 research 的 5 项。回滚：两个文件改回（备份 `x-data-mcp.yaml.bak-20261102T060408Z`、`data-service.conf.bak-20261102T060408Z`）→ `daemon-reload` → 重启 tunnel。只转发 data server，不转发 acquire；drop-in 给该单元加上 `Wants=`/`After=x-data-mcp-data.service`，单元为 `Restart=always` / `RestartSec=10`。**2026-11-01 实测**：只停 data+acquire 的窗口里，tunnel 的 stdio 子进程随 data 退出、tunnel-client 请求重启，systemd 10 s 后重启 tunnel 并由 `Wants=` 把 data 拉起（10:22:19Z），所以停服窗口必须把 tunnel 一起停，且先停 tunnel、最后起它（`scripts/switch_binary.sh`/`deploy_phase_g.sh` 的停/起顺序与回滚路径已按此改，XDM-160）；历史（未复核）：`ExecStartPre` 用 `/opt/x-data-mcp-preview/wait-data-service.py`（该文件不在仓库内），就绪等待上限 120s（2026-10-24T16:56:58Z 由 10s 改为 120s；但单元未设 `TimeoutStartSec`，systemd 默认 90s 也覆盖 `ExecStartPre`，所以实际生效上限是 90s） |
 
-启动日志（`journalctl -u x-data-mcp-data`，2026-11-01T10:26:01Z 那次启动；preview.39 起输出相同）：
+启动日志（`journalctl -u x-data-mcp-data`，2026-11-02T06:04:39Z 那次启动；preview.39 起输出相同）：
 `source store: /opt/x-data-mcp-preview/state/source-store`，
 `exchange source outbound request interval: 1000 ms (per client; adjacent request starts are spaced by
-this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮实测都是 `active`：data 自
-2026-11-01T10:26:01Z、acquire 与 tunnel 自 10:26:06Z（preview.41 维护窗口结束后启动；窗口前
+this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮实测都是 `active`：data 与 acquire 自
+2026-11-02T06:04:39/06:04:40Z、tunnel 自 06:04:40Z（preview.42 部署窗口结束后启动；窗口前
 三者均被 stop，`ActiveEnterTimestamp` 证明没有遗留重启）。
 
 访问边界与认证细节属于运维信息，不记录在公开仓库。当前边界是否可接受，尚待 owner 明确决定。
@@ -181,16 +185,16 @@ this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮
 `exec-start.conf` 里并以 `--poll-ms 1000` 结尾（`scripts/data_unit_layout.py` 原样保留尾部参数）。
 回滚步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9.7。
 
-工具数与能力版本的 live 只读复核：preview.41 切换窗口（2026-11-01T10:18Z）的机器报告只记了
-`ops`→`plan_market_update`（15）与 acquire（10）——脚本读基础单元 `ExecStart` 的缺陷，XDM-160 已修；
-`research`→`query_data`（5）与 `maint`→`compute_metrics`（9）在该窗口由手工探针核对（XDM-159），
-维护窗口后重起服务又复核一次（15/5/9/10）。隧道仍连 `mcp.sock`。`get_data_capabilities` 的
-`capability_revision=generic-data-v8` 最近一次实测仍是 preview.37 窗口（切换窗口的探针只记工具数与入口）。
+工具数与能力版本的 live 只读复核（2026-11-02T06:0xZ，preview.42）：`ops`→`plan_market_update` **16**
+（`tools/list` **30,159 B**）、`research`→`query_data` **5**、`maint`→`compute_metrics` **9**、acquire **10**
+（部署脚本的逐 socket 探针与随后的手工 `tools/list` 一致）。隧道已改连 `research.sock`（Ops-D 已执行），
+启动摘要的 `mcp_target_value` 与 `wait_service_ready.py … --entry research` 都读回 research 面。
+`get_data_capabilities({})` 的 `capability_revision=**generic-data-v9**`、`production_ready=false`。
 
 代码（main）注册 25 data tools：三个入口 `research`/`ops`/`maint` 由
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
 `outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
-隧道改指 `research.sock`（Ops-D）仍未做；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），
+隧道改指 `research.sock`（Ops-D）已于 2026-11-02 preview.42 部署窗口执行（见「服务」表）；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），
 结论是 `summary` 不能作为 `ops`/`maint` 缺省。代码（PR #447）已按 D-36 的
 「实测不通过就退回」把所有入口的文本模式缺省改为 `full`，`summary` 只作显式选项；
 当前生产仍靠上表的 `X_DATA_MCP_TEXT_MODE=full` 覆盖，代码缺省改动**待随下个 release
@@ -199,29 +203,49 @@ this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮
 
 ## 数据
 
-**preview.39 的 fresh init 后重建**（2026-10-31T18:30:12→19:27:02Z）与 **XDM-139 的第 1 代日更**
-（2026-11-01T04:21:56→05:49:54Z）都已执行完成；下表是本轮（2026-11-01）只读实测（库 + WAL）。
-重建与日更都在生产机上执行但**非独占**（多个开发 agent 同时在跑），下述耗时不作门禁证据。
-标注「历史」的行是更早的对照值。
+**preview.42 的 fresh init**（2026-11-02T06:04:22→06:04:42Z）与随后的**重建**
+（07:13Z–07:59Z，XDM-165；顺序 `full` → catalog → market.daily → 首次 tail → plan/run → listed_ever → 年线）
+已完成；下表是本轮（2026-11-02）只读实测（库 + WAL）。重建在生产机上执行但**非独占**（多个开发 agent
+同时在跑），下述耗时不作门禁证据。标注「历史」的行是更早的对照值。
 
 | 项 | 事实 | 来源 |
 |---|---|---|
 | active generation | `f2fd6fcbded1fc142c0e0b1aba998a7de72117a58c3bcc8815e80943046d20a6`（2026-11-01T01:14:57Z 激活，`previous_generation_id` = `0f1623b0ec0430baa94cbc2686b781d6400f92eecbbe4ddd862911e295322683`，`activation_request_id` = `daily-20261101-xdm139-activate`）；最新集中行情日 **2026-10-30**（`last_day=20756`） | `generations/active-generation.json`、`market_series` 只读查询 |
 | 热 generation | **2/6**：1 active（`f2fd6fcb`）+ 1 superseded（`0f1623b0`）；另有 15 个 evidence_only（13 个原有 + 本轮退役的 `9d9e38d7`、`c184e9c4`）；`pins/` 16 个目录，`inflight_tasks` 无 | `generations/acquire.sqlite`（按 `state` 计数）、`generations/pins/`、`src/acquire/service.rs:40,44,1118-1140` |
 | 旧代回收 | **已处理（2026-11-01T10:25–10:26Z，XDM-159）**：两个遗留代 `9d9e38d7`、`c184e9c4` 按方案 A（D-65，门禁规则不改）完成——登记 `tdxhy.cfg`/`zhb.zip!incon.dat` 为 generation 成员 → `replay --scope generation_facts` 把 `generation_facts` 重建为 **18** 行 → 每代对 3 类行情派生事实记豁免（共 **6** 条 `retire_exemptions`，`recorded_by=Liqiangcc`，未用 `--owner-approve-evidence`）→ acquire MCP `retire_generation`（`request_id=retire-20261101-<gen8>`）。两个回复均为 `state=evidence_only`、`reason_code=null`，未追加豁免。退役不可逆（base/gbbq/hsjday 字节已删）；回滚只恢复软硬件面 | XDM-159 报告、`retire_exemptions`/`generation_facts`/`manifest.jsonl` 只读查询、[DECISIONS](decisions.md) D-65 |
-| 数据库 | `state/preview.sqlite`，fresh compact schema 25（`pragma user_version=25`，`journal_mode=wal`），**2,013,822,976 B** + WAL **0 B**（维护窗口 10:26 停服后 checkpoint；`-shm` 65,536 B；`mode=ro` 含 WAL 读）；preview.38 的 schema 24 库归档为 `state/preview.sqlite.v24-archived-20261031T182806Z`（1,878,384,640 B，保留，不迁移） | `stat`、`pragma user_version` 读回、phase-g 报告 `preview39-phaseg-deployment.json` |
-| catalog | `catalog-1793471419601619642`，**5,225** 条 | `catalog_head`/`catalog_members` 只读查询 |
-| 日线 | 不复权 **5,561** 条序列 + 前复权 **5,561** 条序列（`qfq-exact-v1`，6dp）：5,223 条是 catalog 实体、338 条是 listed-ever 退市序列，另 **9** 条指数；最新集中行情日 **2026-10-30**。5,217/5,223 个 catalog 实体 head=2026-10-30，6 个在之前：`sh.688496`(20706)、`sz.002717`(20738)、`sh.601326`(20746)、`sh.605258`(20749)、`sz.002827`(20749)、`sh.688121`(20754)（最后一条 bar 日，未逐项归因） | `market_series`（`period=1`）只读查询 |
+| 数据库 | `state/preview.sqlite`，fresh compact schema 26（`pragma user_version=26`，`journal_mode=wal`），**1,932,939,264 B** + WAL **16,777,216 B**（`-shm` 163,840 B；`mode=ro` 含 WAL 读）；归档：preview.41 的 schema 25 库 `state/preview.sqlite.v25-archived-20261102T060432Z`（2,013,822,976 B，保留作回滚点）与 preview.38 的 schema 24 库 `state/preview.sqlite.v24-archived-20261031T182806Z`（1,878,384,640 B，保留） | `stat`、`pragma user_version` 读回、phase-g 报告 `preview42-phaseg-deployment.json` |
+| catalog | `catalog-1793603620505554045`，**5,225** 条（fresh init 后的首采，`task-9bca64db…`，07:13Z） | `catalog_head`/`catalog_members` 只读查询 |
+| 日线 | 不复权 **5,570** 条序列 + 前复权 **5,561** 条序列（`qfq-exact-v1`，6dp）：5,223 条是 catalog 实体、338 条是 listed-ever 退市序列、另 **9** 条指数（仅不复权）；最新集中行情日 **2026-10-30**。5,217/5,223 个 catalog 实体 head=2026-10-30，6 个在之前：`sh.688496`(20706)、`sz.002717`(20738)、`sh.601326`(20746)、`sh.605258`(20749)、`sz.002827`(20749)、`sh.688121`(20754)（重建 run 里它们 6 项都 `success`，窗口内没有新 bar，head 不变） | `market_series`（`period=1`）只读查询、重建 run 的 `task_items.outcome_json` |
 | 年线 | **5,223** 个 published（`yearly_series_lineage` 同数），其中 5,217 个 head=2026-10-30 | `market_series`（`period=2`）只读查询 |
 | 基准指数 | **9** 条，全部 head=2026-10-30；`sh.000001` 剔除 16 根、`sz.399001` 剔除 9 根 OHLC 矛盾的 bar（D-51） | 指数序列只读查询、D-51 |
 | 交易日历 | **8,798** 天（`trade_day` 7657 … 20756 = 1990-12-19 … 2026-10-30） | `trading_days` 只读查询 |
 | 复权事件 | **59,361** 行，`(entity, ordinal)` 组合也是 **59,361** 个 | `adjustment_events` 只读查询 |
 | 缺失 | `sh.688827`、`sz.001381`（官方 hsjday `.day` 缺成员，预期）保持 absent：catalog 中存在，日线/年线均无 series | `catalog_members` 反连接 `market_series` 只读查询 |
-| M3 来源库索引表 | `industry_snapshots` **7** 行、`industry_assignments` **5,235** 行（全部 `name_status=unknown_dictionary`，成因见[M3 设计](tasks/issue-446-m3-delisted-industry.md) AC-M3-3）、`exchange_source_snapshots` **1,834** 行（`sse_suspension` 1,296 / `szse_short_name` 375 / `szse_listing` 146 / `szse_delisting` 12 / `sse_delisting` 2 / `sse_listing` 2 / `sse_bulletin` 1）、`generation_facts` **18** 行（`0f1623b0` 6 + `f2fd6fcb` 6 + `9d9e38d7` 3 + `c184e9c4` 3，后两代由本轮 replay 重建）、`retire_exemptions` **6** 行（两代 × 3 类派生事实）。来源库 `state/source-store` **25,287,617 B**、清单 **1,853** 行、blob **1,842** 个，其中 `origin` 形如 `generation:<sha>` 的有 **8** 行（4 代 × 2：`tdxhy.cfg` 与 `zhb.zip!incon.dat`） | 各表只读计数、`manifest.jsonl`、`du -sb` |
+| M3 来源库索引表 | `industry_snapshots` **7** 行、`industry_assignments` **5,235** 行（全部 `name_status=unknown_dictionary`，成因见[M3 设计](tasks/issue-446-m3-delisted-industry.md) AC-M3-3）、`exchange_source_snapshots` **2,590** 行（`sse_suspension` 1,300 / `szse_short_name` 750 / `szse_listing` 292 / `sse_bulletin` 230 / `szse_delisting` 12 / `sse_listing` 4 / `sse_delisting` 2；首次 `full` 把整表与窗口类来源全量重抓后每页两个 sha 都在）、`generation_facts` **15** 行（4 代 × 3 项行业事实，重放重建；活跃代补齐的 3 项行情派生事实由重建 run 写入）、`retire_exemptions` **3** 行（`0f1623b0` × 3 类派生事实，2026-11-02T08:06:30Z，`recorded_by=Liqiangcc`，理由「preview.42 fresh init 丢失市场派生事实（D-65 先例）」）。来源库 `state/source-store` **68,731,247 B**、清单 **2,607** 行、blob **2,595** 个，其中 `origin` 形如 `generation:<sha>` 的有 **8** 行（4 代 × 2：`tdxhy.cfg` 与 `zhb.zip!incon.dat`） | 各表只读计数、`manifest.jsonl`、`du -sb` |
 | M2 数据集 | 库内实测值见上面「M2 随 preview.37 部署」表的右列；`derived_dataset_versions` 共 **11,024** 行 | 只读查询 |
-| 重建耗时（生产，非独占） | preview.39 当轮（2026-10-31）：catalog 采集 1 项（18:30:12→18:30:19Z）+ 日线全量 collect（53 块：52×100 + 1×25 = 5,225 项，18:30:28→18:39:29Z；2 块 `partially_failed`，各 99/100，1 项 absent）+ v2 日更 run（23 项，18:40:12→19:13:09Z，22 成功，`derived:risk_warnings` 失败）+ `sh_sz_a_listed_ever` 首次采集（338 项，19:14:19→19:15:07Z）+ 年线 plan/run（5,223 项，19:17:36→19:27:02Z）。历史（preview.37）：全量 write-loop 667s、v2 plan/run 84s、年线 320s | `tasks`/`task_items`（`created_at`/`last_progress_at`）只读查询 |
-| 任务与事件 | 本轮：库内共 **62** 个任务（57 succeeded、4 partially_failed、1 interrupted），全部结束，无 running；`market_events` **32,044** 行；`series_bars` **36,145,465** 行。历史（preview.35 时点）：579 个任务、`market_events` 83,545 行 | `tasks`、`market_events`、`series_bars` 只读查询 |
+| 重建耗时（生产，非独占） | **preview.42 当轮（2026-11-02）**：首次 `full` 06:22:20→07:08:06Z（2,746 s，**2,072 请求 / 1,307 复用 / 523 变更**，`failed_windows=0`，G2 full <60 min 通过）+ catalog（1 项，07:13:33→07:13:41Z）+ 日线全量 collect（53 块 = 52×100 + 1×25，07:15:59→07:25:09Z，**553.5 s**，2 块 `partially_failed`）+ 首次 `tail`（07:27:22→07:28:27Z，**65 s**，36 请求 / 28 复用，`verified_through=2026-11-02`，未触发整表）+ 日线 plan/run（23 项，写循环 **131.5 s**，22 成功，`derived:risk_warnings` 失败）+ listed_ever（338 项，07:48:02→07:48:55Z，**53.9 s**）+ 年线 plan/run（5,223 项，07:52:04→07:59:13Z，写循环 **429.2 s**，全成功）。历史（preview.39，2026-10-31）：catalog 7 s + 日线 541 s + v2 run 1,977 s + listed_ever 48 s + 年线 566 s | `tasks`/`task_items`（`created_at`/`last_progress_at`）、`source_refresh_runs` 只读查询 |
+| 任务与事件 | 本轮（fresh 库）：库内共 **57** 个任务（54 succeeded、3 partially_failed：2 个日线 100 项块 + 1 个日线 plan/run），全部结束，无 running；`market_events` **16,366** 行；`series_bars` **36,145,465** 行。历史（preview.35 时点）：579 个任务、`market_events` 83,545 行 | `tasks`、`market_events`、`series_bars` 只读查询 |
 | 退役记录 | **2026-11-01T10:26Z**：`9d9e38d7…`、`c184e9c4…` 退役为 evidence_only（各带 3 条豁免，热代 4→2，代目录 2,291,141,645 → 1,146,923,381 B，释放 ≈1.065 GiB，根盘可用 +1,143,803,904 B）。历史：`87322997…` 2026-10-19 退役；`2d5851a4…` 2026-10-24T16:57:16Z（548M→16K）；`a119629b…` 2026-10-24T17:52Z（574M→16K）；更早 4 个 2026-10-13 退役为 evidence_only；2026-10-28T11:56Z `0f1623b0` 激活后的自动保留一次退役了 `8b8614c3`、`54553656`、`f289c612` | XDM-159 报告、`generations/acquire.sqlite`、`df`/`du -sb` |
+
+### 2026-11-02 preview.42 fresh init 与重建（XDM-165）
+
+时间均为 `tasks.created_at`/`last_progress_at` 或 `source_refresh_runs` 的 UTC：
+
+1. 06:04:22→06:04:42Z 部署（`deploy_phase_g.sh v0.2.0-preview.42 --force-git-transport`）：停 tunnel→acquire→data，
+   schema 25 库归档为 `state/preview.sqlite.v25-archived-20261102T060432Z`，`init21` 建 schema 26，`replay --scope all` 五个 scope
+   全部 `ok`/`database=match`（industry 7 / 5,235、exchange 1,836、generation_facts 12、risk_warnings 1,289、security_names 7,344），
+   起 data→acquire→tunnel；就绪探针 research 219 ms/5、ops 23 ms/16、maint 16 ms/9、acquire 10 ms/10。停机 20 s。
+2. 06:22:20→07:08:06Z **首次 `full`**（`refresh-full-1793600540254628747`）：2,746 s，2,072 请求 / 1,307 复用 / 523 变更，
+   `failed_windows=0`、`unobserved_windows=101`，7 个来源全部 `complete=1`；`verified_through=2026-11-02`。
+3. 07:13:33→07:13:41Z catalog 首采（`catalog-1793603620505554045`，5,225 条）。
+4. 07:15:59→07:25:09Z 日线全量 collect：53 块（52×100 + 1×25，v1 explicit），553.5 s，51 块 succeeded、2 块 partially_failed。
+5. 07:27:22→07:28:27Z 首次 `tail`（`refresh-tail-1793604442021279556`）：65 s，36 请求 / 28 复用，`changed=0`，未触发整表。
+6. 07:28:43→07:30:54Z 日线 plan/run（`plan_id=1e282b03…`，23 项，写循环 131.5 s）：22 成功；`derived:risk_warnings` 失败
+   （`SameDayActionConflict`，`sh.600734` 2022-01-29，见「数据」表该行与 XDM-165 报告）。
+7. 07:48:02→07:48:55Z `sh_sz_a_listed_ever` 首采（338 项，53.9 s，succeeded）。
+8. 07:52:04→07:59:13Z 年线 plan/run（5,223 项，写循环 429.2 s，全成功）。
+9. 08:06:24→08:06:45Z 短窗口（停 tunnel→acquire→data）：给 `0f1623b0` 记 3 条 `retire_exemptions`（08:06:30Z，`recorded_by=Liqiangcc`），
+   起回 data→acquire→tunnel。
 
 ### 2026-11-01 第 1 代日更（XDM-139）
 

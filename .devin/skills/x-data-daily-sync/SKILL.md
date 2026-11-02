@@ -70,7 +70,7 @@ plan/run 大任务的进度按 `get_task_progress` 的 `unfinished` keyset 分�
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
   `contract_version`）：
-  - `capability_revision` 必须等于 `generic-data-v8`
+  - `capability_revision` 必须等于 `generic-data-v9`
     （v6 起 market 数据为单版本序列：`version_id` 为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取被取代时报 `stale_version`，写路径 stale base 为 item 级 `needs_verification`（`STALE_BASE:` 前缀），均须重取当前 head 重试，不得静默适配；v5 的 `related_tasks` 口径沿用，只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；v6 的 `generic-data-v6` 断言遇到 v7 即按下一条停止，不得静默适配。v7 新增 `plan_market_update`/`run_market_update`，日更编排见 §3。）
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。无过滤

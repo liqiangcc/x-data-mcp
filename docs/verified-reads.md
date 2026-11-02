@@ -2,7 +2,7 @@
 
 > **历史文档（JSON 文件存储时期）。** 下文把「按 `version_id` 读取某个历史版本」「列表按提交次序」作为
 > 完整性读取的前提，这是版本链模型（schema 20 及更早；已被 schema 21 取代，历史）。当前部署的
-> schema 25 单版本模型不再保留历史版本：`version_id` 是当前内容摘要（`hex(content_digest)`），旧
+> schema 26 单版本模型不再保留历史版本：`version_id` 是当前内容摘要（`hex(content_digest)`），旧
 > `version_id` 读取返回 `stale_version`（曾存在）或 `version_not_found`（从未存在），**不回退到旧内容**；
 > 完整性校验的对象从「版本记录摘要」变为序列的顺序折叠摘要（schema 21 自 preview.32 起部署，历史；
 > M1 于 2026-10-27 把生产库升到 schema 24）。

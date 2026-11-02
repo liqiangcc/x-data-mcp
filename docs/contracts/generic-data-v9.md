@@ -1,9 +1,8 @@
 # generic-data-v9 契约（来源刷新 ops 工具）
 
-**状态**：代码契约（未部署）；当前部署仍为 `generic-data-v8` / compact schema 25。
+**状态**：**已部署**（2026-11-02，preview.42 fresh init）；当前部署为 `generic-data-v9` / compact schema 26。
 本文件只记录 v9 相对 [generic-data-v8](generic-data-v8.md) 的增量，v8 的读取面、任务面、
-错误码与部署约束继续有效。代码注册 25 data tools（三个入口；`ops` 入口 16），
-代码 schema 26（未部署）。
+错误码与部署约束继续有效。三个入口合计注册 25 项（`ops` 入口 16），schema 26。
 
 ## 1. 增量
 
@@ -102,8 +101,8 @@
 
 ## 2. 部署与兼容
 
-- 代码能力修订 `generic-data-v9`；部署实例（preview.41，2026-11-01）仍为 `generic-data-v8`，
-  此时 `ops` 的 `tools/list` 没有本工具，16 只是代码 allowlist 计数。
+- 能力修订 `generic-data-v9`；部署实例（preview.42，2026-11-02）`ops` 的 `tools/list` 为 16 项
+  （含本工具），线上实测 **30,159 B**。
 - schema 26 仍按 D-08 全新 init，不做原地迁移；旧二进制拒绝 26。
 - 回滚：回到 v8 二进制并保留旧库归档；schema 26 的 run 记录不参与 v8 的读写面。
 - 工具面预算：`tools/list` 不内联 `outputSchema`。R2b 后 CI 实测 research 11,691 B、
@@ -112,4 +111,4 @@
   贡献 1,113 B（29,300 → 30,500）；R2b 在同一工具上把 `mode` 改为可省、加 `status_of`，
   输出加 `running` 状态与可选 `finished_at`，再加 300 B（无新增工具）。按 v8 §6.3
   「已批准上限 + 已记录面增长」的规则，ops 上限从 30,500 调为 30,500 + 300 = 30,800 B
-  （`tests/mcp/v8_tool_surface.rs`）；实测 30,114 B 距新上限 686 B，**待 owner 批准**。
+  （`tests/mcp/v8_tool_surface.rs`）；部署后线上实测 30,159 B，距上限 641 B（owner 2026-11-01 已批准该预算）。

@@ -220,7 +220,7 @@ Tunnel drop-in (template only; this script does not install it):
   After=$DATA_SERVICE
 
   [Service]
-  ExecStartPre=$DEPLOY_ROOT/current/scripts/wait_service_ready.py $DEPLOY_ROOT/run/mcp.sock --timeout 120 --expect-tool plan_market_update
+  ExecStartPre=$DEPLOY_ROOT/current/scripts/wait_service_ready.py $DEPLOY_ROOT/run/research.sock --timeout 120 --entry research --expect-tool query_data
   TimeoutStartSec=180
 EOF
 }

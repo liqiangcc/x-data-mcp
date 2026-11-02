@@ -25,8 +25,8 @@ EXPECTED_DATA_TOOLS = 25
 # mcp.sock (the only entry x and the daily Skill talk to). Per-entry counts
 # live in the STATUS 服务 table and are checked separately for the deployed
 # instance and for the current code allowlists.
-EXPECTED_DEPLOYED_DATA_TOOLS = 15
-EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 15, "research": 5, "maint": 9}
+EXPECTED_DEPLOYED_DATA_TOOLS = 16
+EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 EXPECTED_CODE_OPS_TOOLS = 16
 EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 EXPECTED_ACQUIRE_TOOLS = 10
@@ -46,13 +46,13 @@ ENTRY_ALLOWLIST_CONST = {
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v9"
 # The revision the deployed docs/contracts/Skills describe. R2's tool is code
 # only until the next deployment; flip this with the Skills at that switch.
-EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v8"
+EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v9"
 # The strict Skills describe the DEPLOYED contract (v8 after the minimal switch).
 # The same deployed revision keys the strict-Skill checks and the
 # stale-deployment-claim check below: the "current" regions describe the
 # deployed instance, not the code on main. Flip this constant together with
 # the Skills in the same commit at the next contract switch.
-EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v8"
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v9"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
@@ -888,10 +888,21 @@ def main() -> int:
         f"ops {EXPECTED_DEPLOYED_ENTRY_TOOLS['ops']}, prose "
         f"{EXPECTED_DEPLOYED_DATA_TOOLS}",
     )
+    # While a code-only contract exists (code revision ahead of the deployed
+    # one), the two count tables must stay separate so the gap is visible.
+    # Once the code revision is deployed (v9 since preview.42) there is no
+    # code-only difference left and the tables are expected to agree.
+    code_only = EXPECTED_DEPLOYED_CAPABILITY_REVISION != EXPECTED_DATA_CAPABILITY_REVISION
     check(
-        "deployed and code entry counts are kept separate",
-        EXPECTED_DEPLOYED_ENTRY_TOOLS != EXPECTED_CODE_ENTRY_TOOLS,
-        "the R2 allowlist must be visible as a code-only difference",
+        "deployed and code entry counts are kept separate"
+        if code_only else
+        "deployed and code entry counts agree (no code-only contract)",
+        EXPECTED_DEPLOYED_ENTRY_TOOLS != EXPECTED_CODE_ENTRY_TOOLS
+        if code_only else
+        EXPECTED_DEPLOYED_ENTRY_TOOLS == EXPECTED_CODE_ENTRY_TOOLS,
+        "the R2 allowlist must be visible as a code-only difference"
+        if code_only else
+        f"deployed {EXPECTED_DEPLOYED_ENTRY_TOOLS} != code {EXPECTED_CODE_ENTRY_TOOLS}",
     )
     check(
         "registry declares every entry allowlist",

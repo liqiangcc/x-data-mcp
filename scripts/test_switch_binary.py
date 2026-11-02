@@ -638,9 +638,12 @@ class TunnelDropinTemplate(unittest.TestCase):
         text = DEPLOY.read_text()
         self.assertIn("tunnel_dropin_template()", text)
         body = text.split("tunnel_dropin_template() {", 1)[1]
+        # Ops-D (XDM-166 scheme (a), executed 2026-11-02): the tunnel forwards
+        # the read-only research entry, so the probe asserts that entry's tool.
         self.assertIn(
             "ExecStartPre=$DEPLOY_ROOT/current/scripts/wait_service_ready.py "
-            "$DEPLOY_ROOT/run/mcp.sock --timeout 120 --expect-tool plan_market_update",
+            "$DEPLOY_ROOT/run/research.sock --timeout 120 --entry research "
+            "--expect-tool query_data",
             body,
         )
         # systemd's default TimeoutStartSec (90s) covers ExecStartPre, so the

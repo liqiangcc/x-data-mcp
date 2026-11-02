@@ -59,13 +59,13 @@ M2 的 6 个解析事实数据集（`market.security_master`、`security_names`�
 `risk_warnings`、`suspensions`、`price_limit_rules`）随 preview.37 **已部署**（v8 的
 `contract_version:"v2"` 面上可读）。其中 `security_master`/`capital_events`/`suspensions`
 有写入路径；交易所名单（A-1/A-2）与 A 股总股本已准入，历史 ST（#308）与简称历史（D-61）
-写入器已随 preview.39 部署（简称 7,344 行；历史 ST 因空季度 `pageCount=0` 失败、仍 0 行），
+写入器已随 preview.39 部署（简称 7,344 行；历史 ST 在 preview.42 的 fresh init 重放后为 1,289 行），
 停复牌公告（PR-11）写入器同样已部署（`confirmed` 20,420 段），
 涨跌停规则原文已按 D-59 裁决准入；默认/非 ops 形态下来源未接入或未配置的部分在 item
 结果里按 `pending_source` 记录，生产形态（ops + compact）缺 `X_DATA_MCP_SOURCE_STORE`
 时四个同源 item 以稳定码 `source_store_unconfigured` 失败（见 §3.2）。未登记版本返回
 `absent` 与 0 行（见 §3.1「M2 部署状态」）。
-数据库 compact schema：**已部署 25（preview.39 的 fresh init 上线）；代码 26（R2 刷新 run 记录，未部署）**。schema 25（M3 PR-1，
+数据库 compact schema：**已部署 26（preview.42 的 fresh init 上线，2026-11-02）**。schema 25（M3 PR-1，
 [#446](tasks/issue-446-m3-delisted-industry.md) §9）加 5 张来源库索引表与
 `price_limit_rules.min_band_ticks` 可空列。5 张索引表已由日更的派生 item 与 `--scope` 重放写入
 （2026-11-01 只读实测：`industry_snapshots` 7 行、`industry_assignments` 5,235 行、
@@ -308,9 +308,8 @@ T 日股票池 `universe(as_of=T)`。
 
 写入路径：`market.security_master`、`market.risk_warnings`、`market.suspensions`、
 `market.price_limit_rules` 由日更 run 的内部 item 维护，`market.capital_events` 随每条日线
-提交同事务写入；`market.security_names` 的写入器与读取面均已实现（代码已合并，未部署；
-XDM-163 起 `query_data` 读取 `security_name_history` 区间并带 `metadata.verified_through`，
-未登记版本仍回答 `absent`/0 行）。**来源状态**：
+提交同事务写入；`market.security_names` 的写入器与读取面均已部署（XDM-163 起 `query_data` 读取
+`security_name_history` 区间并带 `metadata.verified_through`，未登记版本仍回答 `absent`/0 行）。**来源状态**：
 交易所上市/退市名单与 A 股总股本仍待准入；历史 ST（D-58）、停复牌公告（D-60）、涨跌停
 规则原文（D-59）与简称历史（D-61）已准入。规则书与 `derived:trading_rules` 的写路径已在
 代码中实现（仓库内版本化规则数据 + 校验；内容不变为 `no_change`），但 preview.37 实例仍是
@@ -324,7 +323,7 @@ XDM-163 起 `query_data` 读取 `security_name_history` 区间并带 `metadata.v
 缺 store 则失败；都不使用当前值回填。没有规则时涨跌停派生一律 `unknown`。数据量见
 [STATUS](STATUS.md)（本文件不写部署数字）。
 
-**简称与历史 ST 的知晓时间（XDM-157，代码已合并，未部署）**：深市简称/ST 行的 `known_at`
+**简称与历史 ST 的知晓时间（XDM-157，已部署）**：深市简称/ST 行的 `known_at`
 不再是 NULL，而是“首次包含该行的快照入库日”（`issue-446` §5.3/Q4）：适配器解析后按来源库清单
 （`manifest.jsonl` 的 `acquired_at`）的**上海日期**（`crate::calendar::shanghai_date_of`；UTC
 时间戳在北京时间 00:00–08:00 会把日子记早一天）从旧到新读回冻结字节，取最早包含该行的一天
@@ -373,7 +372,7 @@ D-66 Q4 原文的 2026-10-31 是 UTC 日期）。两句同时进数据集证据�
 **M3 代码状态（main，2026-10-30）**：PR-1a…PR-9 已合并，**均已随 preview.39 部署**
 （2026-10-31 phase-g fresh init；2026-11-01 日更后的库内实测见 [STATUS](STATUS.md)「数据」段）。
 已部署的能力：
-来源库与重放框架（PR-1a）、schema 25 的 5 张索引表（PR-1）、交易所来源共用入口
+来源库与重放框架（PR-1a）、M3 引入的 5 张来源库索引表（PR-1，随 schema 26 部署）、交易所来源共用入口
 （PR-2）、A-1/A-2 上市/终止上市适配器与主表合并（PR-3）、`sh_sz_a_listed_ever`
 首采 scope（PR-4，已首采 338 条序列）、日更尾巴与 `derived:delisted_series_check` 不消失检查
 （PR-5）、
@@ -381,11 +380,12 @@ D-66 Q4 原文的 2026-10-31 是 UTC 日期）。两句同时进数据集证据�
 （PR-7）、退役门禁（PR-8）、`research-snapshot.v3` 导出（PR-9）。落地记录见
 [来源库](source-store.md)、[交易所来源入口](exchange-source.md)、[日更](daily-sync.md)
 与 §5.3；设计拆分见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §14。
-生产实例已是 schema 25，退市股首采已完成，`X_DATA_MCP_SOURCE_STORE` 已配置
+生产实例已是 schema 26（2026-11-02 fresh init），`X_DATA_MCP_SOURCE_STORE` 已配置
 （`source-store.conf`），owner 归档的行业历史也已导入并由 `--scope industry` 重放。
 PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称 7,344 行、停牌 `confirmed`
-20,420 段；只有历史 ST 因空季度 `pageCount=0` 失败、仍 0 行（修复 #485 未部署）。
-下表「未部署」字样保留为编写时的状态，当前事实以 [STATUS](STATUS.md) 为准。
+20,420 段（preview.41 库）；历史 ST 在 preview.42 的 fresh init 重放后为 1,289 行
+（`known_at=2026-11-01`，SSE 覆盖只到 2000Q1）。下表「未部署」字样保留为编写时的状态，
+当前事实以 [STATUS](STATUS.md) 为准。
 
 `#446` 侧的 AC-M3-1…10 与本节下面的 AC-M3-1…4 不是同一套：本文件这 4 条是目录视角的
 验收建议；#446 的 10 条实现验收与部署前的私有栈证据清单见 M3 设计 §14.3（每条状态
@@ -610,7 +610,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
   `sh_sz_a_listed_ever`，与 `catalog_version` 互斥，且不传时行为不变。
 - `query_data` 是纯读：不触发采集、修复或换源（`src/data_supply/registry.rs:139`）。
 - 工具清单、参数与返回形状用 `get_data_capabilities` 查（`registry.rs` 的 `entries()`），本文不复述；
-  data 侧当前部署三个入口（单进程三 socket）：`ops` 15 个 data 工具、`research`（只读研究面）
+  data 侧当前部署三个入口（单进程三 socket）：`ops` 16 个 data 工具、`research`（只读研究面）
   与 `maint`（本机运维）各 5 / 9，数量以 [STATUS](STATUS.md) 的「服务」表为权威。
 
 ### 5.2 过渡期直读（#373 分析脚本）
