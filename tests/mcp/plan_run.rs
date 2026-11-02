@@ -1478,8 +1478,8 @@ fn yearly_signature(r: &Rig) -> Vec<String> {
     drop(stmt);
     let mut stmt = c
         .prepare(
-            "SELECT ms.entity,sb.trade_day,sb.open_cents,sb.high_cents,sb.low_cents,\
-             sb.close_cents,ifnull(sb.volume,-1),ifnull(sb.amount,''),ifnull(sb.r7_raw,-1) \
+            "SELECT ms.entity,sb.trade_day,sb.open_units,sb.high_units,sb.low_units,\
+             sb.close_units,ifnull(sb.volume,-1),ifnull(sb.amount,''),ifnull(sb.r7_raw,-1) \
              FROM series_bars sb JOIN market_series ms ON ms.series_key=sb.series_key \
              WHERE ms.period=2 ORDER BY ms.entity,sb.trade_day",
         )
