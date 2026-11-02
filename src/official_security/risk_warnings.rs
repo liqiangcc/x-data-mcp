@@ -99,8 +99,10 @@ use std::sync::Arc;
 /// parse: one object is one group. v3 → v4: an SZ change row carries its
 /// knowledge time — the day the first snapshot containing it was stored
 /// (§5.3/Q4) — so rows written before XDM-157 stay distinguishable from rows
-/// whose `known_at` is set on purpose.
-pub const PARSER_VERSION: &str = "risk-warnings-v4";
+/// whose `known_at` is set on purpose. v4 → v5: title classification follows
+/// D-68 (a revocation handing over to another warning is `Implement(B)`;
+/// forecasts, pre-audit notes and third-party opinions are not events).
+pub const PARSER_VERSION: &str = "risk-warnings-v5";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -1152,34 +1154,133 @@ fn sh_groups(value: &Value) -> Result<Vec<Vec<Value>>, Error> {
     Ok(groups)
 }
 
+/// D-68: a revocation that hands over to another warning is an
+/// implementation of the remaining state, not the end of every warning.
+///
+/// `撤销 A 并实施 B` / `撤销 A 并继续（被）实施 B` used to stop at the word
+/// 撤销 and close the interval. `apply_sh_event` already turns the event into a
+/// status transition when B differs and into a no-op when it is the status
+/// already open, so the adapter only has to report `Implement(B)`.
 fn classify_title(title: &str) -> Option<(RiskWarningAction, Option<RiskStatus>)> {
     let title = title.trim();
     if !title.contains("风险警示") && !title.contains("特别处理") {
         return None;
     }
-    // An application, a proposal, or a prediction is not an event. D-58
-    // admits implementation/revocation, not intent.
-    if title.contains("申请")
-        || title.contains("拟")
-        || title.contains("可能")
-        || title.contains("将被")
+    // An application, a proposal, a forecast, or a pre-audit note is not an
+    // event. D-58 admits implementation/revocation, not intent (D-68).
+    if [
+        "申请",
+        "拟",
+        "可能",
+        "将被",
+        "预计",
+        "预审计",
+        "将消除",
+        "争取",
+    ]
+    .iter()
+    .any(|word| title.contains(word))
     {
         return None;
     }
-    let status = if title.contains("退市风险警示") {
+    // An accountant's/lawyer's/sponsor's opinion is evidence about a filing,
+    // not the issuer's implementation or revocation announcement (D-68).
+    if is_third_party_document(title) {
+        return None;
+    }
+    if let Some((revoke_at, _)) = last_marker(title, &REVOCATION_MARKERS) {
+        let tail = &title[revoke_at..];
+        if let Some(segment) = implementation_after_revocation(tail) {
+            let status = warning_status(segment).or_else(|| warning_status(tail))?;
+            return Some((RiskWarningAction::Implement, Some(status)));
+        }
+        return Some((RiskWarningAction::Revoke, None));
+    }
+    let (_, implement_end) = first_marker(title, &IMPLEMENTATION_MARKERS)?;
+    let status = warning_status(&title[implement_end..]).or_else(|| warning_status(title))?;
+    Some((RiskWarningAction::Implement, Some(status)))
+}
+
+/// The words an SSE title uses for a revocation. `撤消` is the old spelling
+/// used by the source itself; `解除` appears in two 2004 titles. `取消` is kept
+/// from the pre-D-68 rule even though this corpus has no such title.
+const REVOCATION_MARKERS: [&str; 4] = ["撤销", "撤消", "取消", "解除"];
+const IMPLEMENTATION_MARKERS: [&str; 2] = ["实施", "实行"];
+/// Status phrases. `退市风险警示` contains `风险警示`; taking the earliest
+/// start of any marker makes the longer phrase win.
+const STATUS_MARKERS: [&str; 3] = ["退市风险警示", "特别处理", "风险警示"];
+const THIRD_PARTY_MARKERS: [&str; 12] = [
+    "事务所",
+    "会计师",
+    "律师",
+    "独立董事",
+    "监事会",
+    "保荐机构",
+    "财务顾问",
+    "核查意见",
+    "审核意见",
+    "法律意见",
+    "专项审核报告",
+    "审计报告",
+];
+
+fn is_third_party_document(title: &str) -> bool {
+    THIRD_PARTY_MARKERS
+        .iter()
+        .any(|marker| title.contains(marker))
+}
+
+fn first_marker<'a>(text: &str, markers: &[&'a str]) -> Option<(usize, usize)> {
+    markers
+        .iter()
+        .filter_map(|marker| text.find(marker).map(|start| (start, start + marker.len())))
+        .min_by_key(|(start, _)| *start)
+}
+
+fn last_marker<'a>(text: &str, markers: &[&'a str]) -> Option<(usize, usize)> {
+    markers
+        .iter()
+        .filter_map(|marker| {
+            text.rfind(marker)
+                .map(|start| (start, start + marker.len()))
+        })
+        .max_by_key(|(start, _)| *start)
+}
+
+/// `退市风险警示` dominates `其他风险警示`: one event carries one status, and
+/// D-58's interval model has no row that says both at once.
+fn warning_status(text: &str) -> Option<RiskStatus> {
+    if text.contains("退市风险警示") {
         Some(RiskStatus::DelistingRiskWarning)
-    } else if title.contains("特别处理") || title.contains("风险警示") {
+    } else if text.contains("特别处理") || text.contains("风险警示") || text.contains("风险")
+    {
         Some(RiskStatus::OtherRiskWarning)
     } else {
         None
-    };
-    if title.contains("撤销") || title.contains("取消") {
-        return Some((RiskWarningAction::Revoke, None));
     }
-    if title.contains("实施") || title.contains("实行") {
-        return status.map(|status| (RiskWarningAction::Implement, Some(status)));
+}
+
+/// The `B` clause of `撤销 A 并实施 B`, or `None` when the title only revokes.
+///
+/// The revoked object is the first status phrase after the revocation word. An
+/// implementation verb *before* that phrase belongs to the revoked object
+/// (`撤销对公司股票实行特别处理`); one after it is B (`撤销退市风险警示并
+/// 继续被实施其他风险警示`, `撤销…实施其他特别处理及变更简称`). The last
+/// such verb wins, because an earlier `被实施` may describe the clause being
+/// revoked (`撤销因重整而被实施的退市风险警示…继续被实施…`).
+fn implementation_after_revocation(tail: &str) -> Option<&str> {
+    let (_, object_end) = first_marker(tail, &STATUS_MARKERS)?;
+    let mut found = None;
+    let mut cursor = object_end;
+    while cursor < tail.len() {
+        let Some((_, end)) = first_marker(&tail[cursor..], &IMPLEMENTATION_MARKERS) else {
+            break;
+        };
+        let end = cursor + end;
+        found = Some(end);
+        cursor = end;
     }
-    None
+    found.map(|end| &tail[end..])
 }
 
 fn is_sh_a_code(code: &str) -> bool {
@@ -1553,8 +1654,8 @@ mod tests {
                 RiskWarningAction::Implement
             ]
         );
-        // The second group's attachment also classifies as an implementation;
-        // de-duplication by `(id, event)` keeps one event for it.
+        // The second group's attachment is a third-party audit opinion and is
+        // ignored (D-68); the body still supplies the implementation.
         assert_eq!(page.events[1].code, "600010");
         assert_eq!(page.events[1].status, Some(RiskStatus::OtherRiskWarning));
         assert_eq!(page.events[2].code, "600011");
@@ -1629,6 +1730,98 @@ mod tests {
                 RiskWarningAction::Implement,
                 Some(RiskStatus::OtherRiskWarning)
             ))
+        );
+    }
+
+    /// D-68: 撤销 A 并（继续被）实施 B is Implement(B); the interval moves to
+    /// B or stays put, it does not close.
+    #[test]
+    fn a_revocation_that_hands_over_to_another_warning_implements_it() {
+        for (title, status) in [
+            (
+                "某公司关于撤销退市风险警示并实施其他风险警示暨停牌的公告",
+                RiskStatus::OtherRiskWarning,
+            ),
+            (
+                "某公司关于撤销退市风险警示并继续被实施其他风险警示暨临时停牌的公告",
+                RiskStatus::OtherRiskWarning,
+            ),
+            (
+                "某公司关于撤销部分其他风险警示暨继续被实施退市风险警示及其他风险警示的公告",
+                RiskStatus::DelistingRiskWarning,
+            ),
+            (
+                "某公司关于撤销退市风险警示及实施其他特别处理的公告",
+                RiskStatus::OtherRiskWarning,
+            ),
+        ] {
+            assert_eq!(
+                classify_title(title),
+                Some((RiskWarningAction::Implement, Some(status))),
+                "{title}"
+            );
+        }
+        assert_eq!(
+            classify_title("某公司关于撤销退市风险警示并变更股票简称的公告"),
+            Some((RiskWarningAction::Revoke, None)),
+            "a revocation with no remaining warning still closes the interval"
+        );
+    }
+
+    /// D-68: forecasts/pre-audits and third-party opinions are evidence about
+    /// a filing, not the issuer's implementation or revocation.
+    #[test]
+    fn forecasts_preaudits_and_third_party_opinions_are_not_events() {
+        assert!(
+            classify_title(
+                "某公司关于公司股票被实施退市风险警示情形预计将消除的预审计情况专项说明"
+            )
+            .is_none()
+        );
+        assert!(classify_title("某公司关于公司股票被实施退市风险警示情形将消除的公告").is_none());
+        assert!(classify_title("某律师事务所关于某公司撤销其他风险警示的法律意见书").is_none());
+        assert!(classify_title("某会计师事务所关于某公司撤销其他风险警示的核查意见").is_none());
+    }
+
+    /// The two real `sh.600734` titles from 2022-01-29, unchanged: the
+    /// accountant's pre-audit note is not an implementation and the issuer's
+    /// hand-over keeps the delisting warning open instead of closing it.
+    #[test]
+    fn the_real_600734_titles_are_classified_as_the_source_states() {
+        assert_eq!(
+            classify_title(
+                "福建实达集团股份有限公司关于撤销相关风险警示并继续被实施退市风险警示的公告"
+            ),
+            Some((
+                RiskWarningAction::Implement,
+                Some(RiskStatus::DelistingRiskWarning)
+            ))
+        );
+        assert!(
+            classify_title(
+                "中兴财光华会计师事务所（特殊普通合伙）关于福建实达集团股份有限公司因财务类\
+                 退市指标被实施退市风险警示情形预计将消除的预审计情况专项说明"
+            )
+            .is_none()
+        );
+    }
+
+    /// D-68: `撤消` is the source's old spelling of 撤销, and `解除` is used by
+    /// two 2004 titles; both are revocations. `取消` stays supported although
+    /// this corpus has no such title.
+    #[test]
+    fn revocation_spellings_are_recognized() {
+        assert_eq!(
+            classify_title("国投电力撤消公司股票特别处理的公告"),
+            Some((RiskWarningAction::Revoke, None))
+        );
+        assert_eq!(
+            classify_title("*ST民丰关于公司股票解除退市风险警示公告"),
+            Some((RiskWarningAction::Revoke, None))
+        );
+        assert_eq!(
+            classify_title("某公司关于取消股票特别处理的公告"),
+            Some((RiskWarningAction::Revoke, None))
         );
     }
 
