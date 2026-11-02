@@ -1530,21 +1530,48 @@ fn yearly_signature(r: &Rig) -> Vec<String> {
     out
 }
 
+/// 150-item yearly fixture. The explicit `start_collection` selection budget
+/// is 100 (1..100), so the rig seeds 90 members and the remaining 60 get real
+/// published daily heads through the same batch-collection path, after the
+/// full catalog is published.
+fn yearly_batch_fixture(base: usize) -> Rig {
+    let seeded: Vec<String> = (0..90).map(|i| format!("{:06}", base + i)).collect();
+    let members: Vec<(&str, &str, u32)> = seeded
+        .iter()
+        .map(|code| ("sh", code.as_str(), day_u32(1)))
+        .collect();
+    let r = rig(&members);
+    let extra: Vec<String> = (90..150).map(|i| format!("sh.{:06}", base + i)).collect();
+    let mut codes = seeded;
+    codes.extend(
+        extra
+            .iter()
+            .map(|symbol| symbol.strip_prefix("sh.").unwrap().to_string()),
+    );
+    SqliteCatalog::new(r.tasks.clone())
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    seed_daily_heads(&r, &extra);
+    r
+}
+
 /// The yearly rederive is byte-identical whether the task is driven per item
 /// or per chunk, and the chunked path's `tasks` row writes scale with
 /// chunks, not items (PLANRUN-COMMIT-COST for yearly).
 #[test]
 fn yearly_batch_matches_per_item_and_scales_task_row_writes() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let codes: Vec<String> = (0..150).map(|i| format!("{:06}", 700_000 + i)).collect();
-    let members: Vec<(&str, &str, u32)> = codes
-        .iter()
-        .map(|code| ("sh", code.as_str(), day_u32(1)))
-        .collect();
     let derived = Utc::now();
 
     // Arm A: the pre-change per-item loop.
-    let old = rig(&members);
+    let old = yearly_batch_fixture(700_000);
     let old_plan = yearly_comparison_plan(&old);
     let _old_env = install_yearly_source(&old);
     let old_task = run(&old.api, "market.yearly", "run-y2", &old_plan)["task_id"]
@@ -1579,7 +1606,7 @@ fn yearly_batch_matches_per_item_and_scales_task_row_writes() {
     let old_signature = yearly_signature(&old);
 
     // Arm B: the chunked path.
-    let new = rig(&members);
+    let new = yearly_batch_fixture(710_000);
     let new_plan = yearly_comparison_plan(&new);
     let _new_env = install_yearly_source(&new);
     let new_task = run(&new.api, "market.yearly", "run-y2", &new_plan)["task_id"]
@@ -1633,12 +1660,7 @@ fn yearly_batch_matches_per_item_and_scales_task_row_writes() {
 #[test]
 fn yearly_batch_resumes_after_interruption() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let codes: Vec<String> = (0..150).map(|i| format!("{:06}", 710_000 + i)).collect();
-    let members: Vec<(&str, &str, u32)> = codes
-        .iter()
-        .map(|code| ("sh", code.as_str(), day_u32(1)))
-        .collect();
-    let r = rig(&members);
+    let r = yearly_batch_fixture(720_000);
     let py = yearly_comparison_plan(&r);
     let _env = install_yearly_source(&r);
     let accepted = run(&r.api, "market.yearly", "run-y2", &py);
