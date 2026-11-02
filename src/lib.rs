@@ -1,4 +1,5 @@
 pub mod calendar;
+pub mod call_log;
 pub mod catalog;
 pub mod catalog_tdx;
 pub mod collector;
