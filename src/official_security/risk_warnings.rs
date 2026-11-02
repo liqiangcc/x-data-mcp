@@ -1224,10 +1224,39 @@ const THIRD_PARTY_MARKERS: [&str; 12] = [
     "审计报告",
 ];
 
+/// A professional opinion is a third party's evidence; the issuer's own
+/// announcement can quote an audit report or an accounting firm in its title.
+/// The source puts the issuer's document type at the end (`…的公告`), so the
+/// marker guard only applies when the title does not end with 公告 after
+/// trimming and dropping trailing parenthetical notes.
 fn is_third_party_document(title: &str) -> bool {
+    if ends_with_announcement(title) {
+        return false;
+    }
     THIRD_PARTY_MARKERS
         .iter()
         .any(|marker| title.contains(marker))
+}
+
+fn ends_with_announcement(title: &str) -> bool {
+    let mut text = title.trim();
+    loop {
+        if text.ends_with("公告") {
+            return true;
+        }
+        let trimmed = text.trim_end();
+        let open = if trimmed.ends_with('）') {
+            trimmed.rfind('（')
+        } else if trimmed.ends_with(')') {
+            trimmed.rfind('(')
+        } else {
+            None
+        };
+        let Some(open) = open else {
+            return false;
+        };
+        text = trimmed[..open].trim_end();
+    }
 }
 
 fn first_marker(text: &str, markers: &[&str]) -> Option<(usize, usize)> {
@@ -1781,6 +1810,43 @@ mod tests {
         assert!(classify_title("某公司关于公司股票被实施退市风险警示情形将消除的公告").is_none());
         assert!(classify_title("某律师事务所关于某公司撤销其他风险警示的法律意见书").is_none());
         assert!(classify_title("某会计师事务所关于某公司撤销其他风险警示的核查意见").is_none());
+    }
+
+    /// The issuer's own announcement can name an audit report or accounting
+    /// firm; only a title that is *not* an announcement is a third-party
+    /// document (D-68 review #503).
+    #[test]
+    fn an_issuer_announcement_naming_an_audit_report_is_still_an_event() {
+        assert_eq!(
+            classify_title(
+                "某公司关于公司股票因2025年度审计报告被出具无法表示意见被实施退市风险警示的公告"
+            ),
+            Some((
+                RiskWarningAction::Implement,
+                Some(RiskStatus::DelistingRiskWarning)
+            ))
+        );
+        assert_eq!(
+            classify_title("某公司关于公司股票被实施其他风险警示的公告（更正后）"),
+            Some((
+                RiskWarningAction::Implement,
+                Some(RiskStatus::OtherRiskWarning)
+            )),
+            "a trailing parenthetical note does not hide the document type"
+        );
+    }
+
+    /// `其他风险` without the word 警示 is the one title in the census whose
+    /// status needs the bare 风险 match; keep it and pin it (D-68 review #503).
+    #[test]
+    fn a_bare_risk_status_after_a_hand_over_is_other_risk_warning() {
+        assert_eq!(
+            classify_title("某公司关于撤销公司股票退市风险警示及实施其他风险的公告"),
+            Some((
+                RiskWarningAction::Implement,
+                Some(RiskStatus::OtherRiskWarning)
+            ))
+        );
     }
 
     /// The two real `sh.600734` titles from 2022-01-29, unchanged: the
