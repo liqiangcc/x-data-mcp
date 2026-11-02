@@ -1,5 +1,8 @@
 //! Receipt-aware execution of accepted yearly tasks; no online source selection.
-use super::{Derivation, DerivationEvidence, results::YearlyRepository};
+use super::{
+    Derivation, DerivationEvidence,
+    results::{YearlyRepository, YearlyResultPlan},
+};
 use crate::{
     market_data::{CoverageEvidence, CoverageStatus, SourceError},
     market_storage::{
@@ -294,12 +297,173 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             self.repository.task(task_id)?,
         )))
     }
+    /// Plan-run yearly execution: prepare each item outside the writer, then
+    /// commit a chunk with one deferred task-row write. Items the batch
+    /// cannot carry (receipts, terminal/running stages, cancellation,
+    /// unverified source state, prepare failures) keep the authoritative
+    /// per-item `run_item` path. `Ok(None)` means the backend has no batch
+    /// surface and the caller must run the whole task per item.
+    pub fn run_items(
+        &self,
+        task_id: &str,
+        item_ids: &[String],
+        verifier: &dyn YearlyVerifier,
+    ) -> Result<Option<()>, Error> {
+        let _total = crate::stage_trace::span("yearly.run_items.total");
+        let chunk = crate::market_update::runner::EXEC_CHUNK;
+        let mut offset = 0;
+        while offset < item_ids.len() {
+            // Cancellation lands between chunks: committed chunks keep their
+            // receipts, the remaining items take the per-item path which owns
+            // the cancellation finish semantics.
+            if offset > 0 && self.repository.task_head(task_id)?.status == Status::CancelRequested {
+                break;
+            }
+            let end = (offset + chunk).min(item_ids.len());
+            let (plans, mut fallback) =
+                self.prepare_chunk(task_id, &item_ids[offset..end], verifier);
+            if !self.commit_prepared_chunk(task_id, plans, &mut fallback, offset == 0)? {
+                return Ok(None);
+            }
+            for item_id in fallback {
+                self.run_item(task_id, &item_id, verifier)?;
+            }
+            offset = end;
+        }
+        for item_id in &item_ids[offset.min(item_ids.len())..] {
+            self.run_item(task_id, item_id, verifier)?;
+        }
+        Ok(Some(()))
+    }
+    /// Read/derive half of one chunk. Never writes; every error and every
+    /// item whose authoritative path is not the batch falls back to
+    /// `run_item`, which reproduces the original outcome and bookkeeping.
+    fn prepare_chunk(
+        &self,
+        task_id: &str,
+        chunk: &[String],
+        verifier: &dyn YearlyVerifier,
+    ) -> (Vec<YearlyResultPlan>, Vec<String>) {
+        let mut plans = Vec::with_capacity(chunk.len());
+        let mut fallback = Vec::new();
+        for item_id in chunk {
+            match self.prepare_item(task_id, item_id, verifier) {
+                Ok(Some(plan)) => plans.push(plan),
+                Ok(None) | Err(_) => fallback.push(item_id.clone()),
+            }
+        }
+        (plans, fallback)
+    }
+    fn prepare_item(
+        &self,
+        task_id: &str,
+        item_id: &str,
+        verifier: &dyn YearlyVerifier,
+    ) -> Result<Option<YearlyResultPlan>, Error> {
+        let mut binding = match self.repository.task_item_binding(task_id, item_id)? {
+            Some(binding) => binding,
+            None => return Ok(None),
+        };
+        if !matches!(
+            binding.head.key.operation.as_str(),
+            "update_data" | "backfill_data"
+        ) || binding.head.key.dataset != "market.yearly"
+            || !matches!(
+                binding.head.key.contract_version.as_str(),
+                super::tasks::CONTRACT_VERSION | crate::data_supply::plan::RUN_CONTRACT_VERSION
+            )
+        {
+            return Ok(None);
+        }
+        if self
+            .repository
+            .yearly_item_receipt(task_id, item_id)?
+            .is_some()
+            || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
+            || binding.item.stage == Stage::Running
+            || binding.head.status.terminal()
+            || binding.item.stage == Stage::Finished
+            || binding.head.status == Status::CancelRequested
+            || binding.item.stage != Stage::Pending
+        {
+            return Ok(None);
+        }
+        // Pending is claimable by this run; Running must already be owned by
+        // this run and is re-claimed by the batch transaction.
+        if binding.head.status != Status::Pending
+            && (binding.head.status != Status::Running
+                || binding.head.owner_run_id.as_deref() != Some(self.run_id.as_str()))
+        {
+            return Ok(None);
+        }
+        // `prepare_yearly_result_prefetched` validates the plan against a
+        // binding that the per-item path only reaches after `StartItem`.
+        // Simulate that transition in memory (claim + start for a pending
+        // head, start for a running one); the batch transaction writes the
+        // real transition and overrides `expected_revision` before commit.
+        if binding.head.status == Status::Pending {
+            binding.head.status = Status::Running;
+            binding.head.owner_run_id = Some(self.run_id.clone());
+            binding.head.state_revision = binding.head.state_revision.saturating_add(2);
+        } else {
+            binding.head.state_revision = binding.head.state_revision.saturating_add(1);
+        }
+        binding.item.stage = Stage::Running;
+        self.derive_and_prepare(&mut binding, item_id, verifier, false)
+            .map(Some)
+    }
+    fn commit_prepared_chunk(
+        &self,
+        task_id: &str,
+        mut plans: Vec<YearlyResultPlan>,
+        fallback: &mut Vec<String>,
+        first: bool,
+    ) -> Result<bool, Error> {
+        if plans.is_empty() {
+            return Ok(true);
+        }
+        match self.repository.commit_yearly_batch(task_id, &mut plans) {
+            Ok(Some(results)) => {
+                if results.len() != plans.len() {
+                    return Err(Error::Integrity(
+                        "yearly batch result count does not match items".into(),
+                    ));
+                }
+                for (plan, result) in plans.iter().zip(results) {
+                    if result.is_err() {
+                        fallback.push(plan.command().item_id.clone());
+                    }
+                }
+            }
+            // The first chunk's `None` keeps the documented contract: the
+            // repository lacks the batch surface and the caller runs the
+            // whole task per item.
+            Ok(None) if first => return Ok(false),
+            // A mid-task `None`/structural error rolled the chunk back: every
+            // item in it keeps the per-item path.
+            Ok(None) | Err(_) => {
+                fallback.extend(plans.iter().map(|plan| plan.command().item_id.clone()));
+            }
+        }
+        Ok(true)
+    }
     fn derive_and_commit(
         &self,
         binding: &mut crate::task_control::ItemBinding,
         item_id: &str,
         verifier: &dyn YearlyVerifier,
     ) -> Result<Receipt, Error> {
+        let plan = self.derive_and_prepare(binding, item_id, verifier, true)?;
+        let _commit = crate::stage_trace::span("yearly.exec.commit");
+        self.repository.commit_yearly(&plan)
+    }
+    fn derive_and_prepare(
+        &self,
+        binding: &mut crate::task_control::ItemBinding,
+        item_id: &str,
+        verifier: &dyn YearlyVerifier,
+        check_head: bool,
+    ) -> Result<YearlyResultPlan, Error> {
         let frozen = &binding.item.spec.frozen_inputs;
         let base_id = frozen["base_daily_version_id"]
             .as_str()
@@ -379,14 +543,18 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             .map_err(|e| Error::Base(e.to_string()))?;
         drop(verify_span);
         let head_span = crate::stage_trace::span("yearly.exec.task_head");
-        let current = self.repository.task_head(&binding.head.task_id)?;
-        drop(head_span);
-        if current.status != Status::Running
-            || current.state_revision != binding.head.state_revision
-        {
-            return Err(Error::Conflict(
-                "task changed or cancelled during yearly verification".into(),
-            ));
+        if check_head {
+            let current = self.repository.task_head(&binding.head.task_id)?;
+            drop(head_span);
+            if current.status != Status::Running
+                || current.state_revision != binding.head.state_revision
+            {
+                return Err(Error::Conflict(
+                    "task changed or cancelled during yearly verification".into(),
+                ));
+            }
+        } else {
+            drop(head_span);
         }
         let id = crate::hash::sha256(
             serde_json::json!([binding.head.task_id, item_id])
@@ -425,7 +593,6 @@ impl<R: YearlyRepository + Clone> YearlyRunner<R> {
             Some(&base),
         )?;
         drop(prepare_span);
-        let _commit = crate::stage_trace::span("yearly.exec.commit");
-        self.repository.commit_yearly(&plan)
+        Ok(plan)
     }
 }

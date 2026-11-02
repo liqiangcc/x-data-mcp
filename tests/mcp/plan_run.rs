@@ -2,7 +2,7 @@
 //! digest-bound stateless plan workflow on the compact backend — digest
 //! determinism, stale/in-flight refusal, request replay and end-to-end
 //! execution through the existing worker.
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike as _, Utc};
 use serde_json::{Value, json};
 use std::{
     io::Write,
@@ -1375,6 +1375,653 @@ fn yearly_plan_derives_and_daily_inflight_blocks_yearly_run() {
     assert_ne!(py2["plan_id"], py["plan_id"]);
 }
 
+/// Install the inspected official-file source the yearly verifier gates on.
+fn install_yearly_source(r: &Rig) -> EnvReset {
+    let manifest_path = r._db.path().join("snapshot-manifest.json");
+    std::fs::write(&manifest_path, &r.snapshot.manifest).unwrap();
+    EnvReset::install(&manifest_path, &r.snapshot.root)
+}
+
+/// Pass 1 derives yearly heads from the seeded daily heads; appending one
+/// daily bar afterwards makes every yearly head `Behind`, so the returned
+/// plan carries the production `comparison` + `expected_yearly_head` fields.
+fn yearly_comparison_plan(r: &Rig) -> Value {
+    let _env = install_yearly_source(r);
+    let py = plan(&r.api, "market.yearly");
+    let y1 = run(&r.api, "market.yearly", "run-y1", &py);
+    let y1_task = y1["task_id"].as_str().unwrap().to_string();
+    r.api.call("run_worker_once", json!({})).unwrap();
+    let y1_done = r.tasks.read_task(&y1_task).unwrap().unwrap();
+    assert_eq!(
+        y1_done.task.status,
+        x_data_mcp::task_control::Status::Succeeded,
+        "pass-1 yearly task must derive every item"
+    );
+    let pd = plan(&r.api, "market.daily");
+    assert!(
+        pd["counts"]["eligible"].as_u64().unwrap() > 0,
+        "daily appends must be eligible: {pd}"
+    );
+    let d = run(&r.api, "market.daily", "run-d", &pd);
+    let d_task = d["task_id"].as_str().unwrap().to_string();
+    let d_ids: Vec<String> = r
+        .tasks
+        .read_task(&d_task)
+        .unwrap()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.spec.item_id.clone())
+        .collect();
+    let runner = x_data_mcp::market_update::runner::RangeRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+    };
+    runner
+        .run_items(&d_task, &d_ids, &AppendProvider)
+        .unwrap()
+        .expect("compact backend carries the daily batch");
+    let d_done = r.tasks.read_task(&d_task).unwrap().unwrap();
+    assert!(d_done.task.status.terminal());
+    let py2 = plan(&r.api, "market.yearly");
+    assert!(
+        py2["counts"]["eligible"].as_u64().unwrap() > 0,
+        "yearly heads must be Behind after the daily append: {py2}"
+    );
+    py2
+}
+
+fn yearly_task_ids(r: &Rig, task_id: &str) -> Vec<String> {
+    r.tasks
+        .read_task(task_id)
+        .unwrap()
+        .unwrap()
+        .items
+        .iter()
+        .map(|i| i.spec.item_id.clone())
+        .collect()
+}
+
+/// Every persisted yearly fact that must be identical between the per-item
+/// and chunked paths: series identity/content, every bar, and every event's
+/// kind plus content/base digests. Publication ids and timestamps are
+/// deliberately excluded (they bind a random task id / wall clock).
+fn yearly_signature(r: &Rig) -> Vec<String> {
+    let c = rusqlite::Connection::open_with_flags(
+        r.tasks.path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    let mut stmt = c
+        .prepare(
+            "SELECT entity,version_id,lower(hex(content_digest)),record_count,first_day,last_day \
+             FROM market_series WHERE period=2 ORDER BY entity",
+        )
+        .unwrap();
+    for row in stmt
+        .query_map([], |r| {
+            Ok(format!(
+                "series|{}|{}|{}|{}|{}|{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?
+            ))
+        })
+        .unwrap()
+    {
+        out.push(row.unwrap());
+    }
+    drop(stmt);
+    let mut stmt = c
+        .prepare(
+            "SELECT ms.entity,sb.trade_day,sb.open_units,sb.high_units,sb.low_units,\
+             sb.close_units,ifnull(sb.volume,-1),ifnull(sb.amount,''),ifnull(sb.r7_raw,-1) \
+             FROM series_bars sb JOIN market_series ms ON ms.series_key=sb.series_key \
+             WHERE ms.period=2 ORDER BY ms.entity,sb.trade_day",
+        )
+        .unwrap();
+    for row in stmt
+        .query_map([], |r| {
+            Ok(format!(
+                "bar|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, i64>(8)?
+            ))
+        })
+        .unwrap()
+    {
+        out.push(row.unwrap());
+    }
+    drop(stmt);
+    let mut stmt = c
+        .prepare(
+            "SELECT entity,kind,lower(hex(new_content_digest)),\
+             ifnull(lower(hex(old_content_digest)),''),\
+             ifnull(lower(hex(base_content_digest)),'') \
+             FROM market_events WHERE period=2 ORDER BY entity,seq",
+        )
+        .unwrap();
+    for row in stmt
+        .query_map([], |r| {
+            Ok(format!(
+                "event|{}|{}|{}|{}|{}",
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?
+            ))
+        })
+        .unwrap()
+    {
+        out.push(row.unwrap());
+    }
+    out
+}
+
+/// 150-item yearly fixture. The explicit `start_collection` selection budget
+/// is 100 (1..100), so the rig seeds 90 members and the remaining 60 get real
+/// published daily heads through the same batch-collection path, after the
+/// full catalog is published.
+fn yearly_batch_fixture(base: usize) -> Rig {
+    let seeded: Vec<String> = (0..90).map(|i| format!("{:06}", base + i)).collect();
+    let members: Vec<(&str, &str, u32)> = seeded
+        .iter()
+        .map(|code| ("sh", code.as_str(), day_u32(1)))
+        .collect();
+    let r = rig(&members);
+    let extra: Vec<String> = (90..150).map(|i| format!("sh.{:06}", base + i)).collect();
+    let mut codes = seeded;
+    codes.extend(
+        extra
+            .iter()
+            .map(|symbol| symbol.strip_prefix("sh.").unwrap().to_string()),
+    );
+    SqliteCatalog::new(r.tasks.clone())
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    seed_daily_heads(&r, &extra);
+    r
+}
+
+/// The yearly rederive is byte-identical whether the task is driven per item
+/// or per chunk, and the chunked path's `tasks` row writes scale with
+/// chunks, not items (PLANRUN-COMMIT-COST for yearly).
+#[test]
+fn yearly_batch_matches_per_item_and_scales_task_row_writes() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let derived = Utc::now();
+
+    // Arm A: the pre-change per-item loop.
+    let old = yearly_batch_fixture(700_000);
+    let old_plan = yearly_comparison_plan(&old);
+    let _old_env = install_yearly_source(&old);
+    let old_task = run(&old.api, "market.yearly", "run-y2", &old_plan)["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let old_ids = yearly_task_ids(&old, &old_task);
+    TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
+    old.backend
+        .compact_writer_authorizer(Some(task_write_probe))
+        .unwrap();
+    let old_runner = x_data_mcp::yearly_publication::runner::YearlyRunner {
+        repository: old.backend.clone(),
+        run_id: "run".into(),
+        derived_at: derived,
+    };
+    for item_id in &old_ids {
+        old_runner
+            .run_item(
+                &old_task,
+                item_id,
+                &x_data_mcp::yearly_publication::runner::OfficialYearlyVerifier,
+            )
+            .unwrap();
+    }
+    old.backend.compact_writer_authorizer(None).unwrap();
+    let writes_old = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        old.tasks.read_task(&old_task).unwrap().unwrap().task.status,
+        x_data_mcp::task_control::Status::Succeeded
+    );
+    let old_signature = yearly_signature(&old);
+
+    // Arm B: the chunked path.
+    let new = yearly_batch_fixture(700_000);
+    let new_plan = yearly_comparison_plan(&new);
+    let _new_env = install_yearly_source(&new);
+    let new_task = run(&new.api, "market.yearly", "run-y2", &new_plan)["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let new_ids = yearly_task_ids(&new, &new_task);
+    TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
+    new.backend
+        .compact_writer_authorizer(Some(task_write_probe))
+        .unwrap();
+    let new_runner = x_data_mcp::yearly_publication::runner::YearlyRunner {
+        repository: new.backend.clone(),
+        run_id: "run".into(),
+        derived_at: derived,
+    };
+    new_runner
+        .run_items(
+            &new_task,
+            &new_ids,
+            &x_data_mcp::yearly_publication::runner::OfficialYearlyVerifier,
+        )
+        .unwrap()
+        .expect("compact backend carries the yearly batch");
+    new.backend.compact_writer_authorizer(None).unwrap();
+    let writes_new = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        new.tasks.read_task(&new_task).unwrap().unwrap().task.status,
+        x_data_mcp::task_control::Status::Succeeded
+    );
+
+    assert_eq!(old_ids.len(), 150);
+    assert_eq!(new_ids.len(), 150);
+    assert_eq!(old_signature, yearly_signature(&new));
+    assert!(
+        writes_old >= 2 * old_ids.len(),
+        "per-item path must rewrite the task row ~twice per item: {writes_old}"
+    );
+    let chunks = new_ids.len().div_ceil(100);
+    assert!(
+        writes_new <= 2 * chunks + 8,
+        "chunked yearly writes {writes_new} must scale with {chunks} chunks, not {} items",
+        new_ids.len()
+    );
+    assert!(writes_new * 10 < writes_old);
+}
+
+/// A crash after the first committed chunk leaves only pending items; the
+/// startup reconcile closes the plan-run task as `interrupted`, and a fresh
+/// plan+run of the remainder keeps every committed yearly fact unchanged.
+#[test]
+fn yearly_batch_resumes_after_interruption() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = yearly_batch_fixture(720_000);
+    let py = yearly_comparison_plan(&r);
+    let _env = install_yearly_source(&r);
+    let accepted = run(&r.api, "market.yearly", "run-y2", &py);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    let ids = yearly_task_ids(&r, &task_id);
+    assert_eq!(ids.len(), 150);
+    let runner = x_data_mcp::yearly_publication::runner::YearlyRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+        derived_at: Utc::now(),
+    };
+    // Exactly the first committed chunk; the rest stay pending.
+    runner
+        .run_items(
+            &task_id,
+            &ids[..100],
+            &x_data_mcp::yearly_publication::runner::OfficialYearlyVerifier,
+        )
+        .unwrap()
+        .expect("compact backend carries the yearly batch");
+    let live = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(live.task.status, x_data_mcp::task_control::Status::Running);
+    assert_eq!(live.head().counts.finished, 100);
+    assert_eq!(live.head().counts.pending, 50);
+    let committed: std::collections::BTreeMap<String, String> = yearly_signature(&r)
+        .into_iter()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("series|")?;
+            let mut parts = rest.split('|');
+            Some((parts.next()?.to_string(), parts.next()?.to_string()))
+        })
+        .collect();
+    let first_entities: std::collections::BTreeSet<String> = ids[..100]
+        .iter()
+        .filter_map(|id| {
+            let parts: Vec<String> = serde_json::from_str(id).ok()?;
+            parts.get(1).cloned()
+        })
+        .collect();
+    assert_eq!(first_entities.len(), 100);
+    assert_eq!(committed.len(), 150);
+
+    // Startup reconcile: the vanished run's plan-run orphan closes.
+    r.tasks.reconcile_plan_run("restarted").unwrap();
+    let closed = r.tasks.read_task(&task_id).unwrap().unwrap();
+    assert_eq!(
+        closed.task.status,
+        x_data_mcp::task_control::Status::Interrupted
+    );
+    assert_eq!(closed.head().counts.finished, 100);
+    assert_eq!(closed.head().counts.pending, 50);
+
+    // Resume through the documented path: re-plan excludes the 100 fresh
+    // heads and runs only the remainder.
+    let resume_plan = plan(&r.api, "market.yearly");
+    assert_eq!(
+        resume_plan["counts"]["already_current"], 100,
+        "{resume_plan}"
+    );
+    assert_eq!(resume_plan["counts"]["eligible"], 50, "{resume_plan}");
+    let resumed = run(&r.api, "market.yearly", "run-y-resume", &resume_plan);
+    let resumed_task = resumed["task_id"].as_str().unwrap().to_string();
+    assert_eq!(resumed["item_count"], 50);
+    r.api.call("run_worker_once", json!({})).unwrap();
+    let done = r.tasks.read_task(&resumed_task).unwrap().unwrap();
+    assert_eq!(
+        done.task.status,
+        x_data_mcp::task_control::Status::Succeeded
+    );
+    assert_eq!(done.head().counts.finished, 50);
+
+    let all: std::collections::BTreeMap<String, String> = yearly_signature(&r)
+        .into_iter()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("series|")?;
+            let mut parts = rest.split('|');
+            Some((parts.next()?.to_string(), parts.next()?.to_string()))
+        })
+        .collect();
+    assert_eq!(all.len(), 150);
+    for entity in &first_entities {
+        assert_eq!(
+            all.get(entity),
+            committed.get(entity),
+            "resume changed {entity}"
+        );
+    }
+    let events: i64 = rusqlite::Connection::open_with_flags(
+        r.tasks.path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+    .query_row(
+        "SELECT count(*) FROM market_events WHERE period=2",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap();
+    assert_eq!(events, 300, "one pass-1 and one rederive event per entity");
+}
+
+/// Accept a yearly plan-run task directly from the current heads with the
+/// production frozen shape (`comparison` + `expected_yearly_head`) — the
+/// measurement arms below need an identical full-market task on the same
+/// database after the rederive pass.
+fn accept_yearly_no_change_task(r: &Rig, request_id: &str) -> String {
+    use x_data_mcp::data_supply::plan::{
+        PlanComparison, PlanItem, RUN_CONTRACT_VERSION, YearlyPlanItem, item_spec,
+    };
+    let c = rusqlite::Connection::open_with_flags(
+        r.tasks.path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut daily = std::collections::BTreeMap::new();
+    let mut stmt = c
+        .prepare("SELECT entity,version_id FROM market_series WHERE period=1 ORDER BY entity")
+        .unwrap();
+    for row in stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .unwrap()
+    {
+        let (entity, version) = row.unwrap();
+        daily.insert(entity, version);
+    }
+    drop(stmt);
+    let mut years_by_entity: std::collections::BTreeMap<String, std::collections::BTreeSet<i32>> =
+        std::collections::BTreeMap::new();
+    let mut stmt = c
+        .prepare(
+            "SELECT ms.entity,sb.trade_day FROM series_bars sb \
+             JOIN market_series ms ON ms.series_key=sb.series_key \
+             WHERE ms.period=1 ORDER BY ms.entity,sb.trade_day",
+        )
+        .unwrap();
+    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    for row in stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .unwrap()
+    {
+        let (entity, trade_day) = row.unwrap();
+        let date = epoch + chrono::Duration::days(trade_day);
+        years_by_entity
+            .entry(entity)
+            .or_default()
+            .insert(date.year());
+    }
+    drop(stmt);
+    let mut yearly = std::collections::BTreeMap::new();
+    let mut stmt = c
+        .prepare("SELECT entity,version_id FROM market_series WHERE period=2 ORDER BY entity")
+        .unwrap();
+    for row in stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+        .unwrap()
+    {
+        let (entity, version) = row.unwrap();
+        yearly.insert(entity, version);
+    }
+    drop(stmt);
+    drop(c);
+    let plan_id = "7a".repeat(32);
+    let mut scopes = std::collections::BTreeSet::new();
+    let mut items = Vec::with_capacity(daily.len());
+    for (entity, base) in &daily {
+        let scope = x_data_mcp::task_control::legacy::scope_id(entity, "year");
+        scopes.insert(scope.clone());
+        let prior = yearly.get(entity);
+        items.push(item_spec(
+            PlanItem::Yearly(YearlyPlanItem {
+                entity: entity.clone(),
+                base_daily_version_id: base.clone(),
+                base_integrity_sha256: base.clone(),
+                years: years_by_entity
+                    .get(entity)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+                expected_yearly_head: prior.cloned(),
+                comparison: prior.map(|version| PlanComparison {
+                    version_id: version.clone(),
+                    integrity_sha256: version.clone(),
+                }),
+            }),
+            &plan_id,
+            &serde_json::Value::Null,
+        ));
+    }
+    let target_day = calendar_day(day_u32(0));
+    let shared = json!({
+        "plan_id": plan_id,
+        "evidence_digest": plan_id,
+        "dataset": "market.yearly",
+        "generation_id": serde_json::Value::Null,
+        "target_day": target_day.to_string(),
+        "counts": {
+            "eligible": items.len(),
+            "already_current": 0,
+            "absent": 0,
+            "ineligible": 0,
+        },
+        "ineligible_reasons": [],
+    });
+    let command = x_data_mcp::task_control::Command {
+        key: x_data_mcp::task_control::CommandKey {
+            operation: "update_data".into(),
+            dataset: "market.yearly".into(),
+            contract_version: RUN_CONTRACT_VERSION.into(),
+        },
+        intent: json!({
+            "contract_version": RUN_CONTRACT_VERSION,
+            "plan_id": plan_id,
+            "dataset": "market.yearly",
+            "generation_id": serde_json::Value::Null,
+            "target_day": target_day.to_string(),
+            "item_count": items.len(),
+        }),
+    };
+    let work = x_data_mcp::task_control::FrozenWork {
+        items,
+        scopes,
+        shared_evidence: Some(shared),
+    };
+    let accepted = r
+        .tasks
+        .accept(request_id, &command, &work, "run", None)
+        .unwrap();
+    let x_data_mcp::task_control::RequestOutcome::Task(snapshot) = accepted.record.outcome else {
+        panic!("yearly measurement acceptance must bind a task")
+    };
+    snapshot.task.task_id
+}
+
+/// Production-shape offline measurement (XDM-171): one task, 5,223 items,
+/// the production `comparison` + `expected_yearly_head` frozen shape. The
+/// daily bars are sparse (one per present year) so the fixture can reach
+/// the production item/year count without the 16.8M-row daily window; the
+/// measured property is task-row bookkeeping, not EBS read bandwidth.
+/// Run explicitly: `cargo test --test mcp yearly_full_market_bookkeeping_measurement -- --ignored --nocapture`.
+#[test]
+#[ignore = "full-market measurement; run explicitly with --ignored"]
+fn yearly_full_market_bookkeeping_measurement() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    const EXTRA: usize = 5_222;
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let mut codes = vec!["600006".to_string()];
+    let mut symbols = vec!["sh.600006".to_string()];
+    let mut extra = Vec::with_capacity(EXTRA);
+    for i in 0..EXTRA {
+        let code = format!("{:06}", 700_000 + i);
+        extra.push(format!("sh.{code}"));
+        symbols.push(format!("sh.{code}"));
+        codes.push(code);
+    }
+    SqliteCatalog::new(r.tasks.clone())
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    let today = calendar_day(day_u32(0));
+    let years: Vec<i32> = ((today.year() - 13)..=today.year()).collect();
+    let epoch = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    let days: Vec<i64> = years
+        .iter()
+        .map(|year| (chrono::NaiveDate::from_ymd_opt(*year, 7, 1).unwrap() - epoch).num_days())
+        .collect();
+    seed_daily_heads_at(&r, &extra, &days);
+    let plan = yearly_comparison_plan(&r);
+    assert_eq!(plan["counts"]["eligible"], symbols.len() as u64, "{plan}");
+    let _env = install_yearly_source(&r);
+    let derived = Utc::now();
+    let rederive = run(&r.api, "market.yearly", "run-y-measure", &plan)["task_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let ids = yearly_task_ids(&r, &rederive);
+    let runner = x_data_mcp::yearly_publication::runner::YearlyRunner {
+        repository: r.backend.clone(),
+        run_id: "run".into(),
+        derived_at: derived,
+    };
+    TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
+    r.backend
+        .compact_writer_authorizer(Some(task_write_probe))
+        .unwrap();
+    let started = Instant::now();
+    runner
+        .run_items(
+            &rederive,
+            &ids,
+            &x_data_mcp::yearly_publication::runner::OfficialYearlyVerifier,
+        )
+        .unwrap()
+        .expect("compact backend carries the yearly batch");
+    let rederive_ms = started.elapsed().as_millis();
+    r.backend.compact_writer_authorizer(None).unwrap();
+    let writes_rederive = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
+    let rederive_done = r.tasks.read_task(&rederive).unwrap().unwrap();
+    assert_eq!(
+        rederive_done.task.status,
+        x_data_mcp::task_control::Status::Succeeded
+    );
+
+    // Two identical no_change full-market arms isolate bookkeeping only.
+    let old_task = accept_yearly_no_change_task(&r, "req-measure-old");
+    let old_ids = yearly_task_ids(&r, &old_task);
+    TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
+    r.backend
+        .compact_writer_authorizer(Some(task_write_probe))
+        .unwrap();
+    let started = Instant::now();
+    for item_id in &old_ids {
+        runner
+            .run_item(
+                &old_task,
+                item_id,
+                &x_data_mcp::yearly_publication::runner::OfficialYearlyVerifier,
+            )
+            .unwrap();
+    }
+    let old_ms = started.elapsed().as_millis();
+    r.backend.compact_writer_authorizer(None).unwrap();
+    let writes_old = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
+    let new_task = accept_yearly_no_change_task(&r, "req-measure-new");
+    let new_ids = yearly_task_ids(&r, &new_task);
+    TASK_ROW_WRITES.store(0, std::sync::atomic::Ordering::Relaxed);
+    r.backend
+        .compact_writer_authorizer(Some(task_write_probe))
+        .unwrap();
+    let started = Instant::now();
+    runner
+        .run_items(
+            &new_task,
+            &new_ids,
+            &x_data_mcp::yearly_publication::runner::OfficialYearlyVerifier,
+        )
+        .unwrap()
+        .expect("compact backend carries the yearly batch");
+    let new_ms = started.elapsed().as_millis();
+    r.backend.compact_writer_authorizer(None).unwrap();
+    let writes_new = TASK_ROW_WRITES.load(std::sync::atomic::Ordering::Relaxed);
+    let chunks = old_ids.len().div_ceil(100);
+    eprintln!(
+        "YEARLY MEASURE items={} years={} chunks={} rederive_new={rederive_ms}ms writes={writes_rederive} old_per_item={old_ms}ms writes={writes_old} new_batch={new_ms}ms writes={writes_new}",
+        ids.len(),
+        years.len(),
+        chunks
+    );
+    assert_eq!(ids.len(), 5_223);
+    assert!(writes_rederive <= 2 * chunks + 8);
+    assert!(writes_new <= 2 * chunks + 8);
+    assert!(writes_old >= 2 * old_ids.len());
+    assert!(writes_new * 10 < writes_old);
+}
+
 /// A-share-scale plan timing (TASK-DEVIN-IMPL-PLAN-RUN-1: 5k synthetic
 /// entities): phantom catalog members carry execution-start markers seeded
 /// straight into `task_item_execution_starts` (the selection layer only
@@ -1468,6 +2115,13 @@ fn vmhwm_kb() -> u64 {
 /// per-item `decide` scans quadratic — and finish each task so its
 /// scopes release before the plan resolution runs.
 fn seed_daily_heads(r: &Rig, symbols: &[String]) {
+    seed_daily_heads_at(r, symbols, &[1]);
+}
+
+/// Same seeding path with explicit bar days (epoch days), so a yearly
+/// fixture can carry several present years without materializing every
+/// daily bar of the production window.
+fn seed_daily_heads_at(r: &Rig, symbols: &[String], epoch_days: &[i64]) {
     use x_data_mcp::official_market::DailyCollectionRepository;
     use x_data_mcp::task_control::{
         Command, CommandKey, FrozenWork, RequestOutcome, TaskRepository,
@@ -1558,7 +2212,7 @@ fn seed_daily_heads(r: &Rig, symbols: &[String]) {
                 // Head day 1 — same lag as the rig seed so every member is
                 // eligible for the pending-day plan (day-2 heads classify
                 // `already_current` and would fall out of `items`).
-                bars: vec![bar(1)],
+                bars: epoch_days.iter().map(|day| bar(*day)).collect(),
                 coverage: CoverageEvidence::complete("seed"),
                 unit_currency: units(),
                 adjustment_evidence: AdjustmentEvidence::confirmed("qfq", "bound"),

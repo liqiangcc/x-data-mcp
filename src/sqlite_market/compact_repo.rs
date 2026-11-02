@@ -2299,104 +2299,65 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
             let tx = c
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(storage)?;
-            let command = plan.command();
-            // Replay first — the result-id anchor outranks every gate; a
-            // repeated command returns its recorded receipt. A result id
-            // bound to a different task/item is an identity conflict, not a
-            // replay.
-            if let Some(event) = series::event_by_result(&tx, &command.publication_id)? {
-                if event.task_id != command.task_id || event.item_id != command.item_id {
-                    return Err(Error::Conflict("result identity conflict".into()));
-                }
-                series_commit::consume_staged(&tx, Some(command.version_id.as_str()))?;
-                let receipt = receipt_for(&tx, &command.publication_id)?
-                    .ok_or_else(|| integrity("receipt event lacks result payload"))?;
-                tx.commit().map_err(storage)?;
-                return Ok(receipt);
-            }
-            let v = plan.publication.record.version();
-            let scope = Scope {
-                symbol: v.symbol.clone(),
-                period: Period::Year,
-            };
-            let lineage = v
-                .yearly_derivation
-                .as_ref()
-                .ok_or_else(|| integrity("yearly candidate lacks derivation lineage"))?;
-            let bars: Vec<CompactBar> = v
-                .records
-                .iter()
-                .map(|r| {
-                    CompactBar::from_bar(
-                        r,
-                        Period::Year,
-                        series::SeriesShape::FORWARD_STOCK_UNITS.price_scale,
-                    )
-                })
-                .collect::<Result<_, _>>()
-                .map_err(integrity)?;
-            let daily_base = series_commit::hex_digest(&plan.base.version().version_id)?;
-            let version_evidence = evidence_store::put_evidence(
-                &tx,
-                EvidenceKind::Version,
-                &json!(crate::compact_market::VersionEvidence {
-                    source: v.source.clone(),
-                    coverage_reason: plan.publication.record.batch.coverage.reason.clone(),
-                    unit_currency: plan.publication.record.batch.unit_currency.clone(),
-                    adjustment_evidence: plan.publication.record.batch.adjustment_evidence.clone(),
-                    excluded_bars: None,
-                }),
-            )?;
-            let event_evidence = evidence_store::put_evidence(
-                &tx,
-                EvidenceKind::Yearly,
-                &json!({
-                    "base_daily_version_id": plan.base.version().version_id,
-                    "algorithm_version": lineage.algorithm_version,
-                    "years": v.records.iter().map(|r| r.date.year()).collect::<Vec<_>>(),
-                }),
-            )?;
-            // `as_of_day` is the daily-content cutoff the derivation consumed
-            // (`last_trading_date`), not the publish wall-clock — reads clip
-            // the daily re-aggregation at it so a same-year append leaves the
-            // row merely Behind rather than unclassifiable.
-            let as_of = lineage.last_trading_date;
-            let occupancy = scope.occupancy_key();
-            let w = series_commit::Commit {
-                result_id: &command.publication_id,
-                task_id: &command.task_id,
-                item_id: &command.item_id,
-                run_id: &command.run_id,
-                occupancy_key: &occupancy,
-                expected_task_revision: command.expected_revision,
-                entity: &v.symbol,
-                period: Period::Year,
-                adjustment: crate::market_data::Adjustment::Forward,
-                base_version_id: plan.prior.as_ref().map(|p| p.version().version_id.as_str()),
-                change: series_commit::SeriesChange::Yearly {
-                    upserts: &bars,
-                    daily_base_digest: daily_base,
-                    algorithm_version: &lineage.algorithm_version,
-                    as_of_day: compact_market::epoch_day(as_of),
-                },
-                range_start_day: 0,
-                range_end_day: 0,
-                algorithm_version: &lineage.algorithm_version,
-                window_digest: None,
-                // Yearly rows inherit the daily head's source binding —
-                // the commit derives it from the daily series inside the tx.
-                source_binding_digest: None,
-                evidence_digest: Some(version_evidence),
-                coverage_status: Some(plan.publication.record.batch.coverage.status),
-                metadata_changed: false,
-                event_evidence_digest: event_evidence,
-                published_at: Some(v.published_at),
-                staged_version_id: Some(command.version_id.as_str()),
-                defer_task_row: false,
-            };
-            let receipt = series_commit::commit_series_tx(&tx, &w)?;
+            let receipt = commit_yearly_tx(&tx, plan, false)?;
             tx.commit().map_err(storage)?;
             Ok(receipt)
+        })
+    }
+    /// Plan-run yearly execution: prepare happens outside the writer, then
+    /// one transaction commits the chunk with `defer_task_row=true` so the
+    /// multi-MB `tasks` row moves once per chunk (`persist_head`) instead of
+    /// twice per item. An item failure rolls its savepoint back and restores
+    /// the in-memory head, so the caller's per-item `run_item` owns the
+    /// authoritative failure/cancellation semantics for that item.
+    fn commit_yearly_batch(
+        &self,
+        task_id: &str,
+        plans: &mut [crate::yearly_publication::results::YearlyResultPlan],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        if plans.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        self.write(|c| {
+            let _batch = crate::stage_trace::span("yearly.commit_batch");
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            let mut head = crate::sqlite_tasks::read_task_head(&tx, task_id)
+                .map_err(Error::Task)?
+                .ok_or(Error::Task(task_control::Error::TaskNotFound))?;
+            let run_id = plans[0].command().run_id.clone();
+            let mut persisted_revision = head.state_revision;
+            if head.status == task_control::Status::Pending {
+                task_control::decide_head(&mut head, None, &run_id, Change::Claim, Utc::now())
+                    .map_err(Error::Task)?;
+                crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
+                    .map_err(Error::Task)?;
+                persisted_revision = head.state_revision;
+            }
+            if head.status != task_control::Status::Running
+                || head.owner_run_id.as_deref() != Some(run_id.as_str())
+            {
+                // Cancellation, a foreign owner and every terminal state
+                // keep the per-item path; this transaction made no writes.
+                return Ok(Some(
+                    plans
+                        .iter()
+                        .map(|_| Err(Error::Conflict("yearly batch head is not runnable".into())))
+                        .collect(),
+                ));
+            }
+            let mut out = Vec::with_capacity(plans.len());
+            for plan in plans.iter_mut() {
+                out.push(commit_yearly_batch_item(&tx, &mut head, plan)?);
+            }
+            {
+                let _span = crate::stage_trace::span("yearly.commit_batch.head_persist");
+                crate::sqlite_tasks::persist_head(&tx, &head, persisted_revision)
+                    .map_err(Error::Task)?;
+            }
+            tx.commit().map_err(storage)?;
+            Ok(Some(out))
         })
     }
     fn yearly_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
@@ -2404,6 +2365,207 @@ impl crate::yearly_publication::results::YearlyRepository for SqliteCompactMarke
     }
     fn yearly_item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
         <Self as RangeRepository>::item_receipt(self, task, item)
+    }
+}
+
+/// One yearly commit inside the caller's transaction. `defer_task_row`
+/// selects the chunked path: the item row is finished but the `tasks` row
+/// update is left to the caller's per-chunk `persist_head`.
+fn commit_yearly_tx(
+    tx: &Connection,
+    plan: &crate::yearly_publication::results::YearlyResultPlan,
+    defer_task_row: bool,
+) -> Result<Receipt, Error> {
+    let command = plan.command();
+    // Replay first — the result-id anchor outranks every gate; a
+    // repeated command returns its recorded receipt. A result id
+    // bound to a different task/item is an identity conflict, not a
+    // replay.
+    if let Some(event) = series::event_by_result(tx, &command.publication_id)? {
+        if event.task_id != command.task_id || event.item_id != command.item_id {
+            return Err(Error::Conflict("result identity conflict".into()));
+        }
+        series_commit::consume_staged(tx, Some(command.version_id.as_str()))?;
+        return receipt_for(tx, &command.publication_id)?
+            .ok_or_else(|| integrity("receipt event lacks result payload"));
+    }
+    let v = plan.publication.record.version();
+    let scope = Scope {
+        symbol: v.symbol.clone(),
+        period: Period::Year,
+    };
+    let lineage = v
+        .yearly_derivation
+        .as_ref()
+        .ok_or_else(|| integrity("yearly candidate lacks derivation lineage"))?;
+    let bars: Vec<CompactBar> = v
+        .records
+        .iter()
+        .map(|r| {
+            CompactBar::from_bar(
+                r,
+                Period::Year,
+                series::SeriesShape::FORWARD_STOCK_UNITS.price_scale,
+            )
+        })
+        .collect::<Result<_, _>>()
+        .map_err(integrity)?;
+    let daily_base = series_commit::hex_digest(&plan.base.version().version_id)?;
+    let version_evidence = evidence_store::put_evidence(
+        tx,
+        EvidenceKind::Version,
+        &json!(crate::compact_market::VersionEvidence {
+            source: v.source.clone(),
+            coverage_reason: plan.publication.record.batch.coverage.reason.clone(),
+            unit_currency: plan.publication.record.batch.unit_currency.clone(),
+            adjustment_evidence: plan.publication.record.batch.adjustment_evidence.clone(),
+            excluded_bars: None,
+        }),
+    )?;
+    let event_evidence = evidence_store::put_evidence(
+        tx,
+        EvidenceKind::Yearly,
+        &json!({
+            "base_daily_version_id": plan.base.version().version_id,
+            "algorithm_version": lineage.algorithm_version,
+            "years": v.records.iter().map(|r| r.date.year()).collect::<Vec<_>>(),
+        }),
+    )?;
+    // `as_of_day` is the daily-content cutoff the derivation consumed
+    // (`last_trading_date`), not the publish wall-clock — reads clip
+    // the daily re-aggregation at it so a same-year append leaves the
+    // row merely Behind rather than unclassifiable.
+    let as_of = lineage.last_trading_date;
+    let occupancy = scope.occupancy_key();
+    let w = series_commit::Commit {
+        result_id: &command.publication_id,
+        task_id: &command.task_id,
+        item_id: &command.item_id,
+        run_id: &command.run_id,
+        occupancy_key: &occupancy,
+        expected_task_revision: command.expected_revision,
+        entity: &v.symbol,
+        period: Period::Year,
+        adjustment: crate::market_data::Adjustment::Forward,
+        base_version_id: plan.prior.as_ref().map(|p| p.version().version_id.as_str()),
+        change: series_commit::SeriesChange::Yearly {
+            upserts: &bars,
+            daily_base_digest: daily_base,
+            algorithm_version: &lineage.algorithm_version,
+            as_of_day: compact_market::epoch_day(as_of),
+        },
+        range_start_day: 0,
+        range_end_day: 0,
+        algorithm_version: &lineage.algorithm_version,
+        window_digest: None,
+        // Yearly rows inherit the daily head's source binding —
+        // the commit derives it from the daily series inside the tx.
+        source_binding_digest: None,
+        evidence_digest: Some(version_evidence),
+        coverage_status: Some(plan.publication.record.batch.coverage.status),
+        metadata_changed: false,
+        event_evidence_digest: event_evidence,
+        published_at: Some(v.published_at),
+        staged_version_id: Some(command.version_id.as_str()),
+        defer_task_row,
+    };
+    series_commit::commit_series_tx(tx, &w)
+}
+
+/// One prepared item inside `commit_yearly_batch`: start the item, commit
+/// the payload with the task row deferred, then advance the in-memory head.
+/// Any error restores the head and the savepoint so the caller can replay
+/// the item through the authoritative per-item path.
+fn commit_yearly_batch_item(
+    c: &Connection,
+    head: &mut task_control::TaskHead,
+    plan: &mut crate::yearly_publication::results::YearlyResultPlan,
+) -> Result<Result<Receipt, Error>, Error> {
+    let (result_id, item_id, run_id) = {
+        let command = plan.command();
+        (
+            command.publication_id.clone(),
+            command.item_id.clone(),
+            command.run_id.clone(),
+        )
+    };
+    // A receipt committed between prepare and this transaction keeps the
+    // per-item replay semantics; never re-finish an item in the batch.
+    if series::event_by_result(c, &result_id)?.is_some() {
+        return Ok(Err(Error::Conflict(
+            "yearly result already committed; per-item replay required".into(),
+        )));
+    }
+    let mut item_row = crate::sqlite_tasks::read_task_item(c, &head.task_id, &item_id)
+        .map_err(Error::Task)?
+        .ok_or(Error::Task(task_control::Error::RevisionConflict))?;
+    let before = head.clone();
+    c.execute_batch("SAVEPOINT yearly_batch_item")
+        .map_err(storage)?;
+    let outcome = (|| -> Result<Receipt, Error> {
+        let now = Utc::now();
+        task_control::decide_head(
+            head,
+            Some(&mut item_row),
+            &run_id,
+            Change::StartItem(item_id.clone()),
+            now,
+        )
+        .map_err(Error::Task)?;
+        crate::sqlite_tasks::write_item_row(c, &head.task_id, &item_row).map_err(Error::Task)?;
+        c.execute(
+            "INSERT INTO task_item_execution_starts VALUES(?1,?2,?3,?4,?5)",
+            params![
+                &head.task_id,
+                &item_id,
+                &run_id,
+                i64::try_from(head.state_revision)
+                    .map_err(|_| integrity("task revision out of range"))?,
+                now.to_rfc3339()
+            ],
+        )
+        .map_err(storage)?;
+        let expected = head.state_revision;
+        plan.publication.command.expected_revision = expected;
+        if let Some(command) = plan.audit.get_mut("command").and_then(Value::as_object_mut) {
+            command.insert("expected_revision".into(), json!(expected));
+        }
+        commit_yearly_tx(c, plan, true)
+    })();
+    match outcome {
+        Ok(receipt) => {
+            c.execute_batch("RELEASE yearly_batch_item")
+                .map_err(storage)?;
+            // `commit_yearly_tx` wrote the canonical finished item row; the
+            // in-memory row still holds the running stage this transition
+            // advances.
+            task_control::decide_head(
+                head,
+                Some(&mut item_row),
+                &run_id,
+                Change::FinishItem(
+                    item_id,
+                    task_control::ItemOutcome {
+                        success: true,
+                        error: None,
+                        evidence: Some(json!({
+                            "result_id": receipt.publication_id.clone(),
+                            "result_kind": "market_update"
+                        })),
+                    },
+                ),
+                Utc::now(),
+            )
+            .map_err(Error::Task)?;
+            commit_terminal(head);
+            Ok(Ok(receipt))
+        }
+        Err(error) => {
+            c.execute_batch("ROLLBACK TO yearly_batch_item; RELEASE yearly_batch_item")
+                .map_err(storage)?;
+            *head = before;
+            Ok(Err(error))
+        }
     }
 }
 

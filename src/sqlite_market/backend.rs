@@ -1134,6 +1134,24 @@ impl crate::yearly_publication::results::YearlyRepository for MarketBackend {
             Self::Compact(m) => m.commit_yearly(plan),
         }
     }
+    fn commit_yearly_batch(
+        &self,
+        task_id: &str,
+        plans: &mut [crate::yearly_publication::results::YearlyResultPlan],
+    ) -> Result<Option<Vec<Result<Receipt, Error>>>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::yearly_publication::results::YearlyRepository::commit_yearly_batch(
+                    m, task_id, plans,
+                )
+            }
+            Self::Compact(m) => {
+                crate::yearly_publication::results::YearlyRepository::commit_yearly_batch(
+                    m, task_id, plans,
+                )
+            }
+        }
+    }
     fn yearly_receipt(&self, id: &str) -> Result<Option<Receipt>, Error> {
         match self {
             Self::Legacy(m) => m.yearly_receipt(id),
