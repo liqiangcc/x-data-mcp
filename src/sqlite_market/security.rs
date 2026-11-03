@@ -668,6 +668,7 @@ pub(crate) fn commit_security_master(
 pub struct EtfDelistingDate {
     pub exchange: Exchange,
     pub code: String,
+    pub announcement_date: chrono::NaiveDate,
     pub delisting_date: chrono::NaiveDate,
     pub doc_sha256: String,
     pub extraction_sha256: String,
@@ -696,6 +697,7 @@ pub(crate) fn apply_etf_delisting(
     };
     let binding = existing.source_binding_digest;
     let mut changed = 0usize;
+    let mut renamed: Vec<(Exchange, String, NaiveDate)> = Vec::new();
     for update in updates {
         let Some(row) = rows
             .iter_mut()
@@ -705,20 +707,41 @@ pub(crate) fn apply_etf_delisting(
         else {
             continue;
         };
-        if row.delisting_date == Some(update.delisting_date)
-            && row.delisting_source == DelistingSource::ExchangeList
+        // One function owns the live and replay row values (M3-2 PR-A2
+        // review M3): same effective_from/effective_to/reason on both paths.
+        let values = crate::official_security::etf_delisting::delisted_row_values(
+            update.announcement_date,
+            update.delisting_date,
+        );
+        if row.delisting_date == Some(values.delisting_date)
+            && row.delisting_source == values.delisting_source
+            && row.delisting_reason_class == values.delisting_reason_class
+            && row.effective_to == Some(values.effective_to)
+            && row.effective_from == values.effective_from
         {
             continue;
         }
-        row.delisting_date = Some(update.delisting_date);
+        if row.effective_from != values.effective_from {
+            renamed.push((row.exchange, row.code.clone(), row.effective_from));
+            row.effective_from = values.effective_from;
+        }
+        row.delisting_date = Some(values.delisting_date);
         row.delisting_date_tdx = None;
-        row.delisting_source = DelistingSource::ExchangeList;
-        row.delisting_reason_class = DelistingReason::Other;
-        row.effective_to = Some(update.delisting_date);
+        row.delisting_source = values.delisting_source;
+        row.delisting_reason_class = values.delisting_reason_class;
+        row.effective_to = Some(values.effective_to);
+        row.known_at = Some(values.effective_from);
         changed += 1;
     }
     if changed == 0 {
         return Ok(0);
+    }
+    for (exchange, code, from) in &renamed {
+        c.execute(
+            "DELETE FROM security_master WHERE exchange=?1 AND code=?2 AND effective_from=?3",
+            params![exchange.as_str(), code, compact_market::epoch_day(*from)],
+        )
+        .map_err(storage)?;
     }
     let digest: Digest = assembly::assembly_digest(&rows, &migrations);
     let bundle = json!({

@@ -90,6 +90,41 @@ pub const SZSE_PAGE_SIZE: usize = 50;
 /// Maximum number of days between an announcement and its effective day.
 pub const MAX_ANNOUNCEMENT_LEAD_DAYS: i64 = 9;
 
+/// The row values both the live item and `replay --scope exchange` write for a
+/// D-72 extraction. One function owns them so the two paths cannot drift.
+///
+/// `effective_to` is the A-share convention (exclusive upper bound = the
+/// delisting-effective day). `effective_from` is normally the announcement day;
+/// when the announcement and the delisting day are the same (zero lead), the
+/// interval would be empty, so the documented rule takes the day before the
+/// delisting day instead of moving the upper bound with `+1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DelistedRowValues {
+    pub effective_from: NaiveDate,
+    pub effective_to: NaiveDate,
+    pub delisting_date: NaiveDate,
+    pub delisting_source: DelistingSource,
+    pub delisting_reason_class: crate::security_master::DelistingReason,
+}
+
+/// Shared D-72 row rule (see [`DelistedRowValues`]).
+pub fn delisted_row_values(
+    announcement_date: NaiveDate,
+    delisting_date: NaiveDate,
+) -> DelistedRowValues {
+    let floor = delisting_date.pred_opt().unwrap_or(delisting_date);
+    DelistedRowValues {
+        effective_from: announcement_date.min(floor),
+        effective_to: delisting_date,
+        delisting_date,
+        // The PDF is an exchange disclosure. We keep the existing
+        // `exchange_list` vocabulary instead of adding a migration; the
+        // evidence bundle names the PDF sha and extraction record.
+        delisting_source: DelistingSource::ExchangeList,
+        delisting_reason_class: crate::security_master::DelistingReason::Other,
+    }
+}
+
 /// The two admitted announcement indexes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AnnouncementKind {
@@ -173,7 +208,15 @@ pub fn plans() -> Vec<(AnnouncementKind, AcquisitionPlan)> {
 
 /// The full quarter windows a complete read needs for both sources.
 pub fn windows(kind: AnnouncementKind, today: NaiveDate) -> Result<Vec<Segment>, String> {
-    quarter_segments(kind.window_start(), today).map_err(|error| error.to_string())
+    // Close the window before "today", the same rule as A-3: a new quarter's
+    // first day then still has the previous quarter as its open/closed tail,
+    // so a daily item that runs before that day's `tail` refresh cannot demand
+    // a quarter the refresh has not frozen yet. An announcement made today is
+    // picked up by the next run.
+    let Some(end) = today.pred_opt() else {
+        return Err("today has no previous day".to_string());
+    };
+    quarter_segments(kind.window_start(), end).map_err(|error| error.to_string())
 }
 
 /// Main-announcement index keyed by entity.
@@ -427,15 +470,6 @@ pub fn read(
     {
         let windows = windows(kind, today)
             .map_err(|error| EtfDelistingError::invalid("source_invalid", error))?;
-        let (_, plan) = planned
-            .iter()
-            .find(|(planned, _)| *planned == kind)
-            .ok_or_else(|| {
-                EtfDelistingError::invalid(
-                    "source_invalid",
-                    format!("{}: no acquisition plan", kind.label()),
-                )
-            })?;
         let read = reader.windows(
             kind.source(),
             &plans,
@@ -472,7 +506,6 @@ pub fn read(
                 ),
             ));
         }
-        let _ = plan;
     }
     let main = main_announcements(&rows);
     let extractions = read_extractions(store, &BTreeMap::new())?;
@@ -613,9 +646,7 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<Announcement>, EtfDelistingError> {
                     "SZSE ETF notice: a row has no publishTime",
                 )
             })?;
-        let url = text(row.get("attachPath"))
-            .or_else(|| text(row.get("attachPath")))
-            .unwrap_or_default();
+        let url = text(row.get("attachPath")).unwrap_or_default();
         let codes = row
             .get("secCode")
             .and_then(Value::as_array)
@@ -912,7 +943,6 @@ pub fn is_etf_candidate_code(exchange: Exchange, code: &str) -> bool {
         return false;
     }
     let prefix3 = &code[..3];
-    let prefix2 = &code[..2];
     match exchange {
         Exchange::Sh => matches!(
             prefix3,
@@ -935,7 +965,7 @@ pub fn is_etf_candidate_code(exchange: Exchange, code: &str) -> bool {
                 | "588"
                 | "589"
         ),
-        Exchange::Sz => matches!(prefix2, "15") && matches!(&code[..3], "158" | "159"),
+        Exchange::Sz => matches!(prefix3, "158" | "159"),
         Exchange::Bj => false,
     }
 }
@@ -968,27 +998,28 @@ pub fn member_facts(
             // it has ETF series and otherwise checked `last_operating_day`.
             extraction.validate(last_bars.get(entity).copied())?;
         }
-        let first_seen = extraction
-            .map(|record| record.announcement_date)
-            .unwrap_or(announcement.announcement_date);
         let listing = tdx_listing_dates
             .get(&(market(exchange), code.clone()))
             .copied();
-        let (delisting_date, delisting_source, effective_to) = match extraction {
-            Some(record) => (
-                Some(record.delisting_date),
-                DelistingSource::ExchangeList,
-                // `effective_to` is exclusive and the row starts at the
-                // announcement day, so a zero-lead announcement still needs a
-                // non-empty interval. The delisting date itself stays exact.
-                Some(
-                    record
-                        .delisting_date
-                        .succ_opt()
-                        .unwrap_or(record.delisting_date),
-                ),
+        let (first_seen, delisting_date, delisting_source, effective_to, reason) = match extraction
+        {
+            Some(record) => {
+                let values = delisted_row_values(record.announcement_date, record.delisting_date);
+                (
+                    values.effective_from,
+                    Some(values.delisting_date),
+                    values.delisting_source,
+                    Some(values.effective_to),
+                    values.delisting_reason_class,
+                )
+            }
+            None => (
+                announcement.announcement_date,
+                None,
+                DelistingSource::Unknown,
+                announcement.announcement_date.succ_opt(),
+                crate::security_master::DelistingReason::Unknown,
             ),
-            None => (None, DelistingSource::Unknown, first_seen.succ_opt()),
         };
         facts.push(MemberFact {
             exchange,
@@ -1005,6 +1036,7 @@ pub fn member_facts(
             effective_to,
             delisting_date,
             delisting_source,
+            delisting_reason_class: reason,
             announcement_date: Some(announcement.announcement_date),
             announcement_url: Some(announcement.url.clone()),
             extraction: extraction.map(|record| record.doc_sha256.clone()),

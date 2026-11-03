@@ -794,6 +794,7 @@ fn apply_etf_delisting(store: &SourceStore, database: &Path) -> Result<usize, St
             |((exchange, code), record)| crate::sqlite_market::security::EtfDelistingDate {
                 exchange: *exchange,
                 code: code.clone(),
+                announcement_date: record.announcement_date,
                 delisting_date: record.delisting_date,
                 doc_sha256: record.doc_sha256.clone(),
                 extraction_sha256: extraction_sha.clone(),

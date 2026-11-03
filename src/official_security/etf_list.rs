@@ -719,6 +719,7 @@ pub fn member_facts(
                 .copied(),
             delisting_date: None,
             delisting_source: crate::security_master::DelistingSource::Unknown,
+            delisting_reason_class: crate::security_master::DelistingReason::Unknown,
             announcement_date: None,
             announcement_url: None,
             extraction: None,

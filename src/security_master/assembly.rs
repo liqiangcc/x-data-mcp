@@ -149,6 +149,7 @@ pub struct MemberFact {
     /// Exact delisting-effective day from a frozen announcement extraction.
     pub delisting_date: Option<NaiveDate>,
     pub delisting_source: DelistingSource,
+    pub delisting_reason_class: DelistingReason,
     /// Announcement day (evidence only; it is not the effective day, D-71).
     pub announcement_date: Option<NaiveDate>,
     pub announcement_url: Option<String>,
@@ -234,6 +235,7 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
                 if current.delisting_date.is_none() && fact.delisting_date.is_some() {
                     current.delisting_date = fact.delisting_date;
                     current.delisting_source = fact.delisting_source;
+                    current.delisting_reason_class = fact.delisting_reason_class;
                     current.announcement_date = fact.announcement_date;
                     current.announcement_url = fact.announcement_url.clone();
                     current.extraction = fact.extraction.clone();
@@ -279,7 +281,11 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
             } else {
                 DelistingSource::Unknown
             },
-            delisting_reason_class: DelistingReason::Unknown,
+            delisting_reason_class: if fact.delisting_date.is_some() {
+                fact.delisting_reason_class
+            } else {
+                DelistingReason::Unknown
+            },
             arrangement_start: None,
             arrangement_end: None,
             listing_conflict: false,

@@ -408,6 +408,10 @@ D-71 准入的两个公告索引也走同一入口：
   同一公告按 URL 去重。信封解析器 `exchange-szse-announcement-page-v1`。
 - 两个来源只产生**候选 ∩ 公告命中**的退市 ETF 身份；代码段或「`hsjday` 有、名单无」单独
   不构成身份（D-71）。公告日作为证据另存，不等于终止上市生效日。
+- 窗口**截至昨天**（与 A-3 同一规则）：新季度第一天日更若先于当天 `tail` 运行，所需窗口仍是
+  上一季度，不会因缺当前季度页而 `source_snapshot_not_found`；当天公告由下一次运行拾取。
+  日更 Skill 的正常顺序仍是 `tail → plan/run`（见 [daily-sync](daily-sync.md)），截至昨天是
+  对顺序抖动的兜底，不是取消刷新。
 - D-72 的 PDF 与提取 CSV 通过 `source_store import --format etf-delisting` 冻结
   （`etf_delist_pdf` / `etf_delist_extract`），`replay --scope exchange --db` 把提取结果写进
   已有 class=2 行的 `delisting_date`；生产代码不解析 PDF。校验

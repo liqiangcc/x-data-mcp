@@ -292,6 +292,9 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
     （实测 1 只：`sz159986`；正式与提示性两版的终止上市日 7/7 相同）。
   - 校验：`公告日 ≤ 终止上市日 ≤ 公告日 + 9 天`，且终止上市日晚于该代码 `.day` 末根 bar；
     违反即 fail-closed。提取结果与 PDF 只进来源库，不提交公开仓库。
+  - 落库：日更与 replay 共用 `delisted_row_values`；`effective_to=终止上市日`（排他上界，与 A 股
+    一致）、`delisting_reason_class=other`。零提前量（公告日=终止上市日）时
+    `effective_from=终止上市日-1`，保证区间非空且不改变退市上界。
 - **单调身份**：来源库里**所有已冻结的名单快照 + 退市公告取并集**，首次出现定 `effective_from`；
   移出名单不删行。`sh_sz_etf_listed_ever` = 并集，`sh_sz_etf_current` = 最新快照成员。这样已采集的
   ETF 序列不会因为一次名单刷新失去主表行。

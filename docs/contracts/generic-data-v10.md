@@ -52,6 +52,8 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
 - `effective_from`/`known_at` 是该成员第一次出现在已冻结名单快照或退市公告的日期。
 - 退市 ETF：`delisting_date` 仅在 D-72 提取结果存在时写精确日（`delisting_source=exchange_list`，
   证据里带 PDF sha 与提取记录）；只有公告索引时保持 `NULL`（unknown），公告日作为证据另存。
+  日更与 replay 共用同一落库函数：`effective_to=终止上市日`、`delisting_reason_class=other`；
+  零提前量（公告日=终止上市日）时 `effective_from=终止上市日-1`，区间非空且上界不被 `+1` 改写。
 - 身份写入器是来源无关的：各来源产出 `security_master::assembly::MemberFact`，
   `member_rows` 统一合并（同一代码取最早出现、上市日冲突 fail-closed）并写 class=2 行。
 - A 股 `security_master` 行内容不变；`market_series`、A 股导出与 A 股 `query_data` 输出不变。

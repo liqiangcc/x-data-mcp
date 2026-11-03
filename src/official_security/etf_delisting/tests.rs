@@ -194,7 +194,11 @@ fn extraction_turns_an_announcement_identity_into_an_exact_delisting_date() {
     .unwrap();
     assert_eq!(facts[0].delisting_date, Some(day(2026, 8, 5)));
     assert_eq!(facts[0].delisting_source, DelistingSource::ExchangeList);
-    assert_eq!(facts[0].effective_to, Some(day(2026, 8, 6)));
+    assert_eq!(
+        facts[0].delisting_reason_class,
+        crate::security_master::DelistingReason::Other
+    );
+    assert_eq!(facts[0].effective_to, Some(day(2026, 8, 5)));
     assert_eq!(facts[0].extraction, Some("cd".repeat(32)));
 }
 
@@ -372,4 +376,31 @@ fn an_sse_unpaged_quiet_window_is_one_complete_empty_page() {
     assert_eq!(envelope.page_count, 1);
     assert_eq!(envelope.rows, 0);
     assert_eq!(envelope.total, None);
+}
+
+#[test]
+fn zero_lead_extraction_moves_the_start_not_the_delisting_upper_bound() {
+    let values = delisted_row_values(day(2026, 1, 10), day(2026, 1, 10));
+    assert_eq!(values.effective_from, day(2026, 1, 9));
+    assert_eq!(values.effective_to, day(2026, 1, 10));
+    assert_eq!(values.delisting_date, day(2026, 1, 10));
+    assert_eq!(values.delisting_source, DelistingSource::ExchangeList);
+    assert_eq!(
+        values.delisting_reason_class,
+        crate::security_master::DelistingReason::Other
+    );
+
+    let normal = delisted_row_values(day(2026, 1, 2), day(2026, 1, 10));
+    assert_eq!(normal.effective_from, day(2026, 1, 2));
+    assert_eq!(normal.effective_to, day(2026, 1, 10));
+}
+
+#[test]
+fn announcement_windows_stop_at_yesterday_so_a_new_quarter_needs_no_todays_tail() {
+    let quarter_start = day(2026, 10, 1);
+    for kind in [AnnouncementKind::Sse, AnnouncementKind::Szse] {
+        let windows = windows(kind, quarter_start).unwrap();
+        assert!(windows.iter().all(|window| window.end() < quarter_start));
+        assert_eq!(windows.last().unwrap().end(), day(2026, 9, 30));
+    }
 }
