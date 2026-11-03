@@ -338,8 +338,8 @@ fn merge_etf_identity(
     previous: Vec<crate::security_master::SecurityLifecycleFact>,
     attempt: EtfAttempt,
 ) -> EtfReport {
-    let mut rows = Vec::new();
-    let mut evidence;
+    let mut rows;
+    let evidence;
     let mut failure = None;
     match attempt {
         EtfAttempt::Pending(pending) => {

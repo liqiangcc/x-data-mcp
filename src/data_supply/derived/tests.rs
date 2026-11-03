@@ -199,7 +199,9 @@ fn etf_member(exchange: crate::security_master::Exchange, code: &str) -> assembl
     }
 }
 
-fn class_zero(rows: &[crate::security_master::SecurityLifecycleFact]) -> Vec<_> {
+fn class_zero(
+    rows: &[crate::security_master::SecurityLifecycleFact],
+) -> Vec<crate::security_master::SecurityLifecycleFact> {
     rows.iter()
         .filter(|row| row.instrument_class == 0)
         .cloned()
