@@ -54,11 +54,8 @@ use crate::exchange_source::select::{self, AsOf, Freshness, Reader};
 use crate::exchange_source::{
     AcquisitionPlan, BasisStatus, BindError, PagingFormat, SnapshotBinding, SourceId,
 };
-use crate::security_master::assembly::{DATASET_KIND, PendingSource};
-use crate::security_master::{
-    DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
-    SecurityLifecycleFact,
-};
+use crate::security_master::assembly::{DATASET_KIND, MemberFact, PendingSource};
+use crate::security_master::{Exchange, ListingSource, SecurityLifecycleFact};
 use crate::source_store::{Policy, SourceStore, StoreError, StoreKind};
 
 /// Business-field parser version of this adapter. The source-store manifest
@@ -86,6 +83,9 @@ pub const SZSE_CATALOG: &str = "1945";
 /// fail the item, while a broken workbook (header only, one page, a renamed
 /// sheet) still does.
 pub const SZSE_MIN_ROWS: usize = 700;
+
+/// `base.dbf` `SSDATE` keyed by `(market, code)`; the SZSE listing-day input.
+pub type TdxListingDates = BTreeMap<(u8, String), NaiveDate>;
 
 /// The two admitted identity acquisitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -412,6 +412,12 @@ fn parse_sse(bytes: &[u8]) -> Result<Vec<EtfListRow>, EtfError> {
             index_code: text(row.get("INDEX_CODE")),
         });
     }
+    if rows.is_empty() {
+        return Err(EtfError::invalid(
+            "etf_list_empty",
+            "SSE ETF list is empty; 0 rows is not evidence",
+        ));
+    }
     Ok(rows)
 }
 
@@ -458,6 +464,12 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<EtfListRow>, EtfError> {
             sub_class: None,
             index_code: None,
         });
+    }
+    if rows.is_empty() {
+        return Err(EtfError::invalid(
+            "etf_list_empty",
+            "SZSE ETF list is empty; 0 rows is not evidence",
+        ));
     }
     Ok(rows)
 }
@@ -550,20 +562,21 @@ fn first_seen(
     Ok(seen)
 }
 
-/// The identity rows for the main table (§3.3). Pure function of the admitted
-/// set plus the TDX `base.dbf` listing dates.
-pub fn identity_rows(
+/// The source adapter's contribution to the main table: one source-agnostic
+/// [`MemberFact`] per member (M3-2 §3.3). PR-A2 adds its delisted-ETF list by
+/// producing the same facts; [`crate::security_master::assembly::member_rows`]
+/// is the one writer.
+pub fn member_facts(
     admitted: &Admitted,
-    tdx_listing_dates: &BTreeMap<(u8, String), NaiveDate>,
-) -> Result<Vec<SecurityLifecycleFact>, EtfError> {
+    tdx_listing_dates: &TdxListingDates,
+) -> Result<Vec<MemberFact>, EtfError> {
     let fallback = admitted.as_of().ok_or_else(|| {
         EtfError::invalid(
             "source_invalid",
             "the selected ETF list set has no as_of date",
         )
     })?;
-    let mut rows = Vec::with_capacity(admitted.rows.len());
-    let mut seen = BTreeSet::new();
+    let mut facts = Vec::with_capacity(admitted.rows.len());
     for row in &admitted.rows {
         let first = admitted
             .first_seen
@@ -578,52 +591,40 @@ pub fn identity_rows(
             Exchange::Sz => match tdx_listing {
                 Some(day) => (Some(day), ListingSource::TdxSsdate),
                 // The source carries no listing day and TDX has no `SSDATE`
-                // for this code: the row is still an identity fact, but the
-                // date is `unknown`, never guessed.
+                // for this code: the fact is still an identity, but the date
+                // is `unknown`, never guessed.
                 None => (None, ListingSource::Unknown),
             },
             Exchange::Bj => (None, ListingSource::Unknown),
         };
-        if !seen.insert((row.exchange, row.code.clone(), first)) {
-            return Err(EtfError::invalid(
-                "etf_code_duplicate",
-                format!(
-                    "{} has two identity intervals at {first}",
-                    entity(row.exchange, &row.code)
-                ),
-            ));
-        }
-        rows.push(SecurityLifecycleFact {
+        facts.push(MemberFact {
             exchange: row.exchange,
             code: row.code.clone(),
-            effective_from: first,
-            effective_to: None,
-            instrument_class: 2,
-            issuer_key: Some(row.code.clone()),
-            issuer_resolution: IssuerResolution::IssuerKey,
+            first_seen: first,
+            known_at: first,
             listing_date,
-            listing_date_tdx: tdx_listing,
             listing_source,
-            b_listing_date: None,
-            delisting_date: None,
-            delisting_date_tdx: None,
-            delisting_source: DelistingSource::Unknown,
-            delisting_reason_class: DelistingReason::Unknown,
-            arrangement_start: None,
-            arrangement_end: None,
-            listing_conflict: false,
-            delisting_conflict: false,
-            known_at: Some(first),
+            listing_date_tdx: tdx_listing,
         });
     }
-    rows.sort_by(|left, right| {
-        (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
-            right.exchange,
-            right.code.as_str(),
-            right.effective_from,
-        ))
-    });
-    Ok(rows)
+    Ok(facts)
+}
+
+/// The identity rows for the main table (§3.3). Pure function of the admitted
+/// set plus the TDX `base.dbf` listing dates.
+///
+/// Kept as the PR-A convenience wrapper; the row rules live in
+/// [`crate::security_master::assembly::member_rows`] so PR-A2 does not copy
+/// them.
+pub fn identity_rows(
+    admitted: &Admitted,
+    tdx_listing_dates: &TdxListingDates,
+) -> Result<Vec<SecurityLifecycleFact>, EtfError> {
+    let facts = member_facts(admitted, tdx_listing_dates)?;
+    crate::security_master::assembly::member_rows(&facts).map_err(|error| EtfError::Invalid {
+        code: error.code(),
+        detail: error.to_string(),
+    })
 }
 
 fn market(exchange: Exchange) -> u8 {

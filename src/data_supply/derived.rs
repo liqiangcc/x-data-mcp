@@ -510,21 +510,18 @@ fn execute(
             &candidates,
         )
         .map_err(|e| Error::Invalid(e.to_string()))?;
+        // The identity writer is source-agnostic: every admitted ETF source
+        // contributes `MemberFact`s and `assembly::member_rows` is the one
+        // writer. PR-A2 adds its list by extending this vector, not by
+        // copying the row rules.
+        let mut etf_facts = Vec::new();
         match &etf {
             Some(admitted) => {
-                let mut etf_rows = crate::official_security::etf_list::identity_rows(
+                etf_facts = crate::official_security::etf_list::member_facts(
                     admitted,
                     &snapshot.facts.all_listing_dates,
                 )
                 .map_err(|error| Error::Invalid(error.to_string()))?;
-                assembled.rows.append(&mut etf_rows);
-                assembled.rows.sort_by(|left, right| {
-                    (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
-                        right.exchange,
-                        right.code.as_str(),
-                        right.effective_from,
-                    ))
-                });
             }
             None => assembled.pending_sources.push(assembly::PendingSource {
                 dataset: assembly::DATASET_KIND,
@@ -532,6 +529,18 @@ fn execute(
                 reason: "the M3 source store is not configured for this process \
                          (X_DATA_MCP_SOURCE_STORE); ETF identity stays pending_source",
             }),
+        }
+        if !etf_facts.is_empty() {
+            let mut etf_rows = assembly::member_rows(&etf_facts)
+                .map_err(|error| Error::Invalid(format!("{}: {error}", error.code())))?;
+            assembled.rows.append(&mut etf_rows);
+            assembled.rows.sort_by(|left, right| {
+                (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+                    right.exchange,
+                    right.code.as_str(),
+                    right.effective_from,
+                ))
+            });
         }
         // The item's write set is 主表 + 上市/退市 + 迁移 (§12.1). The name
         // history is its own M3 item (`derived:security_names`, #446 PR-12),

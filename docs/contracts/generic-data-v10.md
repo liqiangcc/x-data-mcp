@@ -43,6 +43,9 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
 - `security_master` 增加 `instrument_class=2` 行；`listing_source` 沪市 `exchange_list`、
   深市 `tdx_ssdate`；`delisting_date=NULL`（名单移除不等于退市）。
 - `effective_from`/`known_at` 是该成员第一次出现在已冻结名单快照的获取日。
+- 身份写入器是来源无关的：各来源产出 `security_master::assembly::MemberFact`，
+  `member_rows` 统一合并（同一代码取最早出现、上市日冲突 fail-closed）并写 class=2 行。
+  PR-A2 的退市 ETF 名单只需新增来源/解析器与事实，不复制写入逻辑。
 - A 股 `security_master` 行内容不变；`market_series`、A 股导出与 A 股 `query_data` 输出不变。
 
 ## 2. 未验证 / 部署前待办

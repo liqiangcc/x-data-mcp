@@ -48,6 +48,13 @@ fn the_two_lists_parse_to_the_real_member_counts() {
 }
 
 #[test]
+fn an_empty_list_is_not_evidence() {
+    let empty = br#"{"pageHelp":{"total":0,"data":[]}}"#;
+    let error = parse(ListKind::Sse, empty).unwrap_err();
+    assert_eq!(error.code(), "etf_list_empty");
+}
+
+#[test]
 fn duplicate_codes_fail_closed() {
     let error = parse(ListKind::Sse, SSE_DUPLICATE).unwrap_err();
     assert_eq!(error.code(), "etf_code_duplicate");

@@ -274,7 +274,7 @@ fetch（有界重试，仅网络错误 / 429 / 5xx）
 additive）。
 
 `parser_version` 现在记录信封解析器版本（`exchange-sse-page-v2` /
-`exchange-sse-bulletin-page-v1` / `exchange-szse-page-v3`；旧快照的 SZSE `v2`/`v1` 仍可重放），
+`exchange-sse-bulletin-page-v1` / `exchange-szse-page-v3` / `exchange-szse-xlsx-v1`；旧快照的 SZSE `v2`/`v1` 仍可重放），
 重放据此重算行数与页数。
 具体来源 parser 从 PR-3 起登记自己的版本；未登记的版本按 §9.4.1 一律 fail-closed（`unknown_parser`，
 scope 不重建），不会用「不认识就跳过」掩盖字节。
@@ -377,6 +377,21 @@ PR-11 起 `derived:suspensions` 的 `confirmed` 分支由 `src/official_security
   `derived:suspensions` 以稳定码 `source_store_unconfigured` 失败。配置了但抓取失败 →
   该 item 失败、不写 `confirmed`（§10.1）。深市没有该来源，首期只有 `unresolved_gap`，
   可交易性 `unknown`。
+
+### 6.1 ETF 身份来源（M3-2 PR-A）
+
+D-70 Q1 准入的两份 ETF 名录也走同一入口，不另起抓取链路：
+
+- `sse_etf_list`：`commonSoaQuery.do?sqlId=FUND_LIST&fundType=00&subClass=…`，
+  `pageHelp.pageSize=2000` 一次取全（2026-11-03 为 947 行，`pageCount=1`）；
+  `single_page_only` 保证分页被忽略时 fail-closed。
+- `szse_etf_list`：`ShowReport?SHOWTYPE=xlsx&CATALOGID=1945`，单页 xlsx（770 行），
+  需要 `Referer` + 浏览器 UA；信封解析器 `exchange-szse-xlsx-v1` 从工作簿读数据行数。
+- 业务字段 parser 版本 `etf-list-v1` 只进 `derived:security_master` 的 item 证据
+  `etf_source`；清单的 `parser_version` 仍是信封版本，`--scope exchange` 重放只重建
+  行数/页数索引。`ebs` 只是报价锚，不是身份来源（D-70 Q1）。
+- 空名单、重复代码、SSE `pageHelp.total` 与行数不符、SSE 缺 `listingDate`、SZSE 行数
+  低于形状下界都 fail-closed；名单移除不写退市日（§3.3）。
 
 ## 7. PR-2 当时的非目标（历史）
 

@@ -120,6 +120,150 @@ pub enum ExchangeSource {
     Pending(PendingSource),
 }
 
+/// One identity fact from an exchange member list, independent of **which**
+/// list produced it (M3-2 PR-A).
+///
+/// PR-A fills this from the two current ETF lists; PR-A2 adds the delisted-ETF
+/// announcement index and must produce the same value instead of copying the
+/// row-building rules. [`member_rows`] is the one writer from a member fact to
+/// a `security_master` row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemberFact {
+    pub exchange: Exchange,
+    pub code: String,
+    /// First acquisition date of a frozen snapshot that contained the code.
+    pub first_seen: NaiveDate,
+    /// The 知晓时间 of that first appearance.
+    pub known_at: NaiveDate,
+    /// The source's listing day, when it carries one.
+    pub listing_date: Option<NaiveDate>,
+    /// Where `listing_date` came from; `Unknown` exactly when it is `None`.
+    pub listing_source: ListingSource,
+    /// TDX `base.dbf SSDATE` when known, kept verbatim on the row.
+    pub listing_date_tdx: Option<NaiveDate>,
+}
+
+/// Why a member fact cannot become a main-table row.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum MemberRowError {
+    #[error("member_code_invalid: {code:?} is not a 6-digit code")]
+    Code { code: String },
+    #[error(
+        "member_listing_source_invalid: {entity} has listing_date={listing_date:?} but \
+         listing_source={listing_source:?}"
+    )]
+    ListingSource {
+        entity: String,
+        listing_date: Option<NaiveDate>,
+        listing_source: ListingSource,
+    },
+    #[error("member_listing_conflict: {entity} is {left} in one source and {right} in another")]
+    ListingConflict {
+        entity: String,
+        left: NaiveDate,
+        right: NaiveDate,
+    },
+}
+
+impl MemberRowError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Code { .. } => "member_code_invalid",
+            Self::ListingSource { .. } => "member_listing_source_invalid",
+            Self::ListingConflict { .. } => "member_listing_conflict",
+        }
+    }
+}
+
+/// Turn member facts from any admitted exchange list into `security_master`
+/// class-2 rows (M3-2 §3.3).
+///
+/// The writer is deliberately source-agnostic: a code that appears in two
+/// lists is merged (earliest `first_seen`/`known_at`, one listing day); a
+/// disagreement about the listing day fails closed instead of picking one.
+/// A member is never given a delisting date: absence from a current list is
+/// not a delisting fact (§3.3), and a later source that proves one must carry
+/// its own delisting fact (PR-A2 and later).
+pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, MemberRowError> {
+    let mut merged: BTreeMap<(Exchange, String), MemberFact> = BTreeMap::new();
+    for fact in facts {
+        if fact.code.len() != 6 || !fact.code.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(MemberRowError::Code {
+                code: fact.code.clone(),
+            });
+        }
+        let consistent =
+            fact.listing_date.is_some() == (fact.listing_source != ListingSource::Unknown);
+        if !consistent {
+            return Err(MemberRowError::ListingSource {
+                entity: entity_of(fact.exchange, &fact.code),
+                listing_date: fact.listing_date,
+                listing_source: fact.listing_source,
+            });
+        }
+        match merged.entry((fact.exchange, fact.code.clone())) {
+            Entry::Vacant(entry) => {
+                entry.insert(fact.clone());
+            }
+            Entry::Occupied(mut entry) => {
+                let current = entry.get_mut();
+                current.first_seen = current.first_seen.min(fact.first_seen);
+                current.known_at = current.known_at.min(fact.known_at);
+                if current.listing_date_tdx.is_none() {
+                    current.listing_date_tdx = fact.listing_date_tdx;
+                }
+                match (current.listing_date, fact.listing_date) {
+                    (Some(left), Some(right)) if left != right => {
+                        return Err(MemberRowError::ListingConflict {
+                            entity: entity_of(fact.exchange, &fact.code),
+                            left,
+                            right,
+                        });
+                    }
+                    (None, Some(_)) => {
+                        current.listing_date = fact.listing_date;
+                        current.listing_source = fact.listing_source;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut rows = Vec::with_capacity(merged.len());
+    for ((exchange, code), fact) in merged {
+        rows.push(SecurityLifecycleFact {
+            exchange,
+            code: code.clone(),
+            effective_from: fact.first_seen,
+            effective_to: None,
+            instrument_class: 2,
+            issuer_key: Some(code),
+            issuer_resolution: IssuerResolution::IssuerKey,
+            listing_date: fact.listing_date,
+            listing_date_tdx: fact.listing_date_tdx,
+            listing_source: fact.listing_source,
+            b_listing_date: None,
+            delisting_date: None,
+            delisting_date_tdx: None,
+            delisting_source: DelistingSource::Unknown,
+            delisting_reason_class: DelistingReason::Unknown,
+            arrangement_start: None,
+            arrangement_end: None,
+            listing_conflict: false,
+            delisting_conflict: false,
+            known_at: Some(fact.known_at),
+        });
+    }
+    rows.sort_by(|left, right| {
+        (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+            right.exchange,
+            right.code.as_str(),
+            right.effective_from,
+        ))
+    });
+    Ok(rows)
+}
+
 /// The exchange-list adapter boundary (§16 PR-3): one function, no trait.
 ///
 /// `Some(snapshot)` is an admitted, generation-frozen snapshot (A-1/A-2).
