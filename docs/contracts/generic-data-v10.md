@@ -54,6 +54,9 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
   证据里带 PDF sha 与提取记录）；只有公告索引时保持 `NULL`（unknown），公告日作为证据另存。
   日更与 replay 共用同一落库函数：`effective_to=终止上市日`、`delisting_reason_class=other`；
   零提前量（公告日=终止上市日）时 `effective_from=终止上市日-1`，区间非空且上界不被 `+1` 改写。
+  同一代码同时有名单历史事实与提取事实时：`effective_from`/`known_at` 取两者的最小值
+  （已在名单里出现过的代码不会被提取事实把起点往后挪）；有提取结果时精确终止上市日
+  **覆盖**名单的 `first_missing` 观测，只有没有提取结果时才取名单边界的最小值。
 - 身份写入器是来源无关的：各来源产出 `security_master::assembly::MemberFact`，
   `member_rows` 统一合并（同一代码取最早出现、上市日冲突 fail-closed）并写 class=2 行。
 - A 股 `security_master` 行内容不变；`market_series`、A 股导出与 A 股 `query_data` 输出不变。

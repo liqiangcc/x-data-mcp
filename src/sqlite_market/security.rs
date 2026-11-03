@@ -713,24 +713,33 @@ pub(crate) fn apply_etf_delisting(
             update.announcement_date,
             update.delisting_date,
         );
+        // The row may already start earlier because the code first appeared
+        // in a list snapshot. `member_rows` takes the minimum there, so replay
+        // must do the same instead of moving the start to the announcement.
+        let target_from = row.effective_from.min(values.effective_from);
+        let target_known = Some(match row.known_at {
+            Some(day) => day.min(values.effective_from),
+            None => values.effective_from,
+        });
         if row.delisting_date == Some(values.delisting_date)
             && row.delisting_source == values.delisting_source
             && row.delisting_reason_class == values.delisting_reason_class
             && row.effective_to == Some(values.effective_to)
-            && row.effective_from == values.effective_from
+            && row.effective_from == target_from
+            && row.known_at == target_known
         {
             continue;
         }
-        if row.effective_from != values.effective_from {
+        if row.effective_from != target_from {
             renamed.push((row.exchange, row.code.clone(), row.effective_from));
-            row.effective_from = values.effective_from;
+            row.effective_from = target_from;
         }
         row.delisting_date = Some(values.delisting_date);
         row.delisting_date_tdx = None;
         row.delisting_source = values.delisting_source;
         row.delisting_reason_class = values.delisting_reason_class;
         row.effective_to = Some(values.effective_to);
-        row.known_at = Some(values.effective_from);
+        row.known_at = target_known;
         changed += 1;
     }
     if changed == 0 {

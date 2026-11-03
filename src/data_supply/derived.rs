@@ -313,6 +313,9 @@ enum EtfAttempt {
         /// A partial source failure (the delisted branch) that must not erase
         /// the current-list facts but still ends the item as a failure.
         failure: Option<(String, String)>,
+        /// The delisted branch was pending/failed, so previous class=2 rows
+        /// absent from `facts` must survive (monotonic identity, review n1).
+        preserve_previous: bool,
     },
     Failed {
         code: String,
@@ -386,12 +389,13 @@ fn merge_etf_identity(
             facts,
             evidence: source_evidence,
             failure: source_failure,
+            preserve_previous,
         } => match facts.and_then(|facts| {
             assembly::member_rows(&facts)
                 .map_err(|error| (error.code().to_string(), error.to_string()))
         }) {
             Ok(mut new_rows) => {
-                if source_failure.is_some() {
+                if preserve_previous {
                     // Monotonic identity: a failed delisted branch must not
                     // delete class=2 rows that only the previous version has.
                     // Keep every previous class=2 entity the new current list
@@ -769,6 +773,8 @@ fn execute(
                         }
                     }
                 };
+                let preserve_previous = delisted_failure.is_some()
+                    || delisted_evidence.get("status").and_then(Value::as_str) != Some("ok");
                 let evidence = json!({
                     "current": current_evidence,
                     "delisted": delisted_evidence,
@@ -777,6 +783,7 @@ fn execute(
                     facts,
                     evidence,
                     failure: delisted_failure,
+                    preserve_previous,
                 }
             }
             Err(error) => EtfAttempt::Failed {

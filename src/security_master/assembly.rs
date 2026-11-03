@@ -227,12 +227,33 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
                 if current.listing_date_tdx.is_none() {
                     current.listing_date_tdx = fact.listing_date_tdx;
                 }
-                current.effective_to = match (current.effective_to, fact.effective_to) {
-                    (None, None) => None,
-                    (Some(day), None) | (None, Some(day)) => Some(day),
-                    (Some(left), Some(right)) => Some(left.min(right)),
-                };
-                if current.delisting_date.is_none() && fact.delisting_date.is_some() {
+                let current_precise = current.delisting_date;
+                let fact_precise = fact.delisting_date;
+                match (current_precise, fact_precise) {
+                    // An extraction proves the exact upper bound. It overrides
+                    // the list's first-missing observation, which is only a
+                    // bound and can be later than the delisting day.
+                    (Some(left), Some(right)) => {
+                        current.effective_to = Some(left.min(right));
+                    }
+                    (None, Some(right)) => {
+                        current.effective_to = Some(fact.effective_to.unwrap_or(right));
+                    }
+                    (Some(left), None) => {
+                        current.effective_to = Some(left);
+                    }
+                    (None, None) => {
+                        current.effective_to = match (current.effective_to, fact.effective_to) {
+                            (None, None) => None,
+                            (Some(day), None) | (None, Some(day)) => Some(day),
+                            (Some(left), Some(right)) => Some(left.min(right)),
+                        };
+                    }
+                }
+                if fact_precise.is_some()
+                    && current_precise
+                        .is_none_or(|current| fact_precise.is_some_and(|fact| fact < current))
+                {
                     current.delisting_date = fact.delisting_date;
                     current.delisting_source = fact.delisting_source;
                     current.delisting_reason_class = fact.delisting_reason_class;

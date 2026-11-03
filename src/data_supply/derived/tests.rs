@@ -260,6 +260,7 @@ fn an_etf_fact_or_member_error_is_a_partial_failure_and_keeps_previous_rows() {
             )),
             evidence: json!({"parser_version": "etf-list-v1"}),
             failure: None,
+            preserve_previous: false,
         },
     );
     assert_eq!(
@@ -325,6 +326,7 @@ fn a_successful_etf_attempt_replaces_previous_rows_and_keeps_a_shares() {
             facts: Ok(new),
             evidence: json!({"parser_version": "etf-list-v1"}),
             failure: None,
+            preserve_previous: false,
         },
     );
     assert!(report.failure.is_none());
@@ -381,6 +383,7 @@ fn an_etf_last_bar_failure_is_an_etf_only_failure_that_preserves_a_shares_and_de
             )]),
             evidence: json!({"current": "synthetic"}),
             failure: Some((code, detail)),
+            preserve_previous: true,
         },
     );
     assert_eq!(
@@ -399,5 +402,57 @@ fn an_etf_last_bar_failure_is_an_etf_only_failure_that_preserves_a_shares_and_de
     assert!(
         class_two.contains(&"512390".to_string()),
         "a failed delisted branch must keep the previous delisted row"
+    );
+}
+
+#[test]
+fn a_pending_delisted_branch_also_keeps_previous_class_two_rows() {
+    let mut assembled = a_share_assembly();
+    let before = class_zero(&assembled.rows);
+    let previous = assembly::member_rows(&[
+        etf_member(crate::security_master::Exchange::Sh, "510050"),
+        assembly::MemberFact {
+            exchange: crate::security_master::Exchange::Sh,
+            code: "512390".into(),
+            first_seen: chrono::NaiveDate::from_ymd_opt(2026, 1, 2).unwrap(),
+            known_at: chrono::NaiveDate::from_ymd_opt(2026, 1, 2).unwrap(),
+            listing_date: Some(chrono::NaiveDate::from_ymd_opt(2010, 1, 1).unwrap()),
+            listing_source: crate::security_master::ListingSource::TdxSsdate,
+            listing_date_tdx: Some(chrono::NaiveDate::from_ymd_opt(2010, 1, 1).unwrap()),
+            effective_to: Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 5).unwrap()),
+            delisting_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 5).unwrap()),
+            delisting_source: crate::security_master::DelistingSource::ExchangeList,
+            delisting_reason_class: crate::security_master::DelistingReason::Other,
+            announcement_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 8, 1).unwrap()),
+            announcement_url: None,
+            extraction: Some("cd".repeat(32)),
+        },
+    ])
+    .unwrap();
+    let report = merge_etf_identity(
+        &mut assembled,
+        previous,
+        EtfAttempt::Facts {
+            facts: Ok(vec![etf_member(
+                crate::security_master::Exchange::Sh,
+                "510050",
+            )]),
+            evidence: json!({"current": "synthetic", "delisted": {"status": "pending"}}),
+            failure: None,
+            preserve_previous: true,
+        },
+    );
+    assert!(report.failure.is_none());
+    assert_eq!(class_zero(&assembled.rows), before);
+    let class_two: Vec<_> = assembled
+        .rows
+        .iter()
+        .filter(|row| row.instrument_class == 2)
+        .map(|row| row.code.clone())
+        .collect();
+    assert!(class_two.contains(&"510050".to_string()));
+    assert!(
+        class_two.contains(&"512390".to_string()),
+        "a pending delisted branch must not drop the previous delisted row"
     );
 }
