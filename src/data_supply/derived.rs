@@ -208,9 +208,7 @@ pub fn run(ctx: &RunContext, items: &[ItemSpec]) -> Result<(), Error> {
             check_delisted_series(market, spec)
         } else {
             match session {
-                Some(_) => {
-                    execute(ctx, item, revision, &source_cache, today).map_err(ItemFailure::Plain)
-                }
+                Some(_) => execute(ctx, item, revision, &source_cache, today),
                 None => Err(ItemFailure::Plain(Error::Invalid(format!(
                     "{} needs a verified official source; none is installed for this run",
                     item.item_id
@@ -293,6 +291,101 @@ enum ItemFailure {
     Evidence(Error, Value),
 }
 
+impl From<Error> for ItemFailure {
+    fn from(error: Error) -> Self {
+        Self::Plain(error)
+    }
+}
+
+/// What one ETF identity source contributed to `derived:security_master`.
+///
+/// ETF failures are deliberately **local** to the ETF part of the main table:
+/// the A-share assembly is already complete, and the previous class=2 rows are
+/// kept so a bad/stale/missing ETF list cannot erase ETF identity or block the
+/// A-share write. The item outcome still reports `success=false` through
+/// [`ItemFailure::Evidence`], so the run ends `partially_failed` instead of
+/// pretending everything worked.
+enum EtfAttempt {
+    Pending(PendingSource),
+    Facts {
+        facts: Result<Vec<assembly::MemberFact>, (String, String)>,
+        evidence: Value,
+    },
+    Failed {
+        code: String,
+        detail: String,
+    },
+}
+
+struct EtfReport {
+    evidence: Value,
+    failure: Option<(String, String)>,
+}
+
+fn etf_failure_evidence(code: &str, detail: &str, preserved: usize) -> Value {
+    json!({
+        "status": "failed",
+        "code": code,
+        "detail": detail,
+        "preserved_rows": preserved,
+    })
+}
+
+/// Merge ETF identity rows into an A-share assembly without letting an ETF
+/// failure touch the A-share rows.
+fn merge_etf_identity(
+    assembled: &mut assembly::Assembly,
+    previous: Vec<crate::security_master::SecurityLifecycleFact>,
+    attempt: EtfAttempt,
+) -> EtfReport {
+    let mut rows = Vec::new();
+    let mut evidence;
+    let mut failure = None;
+    match attempt {
+        EtfAttempt::Pending(pending) => {
+            assembled.pending_sources.push(pending);
+            rows = previous;
+            evidence = json!({"status": "pending", "preserved_rows": rows.len()});
+        }
+        EtfAttempt::Failed { code, detail } => {
+            rows = previous;
+            evidence = etf_failure_evidence(&code, &detail, rows.len());
+            failure = Some((code, detail));
+        }
+        EtfAttempt::Facts {
+            facts,
+            evidence: source_evidence,
+        } => match facts.and_then(|facts| {
+            assembly::member_rows(&facts)
+                .map_err(|error| (error.code().to_string(), error.to_string()))
+        }) {
+            Ok(new_rows) => {
+                let count = new_rows.len();
+                rows = new_rows;
+                evidence = json!({
+                    "status": "ok",
+                    "member_count": count,
+                    "source": source_evidence,
+                });
+            }
+            Err((code, detail)) => {
+                rows = previous;
+                evidence = etf_failure_evidence(&code, &detail, rows.len());
+                failure = Some((code, detail));
+            }
+        },
+    }
+    assembled.rows.append(&mut rows);
+    assembled.rows.sort_by(|left, right| {
+        (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+            right.exchange,
+            right.code.as_str(),
+            right.effective_from,
+        ))
+    });
+    EtfReport { evidence, failure }
+}
+
 /// Execute `derived:delisted_series_check` (M3 PR-5, `#446` §4.5). The baseline
 /// comes from the item's frozen inputs — resolved before the entity items ran —
 /// and is compared with the series facts they left behind. The item writes no
@@ -352,7 +445,7 @@ fn execute(
     expected_task_revision: u64,
     source_cache: &RefCell<Option<DatasetSource>>,
     today: NaiveDate,
-) -> Result<Value, Error> {
+) -> Result<Value, ItemFailure> {
     let RunContext {
         market,
         session: Some(session),
@@ -363,9 +456,9 @@ fn execute(
         policy,
     } = *ctx
     else {
-        return Err(Error::Integrity(
+        return Err(ItemFailure::Plain(Error::Integrity(
             "a derived item needs the run's verified source session".into(),
-        ));
+        )));
     };
     if let Some(entity) = task_control::derived::index_entity(&item.item_id) {
         let index = session
@@ -487,22 +580,6 @@ fn execute(
                 (assembly::exchange_source(Some(admitted.snapshot)), evidence)
             }
         };
-        // M3-2 PR-A (D-70 Q1): ETF identity comes from the two admitted
-        // exchange lists, never from a code prefix. The branch is independent
-        // of A-1/A-2: without a source store it stays `pending_source`, and the
-        // A-share rows are written exactly as before.
-        let (etf, etf_pending, etf_evidence) =
-            match crate::official_security::etf_list::run_source(market, today, policy).map_err(
-                |error| Error::Invalid(format!("ETF identity source: {}: {error}", error.code())),
-            )? {
-                crate::official_security::etf_list::RunSource::Pending(pending) => {
-                    (None, Some(pending), Value::Null)
-                }
-                crate::official_security::etf_list::RunSource::Admitted(admitted) => {
-                    let evidence = admitted.evidence();
-                    (Some(admitted), None, evidence)
-                }
-            };
         let mut assembled = assembly::assemble_security_master(
             &snapshot.facts.lifecycle,
             &snapshot.facts.arrangements,
@@ -510,37 +587,40 @@ fn execute(
             &candidates,
         )
         .map_err(|e| Error::Invalid(e.to_string()))?;
-        // The identity writer is source-agnostic: every admitted ETF source
-        // contributes `MemberFact`s and `assembly::member_rows` is the one
-        // writer. PR-A2 adds its list by extending this vector, not by
-        // copying the row rules.
-        let mut etf_facts = Vec::new();
-        match &etf {
-            Some(admitted) => {
-                etf_facts = crate::official_security::etf_list::member_facts(
-                    admitted,
+        // M3-2 PR-A (D-70 Q1): ETF identity comes from the two admitted
+        // exchange lists, never from a code prefix. The writer is
+        // source-agnostic: every source contributes `MemberFact`s and
+        // `assembly::member_rows` is the one row writer. A failed/stale/invalid
+        // ETF snapshot must not block the A-share write: keep the previous
+        // class=2 rows, write the A-share assembly, and report the ETF failure
+        // as an item-level partial failure (`ItemFailure::Evidence`).
+        let previous_class_two = market
+            .read(|c| crate::sqlite_market::security::read_security_master(c))?
+            .into_iter()
+            .filter(|row| row.instrument_class == 2)
+            .collect::<Vec<_>>();
+        let attempt = match crate::official_security::etf_list::run_source(market, today, policy) {
+            Ok(crate::official_security::etf_list::RunSource::Pending(pending)) => {
+                EtfAttempt::Pending(pending)
+            }
+            Ok(crate::official_security::etf_list::RunSource::Admitted(admitted)) => {
+                let evidence = admitted.evidence();
+                let facts = crate::official_security::etf_list::member_facts(
+                    &admitted,
                     &snapshot.facts.all_listing_dates,
                 )
-                .map_err(|error| Error::Invalid(error.to_string()))?;
+                .map_err(|error| (error.code().to_string(), error.to_string()));
+                EtfAttempt::Facts { facts, evidence }
             }
-            None => {
-                if let Some(pending) = etf_pending {
-                    assembled.pending_sources.push(pending);
-                }
-            }
-        }
-        if !etf_facts.is_empty() {
-            let mut etf_rows = assembly::member_rows(&etf_facts)
-                .map_err(|error| Error::Invalid(format!("{}: {error}", error.code())))?;
-            assembled.rows.append(&mut etf_rows);
-            assembled.rows.sort_by(|left, right| {
-                (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
-                    right.exchange,
-                    right.code.as_str(),
-                    right.effective_from,
-                ))
-            });
-        }
+            Err(error) => EtfAttempt::Failed {
+                code: error.code().to_string(),
+                detail: error.to_string(),
+            },
+        };
+        let EtfReport {
+            evidence: etf_evidence,
+            failure: etf_failure,
+        } = merge_etf_identity(&mut assembled, previous_class_two, attempt);
         // The item's write set is 主表 + 上市/退市 + 迁移 (§12.1). The name
         // history is its own M3 item (`derived:security_names`, #446 PR-12),
         // so this item neither writes a name row nor reports a name
@@ -564,7 +644,7 @@ fn execute(
             security_event_sha256: &source.security_event_sha256,
             generation_evidence: &generation_evidence,
         })?;
-        return Ok(json!({
+        let evidence = json!({
             "dataset": item.item_id,
             "version_id": registration.version_id,
             "row_count": registration.record_count,
@@ -577,7 +657,17 @@ fn execute(
             "etf_source": etf_evidence,
             "pending_sources": pending_json(&pending),
             "elapsed_ms": elapsed_ms(started),
-        }));
+        });
+        if let Some((code, detail)) = etf_failure {
+            // The A-share rows and the previous ETF rows are committed above;
+            // the item is still a failure so the run is `partially_failed`, not
+            // a silent success.
+            return Err(ItemFailure::Evidence(
+                Error::Invalid(format!("ETF identity source: {code}: {detail}")),
+                evidence,
+            ));
+        }
+        return Ok(evidence);
     }
     if item.item_id == task_control::derived::SECURITY_NAMES {
         let started = std::time::Instant::now();
@@ -914,10 +1004,10 @@ fn execute(
             "elapsed_ms": elapsed_ms(started),
         }));
     }
-    Err(Error::Integrity(format!(
+    Err(ItemFailure::Plain(Error::Integrity(format!(
         "{} is not a known derived dataset item",
         item.item_id
-    )))
+    ))))
 }
 
 /// Stable result identity of one internal item (replay anchor of its event).

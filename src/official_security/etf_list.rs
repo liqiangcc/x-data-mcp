@@ -42,8 +42,11 @@
 //! SZSE row count below the shape floor are all `source_invalid`-class failures
 //! (or a named code with the same effect). A missing/overdue frozen set is the
 //! shared read path's error (`source_snapshot_not_found` /
-//! `source_refresh_overdue`). The caller turns any of them into a failed item,
-//! so the previous main-table version stays readable.
+//! `source_refresh_overdue`). The main-table item treats any of them as an
+//! ETF-only partial failure: it keeps the previous class=2 rows, writes the
+//! A-share assembly, and reports `etf_source.status=failed` on the item outcome
+//! (`success=false`), so the run ends `partially_failed` rather than silently
+//! succeeding or blocking A-share derivation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -247,8 +250,9 @@ pub enum RunSource {
 /// Under [`Policy::Optional`] (stdio, tests, non-ops) an unconfigured store is
 /// not a read failure: the main-table item keeps the TDX/A-share result and
 /// records `pending_source`. Under [`Policy::Required`] (the ops entry) a
-/// missing or unreadable store fails with `source_store_unconfigured` instead of
-/// writing a main table with no ETF identity.
+/// missing or unreadable store is an ETF-source error; the main-table item
+/// keeps the previous class=2 rows, writes the A-share assembly, and reports
+/// the ETF part as a partial failure instead of blocking A-share derivation.
 pub fn run_source(
     market: &crate::sqlite_market::backend::MarketBackend,
     today: NaiveDate,

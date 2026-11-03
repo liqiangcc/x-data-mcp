@@ -200,6 +200,71 @@ fn etf_identity_reads_both_frozen_lists_and_is_idempotent() {
     );
 }
 
+/// The main-table item keeps the A-share assembly and the previous class=2 rows
+/// when the ETF branch fails; these are the two source-level errors it must be
+/// able to see (`source_invalid` for a broken workbook, `source_refresh_overdue`
+/// for a stale frozen set).
+#[test]
+fn an_invalid_or_overdue_etf_list_is_reported_as_a_source_error() {
+    let scenario = Scenario::new();
+    for (kind, plan) in etf_list::plans() {
+        let body = match kind {
+            etf_list::ListKind::Sse => SSE_ETF_LIST,
+            etf_list::ListKind::Szse => {
+                &include_bytes!("../../tests/fixtures/exchange-etf-list/szse_etf_list_small.xlsx")[..]
+            }
+        };
+        freeze(&scenario, &plan, 1, None, "", "", body, OBSERVED_AT);
+    }
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SseEtfList,
+        OBSERVED_DAY,
+        OBSERVED_AT,
+    );
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SzseEtfList,
+        OBSERVED_DAY,
+        OBSERVED_AT,
+    );
+    let error = etf_list::read(&scenario.store, &scenario.market, day(2026, 10, 31)).unwrap_err();
+    assert_eq!(error.code(), "etf_row_count_below_floor");
+
+    // A stale confirmation is the other failure the item must localize.
+    let scenario = Scenario::new();
+    for (kind, plan) in etf_list::plans() {
+        let body = match kind {
+            etf_list::ListKind::Sse => SSE_ETF_LIST,
+            etf_list::ListKind::Szse => SZSE_ETF_LIST,
+        };
+        freeze(
+            &scenario,
+            &plan,
+            1,
+            None,
+            "",
+            "",
+            body,
+            "2026-09-01T02:00:00Z",
+        );
+    }
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SseEtfList,
+        "2026-09-01",
+        "2026-09-01T02:00:00Z",
+    );
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SzseEtfList,
+        "2026-09-01",
+        "2026-09-01T02:00:00Z",
+    );
+    let error = etf_list::read(&scenario.store, &scenario.market, day(2026, 10, 31)).unwrap_err();
+    assert_eq!(error.code(), "source_refresh_overdue");
+}
+
 // ------------------------------------------------- daily items, no request ---
 
 /// A fake exchange transport that counts every attempt and refuses it. The
