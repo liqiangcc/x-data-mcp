@@ -36,19 +36,21 @@
    （`sz159922` 2024-12-02）表现为 2.5:1 拆分却记在 cat1 —— 直接套现有 QFQ 链会造出错误历史。
 5. **读取**：ETF 序列的可见性不是"新 dataset"，但现有读面把 `market.daily` 写死成
    (前复权, 股票)（`src/sqlite_supply.rs:486-505`），必须改成按**实体**解析品种；同时 `market.daily`
-   目前没有口径参数，ETF 只有不复权序列，因此需要 owner 在 Q3 决定读取口径的表达方式。
+   目前没有口径参数，ETF 只有不复权序列，因此需要 owner 在 Q4 决定读取口径的表达方式；
+   **ETF 在未指定口径时必须显式报错（fail-closed）**，不能静默返回不复权或空结果。
 6. **A 股字节不变**是可执行的验收项：改动前后 16,354 条 `market_series` 的 `version_id`、
    5,561+5,561+9+5,223 条序列的 digest、以及 A 股导出文件 sha256 必须逐一相同（§13 AC-M3-2-2）。
 7. **SLO**：ETF 加入会把同代全量 `update_data` 的 item 数从 5,238 推到约 6,869。按 preview.42 同代
    实测的 109.5 ms/item 外推 ≈ **752s**，超过第 1 行 600s hard 门禁（**推断**，未实测）。
-   设计不把外推写成结论：§11 给 A/B 测量方法，Q7 决定「重新基线 / ETF 独立批次预算 / 先优化」。
+   设计不把外推写成结论：§11 给 A/B 测量方法，Q8 决定「重新基线 / ETF 独立批次预算 / 先优化」。
 8. **退市 ETF 的官方身份**当前两所名单都只给"当前成员"，拿不到就是 `unknown`；这会在 ETF universe 上
-   留下约 128 只的**幸存者偏差**，必须写进数据目录 §3.3（Q1 决定是否为本批新增历史/终止上市基金名单来源）。
+   留下约 128 只的**幸存者偏差**，必须写进数据目录 §3.3（Q2 决定是否为本批新增历史/终止上市基金名单来源）。
 
-推荐裁决（owner 逐项确认，未批准不写进 `docs/decisions.md`）：Q1 先取证历史名单、期间标 `unknown`；
-Q2 只不复权；Q3 增 `adjustment` 参数（缺省 qfq）；Q4 不进 `securities.catalog`；Q5 首期不出年线；
-Q6 导出 v4 加 `instrument_class` 列（可后置）；Q7 先实测再定；Q8 ETF 写 `volume_quantum=100`、A 股保持现状；
-Q9 升 `generic-data-v10`；Q10 首期只入名称；Q11 夹具合成、不提交交易所原始字节。
+推荐裁决（owner 逐项确认，未批准不写进 `docs/decisions.md`）：**Q1 先准入两份交易所 ETF 名单（SSE `FUND_LIST` 作身份/上市日，
+SZSE `1945` 作身份；`ebs` 只作报价锚）**；Q2 退市名单来源先取证、期间标 `unknown`；Q3 只不复权；
+Q4 增 `adjustment` 参数（缺省 qfq，ETF 未指定时显式报错）；Q5 不进 `securities.catalog`；Q6 首期不出年线；
+Q7 导出 v4 加 `instrument_class` 列（可后置）；Q8 先实测再定 SLO；Q9 ETF 写 `volume_quantum=100`、A 股保持现状；
+Q10 升 `generic-data-v10`；Q11 类型/指数先随快照留证、不建数据集；Q12 夹具合成、不提交交易所原始字节。
 
 ---
 
@@ -71,7 +73,7 @@ Q9 升 `generic-data-v10`；Q10 首期只入名称；Q11 夹具合成、不提�
 - 基金净值/份额/规模数据的生产化（`base.dbf` 有 `ZGB`/`TZMGJZ`，但本批不做数据集）。
 - 北交所、B 股、分钟线、财务数据。
 - 生产部署与 release（按 D-08 另走部署窗口）；本文件只给上线/回滚点。
-- 交易所 ETF 类型（`ETF_TYPE`）与跟踪指数的逐只抓取（Q10）。
+- 交易所 ETF 类型/跟踪指数的**生产数据集**（名录快照里已有 `subClass`/`INDEX_CODE`，但落库模型另议，Q11）。
 
 ---
 
@@ -90,6 +92,7 @@ Q9 升 `generic-data-v10`；Q10 首期只入名称；Q11 夹具合成、不提�
 | `hsjday` 在这三段的成员数 | 526=0、551=0、589=0（对照 588=84、520=47、530=14） | 中央目录 |
 | `hsjday` 覆盖的 2026 年上市 ETF | **306**（最新 `sz158065`/`sz158079`，`base.dbf` `SSDATE=20261102`，`.day` 有 11-02 bar） | 名单 × `base.dbf` × `.day` |
 | 上市日（`base.dbf` `SSDATE`）与 `.day` 首根 bar | 1,624 相同、7 例 `SSDATE` 晚于首 bar、0 缺失 | 同上；7 例：`sh511600/511800/511910/511920/511960/511970/511980` |
+| 官方上市日（SSE 名录） | `FUND_LIST.listingDate` **947/947** 有值（2005-02-23…2026-10-16），与 `base.dbf` 的 `SSDATE` **947/947 相同**；与 `.day` 首根 bar：854 相同、7 例上市日晚于首 bar、86 只无 `.day` | 实测（名录原始响应已冻结） |
 | 价格缩放（沪） | **861/861** 收盘 `raw/1000` = SSE 名单 `prev_close`（2026-10-30 收盘）；`raw/100` 命中 **0** | 名单 `prev_close`（日期 20261102，前收即 10-30） |
 | 价格缩放（深） | **558/558** OHLC `raw/1000` 与 SZSE 2025-10-31 官方日行情精确相等；`raw/100` 命中 **0** | SZSE `1815_stock` 2025-10-31（558 只 ETF 段成员） |
 | 成交额 | **557/558** 与官方「万元×1e4」一致（±1000 元）；1 例 `sz159770` 与成交量同源不一致 | 同上 |
@@ -167,17 +170,29 @@ Q9 升 `generic-data-v10`；Q10 首期只入名称；Q11 夹具合成、不提�
 
 | 来源 | 请求（一次拿全量） | 行数 | 字段 | 分页 |
 |---|---|---|---|---|
-| 上交所 ETF 列表 | `yunhq.sse.com.cn:32041/v1/sh1/list/exchange/ebs?select=code,name,open,high,low,last,prev_close,volume,amount&begin=0&end=999` | 947（`total=947`，`date=20261102`，`time=162900`） | 代码、简称、开/高/低/现价/前收、成交量、成交额 | `begin/end` 单请求取全量；`end` 大于 `total` 时不报错，按 `total` 截断 |
-| 深交所 ETF 列表 | `www.szse.cn/api/report/ShowReport?SHOWTYPE=xlsx&CATALOGID=1945` | 770 | 证券代码、证券简称、**拟合指数**、当前规模（份）、基金管理人 | 单 xlsx，无分页参数；**需要 `Referer` + 浏览器 UA**（不带 `Referer` 时连接被重置，实测一次） |
-| 上交所单只基金基本信息（分类用，非首期） | `query.sse.com.cn/commonQuery.do?sqlId=COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_MOREN_L&SEC_CODE=<code>` | 1 行/代码 | `ETF_TYPE`（单市/跨市/跨境）、`STAT_DATE`、`SEC_NAME`、`TOT_VOL`（万份）、`FUND_EXPANSION_ABBR` | **逐只请求 947 次**，不满足本任务 ≤40 次预算，也不做首期必需项（Q10） |
+| **上交所 ETF 名录（推荐作身份来源）** | `query.sse.com.cn/commonSoaQuery.do?isPagination=true&pageHelp.pageSize=2000&pageHelp.pageNo=1&sqlId=FUND_LIST&fundType=00&subClass=01,02,03,04,05,06,07,08,09,30,31,32,33,34,35,36,37,38` | **947**（`pageHelp.total=947`，`pageCount=1`） | `fundCode`、`secNameFull`、`fundAbbr`、`companyName`、`fundManager`、**`listingDate`**、**`subClass`**、`INDEX_CODE`、`INDEX_NAME`、`fundType` 等 | `pageHelp.pageNo/beginPage/endPage/pageSize`；页面默认 25/页（≈38 页），`pageSize=2000` 一次取完（实测）；超出页大小边界未验证 |
+| 上交所 ETF 报价快照（**只作价格锚，不作身份**） | `yunhq.sse.com.cn:32041/v1/sh1/list/exchange/ebs?select=code,name,open,high,low,last,prev_close,volume,amount&begin=0&end=999` | 947（`total=947`，`date=20261102`，`time=162900`） | 代码、简称、开/高/低/现价/前收、成交量、成交额 | `begin/end` 单请求取全量；`end` 大于 `total` 时不报错，按 `total` 截断 |
+| 深交所 ETF 列表（推荐作身份来源） | `www.szse.cn/api/report/ShowReport?SHOWTYPE=xlsx&CATALOGID=1945` | 770 | 证券代码、证券简称、**拟合指数**、当前规模（份）、基金管理人 | 单 xlsx，无分页参数；**需要 `Referer` + 浏览器 UA**（不带 `Referer` 时连接被重置，实测一次） |
+| 上交所单只基金基本信息（历史规模，非首期） | `query.sse.com.cn/commonQuery.do?sqlId=COMMON_SSE_ZQPZ_ETFZL_ETFJBXX_JJGM_MOREN_L&SEC_CODE=<code>` | 1 行/代码 | `ETF_TYPE`（单市/跨市/跨境）、`STAT_DATE`、`SEC_NAME`、`TOT_VOL`（万份）、`FUND_EXPANSION_ABBR` | **逐只请求 947 次**；类型/指数已由名录查询一次给出，本接口只用于历史规模，**不作首期依赖**（Q11） |
 
-- **两份名单都没有上市日期**；上市日只能取 `base.dbf` 的 `SSDATE`（D-47 已锚定字段与格式；
-  ETF 行实测 1,624/1,631 与 `.day` 首根 bar 相同，7 例晚于首 bar，见 §5.2）。
-- **两份名单都不带"类型"字段**（SSE 的类型在逐只接口，SZSE 只有拟合指数/管理人），所以
-  "是 ETF" 只能等价于"在名单内"，不能从代码/名称/类型推断。
-- **更新频率**：两所页面都没有声明频率，也没有版本号/历史。快照语义按「`fetched_at` 时的当前成员集」记录
-  （同 M3 §5.2 的 `effective_from=last_modified 或获取时间`，这里没有 `last_modified`，取获取时间并标 `basis=fetch_time`）。
-  日更只做"当前名单刷新"，历史成员靠快照积累（§4.2）。
+- **`ebs` 不是基金名录**：它是 `yunhq` **实时行情快照接口**的"分类列表"（返回当日/前一交易日 OHLC 与前收），
+  `ebs` 的类别口径**没有官方说明**（接口文档与页面都没有给出类别定义）。本次只用它做价格/成交量锚
+  （§2.1 的 861/861 前收比对），**不得作为 ETF 身份依据**。
+- **名录查询才是身份依据**：ETF 列表页 HTML（2026-11-03T06:07:34Z 实测，26,816 B）引用
+  `/xhtml/home/2021public/querySearch/search_fund_2021.js`；该页 JS 的 `etfList` 参数（保存副本，XDM-15 2026-10-26）
+  指向 `commonSoaQuery.do?sqlId=FUND_LIST`。实测该查询返回 **947 行**、`pageCount=1`：
+  `listingDate` **947/947**、`subClass` **947/947**、`INDEX_CODE`/`INDEX_NAME` **915/947**
+  （缺的正好是 24 只交易型货币 ETF 与 8 只黄金 ETF，符合"没有跟踪指数"）。
+- **成员集一致**：`FUND_LIST` 与 `ebs` 的代码集**完全相同**（947=947，双向差集为空）→ 用 `FUND_LIST`
+  替换 `ebs` 作身份来源**不改变成员集**，但多了官方上市日期、ETF 类型与跟踪指数。
+- **上市日**：沪市取 `FUND_LIST.listingDate`（与 `base.dbf SSDATE` 947/947 相同）；深市 `1945` 没有上市日，
+  仍取 `base.dbf SSDATE`（D-47）。
+- **类型字段**：`subClass` 的取值→中文名映射来自页面 JS（01 单市场股票、02 单市场债券、03 跨市场股票、
+  05 交易型货币、06 黄金、08 跨市场股票(沪深港京)、09 单市场科创板、31 跨市场(含科创板)、32 跨市场债券(沪深)、
+  33 跨境、37 现金申赎类债券），**页面映射不是独立发布的分类文档**，入库要标来源与版本。
+- **更新频率/历史**：两所页面都没有声明频率，也没有版本号/历史快照。快照语义按「`fetched_at` 时的当前成员集」
+  记录（同 M3 §5.2 的 `effective_from=last_modified 或获取时间`，这里没有 `last_modified`，取获取时间并标
+  `basis=fetch_time`）。日更只做"当前名单刷新"，历史成员靠快照积累（§4.2）。
 
 ### 3.2 与 M3 §6 共用入口和来源库的接线（不另起抓取链路）
 
@@ -190,11 +205,26 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
   → etf identity writer（security_master class=2 + 名单成员事实）
 ```
 
-- **不新增抓取链路**：两个 URL 注册进现有交易所来源入口（`refresh_exchange_sources` 的 `sources` 集合），
+- **不新增抓取链路**：两个身份来源 URL（`FUND_LIST`/`1945`）注册进现有交易所来源入口（`refresh_exchange_sources` 的 `sources` 集合），
   复用同一重试/分页/冻结/错误语义；`exchange_source_snapshots` 只加索引行，不存原始字节。
-- **来源分档**：名单身份 `APPROVED_SOURCE`（与 A-1/A-2 同档，D-45/D-46 先例）；「当前成员」是快照事实，
-  不是"历史成员"；`listing_date` 仍按 D-47 的 `TdxSsdate`；再分发 `NOT_AVAILABLE`（本地个人研究，
-  D-20/#71），公开仓库不提交原始字节（§12 测试夹具同此约束）。
+- **来源分档：待准入（本文件不宣称已批准）**。owner 从未批准 SSE `FUND_LIST` 或 SZSE `1945`；D-25 要求
+  一手官方来源按 [#308](https://github.com/liqiangcc/x-data-mcp/issues/308) 模式**逐个准入**。本文件只给
+  证据包状态，准入前不得进入生产路径（Q1）；`APPROVED_SOURCE` / `OWNER_RISK_ACCEPTED` 由 owner 裁决后
+  写入 `docs/decisions.md`，不预先写。
+- **证据包状态**（2026-11-03 实测；原始字节已按 §3.2 的 freeze 流程冻结进本任务证据清单）：
+
+| 来源 | 成员集 | 官方字段 | 分页 | 历史/更新频率 | 冻结证据 | 再分发 |
+|---|---|---|---|---|---|---|
+| SSE `FUND_LIST` | 947（= ebs，无差集） | `fundCode/secNameFull/fundAbbr/companyName/fundManager/listingDate/subClass/INDEX_CODE/INDEX_NAME` | `pageHelp`；`pageSize=2000` 一次取完（默认 25/页） | 无历史版本、无 `last_modified`、未声明频率 | 原始 JSON 694,715 B，sha256 见证据清单（`sse_fund_list_20261103.raw.json`） | `NOT_AVAILABLE`（本地个人研究，D-20/#71） |
+| SZSE `1945` | 770 | 证券代码/简称/拟合指数/当前规模（份）/基金管理人 | 单 xlsx，无分页 | 同上 | 原始 xlsx 35,959 B，sha256 见证据清单 | 同上 |
+| SSE `ebs`（仅报价锚） | 947 | code/name/OHLC/prev_close/volume/amount | `begin/end` | 实时快照；类别口径无官方说明 | 原始 JSON 73,121 B，sha256 见证据清单 | 同上 |
+
+- **推荐来源组合**（Q1）：SSE 身份用 `FUND_LIST`（`source_id=sse_etf_list`），SZSE 身份用 `1945`
+  （`source_id=szse_etf_list`）；`ebs` 只作价格/成交量锚（不注册为身份来源，或注册为 `sse_etf_quote`
+  但只进证据、不进成员集）。
+- **上市日来源**：沪市 ETF 用 `FUND_LIST.listingDate`（`listing_source=ExchangeList`）；深市 ETF 用
+  `base.dbf SSDATE`（`listing_source=TdxSsdate`，D-47）。「当前成员」是快照事实，不是"历史成员"；
+  再分发 `NOT_AVAILABLE`，公开仓库不提交原始字节（§12 测试夹具同此约束）。
 - **重放**：ETF 身份写入器必须是"冻结字节 → 行"的纯函数（输入 = 快照 sha256 + `parser_version`），
   接入 `replay --scope exchange` 同一事务；`--verify-only` 用同一摘要对账。这样 D-08 的
   fresh-init 不需要重新抓取（交易所名单会变，重抓得到的是新事实）。
@@ -215,8 +245,10 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
 
 ### 3.4 上市/退市日
 
-- 上市日：`base.dbf SSDATE`，7 例晚于首 bar（`sh511600/511800/511910/511920/511960/511970/511980`，
-  均晚 10–18 天）需在写入器里逐例保留 `listing_source=TdxSsdate` 并进偏差/审计清单，不用 `.day` 首 bar 覆盖。
+- 上市日：沪市取 `FUND_LIST.listingDate`（947/947，`listing_source=ExchangeList`），与 `base.dbf SSDATE`
+  947/947 一致；深市 `1945` 没有上市日，取 `base.dbf SSDATE`（`listing_source=TdxSsdate`，D-47）。
+  `.day` 首根 bar 早于官方上市日的 7 例（`sh511600/511800/511910/511920/511960/511970/511980`，均早 10–18 天）
+  保留官方上市日并进审计清单，不用首 bar 覆盖；86 只名单有、`.day` 无的成员照写上市日、序列记 `absent`。
 - 退市日（现名单内成员）：`NULL`（`unknown`）。交易所有"终止上市基金"公告/名单，但本任务未取证，
   不能假设 A-2 的股票终止名单覆盖基金（A-2 明确过滤 `STOCK_TYPE`，D-46）。
 
@@ -248,7 +280,7 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
   `unidentified_etf_candidate`（带代码段口径的样例清单），数据目录 §3.3 写明"这 128 只未收录"。
   **禁止**凭代码段把它们当 ETF 收进来——那会把 LOF/老基金（§3.5 反例）混进 ETF 类。
 - 偏差：ETF universe 存在幸存者偏差（约 128 只候选 + 更早的已消失成员）；回测中 ETF 池的
-  收益/存活分析必须标 `survivorship_biased=true`，直到 Q1 的来源准入完成。
+  收益/存活分析必须标 `survivorship_biased=true`，直到 Q2 的来源准入完成。
 
 ### 4.2 名单有、`.day` 无（86 只）
 
@@ -279,7 +311,7 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
 
 ### 5.3 目录（`securities.catalog`）与 scope 词汇
 
-- **不把 ETF 加进 `catalog_members`**（推荐，Q4）：
+- **不把 ETF 加进 `catalog_members`**（推荐，Q5）：
   - `catalog_members` 没有 `instrument_class` 列（`migrations/tasks/004_catalog.sql:5-11`），
     加列 = 新 migration（027）；`catalog_head` 是单例，无法同时挂"A 股目录"和"ETF 目录"两个 head；
   - 把 ETF 混进同一目录会让默认 `universe`（目录版本）突然包含 ETF，A 股读面的成员集随之改变
@@ -318,14 +350,14 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
 | P8 | `src/sqlite_supply.rs:486-505` | `dataset_shape` 按 dataset 定 (前复权, 股票) | 改为「dataset + entity → shape」：ETF 实体查 `security_master.instrument_class`；`market.index` 分支不变 |
 | P9 | `src/sqlite_supply.rs:511-550`、`:2145-2146`、`:2763-2780` | head/可见性/availability 都用 dataset shape | 跟随 P8 的解析函数，一处改、全路径一致（禁止各自硬编码） |
 | P10 | `src/sqlite_market/series.rs:400-416` | `read_public_series` = (前复权, 股票) | 改为按 P8 解析后的 shape 调用 `read_visible_series`；A 股仍走 (前复权, 股票) |
-| P11 | `src/sqlite_market/series.rs:1157-1175` | 年线 lineage 必须是 Forward+Stock | 若 Q5 = 出 ETF 年线：允许 `base_instrument_class=2` 且口径与 base 一致（首期不出，见 §9.1） |
-| P12 | `src/research/read.rs:199-230`、`src/research/parquet.rs:421`、`:892` | 导出只取 Stock / Index | 若 Q6 = 导出 ETF：按 `instrument_class` 过滤扩展；列集加 `instrument_class`（v4） |
+| P11 | `src/sqlite_market/series.rs:1157-1175` | 年线 lineage 必须是 Forward+Stock | 若 Q6 = 出 ETF 年线：允许 `base_instrument_class=2` 且口径与 base 一致（首期不出，见 §9.1） |
+| P12 | `src/research/read.rs:199-230`、`src/research/parquet.rs:421`、`:892` | 导出只取 Stock / Index | 若 Q7 = 导出 ETF：按 `instrument_class` 过滤扩展；列集加 `instrument_class`（v4） |
 | P13 | `src/research/market_cap.rs:443-470` | `price_cents(units, scale)` 已通用，字段名/注释写"分" | ETF 市值不在范围；该函数不得被 ETF 调用（加品种守卫或注释），不改为 ETF 专用 |
 | P14 | `src/sqlite_market/calendar.rs:135-150`、`:230-245` | 日历来源 = (股票, 不复权) | 保持：ETF bar 不进日历推导；在文档写明（否则会以为 ETF 也参与 `cal-union-v1`） |
 | P15 | `src/data_supply/columnar.rs:29` | 读面列集无 `price_scale` | 值本身是 decimal（`to_bar` 已按 scale 解码），读不需要 scale；建议版本元数据**加** `price_scale`（可加性字段，§9.2） |
 | P16 | `src/data_supply/collect.rs:320-336` | 首采候选只收 class=0 | 新 scope 分支收 class=2；不得放宽成"所有 class" |
 | P17 | `src/data_supply/delisted_series.rs:250-258` | 退市检查只对 class=0 | 本批不改（ETF 退市身份未知）；写明"ETF 不参与该检查" |
-| P18 | `migrations/tasks/022_research_data.sql:29-37/70-90/106-108` | class 0/1/2、scale 0..6、`volume_quantum` | **无需 migration**；只有 Q4 选"进 catalog"才需要 027 |
+| P18 | `migrations/tasks/022_research_data.sql:29-37/70-90/106-108` | class 0/1/2、scale 0..6、`volume_quantum` | **无需 migration**；只有 Q5 选"进 catalog"才需要 027 |
 
 **为什么现在才发现**：M1 已把价格单位从"分"改成"按序列 scale"（schema 22），XDM-15 的 `cents()`
 清单（2dp 拒绝 3dp）已过期；真正剩余的是 `.day` 适配器的写入/校验、读面可见性与导出的品种过滤。
@@ -434,7 +466,7 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 ### 9.1 年线
 
-**推荐首期不出 ETF 年线（Q5）**，原因：
+**推荐首期不出 ETF 年线（Q6）**，原因：
 
 - 年线派生只接受「前复权 + 股票」的日线（`src/sqlite_market/series.rs:1157-1175`），ETF 没有前复权序列；
 - 若用不复权日出年线，`yearly.rs:51-80` 的口径/单位证据会要求"前复权"确认（现有 `aggregate()` 明确
@@ -449,15 +481,19 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 - ETF 序列的值按 `price_scale` 解码，客户端拿到的是 decimal（3dp），**不需要新字段也能正确解析**；
   但需要：
   1. `market.daily` 的可见性/head/availability 按实体品种解析（§6 P8/P10）；
-  2. 口径：ETF 首期只有不复权，而 `market.daily` 现在固定返回前复权（股票）。两种选择（Q3）：
+  2. 口径：ETF 首期只有不复权，而 `market.daily` 现在固定返回前复权（股票）。两种选择（Q4）：
      - **推荐**：请求加可选 `adjustment: "raw"|"qfq"`（缺省 `qfq`，A 股行为不变），ETF 用 `raw`；
      - 备选：`market.daily` 对 ETF 隐式返回不复权（同 dataset 不同品种不同口径，容易误读，不推荐）。
-  3. 版本元数据**增加** `price_scale`（可加性字段；现状见 `src/data_supply/columnar.rs:29` 与
+  3. **缺省行为必须 fail-closed**：请求**未带** `adjustment` 时缺省为 `qfq`；若实体是 ETF（首期没有前复权序列），
+     必须返回**显式错误**（稳定错误码，例如 `adjustment_required_for_etf` / `no_forward_series`），
+     **不得静默返回不复权序列，也不得返回空结果**（空结果会被误读成"该 ETF 没有数据"）。
+     这条写进 AC-M3-2-7 与 PR-C 的测试；若 owner 选"隐式不复权"备选，也必须在契约里显式声明口径并同样拒绝静默降级。
+  4. 版本元数据**增加** `price_scale`（可加性字段；现状见 `src/data_supply/columnar.rs:29` 与
      `sqlite_supply.rs` 的 `units`/`adjustment` 元数据），让客户端能区分 2dp/3dp；
-  4. `market.daily` 的 `comparison`/`expected_head` 等写路径参数不因 ETF 改变。
+  5. `market.daily` 的 `comparison`/`expected_head` 等写路径参数不因 ETF 改变。
 - `universe`：新 scope 只对 `market.daily`；默认（目录版本）仍是 A 股（§5.3）。
 - `tools/list` 体积：新增 2 个 scope 字符串（`sh_sz_etf_current`/`sh_sz_etf_listed_ever`）出现在
-  `market.daily` 的 selection schema 与 universe scope 上，估算 +200–400 B；若 Q3 采纳 `adjustment`，
+  `market.daily` 的 selection schema 与 universe scope 上，估算 +200–400 B；若 Q4 采纳 `adjustment`，
   再加一个 2 值枚举（约 +150 B）。当前 ops `tools/list` **30,159 B**、批准上限 **30,800 B**
   （[v9 契约](../contracts/generic-data-v9.md) §2）。**推断**总增量 350–550 B，可能贴线；
   超过时按同一节的「已批准上限 + 已记录面增长」规则申请，不静默超限。
@@ -466,10 +502,10 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 - `DAILY_COLUMNS`（`src/research/mod.rs:546-558`）没有 `instrument_class`；ETF 行若并入
   `daily_raw`，消费者无法区分股票/ETF（只能靠代码段，违反本文档自己的身份规则）。
-- **推荐（Q6）**：`research-snapshot.v4` 在日线文件加一列 `instrument_class`（INT32，0/1/2），
+- **推荐（Q7）**：`research-snapshot.v4` 在日线文件加一列 `instrument_class`（INT32，0/1/2），
   ETF 不复权行并入 `daily_raw`；`daily_qfq` 在 ETF 前复权交付前不含 ETF。
   - 兼容性：v3 文件的列集不变（v3 仍然可读）；v4 是新增列，属 schema 变更 → 版本号必须升；
-  - 若 owner 不想在本批改导出：可先只交付 daily 读面（ETF 不导出），把导出放到 Q6 的后续批次，
+  - 若 owner 不想在本批改导出：可先只交付 daily 读面（ETF 不导出），把导出放到 Q7 的后续批次，
     数据目录写明"导出暂不含 ETF"。
 - ETF 不进 `index` 文件、不进 `universe`（目录）文件；若未来导出 ETF，另加 `etf_membership` 或复用
   `security_master`/`code_migrations` 的行（`instrument_class=2` 已在主表）。
@@ -477,11 +513,11 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 ### 9.4 能力修订与 wire 枚举
 
 - 新 scope 值是 **wire 形状变化**（`tools/list` schema 的 enum），且 `market.daily` 的可用成员类型变了：
-  按 v8/v9 先例升 `capability_revision` → **`generic-data-v10`**（Q9）。D-32 的"精度不算契约升版"不适用：
+  按 v8/v9 先例升 `capability_revision` → **`generic-data-v10`**（Q10）。D-32 的"精度不算契约升版"不适用：
   这里变的是可选值与行为，不是数值精度。
 - `docs/contracts/generic-start-collection-v1.json:49` 的 `scope` 是 `const`（v1 只允许
   `current_sh_sz_a`）；ETF 的 scope 只出现在 v2（与 `sh_sz_a_listed_ever` 同一分支），
-  不需要改 v1 快照；但 `generic-data-v10.md`/JSON 需要记录新 enum 与 `adjustment`（若 Q3 采纳）。
+  不需要改 v1 快照；但 `generic-data-v10.md`/JSON 需要记录新 enum 与 `adjustment`（若 Q4 采纳）。
 - 工具数不变（无新工具）；`tools/list` 体积按 §9.2 测量；`get_data_capabilities` 的
   `datasets[].adjustments`/`units` 需要能表达 ETF（不复权 + 厘 + 份 + 手日精度）。
 
@@ -493,7 +529,7 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 - **不需要**：`instrument_class IN (0,1,2)`、`price_scale BETWEEN 0 AND 6`、`series_bars.*_units`、
   `volume_quantum`、`yearly_series_lineage.base_instrument_class` 都已存在（§2.3）。
-- 只有 Q4 选择"把 ETF 放进 `securities.catalog`"时，才需要 migration 027（`catalog_members.instrument_class`）；
+- 只有 Q5 选择"把 ETF 放进 `securities.catalog`"时，才需要 migration 027（`catalog_members.instrument_class`）；
   推荐方案（§5.3）避免它。
 - 来源快照使用既有 `exchange_source_snapshots` + 来源库（M3 §9.4），不需要新表；ETF 名单新增
   `source_id` 两个值，属数据不是 schema。
@@ -538,7 +574,7 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 | SLO 行 | 参考实测 | 每 item | +1,631 item 外推 | 判定 |
 |---|---|---|---|---|
-| 1 同代无变化全市场 `update_data`（hard <600s） | 573.4s / 5,238 item（XDM-84，preview.37 代码 `0f3fe25`） | 109.5 ms | **≈752s** | **推断会超 600s**；需实测/裁决（Q7） |
+| 1 同代无变化全市场 `update_data`（hard <600s） | 573.4s / 5,238 item（XDM-84，preview.37 代码 `0f3fe25`） | 109.5 ms | **≈752s** | **推断会超 600s**；需实测/裁决（Q8） |
 | 2 G1 跨代日更（hard <600s，D-52 豁免中） | 734.0s / 5,238 item（XDM-84） | 140.1 ms | ≈963s | 已豁免；仍变差 |
 | 3 全市场年线（hard <600s，D-69 豁免中） | 791.89s / 5,223 item（preview.42 生产单任务） | 151.6 ms | ≈1,039s | 只在 ETF 出年线时相关 |
 | 4 首次全市场采集（hard ≤20min） | 553.5s / 5,223 item（preview.42 重建） | 106.0 ms | ≈726s | 仍在 20min 内 |
@@ -561,15 +597,15 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 约束：每个 PR 只改本层，Rust 正确性由 CI 证明（本机只 `cargo fmt`）；夹具不得提交交易所原始字节
 （D-47 再分发 `NOT_AVAILABLE`），用**合成记录**复现下面的锚点值，并在测试注释/文档里记录真实字节的 sha256
-作为 provenance（Q11）。
+作为 provenance（Q12）。
 
 | PR | 范围 | 关键 AC / 测试 | 依赖 |
 |---|---|---|---|
-| **PR-A 身份与来源** | `source_id` `sse_etf_list`/`szse_etf_list` + parser `etf-list-v1`；freeze/validate/replay；`security_master` class=2 写入器；新 `CatalogScope` 值 + 主表解析 + catalog 拒绝 | 名单 sha256 冻结；1,717 成员；86 只 `absent`；128 只不入 class=2；`replay --verify-only` match；`securities.catalog` 拒新 scope；A 股 `security_master` 行不变 | M3 §6 已合并（共用入口/来源库） |
+| **PR-A 身份与来源** | SSE 用 `FUND_LIST`、SZSE 用 `1945`（`ebs` 只作报价锚）；`source_id` `sse_etf_list`/`szse_etf_list` + parser `etf-list-v1`；freeze/validate/replay；`security_master` class=2 写入器（沪 `listing_source=ExchangeList`、深 `TdxSsdate`）；新 `CatalogScope` 值 + 主表解析 + catalog 拒绝 | 名单 sha256 冻结；1,717 成员；86 只 `absent`；128 只不入 class=2；`FUND_LIST` 的 947 代码集与 `ebs` 双向差集为空（每次刷新都断言）；`listingDate` 与 `base.dbf SSDATE` 一致；`replay --verify-only` match；`securities.catalog` 拒新 scope；A 股 `security_master` 行不变 | M3 §6 已合并（共用入口/来源库）；Q1 准入 |
 | **PR-B 精度与量纲** | `SeriesShape::etf`、`PRICE_SCALE_LI`、`.day` 适配器按品种 scale、`normalized_volume/hands_consistent` 参数化、单位证据按品种；ETF 不复权采集（新 scope 分支、预算 500） | 合成夹具：`sh510050` 3dp 往返、`sz159338` 手日 ×100 + `volume_quantum=100`、`sz159919` cat1 锚点、`sz159901` cat11 锚点、`sh510070`（退市候选）不入库；A 股 16,354 条 version_id 不变；1 个不一致手日 fail-closed | PR-A |
-| **PR-C 读面与 scope 语义** | `dataset_shape`/`read_public_series`/head/availability 按实体解析；`market.daily` ETF 不复权可读；元数据加 `price_scale`；（Q3 采纳时）`adjustment` 参数 | `query_data` 单只 ETF 返回 3dp、`adjustment=raw`；A 股 `sh.600000` 输出逐字节不变；`universe` 新 scope 只对 daily 生效；`tools/list` 增量实测 | PR-B |
+| **PR-C 读面与 scope 语义** | `dataset_shape`/`read_public_series`/head/availability 按实体解析；`market.daily` ETF 不复权可读；元数据加 `price_scale`；（Q4 采纳时）`adjustment` 参数 | `query_data` 单只 ETF 返回 3dp、`adjustment=raw`；A 股 `sh.600000` 输出逐字节不变；`universe` 新 scope 只对 daily 生效；`tools/list` 增量实测 | PR-B |
 | **PR-D 导出（可选，Q6）** | `research-snapshot.v4`：日线文件加 `instrument_class`，ETF 行并入 `daily_raw` | v3 仍可读；v4 列集与行数；A 股导出文件 sha256 不变；manifest 版本 | PR-C |
-| **PR-E 年线/前复权（可选，Q2/Q5）** | cat11 进 QFQ 链、事件逐条核对清单、ETF 年线放宽 `yearly_state` | §8.3 的逐条核对表；复权连续性 10 只样本；年线 A 股不变 | PR-B/Q 裁决 |
+| **PR-E 年线/前复权（可选，Q3/Q6）** | cat11 进 QFQ 链、事件逐条核对清单、ETF 年线放宽 `yearly_state` | §8.3 的逐条核对表；复权连续性 10 只样本；年线 A 股不变 | PR-B/Q 裁决 |
 
 顺序：A → B → C →（D/E 视裁决）。每个 PR 的 CI 必须绿；docs-only 设计 PR（本文件）先行。
 
@@ -594,13 +630,13 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 | AC | 判据（可执行） |
 |---|---|
-| AC-M3-2-1 身份 | 1,717 只 class=2；86 只 `absent`（带原因）；128 只候选不在 class=2；`replay --verify-only` = match；名单快照 sha256/URL/时间入清单 |
+| AC-M3-2-1 身份 | 1,717 只 class=2；沪市上市日来自 `FUND_LIST.listingDate`（947/947 与 `base.dbf SSDATE` 一致）、深市来自 `SSDATE`；86 只 `absent`（带原因）；128 只候选不在 class=2；`FUND_LIST` 与 `ebs` 代码集差集为空；`replay --verify-only` = match；名单快照 sha256/URL/时间入清单 |
 | AC-M3-2-2 精度 + A 股不变 | ETF OHLC 3dp 精确往返；A 股 16,354 条 series 的 version_id/digest 与改动前逐一相同；A 股导出行/文件 sha256 相同 |
 | AC-M3-2-3 量纲 | 3,819 根手日夹具还原 ×100 + `volume_quantum=100`；`r7` 标记与量额一致性表 4 个分支各 1 测试；不一致 → item 失败（不部分写） |
 | AC-M3-2-4 成员集 | 新 scope 只在 `market.daily`；`securities.catalog` 拒绝；默认 `universe` 成员数不变；`market.daily` 单只 ETF 可读 |
 | AC-M3-2-5 采集 | 4 批（500/500/500/131）首采；considered/succeeded/absent/failed 逐项报告；86 只 absent；不静默丢 |
 | AC-M3-2-6 复权 | 首期只交付不复权 + 因子事实；因子行带 `basis_status` 与事件证据；若交付 QFQ，§8.3 的逐条核对表齐全 |
-| AC-M3-2-7 契约 | capability 升 v10；`tools/list` 增量实测并记录；`price_scale` 在版本元数据可读；`get_data_capabilities` 能表达 ETF 口径/单位 |
+| AC-M3-2-7 契约 | capability 升 v10；`tools/list` 增量实测并记录；`price_scale` 在版本元数据可读；`get_data_capabilities` 能表达 ETF 口径/单位；**ETF 未指定 `adjustment` 时返回显式错误（fail-closed），不得静默返回不复权或空结果** |
 | AC-M3-2-8 来源/重放 | 原始字节只在来源库；`replay --scope exchange` 幂等；公开仓库无交易所原始字节；再分发 `NOT_AVAILABLE` 写明 |
 | AC-M3-2-9 性能 | 按 §11.3 记录 A/B；task 数/项数、write-loop、库增长、MemAvailable；未实测不写 PASS、不改门槛 |
 | AC-M3-2-10 偏差 | 数据目录 §3.3 新增：128 只候选退市的幸存者偏差、86 只无日线、ETF 无行业、ETF 暂无年线/前复权（若延后）、`SSDATE` 7 例晚于首 bar |
@@ -611,17 +647,18 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 | Q | 问题 | 选项 | 推荐 | 理由 |
 |---|---|---|---|---|
-| **Q1** | 128 只候选退市 ETF 的官方身份怎么拿 | (a) 取证交易所"终止上市基金/历史基金名单"并按 #308 准入；(b) 从今天起积累快照、历史标 `unknown`；(c) 不收录 ETF | **(a)，期间按 (b) 标 `unknown` 并写偏差** | (a) 才能消幸存者偏差；(b) 只能覆盖未来；(c) 与 D-28/D-30 冲突。取证成本是 1–2 个来源 URL + 分页证据，不影响本批主体 |
-| **Q2** | 首期复权范围 | (a) 只不复权 + 因子事实；(b) 不复权 + 前复权（需补 cat11/cat1 逐条核对） | **(a)** | cat11 仅 3 个事件锚定、cat1 含 1 例疑似拆分（159922）；先交付事实行，QFQ 作为独立批次（§8.3 给核对方法） |
-| **Q3** | `market.daily` 如何表达口径 | (a) 请求加 `adjustment: raw\|qfq`（缺省 qfq）；(b) ETF 隐式返回不复权；(c) 首期只导出不进 MCP | **(a)** | (a) 显式、A 股缺省不变；(b) 同一 dataset 不同品种不同口径会误导回测；(c) 不满足"ETF 是 market.daily 的证券类型" |
-| **Q4** | ETF 是否进 `securities.catalog` | (a) 不进，用主表 scope；(b) 进目录（需 migration 027 + `catalog_members.instrument_class` + 单例 head 改造） | **(a)** | (b) 改动 schema/head/默认 universe，破坏"A 股输出不变"；(a) 复用 M3 的 scope 模式（D-62 Q5） |
-| **Q5** | ETF 是否出年线 | (a) 首期不出；(b) 随前复权一起出；(c) 用不复权硬出 | **(a)** | 年线派生要求前复权股票口径；不复权年线会把分红/折算当跳空 |
-| **Q6** | 研究快照导出 | (a) v4 日线文件加 `instrument_class`、ETF 行并入 `daily_raw`；(b) 新 `etf_daily` 文件；(c) 本批不导出 | **(a)，可后置一批** | (a) 不新增文件语义、消费者能区分；(b) 文件面扩大；(c) 与"可回测"目标冲突，可短期接受 |
-| **Q7** | 第 1 行 SLO（同代全量 <600s）怎么办 | (a) 先实测再定；(b) 直接重新基线；(c) ETF 独立批次、不计入"全市场" | **(a)，若确认 >600s 再在 (b)/(c) 中选** | 外推 752s 是推断；实测前改门槛或无依据排除都不合规（D-30/AGENTS.md） |
-| **Q8** | 手日精度列与 A 股既有 19 根 | (a) ETF 写 `volume_quantum=100`，A 股保持现状 NULL；(b) A 股也回填 100（改 A 股导出字节） | **(a)** | (b) 违反 AC-M3-2-2；A 股 19 根的精度标注可另案 |
-| **Q9** | 能力修订与工具面 | (a) 升 `generic-data-v10`；(b) 不升版只更 release notes | **(a)** | 新 scope enum/`adjustment` 是 wire 形状变化，不是 D-32 的"精度不变" |
-| **Q10** | ETF 分类字段（SSE `ETF_TYPE` 逐只、SZSE 拟合指数/管理人） | (a) 首期只入名称；(b) 同时入 SSE 类型（947 次逐只请求）；(c) 连跟踪指数一起做 | **(a)** | (b) 请求量 947 次、超本任务 40 次预算且需另立来源准入粒度；(c) 跟踪指数需 PCF/成分，属另一任务 |
-| **Q11** | 测试夹具与再分发 | (a) 合成夹具 + 记录真实字节 sha256 作 provenance；(b) 直接提交交易所原始字节 | **(a)** | (b) 属对外再分发（D-47 `NOT_AVAILABLE`）；(a) 同样能钉住数值与格式 |
+| **Q1** | **是否准入 SSE `FUND_LIST` 与 SZSE `1945` 作为 ETF 身份来源**（证据包状态见 §3.2 表） | (a) 两份都准入为身份来源：SSE `FUND_LIST`（身份 + `listingDate` + `subClass` + `INDEX_CODE`），SZSE `1945`（身份 + 拟合指数/规模/管理人），`ebs` 仅作报价锚；(b) 只准入 SZSE `1945`，SSE 继续用 `ebs`（则无官方上市日/类型）；(c) 都不准入（M3-2 无法交付身份） | **(a)** | 证据包已齐：SSE 947 行、`pageCount=1`、`listingDate` 947/947、`subClass` 947/947、`INDEX_CODE` 915/947；SZSE 770 行；两份成员集与 `ebs` **完全一致**（947=947，无差集）。`ebs` 是行情快照的分类列表、类别口径无官方说明，不能当身份。D-25 要求逐个准入，**准入前不得进入生产路径** |
+| **Q2** | 128 只候选退市 ETF 的官方身份怎么拿 | (a) 取证交易所"终止上市基金/历史基金名单"并按 #308 准入；(b) 从今天起积累快照、历史标 `unknown`；(c) 不收录 ETF | **(a)，期间按 (b) 标 `unknown` 并写偏差** | (a) 才能消幸存者偏差；(b) 只能覆盖未来；(c) 与 D-28/D-30 冲突。取证成本**推断**为 1–2 个来源 URL + 分页证据（**未实测**），不影响本批主体 |
+| **Q3** | 首期复权范围 | (a) 只不复权 + 因子事实；(b) 不复权 + 前复权（需补 cat11/cat1 逐条核对） | **(a)** | cat11 仅 3 个事件锚定、cat1 含 1 例疑似拆分（159922）；先交付事实行，QFQ 作为独立批次（§8.3 给核对方法） |
+| **Q4** | `market.daily` 如何表达口径 | (a) 请求加 `adjustment`（取值 raw 或 qfq；缺省 qfq；**ETF 未指定 `adjustment` 时显式报错 fail-closed**）；(b) ETF 隐式返回不复权；(c) 首期只导出不进 MCP | **(a)** | (a) 显式、A 股缺省不变，且 ETF 缺省 qfq 不会静默返回 raw 或空结果；(b) 同一 dataset 不同品种不同口径会误导回测；(c) 不满足"ETF 是 market.daily 的证券类型" |
+| **Q5** | ETF 是否进 `securities.catalog` | (a) 不进，用主表 scope；(b) 进目录（需 migration 027 + `catalog_members.instrument_class` + 单例 head 改造） | **(a)** | (b) 改动 schema/head/默认 universe，破坏"A 股输出不变"；(a) 复用 M3 的 scope 模式（D-62 Q5） |
+| **Q6** | ETF 是否出年线 | (a) 首期不出；(b) 随前复权一起出；(c) 用不复权硬出 | **(a)** | 年线派生要求前复权股票口径；不复权年线会把分红/折算当跳空 |
+| **Q7** | 研究快照导出 | (a) v4 日线文件加 `instrument_class`、ETF 行并入 `daily_raw`；(b) 新 `etf_daily` 文件；(c) 本批不导出 | **(a)，可后置一批** | (a) 不新增文件语义、消费者能区分；(b) 文件面扩大；(c) 与"可回测"目标冲突，可短期接受 |
+| **Q8** | 第 1 行 SLO（同代全量 <600s）怎么办 | (a) 先实测再定；(b) 直接重新基线；(c) ETF 独立批次、不计入"全市场" | **(a)，若确认 >600s 再在 (b)/(c) 中选** | 外推 752s 是推断；实测前改门槛或无依据排除都不合规（D-30/AGENTS.md） |
+| **Q9** | 手日精度列与 A 股既有 19 根 | (a) ETF 写 `volume_quantum=100`，A 股保持现状 NULL；(b) A 股也回填 100（改 A 股导出字节） | **(a)** | (b) 违反 AC-M3-2-2；A 股 19 根的精度标注可另案 |
+| **Q10** | 能力修订与工具面 | (a) 升 `generic-data-v10`；(b) 不升版只更 release notes | **(a)** | 新 scope enum/`adjustment` 是 wire 形状变化，不是 D-32 的"精度不变" |
+| **Q11** | ETF 类型/跟踪指数是否落库 | (a) 首期只入身份/名称/上市日，类型/指数随名录快照冻结留证、不建数据集；(b) 新建 ETF 元数据数据集（类型/指数/规模/管理人）；(c) 写进 `security_master` flags | **(a)**，后续可做 (b) | 名录查询已一次给出 `subClass` 与 `INDEX_CODE`/`INDEX_NAME`（915/947），**不再需要 947 次逐只请求**；但落库要新表/迁移，首期先留证不扩 schema |
+| **Q12** | 测试夹具与再分发 | (a) 合成夹具 + 记录真实字节 sha256 作 provenance；(b) 直接提交交易所原始字节 | **(a)** | (b) 属对外再分发（D-47 `NOT_AVAILABLE`）；(a) 同样能钉住数值与格式 |
 
 ---
 
@@ -632,7 +669,7 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 3. **`sz159830` 2024-12-20 的 cat11**（`c3=0.93584`）未解释：价格未按 `1/c3` 变化。
 4. **`sz159922` 2024-12-02 的 cat1**（`c1=1.292`、比率 2.5026）疑似拆分记错类别，未逐条核对官方公告。
 5. **86 只缺段的原因**（TDX 为什么不含 526/551/589）未验证；只证明"整段缺失、不是新上市滞后"。
-6. **128 只候选退市的官方身份/退市日**未取得（Q1）。
+6. **128 只候选退市的官方身份/退市日**未取得（Q2）。
 7. **ETF 名称历史**：名单只给当前简称，历史简称没有日期化来源（与 S-6 同类问题，本批不做）。
 8. **ETF 规模/份额/净值**未纳入（`base.dbf` 有 `ZGB`/`TZMGJZ`，但未锚定到 ETF 口径）。
 9. **`fetch_time` 作为 `effective_from`** 的上界性：名单无 `last_modified`，只能取抓取时间（偏差同 M3 §5.2）。
@@ -640,6 +677,12 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 11. **导出 v4** 的兼容性未验证（只有设计取舍）。
 12. **沪市 ETF 逐日 OHLC** 只有单日官方锚（`prev_close`）+ 全历史量额一致性；沪所无历史日线接口
     （XDM-15 已验证），逐日锚定强度弱于深市（5 日 × 13 只 → 本次 558 只单日）——这是来源限制，不是实现缺陷。
+13. **SSE `FUND_LIST` 的更新频率/历史版本未验证**；`pageSize` 上限（>2000）与未知 `subClass` 值的行为未验证；
+    `subClass` 的中文映射来自页面 JS，不是独立发布的分类文档，入库要标来源与版本。
+14. **`FUND_LIST` 与 `ebs` 成员集一致只在本日快照成立**（947=947，双向差集为空）；写入器必须在每次刷新时
+    重新做双向比对，出现差异要显式列出而不是取其一（本文件不改运行时行为）。
+15. **SSE `FUND_LIST` 的 `INDEX_CODE`/`INDEX_NAME` 覆盖 915/947**（缺 24 只货币 + 8 只黄金，符合无跟踪指数），
+    但指数代码与中证/国证代码体系的对齐未验证（Q11 只留证，不落库）。
 
 ---
 
