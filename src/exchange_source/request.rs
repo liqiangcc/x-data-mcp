@@ -268,6 +268,11 @@ pub enum PagingFormat {
     /// `tabkey=tab2` first, unique non-empty block second. Kept only for
     /// replay: the same bytes must keep their old counts.
     SzseMetadataV2,
+    /// SZSE `ShowReport?SHOWTYPE=xlsx` workbook (the ETF list, `CATALOGID=1945`).
+    /// One sheet, no pagination: the envelope is the data-row count after the
+    /// header row. The bytes are parsed by the strict reader in
+    /// [`super::xlsx`]; replay re-derives the same count from the same bytes.
+    SzseXlsx,
     /// SZSE `metadata` envelopes frozen before the block-selection change:
     /// these always read the first block. Kept only for replay.
     SzseMetadataV1,
@@ -291,6 +296,8 @@ pub const SSE_BULLETIN_PARSER_VERSION: &str = "exchange-sse-bulletin-page-v1";
 /// several non-empty blocks fail closed (#446 D1: `CATALOGID=1110` answers four
 /// blocks and only tab1 carries the current list).
 pub const SZSE_PARSER_VERSION: &str = "exchange-szse-page-v3";
+/// Parser version recorded for SZSE XLSX workbooks (M3-2 ETF list).
+pub const SZSE_XLSX_PARSER_VERSION: &str = "exchange-szse-xlsx-v1";
 /// The SZSE `metadata` version that chose `tabkey=tab2` first and the only
 /// non-empty block second. Frozen snapshots keep that meaning on replay: the
 /// same bytes must not silently change their row/page counts.
@@ -319,6 +326,7 @@ impl PagingFormat {
             Self::SzseMetadata => SZSE_PARSER_VERSION,
             Self::SzseMetadataV2 => SZSE_PARSER_VERSION_V2,
             Self::SzseMetadataV1 => SZSE_PARSER_VERSION_V1,
+            Self::SzseXlsx => SZSE_XLSX_PARSER_VERSION,
         }
     }
 
@@ -330,6 +338,7 @@ impl PagingFormat {
             SZSE_PARSER_VERSION => Some(Self::SzseMetadata),
             SZSE_PARSER_VERSION_V2 => Some(Self::SzseMetadataV2),
             SZSE_PARSER_VERSION_V1 => Some(Self::SzseMetadataV1),
+            SZSE_XLSX_PARSER_VERSION => Some(Self::SzseXlsx),
             _ => None,
         }
     }
@@ -370,6 +379,8 @@ impl PagingFormat {
             Self::SzseMetadata | Self::SzseMetadataV2 | Self::SzseMetadataV1 => {
                 params.insert("PAGENO".to_string(), page);
             }
+            // A workbook has no page parameter: the whole list is one response.
+            Self::SzseXlsx => {}
         }
     }
 

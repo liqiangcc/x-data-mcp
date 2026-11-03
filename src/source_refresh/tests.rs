@@ -136,6 +136,11 @@ impl RefreshFixture {
 
     fn body(&self, url: &str) -> Result<Vec<u8>, TransportError> {
         if url.contains("commonSoaQuery") {
+            if url.contains("FUND_LIST") {
+                // M3-2 ETF identity list: one row is enough for the envelope;
+                // the business parser/floor is tested in `etf_list`.
+                return Ok(sse_page(1, 1, 1));
+            }
             return Ok(
                 br#"{"pageHelp":{"pageNo":1,"pageSize":25,"pageCount":0,"total":0,"data":[]}}"#
                     .to_vec(),
@@ -172,6 +177,13 @@ impl RefreshFixture {
         }
         if url.contains("commonQuery.do") {
             return Ok(sse_page(1, 1, 1));
+        }
+        if url.contains("ShowReport") && url.contains("CATALOGID=1945") {
+            // M3-2 ETF identity list: a synthetic workbook (no exchange bytes).
+            return Ok(include_bytes!(
+                "../../tests/fixtures/exchange-etf-list/szse_etf_list_small.xlsx"
+            )
+            .to_vec());
         }
         if url.contains("ShowReport/data") {
             return self.szse_body(url);
@@ -392,15 +404,15 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
     // A tail is synchronous: the reply is the finished run, not a handle.
     assert!(first.finished_at.is_some());
     assert!(
-        first.requests <= 28,
+        first.requests <= 32,
         "tail must stay within the D-66 budget, got {} ({} calls)",
         first.requests,
         fixture.calls()
     );
     assert_eq!(first.requests as usize, fixture.calls());
-    assert_eq!(first.scope.len(), 7);
-    assert_eq!(first.planned.len(), 14);
-    assert_eq!(first.sources.len(), 7);
+    assert_eq!(first.scope.len(), 9);
+    assert_eq!(first.planned.len(), 16);
+    assert_eq!(first.sources.len(), 9);
     let short = first
         .sources
         .iter()
@@ -421,7 +433,7 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
     assert_eq!(runs[0].status, "succeeded");
     assert_eq!(runs[0].verified_through.as_deref(), Some("2026-11-02"));
     let source_rows = backend.read_source_refresh_run_sources(&run_id).unwrap();
-    assert_eq!(source_rows.len(), 7);
+    assert_eq!(source_rows.len(), 9);
     let listing = source_rows
         .iter()
         .find(|row| row.source_id == "sse_listing")
@@ -521,7 +533,7 @@ fn full_run_observes_every_source() {
         &[],
     );
     assert_eq!(report.status, RefreshStatus::Succeeded);
-    assert_eq!(report.requests, 308);
+    assert_eq!(report.requests, 312);
     assert_eq!(report.requests as usize, fixture.calls());
     assert_eq!(report.changed, 0, "first observation is not a revision");
     for source in &report.sources {
@@ -816,7 +828,9 @@ fn dry_run_lists_the_plan_and_touches_nothing() {
     assert_eq!(report.status, RefreshStatus::Planned);
     assert!(report.dry_run);
     assert!(report.run_id.is_none());
-    assert_eq!(report.planned.len(), 14);
+    assert_eq!(report.planned.len(), 16);
+    assert!(report.scope.contains(&"sse_etf_list".to_string()));
+    assert!(report.scope.contains(&"szse_etf_list".to_string()));
     assert!(report.sources.iter().all(|source| source.requests == 0));
     assert!(!scenario.db().exists());
     assert!(!store.manifest_path().exists());
@@ -1033,7 +1047,7 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
     assert_eq!(started.requests, 0);
     assert_eq!(
         started.planned.len(),
-        300,
+        302,
         "the immediate reply carries the full plan, not results"
     );
     let run_id = started.run_id.clone().unwrap();
@@ -1050,7 +1064,7 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
     fixture.release();
     let report = wait_for_run(&backend, &run_id);
     assert_eq!(report.status, RefreshStatus::Succeeded);
-    assert_eq!(report.requests, 308);
+    assert_eq!(report.requests, 312);
     assert_eq!(report.requests as usize, fixture.calls());
     assert!(report.finished_at.is_some());
     assert_eq!(report.verified_through.as_deref(), Some("2026-11-02"));
@@ -1063,7 +1077,7 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
         "a completed background run advances the durable verified date"
     );
     // The reply is readable after the fact through the same durable record.
-    assert_eq!(super::status_of(&backend, &run_id).unwrap().requests, 308);
+    assert_eq!(super::status_of(&backend, &run_id).unwrap().requests, 312);
     // The guard is released: the next run (here a tail) may start.
     let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
     assert_eq!(next.mode, RefreshMode::Tail);

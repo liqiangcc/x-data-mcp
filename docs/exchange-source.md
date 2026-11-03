@@ -153,7 +153,7 @@ run 记录；四个同源日更 item 只读它冻结的快照。代码行为如�
   `szse_short_name` 只取第 1 页探针（`szse_short_name` 仅当新行含 `ST`/`*ST`/`退` 才在
   当天补全量）。`full` 覆盖全部 1,941 个指纹（停牌/公告的全部季度 + 整表全部页），逐指纹
   与最新 sha 比对，输出 `revision`。关闭窗口在 `tail` 里根本不进计划，所以“关闭窗口不发
-  请求”由计划保证；R1 的 `ReusePolicy` 表已注册 7 个来源但全部 `Enabled::No`（R1 验收要求
+  请求”由计划保证；R1 的 `ReusePolicy` 表已注册 9 个来源（M3-2 PR-A 增加 `sse_etf_list`/`szse_etf_list`）但全部 `Enabled::No`（R1 验收要求
   默认不改变行为），读穿复用只在显式启用时生效，不是当前请求数下降的原因；`full` 按设计
   必须重抓全部指纹检测修订，也不能靠读穿复用跳过。**要启用 R1 的 `ReusePolicy` 需另行决策，
   目前没有计划。**

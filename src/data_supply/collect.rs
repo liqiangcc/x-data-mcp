@@ -297,7 +297,9 @@ impl ListedEverCollectionContract {
                     WriteSelection::Scope { scope } if *scope == CatalogScope::ShSzAListedEver => {}
                     WriteSelection::Scope { .. } => {
                         return Err(invalid(
-                            "listed-ever collection only accepts scope sh_sz_a_listed_ever",
+                            "v2 scope collection accepts sh_sz_a_listed_ever only; \
+                             sh_sz_etf_current / sh_sz_etf_listed_ever are resolved \
+                             by the read path in PR-A and collected in PR-B",
                         ));
                     }
                     _ => {

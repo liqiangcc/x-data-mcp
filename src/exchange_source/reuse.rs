@@ -164,12 +164,12 @@ impl ReusePolicy {
 
 /// The one registry of refresh rules (§5.1).
 ///
-/// All seven HTTP sources are registered, in [`SourceId::ALL`] order, with
-/// `P=7`, `H=14` and `Enabled::No`. A new source adds a row here; a caller that
-/// must not reuse anything keeps the default table.
+/// Every HTTP source is registered, in [`SourceId::ALL`] order, with `P=7`,
+/// `H=14` and `Enabled::No`. A new source adds a row here; a caller that must
+/// not reuse anything keeps the default table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReusePolicyTable {
-    policies: [ReusePolicy; 7],
+    policies: [ReusePolicy; 9],
 }
 
 impl ReusePolicyTable {
@@ -202,6 +202,12 @@ impl ReusePolicyTable {
                     Enabled::No,
                 ),
                 ReusePolicy::declared(
+                    SourceId::SseEtfList,
+                    ReuseClass::Table,
+                    TailScope::WholeTable,
+                    Enabled::No,
+                ),
+                ReusePolicy::declared(
                     SourceId::SzseListing,
                     ReuseClass::Table,
                     TailScope::FirstPageProbe,
@@ -217,6 +223,12 @@ impl ReusePolicyTable {
                     SourceId::SzseShortName,
                     ReuseClass::Table,
                     TailScope::FirstPageProbe,
+                    Enabled::No,
+                ),
+                ReusePolicy::declared(
+                    SourceId::SzseEtfList,
+                    ReuseClass::Table,
+                    TailScope::WholeTable,
                     Enabled::No,
                 ),
             ],

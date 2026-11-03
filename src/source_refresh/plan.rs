@@ -8,7 +8,7 @@
 use chrono::NaiveDate;
 
 use crate::exchange_source::{AcquisitionPlan, Segment, SourceId, quarter_segments};
-use crate::official_security::{a1a2, a3, risk_warnings};
+use crate::official_security::{a1a2, a3, etf_list, risk_warnings};
 
 use super::wire::{PlannedUnit, RefreshMode};
 
@@ -114,6 +114,7 @@ pub fn build(
     }
 
     let a1a2_plans = a1a2::plans();
+    let etf_plans = etf_list::plans();
     let risk_plans = risk_warnings::plans();
     let mut plans = Vec::new();
     for source in selected {
@@ -147,6 +148,21 @@ pub fn build(
                 SourcePlan {
                     source_id: source,
                     class,
+                    plans,
+                    windows: Vec::new(),
+                    from_param: "",
+                    to_param: "",
+                }
+            }
+            SourceId::SseEtfList | SourceId::SzseEtfList => {
+                let plans = etf_plans
+                    .iter()
+                    .filter(|(_, plan)| plan.source_id == source)
+                    .map(|(kind, plan)| (kind.label().to_string(), plan.clone()))
+                    .collect::<Vec<_>>();
+                SourcePlan {
+                    source_id: source,
+                    class: PlanClass::Table,
                     plans,
                     windows: Vec::new(),
                     from_param: "",

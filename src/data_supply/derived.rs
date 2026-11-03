@@ -487,13 +487,52 @@ fn execute(
                 (assembly::exchange_source(Some(admitted.snapshot)), evidence)
             }
         };
-        let assembled = assembly::assemble_security_master(
+        // M3-2 PR-A (D-70 Q1): ETF identity comes from the two admitted
+        // exchange lists, never from a code prefix. The branch is independent
+        // of A-1/A-2: without a source store it stays `pending_source`, and the
+        // A-share rows are written exactly as before.
+        let (etf, etf_evidence) = match crate::official_security::etf_list::run_source(
+            market, today, policy,
+        )
+        .map_err(|error| {
+            Error::Invalid(format!("ETF identity source: {}: {error}", error.code()))
+        })? {
+            crate::official_security::etf_list::RunSource::Pending(pending) => (None, Value::Null),
+            crate::official_security::etf_list::RunSource::Admitted(admitted) => {
+                let evidence = admitted.evidence();
+                (Some(admitted), evidence)
+            }
+        };
+        let mut assembled = assembly::assemble_security_master(
             &snapshot.facts.lifecycle,
             &snapshot.facts.arrangements,
             exchange,
             &candidates,
         )
         .map_err(|e| Error::Invalid(e.to_string()))?;
+        match &etf {
+            Some(admitted) => {
+                let mut etf_rows = crate::official_security::etf_list::identity_rows(
+                    admitted,
+                    &snapshot.facts.all_listing_dates,
+                )
+                .map_err(|error| Error::Invalid(error.to_string()))?;
+                assembled.rows.append(&mut etf_rows);
+                assembled.rows.sort_by(|left, right| {
+                    (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+                        right.exchange,
+                        right.code.as_str(),
+                        right.effective_from,
+                    ))
+                });
+            }
+            None => assembled.pending_sources.push(assembly::PendingSource {
+                dataset: assembly::DATASET_KIND,
+                source: "etf_list",
+                reason: "the M3 source store is not configured for this process \
+                         (X_DATA_MCP_SOURCE_STORE); ETF identity stays pending_source",
+            }),
+        }
         // The item's write set is 主表 + 上市/退市 + 迁移 (§12.1). The name
         // history is its own M3 item (`derived:security_names`, #446 PR-12),
         // so this item neither writes a name row nor reports a name
@@ -527,6 +566,7 @@ fn execute(
             // later audit can tell a dedupe from a missing row (XDM-70, #391).
             "duplicates_collapsed": collapsed_duplicates_json(&snapshot.facts.duplicates_collapsed),
             "exchange_source": exchange_evidence,
+            "etf_source": etf_evidence,
             "pending_sources": pending_json(&pending),
             "elapsed_ms": elapsed_ms(started),
         }));

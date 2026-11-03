@@ -53,6 +53,7 @@ pub mod reuse;
 pub mod select;
 pub mod transport;
 pub mod validate;
+pub mod xlsx;
 
 #[cfg(test)]
 mod tests;
@@ -92,20 +93,24 @@ pub enum SourceId {
     SseDelisting,
     SseBulletin,
     SseSuspension,
+    SseEtfList,
     SzseListing,
     SzseDelisting,
     SzseShortName,
+    SzseEtfList,
 }
 
 impl SourceId {
-    pub const ALL: [SourceId; 7] = [
+    pub const ALL: [SourceId; 9] = [
         Self::SseListing,
         Self::SseDelisting,
         Self::SseBulletin,
         Self::SseSuspension,
+        Self::SseEtfList,
         Self::SzseListing,
         Self::SzseDelisting,
         Self::SzseShortName,
+        Self::SzseEtfList,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -114,9 +119,11 @@ impl SourceId {
             Self::SseDelisting => "sse_delisting",
             Self::SseBulletin => "sse_bulletin",
             Self::SseSuspension => "sse_suspension",
+            Self::SseEtfList => "sse_etf_list",
             Self::SzseListing => "szse_listing",
             Self::SzseDelisting => "szse_delisting",
             Self::SzseShortName => "szse_short_name",
+            Self::SzseEtfList => "szse_etf_list",
         }
     }
 
@@ -129,10 +136,14 @@ impl SourceId {
     /// Referer the exchange APIs require (§6.3); the request builder adds it.
     pub fn referer(self) -> &'static str {
         match self {
-            Self::SseListing | Self::SseDelisting | Self::SseBulletin | Self::SseSuspension => {
-                "https://www.sse.com.cn/"
+            Self::SseListing
+            | Self::SseDelisting
+            | Self::SseBulletin
+            | Self::SseSuspension
+            | Self::SseEtfList => "https://www.sse.com.cn/",
+            Self::SzseListing | Self::SzseDelisting | Self::SzseShortName | Self::SzseEtfList => {
+                "https://www.szse.cn/"
             }
-            Self::SzseListing | Self::SzseDelisting | Self::SzseShortName => "https://www.szse.cn/",
         }
     }
 

@@ -43,7 +43,7 @@ ENTRY_ALLOWLIST_CONST = {
     "ops": "OPS_TOOLS",
     "maint": "MAINT_TOOLS",
 }
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v9"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v10"
 # The revision the deployed docs/contracts/Skills describe. R2's tool is code
 # only until the next deployment; flip this with the Skills at that switch.
 EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v9"
@@ -888,21 +888,24 @@ def main() -> int:
         f"ops {EXPECTED_DEPLOYED_ENTRY_TOOLS['ops']}, prose "
         f"{EXPECTED_DEPLOYED_DATA_TOOLS}",
     )
-    # While a code-only contract exists (code revision ahead of the deployed
-    # one), the two count tables must stay separate so the gap is visible.
-    # Once the code revision is deployed (v9 since preview.42) there is no
-    # code-only difference left and the tables are expected to agree.
+    # A code-only contract (code revision ahead of the deployed one) may be a
+    # wire-shape change without a tool-count change (M3-2's ETF scopes bump
+    # v9→v10 but add no tool). When the counts differ they must stay separate
+    # so the gap is visible; when they are equal the revision constants carry
+    # the gap instead.
     code_only = EXPECTED_DEPLOYED_CAPABILITY_REVISION != EXPECTED_DATA_CAPABILITY_REVISION
     check(
-        "deployed and code entry counts are kept separate"
-        if code_only else
-        "deployed and code entry counts agree (no code-only contract)",
-        EXPECTED_DEPLOYED_ENTRY_TOOLS != EXPECTED_CODE_ENTRY_TOOLS
-        if code_only else
-        EXPECTED_DEPLOYED_ENTRY_TOOLS == EXPECTED_CODE_ENTRY_TOOLS,
-        "the R2 allowlist must be visible as a code-only difference"
-        if code_only else
-        f"deployed {EXPECTED_DEPLOYED_ENTRY_TOOLS} != code {EXPECTED_CODE_ENTRY_TOOLS}",
+        "deployed and code entry counts are consistent with the revision gap",
+        (EXPECTED_DEPLOYED_ENTRY_TOOLS == EXPECTED_CODE_ENTRY_TOOLS)
+        or (EXPECTED_DEPLOYED_DATA_TOOLS != EXPECTED_CODE_OPS_TOOLS),
+        f"deployed {EXPECTED_DEPLOYED_ENTRY_TOOLS}, code {EXPECTED_CODE_ENTRY_TOOLS}, "
+        f"deployed ops {EXPECTED_DEPLOYED_DATA_TOOLS}, code ops {EXPECTED_CODE_OPS_TOOLS}",
+    )
+    check(
+        "a code-only contract names two different revisions",
+        not code_only
+        or EXPECTED_DEPLOYED_CAPABILITY_REVISION != EXPECTED_DATA_CAPABILITY_REVISION,
+        f"deployed {EXPECTED_DEPLOYED_CAPABILITY_REVISION}, code {EXPECTED_DATA_CAPABILITY_REVISION}",
     )
     check(
         "registry declares every entry allowlist",

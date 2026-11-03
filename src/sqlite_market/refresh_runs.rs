@@ -511,6 +511,8 @@ fn dataset_sources(dataset_kind: &str) -> &'static [crate::exchange_source::Sour
             SourceId::SseDelisting,
             SourceId::SzseListing,
             SourceId::SzseDelisting,
+            SourceId::SseEtfList,
+            SourceId::SzseEtfList,
         ],
         crate::security_master::names::DATASET_KIND => &[SourceId::SzseShortName],
         crate::security_master::risk_warnings::DATASET_KIND => {
@@ -729,8 +731,8 @@ mod tests {
             Some(NaiveDate::from_ymd_opt(2026, 10, 31).unwrap())
         );
 
-        // security_master needs four sources; two have no run, so there is no
-        // dataset-level fact to report yet.
+        // security_master needs six sources (A-1/A-2 + the two ETF lists); none
+        // has a complete run here, so there is no dataset-level fact yet.
         let through = market
             .read(|c| dataset_verified_through(c, crate::security_master::assembly::DATASET_KIND))
             .unwrap();
