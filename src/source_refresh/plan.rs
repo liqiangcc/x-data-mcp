@@ -8,7 +8,7 @@
 use chrono::NaiveDate;
 
 use crate::exchange_source::{AcquisitionPlan, Segment, SourceId, quarter_segments};
-use crate::official_security::{a1a2, a3, etf_list, risk_warnings};
+use crate::official_security::{a1a2, a3, etf_delisting, etf_list, risk_warnings};
 
 use super::wire::{PlannedUnit, RefreshMode};
 
@@ -115,6 +115,7 @@ pub fn build(
 
     let a1a2_plans = a1a2::plans();
     let etf_plans = etf_list::plans();
+    let delist_plans = etf_delisting::plans();
     let risk_plans = risk_warnings::plans();
     let mut plans = Vec::new();
     for source in selected {
@@ -167,6 +168,34 @@ pub fn build(
                     windows: Vec::new(),
                     from_param: "",
                     to_param: "",
+                }
+            }
+            SourceId::SseFundDelistAnn | SourceId::SzseEtfNoticeAnn => {
+                let plans = delist_plans
+                    .iter()
+                    .filter(|(_, plan)| plan.source_id == source)
+                    .map(|(kind, plan)| (kind.label().to_string(), plan.clone()))
+                    .collect::<Vec<_>>();
+                let kind = etf_delisting::AnnouncementKind::from_source(source)
+                    .expect("matched an announcement source above");
+                let mut windows = etf_delisting::windows(kind, today)
+                    .map_err(|error| format!("ETF delisting announcement windows: {error}"))?;
+                if mode == RefreshMode::Tail {
+                    trim_tail(&mut windows);
+                }
+                SourcePlan {
+                    source_id: source,
+                    class: PlanClass::Window,
+                    plans,
+                    windows,
+                    from_param: match kind {
+                        etf_delisting::AnnouncementKind::Sse => "START_DATE",
+                        etf_delisting::AnnouncementKind::Szse => "seDateStart",
+                    },
+                    to_param: match kind {
+                        etf_delisting::AnnouncementKind::Sse => "END_DATE",
+                        etf_delisting::AnnouncementKind::Szse => "seDateEnd",
+                    },
                 }
             }
             SourceId::SzseShortName => {

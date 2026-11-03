@@ -20,7 +20,7 @@
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -79,6 +79,15 @@ pub struct ArchiveIndexEntry {
     pub incon_sha256: Option<String>,
 }
 
+/// What an `import` invocation reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportFormat {
+    /// The M3 A/B industry archive index (historical default).
+    Archive,
+    /// D-72: one announcement PDF directory plus its extraction CSV.
+    EtfDelisting,
+}
+
 /// Operator choices; the defaults are the design's A/B industry import.
 #[derive(Debug, Clone)]
 pub struct ImportOptions {
@@ -86,6 +95,7 @@ pub struct ImportOptions {
     pub kind: Option<String>,
     pub dry_run: bool,
     pub batch: Option<String>,
+    pub format: ImportFormat,
 }
 
 impl Default for ImportOptions {
@@ -95,6 +105,7 @@ impl Default for ImportOptions {
             kind: None,
             dry_run: false,
             batch: None,
+            format: ImportFormat::Archive,
         }
     }
 }
@@ -265,6 +276,9 @@ pub fn import(
     blobs_dir: &Path,
     options: &ImportOptions,
 ) -> Result<ImportReport, StoreError> {
+    if options.format == ImportFormat::EtfDelisting {
+        return import_etf_delisting(store, index_path, blobs_dir, options);
+    }
     let text = std::fs::read_to_string(index_path)?;
     let mut report = ImportReport {
         status: "ok",
@@ -568,6 +582,196 @@ fn import_member(
     } else {
         Ok(MemberOutcome::AlreadyPresent(member))
     }
+}
+
+/// D-72 batch: verify every referenced PDF, register the PDFs and the
+/// extraction CSV through the same manifest/blob/fsync path as the archive
+/// import. An invalid row or a missing/tampered PDF fails the whole batch
+/// instead of registering half an extraction.
+fn import_etf_delisting(
+    store: &SourceStore,
+    index_path: &Path,
+    blobs_dir: &Path,
+    options: &ImportOptions,
+) -> Result<ImportReport, StoreError> {
+    use crate::official_security::etf_delisting::{
+        EXTRACT_PARSER_VERSION, EXTRACT_SOURCE_ID, PDF_SOURCE_ID, parse_extraction_csv,
+    };
+
+    let bytes = std::fs::read(index_path)?;
+    let records = parse_extraction_csv(&bytes)
+        .map_err(|error| StoreError::Manifest(format!("{}: {error}", index_path.display())))?;
+    for record in &records {
+        record
+            .validate(None)
+            .map_err(|error| StoreError::Manifest(format!("{}: {error}", index_path.display())))?;
+    }
+    let acquired_at = records
+        .iter()
+        .map(|record| record.extracted_at.as_str())
+        .max()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(crate::exchange_source::now);
+    let batch = options
+        .batch
+        .clone()
+        .unwrap_or_else(|| format!("etf-delisting-{}", crate::hash::sha256(&bytes)));
+    let mut report = ImportReport {
+        status: "ok",
+        store: store.root().display().to_string(),
+        index: index_path.display().to_string(),
+        blobs: blobs_dir.display().to_string(),
+        batches: vec![batch.clone()],
+        tiers: options.tiers.clone(),
+        kind: "etf_delisting".to_string(),
+        dry_run: options.dry_run,
+        index_lines: records.len(),
+        imported: Vec::new(),
+        already_present: Vec::new(),
+        skipped_unverified: Vec::new(),
+        blobs_added: 0,
+        manifest_lines_added: 0,
+    };
+    let mut existing = store.registered_keys()?;
+    let mut referenced = BTreeSet::new();
+    for record in &records {
+        if !referenced.insert(record.doc_sha256.clone()) {
+            continue;
+        }
+        let Some(path) = find_pdf(blobs_dir, &record.doc_url, &record.doc_sha256) else {
+            return Err(StoreError::Manifest(format!(
+                "{}: no PDF for doc_sha256 {} (looked for {} and <sha>.pdf)",
+                record.entity,
+                record.doc_sha256,
+                record.doc_url.rsplit('/').next().unwrap_or(&record.doc_url)
+            )));
+        };
+        let pdf = std::fs::read(&path)?;
+        let actual = crate::hash::sha256(&pdf);
+        if !same_sha(&record.doc_sha256, &actual) {
+            return Err(StoreError::Manifest(format!(
+                "{}: PDF {} expected {} read back {actual}",
+                record.entity,
+                path.display(),
+                record.doc_sha256
+            )));
+        }
+        let member = ImportedMember {
+            member: "etf_delist_pdf",
+            source_id: PDF_SOURCE_ID,
+            sha256: actual.clone(),
+            origin: format!("{batch}:{}!pdf", actual),
+        };
+        let key = (
+            actual.clone(),
+            PDF_SOURCE_ID.to_string(),
+            member.origin.clone(),
+        );
+        if existing.contains(&key) {
+            report.already_present.push(member);
+            continue;
+        }
+        let registration = Registration {
+            source_id: PDF_SOURCE_ID.to_string(),
+            store_kind: StoreKind::ArchiveImport,
+            origin: member.origin.clone(),
+            acquired_at: acquired_at.clone(),
+            publisher_last_modified: None,
+            evidence_grade: Some("A".to_string()),
+            basis_status: Some("approved_source".to_string()),
+            parser_version: Some("pdf-v1".to_string()),
+            container_sha256: None,
+            import_batch: Some(batch.clone()),
+            imported_at: Some(crate::industry::now()),
+            http_etag: None,
+        };
+        if options.dry_run {
+            if !store.blob_exists(&actual) {
+                report.blobs_added += 1;
+            }
+            report.manifest_lines_added += 1;
+            report.imported.push(member);
+            continue;
+        }
+        let outcome = store.register(&pdf, &registration)?;
+        existing.insert(key);
+        if outcome.appended_line {
+            report.manifest_lines_added += 1;
+            if outcome.written_blob {
+                report.blobs_added += 1;
+            }
+            report.imported.push(member);
+        } else {
+            report.already_present.push(member);
+        }
+    }
+    let member = ImportedMember {
+        member: "etf_delist_extract",
+        source_id: EXTRACT_SOURCE_ID,
+        sha256: crate::hash::sha256(&bytes),
+        origin: format!("{batch}:extract.csv"),
+    };
+    let key = (
+        member.sha256.clone(),
+        EXTRACT_SOURCE_ID.to_string(),
+        member.origin.clone(),
+    );
+    if existing.contains(&key) {
+        report.already_present.push(member);
+        return Ok(report);
+    }
+    let registration = Registration {
+        source_id: EXTRACT_SOURCE_ID.to_string(),
+        store_kind: StoreKind::ArchiveImport,
+        origin: member.origin.clone(),
+        acquired_at,
+        publisher_last_modified: None,
+        evidence_grade: Some("A".to_string()),
+        basis_status: Some("approved_source".to_string()),
+        parser_version: Some(EXTRACT_PARSER_VERSION.to_string()),
+        container_sha256: None,
+        import_batch: Some(batch),
+        imported_at: Some(crate::industry::now()),
+        http_etag: None,
+    };
+    if options.dry_run {
+        if !store.blob_exists(&member.sha256) {
+            report.blobs_added += 1;
+        }
+        report.manifest_lines_added += 1;
+        report.imported.push(member);
+        return Ok(report);
+    }
+    let outcome = store.register(&bytes, &registration)?;
+    if outcome.appended_line {
+        report.manifest_lines_added += 1;
+        if outcome.written_blob {
+            report.blobs_added += 1;
+        }
+        report.imported.push(member);
+    } else {
+        report.already_present.push(member);
+    }
+    Ok(report)
+}
+
+/// Locate a referenced PDF by its URL basename or by `<sha>\.pdf`.
+fn find_pdf(dir: &Path, doc_url: &str, sha256: &str) -> Option<PathBuf> {
+    let basename = doc_url.rsplit('/').next().unwrap_or(doc_url);
+    let by_name = dir.join(basename);
+    if by_name.is_file() {
+        return Some(by_name);
+    }
+    let by_sha = dir.join(format!("{sha256}.pdf"));
+    if by_sha.is_file() {
+        return Some(by_sha);
+    }
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| path.file_name().and_then(|name| name.to_str()) == Some(basename))
 }
 
 fn manifest_matches(entry: &ArchiveIndexEntry) -> bool {

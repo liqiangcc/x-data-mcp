@@ -169,7 +169,7 @@ impl ReusePolicy {
 /// not reuse anything keeps the default table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReusePolicyTable {
-    policies: [ReusePolicy; 9],
+    policies: [ReusePolicy; 11],
 }
 
 impl ReusePolicyTable {
@@ -208,6 +208,12 @@ impl ReusePolicyTable {
                     Enabled::No,
                 ),
                 ReusePolicy::declared(
+                    SourceId::SseFundDelistAnn,
+                    ReuseClass::Window,
+                    TailScope::OpenWindowPlusPreviousQuarter,
+                    Enabled::No,
+                ),
+                ReusePolicy::declared(
                     SourceId::SzseListing,
                     ReuseClass::Table,
                     TailScope::FirstPageProbe,
@@ -229,6 +235,12 @@ impl ReusePolicyTable {
                     SourceId::SzseEtfList,
                     ReuseClass::Table,
                     TailScope::WholeTable,
+                    Enabled::No,
+                ),
+                ReusePolicy::declared(
+                    SourceId::SzseEtfNoticeAnn,
+                    ReuseClass::Window,
+                    TailScope::OpenWindowPlusPreviousQuarter,
                     Enabled::No,
                 ),
             ],

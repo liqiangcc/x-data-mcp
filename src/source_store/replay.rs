@@ -511,6 +511,35 @@ fn run(
                     });
                 }
             }
+            // D-72: an imported extraction batch is a derived fact for
+            // existing class=2 rows. Applying it here keeps "clear the DB and
+            // replay" able to reconstruct the delisting dates without a PDF
+            // parser in production code. No extraction => no-op.
+            if status == "ok"
+                && !request.verify_only
+                && let Some(database) = request.database
+            {
+                match apply_etf_delisting(store, database) {
+                    Ok(applied) => {
+                        if applied > 0
+                            && let Some(summary) = summary.as_mut()
+                        {
+                            summary.push_str(&format!("\netf_delisting_rows={applied}"));
+                        }
+                    }
+                    Err(error) => {
+                        status = "etf_delisting_replay_failed";
+                        problems.push(BlobProblem {
+                            sha256: String::new(),
+                            source_id: "etf_delist_extract".to_string(),
+                            reason: "etf_delisting_replay_failed",
+                            expected: "a valid imported extraction batch and a compact database"
+                                .to_string(),
+                            actual: error,
+                        });
+                    }
+                }
+            }
         }
         if *scope == Scope::RiskWarnings && status == "ok" {
             match rebuild_risk_warnings(store, &selected, request.verify_only, request.database) {
@@ -744,6 +773,40 @@ impl ExchangeOutcome {
             expected: expected.to_string(),
         }
     }
+}
+
+fn apply_etf_delisting(store: &SourceStore, database: &Path) -> Result<usize, String> {
+    let extractions =
+        crate::official_security::etf_delisting::read_extractions(store, &BTreeMap::new())
+            .map_err(|error| format!("{}: {error}", error.code()))?;
+    if extractions.records.is_empty() {
+        return Ok(0);
+    }
+    let extraction_sha = extractions
+        .extraction_shas
+        .first()
+        .cloned()
+        .unwrap_or_default();
+    let updates: Vec<crate::sqlite_market::security::EtfDelistingDate> = extractions
+        .records
+        .iter()
+        .map(
+            |((exchange, code), record)| crate::sqlite_market::security::EtfDelistingDate {
+                exchange: *exchange,
+                code: code.clone(),
+                announcement_date: record.announcement_date,
+                delisting_date: record.delisting_date,
+                doc_sha256: record.doc_sha256.clone(),
+                extraction_sha256: extraction_sha.clone(),
+            },
+        )
+        .collect();
+    let tasks = crate::sqlite_tasks::SqliteTasks::new(database);
+    let backend = MarketBackend::open(&tasks)
+        .map_err(|error| format!("database_unavailable: {}: {error}", database.display()))?;
+    backend
+        .apply_etf_delisting(&updates, &extractions.evidence())
+        .map_err(|error| error.to_string())
 }
 
 fn rebuild_exchange(

@@ -767,6 +767,8 @@ fn retries_are_bounded_and_only_for_transient_failures() {
     let request = HttpRequest {
         url: "https://example.invalid/list".to_string(),
         headers: std::collections::BTreeMap::new(),
+        method: None,
+        body: None,
     };
     let flaky = std::sync::Arc::new(Scripted::new(vec![
         Err(TransportError::Failed("connection reset".to_string())),
@@ -895,6 +897,8 @@ fn list_request() -> HttpRequest {
     HttpRequest {
         url: "https://example.invalid/list".to_string(),
         headers: std::collections::BTreeMap::new(),
+        method: None,
+        body: None,
     }
 }
 
@@ -1235,7 +1239,10 @@ fn every_source_has_one_disabled_reuse_rule() {
         assert_eq!(policy.refresh_period_days, REFRESH_PERIOD_DAYS);
         assert_eq!(policy.max_age_days, MAX_AGE_DAYS);
         let (class, tail) = match source {
-            SourceId::SseSuspension | SourceId::SseBulletin => {
+            SourceId::SseSuspension
+            | SourceId::SseBulletin
+            | SourceId::SseFundDelistAnn
+            | SourceId::SzseEtfNoticeAnn => {
                 (ReuseClass::Window, TailScope::OpenWindowPlusPreviousQuarter)
             }
             SourceId::SseListing | SourceId::SseDelisting | SourceId::SzseDelisting => {

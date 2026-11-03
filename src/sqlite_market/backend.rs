@@ -124,6 +124,22 @@ impl MarketBackend {
     /// Replace the assembled M2 `security_master` dataset (issue-391 §12.1).
     /// The `derived:security_master` item drives this; the legacy backend has
     /// no M2 tables, so the item fails closed instead of writing a stub.
+    /// Apply D-72 extraction dates to existing ETF rows (source_store replay).
+    pub(crate) fn apply_etf_delisting(
+        &self,
+        updates: &[super::security::EtfDelistingDate],
+        evidence: &serde_json::Value,
+    ) -> Result<usize, Error> {
+        match self {
+            Self::Compact(m) => {
+                m.tx(|c| super::security::apply_etf_delisting(c, updates, evidence))
+            }
+            Self::Legacy(_) => Err(Error::Invalid(
+                "ETF delisting replay requires the compact market schema".into(),
+            )),
+        }
+    }
+
     pub(crate) fn commit_security_master(
         &self,
         write: &super::security::SecurityMasterWrite<'_>,

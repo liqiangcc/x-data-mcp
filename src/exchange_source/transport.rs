@@ -78,6 +78,11 @@ pub type Headers = BTreeMap<String, String>;
 pub struct HttpRequest {
     pub url: String,
     pub headers: Headers,
+    /// HTTP method; `None` is GET (the historical shape, kept so existing
+    /// fake transports and call sites do not change).
+    pub method: Option<String>,
+    /// Raw request body for a POST (`None` for GET).
+    pub body: Option<String>,
 }
 
 /// What the helper returned: status, cache validators and the raw bytes.
@@ -388,8 +393,8 @@ impl Client {
 
 /// Runs `scripts/exchange_fetch.py` as a child process.
 ///
-/// Contract: request JSON on stdin (`{"url":...,"headers":{...}}`), body
-/// written to the destination path, one JSON object on stdout
+/// Contract: request JSON on stdin (`{"url":...,"headers":{...},"method":...,
+/// "body":...}`), body written to the destination path, one JSON object on stdout
 /// (`status`, `etag`, `last_modified`, `bytes`, `sha256`). The helper's sha256
 /// is verified against the bytes we read back, so a truncated write fails as
 /// `source_transport_invalid` instead of freezing wrong bytes.
@@ -443,6 +448,8 @@ impl Transport for Helper {
         let payload = serde_json::json!({
             "url": request.url,
             "headers": request.headers,
+            "method": request.method.as_deref().unwrap_or("GET"),
+            "body": request.body,
         });
         let mut child = Command::new("python3")
             .arg(&self.script)

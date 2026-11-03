@@ -186,10 +186,18 @@ impl EtfError {
 /// An admitted identity set plus everything a re-derivation must pin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Admitted {
+    /// Newest complete snapshot set: the **current** member list.
     pub rows: Vec<EtfListRow>,
+    /// Union of every frozen list snapshot. A code that disappeared from a
+    /// newer snapshot stays here (monotonic identity, PR-A2); `effective_to`
+    /// says from when the list no longer proved it.
+    pub history: Vec<EtfListRow>,
     /// `(exchange, code) → acquisition date of the first frozen snapshot that
     /// contained the code`.
     pub first_seen: BTreeMap<(Exchange, String), NaiveDate>,
+    /// `(exchange, code) → first observation after which the newest list no
+    /// longer contained the code`. Only historical members carry an entry.
+    pub effective_to: BTreeMap<(Exchange, String), NaiveDate>,
     /// One binding per `source_id`, sorted.
     pub bindings: Vec<SnapshotBinding>,
     /// `label → snapshot ids`, in acquisition order.
@@ -229,6 +237,8 @@ impl Admitted {
             "source_bindings": self.bindings,
             "snapshot_ids": self.snapshot_ids,
             "member_count": self.rows.len(),
+            "history_member_count": self.history.len(),
+            "removed_member_count": self.effective_to.len(),
             "sse_rows": self.sse_rows(),
             "szse_rows": self.szse_rows(),
             "first_seen_oldest": first_seen_oldest,
@@ -338,10 +348,57 @@ pub fn read(
     }
     let freshness = Freshness::combined(&freshness.iter().collect::<Vec<_>>(), AsOf::Oldest);
     validate_set(&rows)?;
-    let first_seen = first_seen(store, &rows)?;
+    let scanned = scan_history(store)?;
+    let mut first_seen = BTreeMap::new();
+    let mut history = Vec::new();
+    for ((exchange, code), entry) in &scanned.rows {
+        first_seen.insert((*exchange, code.clone()), entry.first_seen);
+        history.push(entry.row.clone());
+    }
+    // Defensive: the selected current rows are always part of the union even
+    // if an older manifest line used a parser version this binary skips.
+    for row in &rows {
+        let key = (row.exchange, row.code.clone());
+        if !history
+            .iter()
+            .any(|existing| existing.exchange == row.exchange && existing.code == row.code)
+        {
+            history.push(row.clone());
+            first_seen.entry(key).or_insert(
+                freshness
+                    .as_of
+                    .as_deref()
+                    .and_then(parse_day)
+                    .unwrap_or_else(|| {
+                        NaiveDate::from_ymd_opt(2000, 1, 1).expect("2000-01-01 is valid")
+                    }),
+            );
+        }
+    }
+    history.sort_by(|left, right| {
+        (left.exchange, left.code.as_str()).cmp(&(right.exchange, right.code.as_str()))
+    });
+    let current: BTreeSet<(Exchange, String)> = rows
+        .iter()
+        .map(|row| (row.exchange, row.code.clone()))
+        .collect();
+    let mut effective_to = BTreeMap::new();
+    for ((exchange, code), entry) in &scanned.rows {
+        if current.contains(&(*exchange, code.clone())) {
+            continue;
+        }
+        let end = entry
+            .first_missing
+            .unwrap_or_else(|| entry.last_seen.succ_opt().unwrap_or(entry.last_seen));
+        if end > entry.first_seen {
+            effective_to.insert((*exchange, code.clone()), end);
+        }
+    }
     Ok(Admitted {
         rows,
+        history,
         first_seen,
+        effective_to,
         bindings,
         snapshot_ids,
         freshness,
@@ -509,22 +566,32 @@ fn validate_set(rows: &[EtfListRow]) -> Result<(), EtfError> {
     Ok(())
 }
 
-/// The acquisition date of the first frozen snapshot that contained each code.
+#[derive(Debug, Clone)]
+struct HistoryEntry {
+    row: EtfListRow,
+    first_seen: NaiveDate,
+    last_seen: NaiveDate,
+    first_missing: Option<NaiveDate>,
+}
+
+#[derive(Debug, Default)]
+struct HistoryScan {
+    rows: BTreeMap<(Exchange, String), HistoryEntry>,
+}
+
+type ObservationMap = BTreeMap<&'static str, BTreeMap<NaiveDate, BTreeSet<(Exchange, String)>>>;
+
+/// Scan every frozen list response, not only the selected page set. This is
+/// the monotonic identity input (PR-A2): a code that appeared in any snapshot
+/// stays in the union, and its first appearance fixes `effective_from`.
 ///
-/// It scans every frozen response of the two sources, not only the selected
-/// page set: `effective_from` is "first appeared in a frozen snapshot", and a
-/// code that was already present in an older snapshot must keep that older
-/// date. The scan is a pure function of the store (bytes + `acquired_at`), so a
-/// replay reproduces it without HTTP.
-fn first_seen(
-    store: &SourceStore,
-    rows: &[EtfListRow],
-) -> Result<BTreeMap<(Exchange, String), NaiveDate>, EtfError> {
-    let wanted: BTreeSet<(Exchange, String)> = rows
-        .iter()
-        .map(|row| (row.exchange, row.code.clone()))
-        .collect();
-    let mut seen: BTreeMap<(Exchange, String), NaiveDate> = BTreeMap::new();
+/// `first_missing` is the first later observation of the same source that no
+/// longer contains the code. It bounds the interval but is not called a
+/// delisting date: a list snapshot only proves membership, never the exact day
+/// a fund stopped being listed.
+fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
+    let mut scan = HistoryScan::default();
+    let mut observations: ObservationMap = BTreeMap::new();
     let mut parsed: BTreeSet<String> = BTreeSet::new();
     for record in store.records()? {
         if record.store_kind != StoreKind::HttpFetch {
@@ -549,21 +616,53 @@ fn first_seen(
             continue;
         };
         let bytes = store.read_verified(&record.sha256)?;
-        for row in parse(kind, &bytes)? {
-            let key = (row.exchange, row.code);
-            if !wanted.contains(&key) {
-                continue;
-            }
-            seen.entry(key)
-                .and_modify(|current| {
-                    if day < *current {
-                        *current = day;
+        let rows = parse(kind, &bytes)?;
+        let members: BTreeSet<(Exchange, String)> = rows
+            .iter()
+            .map(|row| (row.exchange, row.code.clone()))
+            .collect();
+        observations
+            .entry(kind.label())
+            .or_default()
+            .insert(day, members);
+        for row in rows {
+            let key = (row.exchange, row.code.clone());
+            scan.rows
+                .entry(key)
+                .and_modify(|entry| {
+                    entry.first_seen = entry.first_seen.min(day);
+                    entry.last_seen = entry.last_seen.max(day);
+                    if entry.row.listing_date.is_none() && row.listing_date.is_some() {
+                        entry.row = row.clone();
                     }
                 })
-                .or_insert(day);
+                .or_insert(HistoryEntry {
+                    row,
+                    first_seen: day,
+                    last_seen: day,
+                    first_missing: None,
+                });
         }
     }
-    Ok(seen)
+    for entries in scan.rows.values_mut() {
+        let source = match entries.row.exchange {
+            Exchange::Sh => ListKind::Sse.label(),
+            Exchange::Sz => ListKind::Szse.label(),
+            Exchange::Bj => continue,
+        };
+        if let Some(by_day) = observations.get(source) {
+            entries.first_missing = by_day
+                .range((
+                    std::ops::Bound::Excluded(entries.last_seen),
+                    std::ops::Bound::Unbounded,
+                ))
+                .find(|(_, members)| {
+                    !members.contains(&(entries.row.exchange, entries.row.code.clone()))
+                })
+                .map(|(day, _)| *day);
+        }
+    }
+    Ok(scan)
 }
 
 /// The source adapter's contribution to the main table: one source-agnostic
@@ -580,8 +679,13 @@ pub fn member_facts(
             "the selected ETF list set has no as_of date",
         )
     })?;
-    let mut facts = Vec::with_capacity(admitted.rows.len());
-    for row in &admitted.rows {
+    let source_rows = if admitted.history.is_empty() {
+        &admitted.rows
+    } else {
+        &admitted.history
+    };
+    let mut facts = Vec::with_capacity(source_rows.len());
+    for row in source_rows {
         let first = admitted
             .first_seen
             .get(&(row.exchange, row.code.clone()))
@@ -609,6 +713,16 @@ pub fn member_facts(
             listing_date,
             listing_source,
             listing_date_tdx: tdx_listing,
+            effective_to: admitted
+                .effective_to
+                .get(&(row.exchange, row.code.clone()))
+                .copied(),
+            delisting_date: None,
+            delisting_source: crate::security_master::DelistingSource::Unknown,
+            delisting_reason_class: crate::security_master::DelistingReason::Unknown,
+            announcement_date: None,
+            announcement_url: None,
+            extraction: None,
         });
     }
     Ok(facts)

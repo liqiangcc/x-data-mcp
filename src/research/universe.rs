@@ -273,10 +273,29 @@ pub struct MemberInterval {
     pub flags: Vec<MemberFlag>,
 }
 
-/// ETF current members: every `security_master` row with
-/// `instrument_class=2` (M3-2 PR-A). The lists only grant current membership,
-/// so this is exactly the set written from the current frozen snapshots.
+/// ETF current members: class=2 rows whose identity is still open and whose
+/// delisting source is still unknown (M3-2 PR-A2).
+///
+/// A code that disappears from a newer list, or is hit by a termination
+/// announcement, keeps its class=2 row (`listed_ever`) but carries an
+/// `effective_to`/delisting fact and therefore is not current.
 pub fn etf_current_entities(c: &Connection) -> Result<Vec<String>, Error> {
+    let rows = security::read_security_master(c).map_err(Error::from)?;
+    let members: BTreeSet<String> = rows
+        .into_iter()
+        .filter(|row| row.instrument_class == 2)
+        .filter(|row| matches!(row.exchange, Exchange::Sh | Exchange::Sz))
+        .filter(|row| row.effective_to.is_none())
+        .filter(|row| row.delisting_source == crate::security_master::DelistingSource::Unknown)
+        .map(|row| row.entity())
+        .collect();
+    Ok(members.into_iter().collect())
+}
+
+/// ETF listed-ever members: the union of every frozen list snapshot and every
+/// admitted termination announcement, i.e. **all** class=2 rows (M3-2 PR-A2).
+/// Removing a code from a list never deletes its row.
+pub fn etf_listed_ever_entities(c: &Connection) -> Result<Vec<String>, Error> {
     let rows = security::read_security_master(c).map_err(Error::from)?;
     let members: BTreeSet<String> = rows
         .into_iter()
@@ -285,17 +304,6 @@ pub fn etf_current_entities(c: &Connection) -> Result<Vec<String>, Error> {
         .map(|row| row.entity())
         .collect();
     Ok(members.into_iter().collect())
-}
-
-/// ETF listed-ever members: the current identity set. PR-A has no admitted
-/// delisting-ETF source, so a code that disappears from a list is not written
-/// as a delisted ETF and cannot be recovered here; existing ETF series join
-/// this set in PR-B when they are written. Keeping the set equal to the
-/// current one is honest, not a silent subset: the design says the first-phase
-/// set is `current ∪ existing ETF series`, and the second half is empty until
-/// PR-B.
-pub fn etf_listed_ever_entities(c: &Connection) -> Result<Vec<String>, Error> {
-    etf_current_entities(c)
 }
 
 /// The listed-ever member set: every main-table row that is a SH/SZ ordinary A

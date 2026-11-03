@@ -276,6 +276,17 @@ pub enum PagingFormat {
     /// SZSE `metadata` envelopes frozen before the block-selection change:
     /// these always read the first block. Kept only for replay.
     SzseMetadataV1,
+    /// SSE `commonQuery.do` announcement index (`COMMON_PL_JJXX_JJGG_L`). The
+    /// endpoint echoes the paging parameters but applies no paging: one request
+    /// answers the whole `START_DATE`/`END_DATE` window, and `pageHelp.total`
+    /// may be 0 while `pageCount` is null (XDM-176 §2). It is a separate dialect
+    /// so the envelope parser never reads the list services' page count.
+    SsePageHelpUnpaged,
+    /// SZSE `api/disc/announcement/annList` (ETF notice channel). POST JSON,
+    /// paged by `pageNum`; `pageSize` is silently capped at 50 and
+    /// `announceCount` is the publisher's total. It is separate from
+    /// `SzseMetadata` because the body, page field and total name differ.
+    SzseAnnouncement,
 }
 
 /// Parser version recorded for SSE `pageHelp` envelopes.
@@ -298,6 +309,12 @@ pub const SSE_BULLETIN_PARSER_VERSION: &str = "exchange-sse-bulletin-page-v1";
 pub const SZSE_PARSER_VERSION: &str = "exchange-szse-page-v3";
 /// Parser version recorded for SZSE XLSX workbooks (M3-2 ETF list).
 pub const SZSE_XLSX_PARSER_VERSION: &str = "exchange-szse-xlsx-v1";
+/// Parser version recorded for the SSE unpaged announcement index (M3-2
+/// PR-A2, `COMMON_PL_JJXX_JJGG_L`).
+pub const SSE_UNPAGED_PARSER_VERSION: &str = "exchange-sse-unpaged-page-v1";
+/// Parser version recorded for the SZSE announcement `annList` envelopes
+/// (M3-2 PR-A2).
+pub const SZSE_ANNOUNCEMENT_PARSER_VERSION: &str = "exchange-szse-announcement-page-v1";
 /// The SZSE `metadata` version that chose `tabkey=tab2` first and the only
 /// non-empty block second. Frozen snapshots keep that meaning on replay: the
 /// same bytes must not silently change their row/page counts.
@@ -327,6 +344,8 @@ impl PagingFormat {
             Self::SzseMetadataV2 => SZSE_PARSER_VERSION_V2,
             Self::SzseMetadataV1 => SZSE_PARSER_VERSION_V1,
             Self::SzseXlsx => SZSE_XLSX_PARSER_VERSION,
+            Self::SsePageHelpUnpaged => SSE_UNPAGED_PARSER_VERSION,
+            Self::SzseAnnouncement => SZSE_ANNOUNCEMENT_PARSER_VERSION,
         }
     }
 
@@ -339,6 +358,8 @@ impl PagingFormat {
             SZSE_PARSER_VERSION_V2 => Some(Self::SzseMetadataV2),
             SZSE_PARSER_VERSION_V1 => Some(Self::SzseMetadataV1),
             SZSE_XLSX_PARSER_VERSION => Some(Self::SzseXlsx),
+            SSE_UNPAGED_PARSER_VERSION => Some(Self::SsePageHelpUnpaged),
+            SZSE_ANNOUNCEMENT_PARSER_VERSION => Some(Self::SzseAnnouncement),
             _ => None,
         }
     }
@@ -381,6 +402,16 @@ impl PagingFormat {
             }
             // A workbook has no page parameter: the whole list is one response.
             Self::SzseXlsx => {}
+            // The SSE announcement index ignores paging; the parameters are
+            // sent because the endpoint expects them, but they select nothing.
+            Self::SsePageHelpUnpaged => {
+                params.insert("pageHelp.pageSize".to_string(), "100".to_string());
+                params.insert("pageHelp.pageNo".to_string(), page);
+            }
+            Self::SzseAnnouncement => {
+                params.insert("pageSize".to_string(), "50".to_string());
+                params.insert("pageNum".to_string(), page);
+            }
         }
     }
 
@@ -403,6 +434,15 @@ pub struct ExchangeRequest {
     pub source_id: SourceId,
     pub url: String,
     pub params: BTreeMap<String, String>,
+    /// HTTP method when it is not GET. The SZSE announcement index requires
+    /// POST; the field is skipped when absent so every pre-existing fingerprint
+    /// stays byte-stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<String>,
+    /// POST body. Part of the canonical fingerprint, because two different
+    /// `seDate`/`channelCode` bodies are different requests even at one URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 impl ExchangeRequest {
@@ -414,6 +454,8 @@ impl ExchangeRequest {
             source_id,
             url: url.into(),
             params: BTreeMap::new(),
+            method: None,
+            body: None,
         }
     }
 
@@ -432,6 +474,19 @@ impl ExchangeRequest {
     pub fn paged(mut self, format: PagingFormat, page: u32) -> Self {
         format.apply_page(&mut self.params, page);
         self
+    }
+
+    /// Turn this request into a POST carrying the SZSE announcement body built
+    /// from the already-applied parameters (`seDateStart`/`seDateEnd`,
+    /// `channelCode`, `pageSize`, `pageNum`).
+    pub fn post_json(mut self, value: serde_json::Value) -> Self {
+        self.method = Some("POST".to_string());
+        self.body = Some(value.to_string());
+        self
+    }
+
+    pub fn is_post(&self) -> bool {
+        self.method.as_deref() == Some("POST")
     }
 
     /// Canonical request fingerprint: the JSON of this struct, deterministic

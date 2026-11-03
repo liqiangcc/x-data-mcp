@@ -749,3 +749,246 @@ fn known_at_round_trips_as_a_day_and_stays_null_without_a_source() {
     let stored = read_security_master(&c).unwrap();
     assert_eq!(stored[1].known_at, Some(day(2025, 2, 15)));
 }
+
+fn etf_delisted_row(announcement: NaiveDate, delisting: NaiveDate) -> SecurityLifecycleFact {
+    let values =
+        crate::official_security::etf_delisting::delisted_row_values(announcement, delisting);
+    SecurityLifecycleFact {
+        exchange: Exchange::Sh,
+        code: "512390".into(),
+        effective_from: values.effective_from,
+        effective_to: Some(values.effective_to),
+        instrument_class: 2,
+        issuer_key: Some("512390".into()),
+        issuer_resolution: IssuerResolution::IssuerKey,
+        listing_date: Some(day(2010, 1, 1)),
+        listing_date_tdx: Some(day(2010, 1, 1)),
+        listing_source: ListingSource::TdxSsdate,
+        b_listing_date: None,
+        delisting_date: Some(values.delisting_date),
+        delisting_date_tdx: None,
+        delisting_source: values.delisting_source,
+        delisting_reason_class: values.delisting_reason_class,
+        arrangement_start: None,
+        arrangement_end: None,
+        listing_conflict: false,
+        delisting_conflict: false,
+        known_at: Some(values.effective_from),
+    }
+}
+
+#[test]
+fn replay_of_the_same_extraction_keeps_the_live_master_digest_unchanged() {
+    use crate::security_master::assembly::Assembly;
+
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let announcement = day(2026, 1, 2);
+    let delisting = day(2026, 1, 10);
+    let live = etf_delisted_row(announcement, delisting);
+    let assembled = Assembly {
+        rows: vec![live.clone()],
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: None,
+    };
+    let written = replace_security_master(&c, &assembled, binding, "t", "i").unwrap();
+    let updates = vec![EtfDelistingDate {
+        exchange: Exchange::Sh,
+        code: "512390".into(),
+        announcement_date: announcement,
+        delisting_date: delisting,
+        doc_sha256: "cd".repeat(32),
+        extraction_sha256: "ef".repeat(32),
+    }];
+    let changed = apply_etf_delisting(&c, &updates, &json!({"synthetic": true})).unwrap();
+    assert_eq!(changed, 0, "replay must be a no-op after the live item");
+    assert_eq!(read_security_master(&c).unwrap(), vec![live]);
+    let after = derived::read_version(&c, assembly::DATASET_KIND, assembly::DATASET_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.content_digest, written.content_digest);
+    assert_eq!(after.version_id, written.version_id);
+}
+
+#[test]
+fn replay_of_a_zero_lead_extraction_matches_the_live_row_and_digest() {
+    use crate::security_master::assembly::{self, Assembly};
+
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let announcement = day(2026, 1, 10);
+    let delisting = day(2026, 1, 10);
+    let live = etf_delisted_row(announcement, delisting);
+    let mut old = live.clone();
+    old.effective_from = announcement;
+    old.effective_to = None;
+    old.delisting_date = None;
+    old.delisting_source = DelistingSource::Unknown;
+    old.delisting_reason_class = DelistingReason::Unknown;
+    old.known_at = Some(announcement);
+    let before = Assembly {
+        rows: vec![old],
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: None,
+    };
+    replace_security_master(&c, &before, binding, "t", "i").unwrap();
+    let updates = vec![EtfDelistingDate {
+        exchange: Exchange::Sh,
+        code: "512390".into(),
+        announcement_date: announcement,
+        delisting_date: delisting,
+        doc_sha256: "cd".repeat(32),
+        extraction_sha256: "ef".repeat(32),
+    }];
+    let changed = apply_etf_delisting(&c, &updates, &json!({"synthetic": true})).unwrap();
+    assert_eq!(changed, 1);
+    assert_eq!(read_security_master(&c).unwrap(), vec![live.clone()]);
+    let after = derived::read_version(&c, assembly::DATASET_KIND, assembly::DATASET_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.content_digest,
+        assembly::assembly_digest(&[live], &[])
+    );
+}
+
+fn etf_list_member(
+    first_seen: NaiveDate,
+    effective_to: Option<NaiveDate>,
+    announcement: Option<NaiveDate>,
+    delisting: Option<NaiveDate>,
+) -> crate::security_master::assembly::MemberFact {
+    let values = delisting.map(|delisting| {
+        crate::official_security::etf_delisting::delisted_row_values(
+            announcement.unwrap_or(delisting),
+            delisting,
+        )
+    });
+    crate::security_master::assembly::MemberFact {
+        exchange: Exchange::Sh,
+        code: "512390".into(),
+        first_seen: values
+            .map(|value| value.effective_from)
+            .unwrap_or(first_seen),
+        known_at: values
+            .map(|value| value.effective_from)
+            .unwrap_or(first_seen),
+        listing_date: Some(day(2010, 1, 1)),
+        listing_source: ListingSource::TdxSsdate,
+        listing_date_tdx: Some(day(2010, 1, 1)),
+        effective_to: values.map(|value| value.effective_to).or(effective_to),
+        delisting_date: delisting,
+        delisting_source: if delisting.is_some() {
+            DelistingSource::ExchangeList
+        } else {
+            DelistingSource::Unknown
+        },
+        delisting_reason_class: if delisting.is_some() {
+            DelistingReason::Other
+        } else {
+            DelistingReason::Unknown
+        },
+        announcement_date: announcement,
+        announcement_url: None,
+        extraction: delisting.map(|_| "cd".repeat(32)),
+    }
+}
+
+#[test]
+fn replay_overrides_a_list_bound_with_the_exact_delisting_but_keeps_an_earlier_start() {
+    use crate::security_master::assembly::{self, Assembly, member_rows};
+
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let list_first = day(2026, 11, 3);
+    let list_missing = day(2026, 12, 20);
+    let announcement = day(2026, 12, 1);
+    let delisting = day(2026, 12, 10);
+    let list_fact = etf_list_member(list_first, Some(list_missing), None, None);
+    let announcement_fact = etf_list_member(
+        announcement,
+        Some(day(2026, 12, 2)),
+        Some(announcement),
+        None,
+    );
+    let extraction_fact = etf_list_member(announcement, None, Some(announcement), Some(delisting));
+
+    let without_extraction = member_rows(&[list_fact.clone(), announcement_fact]).unwrap();
+    assert_eq!(without_extraction[0].effective_from, list_first);
+    assert_eq!(without_extraction[0].effective_to, Some(day(2026, 12, 2)));
+
+    let with_extraction = member_rows(&[list_fact, extraction_fact]).unwrap();
+    assert_eq!(with_extraction[0].effective_from, list_first);
+    assert_eq!(
+        with_extraction[0].effective_to,
+        Some(delisting),
+        "the exact delisting day overrides the later list bound"
+    );
+
+    let before = Assembly {
+        rows: without_extraction,
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: None,
+    };
+    replace_security_master(&c, &before, binding, "t", "i").unwrap();
+    let updates = vec![EtfDelistingDate {
+        exchange: Exchange::Sh,
+        code: "512390".into(),
+        announcement_date: announcement,
+        delisting_date: delisting,
+        doc_sha256: "cd".repeat(32),
+        extraction_sha256: "ef".repeat(32),
+    }];
+    assert_eq!(
+        apply_etf_delisting(&c, &updates, &json!({"synthetic": true})).unwrap(),
+        1
+    );
+    assert_eq!(read_security_master(&c).unwrap(), with_extraction);
+    let replayed = derived::read_version(&c, assembly::DATASET_KIND, assembly::DATASET_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        replayed.content_digest,
+        assembly::assembly_digest(&with_extraction, &[])
+    );
+
+    // Reverse ordering: a database already written by a live item with the
+    // extraction must not change on replay, and the live merge of the same
+    // facts still equals the stored row.
+    let direct = Assembly {
+        rows: with_extraction.clone(),
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: None,
+    };
+    replace_security_master(&c, &direct, binding, "t", "i").unwrap();
+    eprintln!(
+        "stored after direct: {:?}",
+        read_security_master(&c).unwrap()
+    );
+    eprintln!(
+        "values: {:?}",
+        crate::official_security::etf_delisting::delisted_row_values(announcement, delisting)
+    );
+    assert_eq!(
+        apply_etf_delisting(&c, &updates, &json!({"synthetic": true})).unwrap(),
+        0
+    );
+    assert_eq!(read_security_master(&c).unwrap(), with_extraction);
+    let direct_version = derived::read_version(&c, assembly::DATASET_KIND, assembly::DATASET_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(direct_version.content_digest, replayed.content_digest);
+    assert_eq!(direct_version.version_id, replayed.version_id);
+}

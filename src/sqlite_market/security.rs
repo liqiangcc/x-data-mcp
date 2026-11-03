@@ -661,6 +661,156 @@ pub(crate) fn commit_security_master(
     replace_security_master(c, write.assembled, binding, write.task_id, write.item_id)
 }
 
+/// One D-72 extraction applied by `source_store replay`: the date and the PDF
+/// digest that proves it. The writer only touches an existing class=2 row; it
+/// never creates identity from an extraction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EtfDelistingDate {
+    pub exchange: Exchange,
+    pub code: String,
+    pub announcement_date: chrono::NaiveDate,
+    pub delisting_date: chrono::NaiveDate,
+    pub doc_sha256: String,
+    pub extraction_sha256: String,
+}
+
+/// Apply D-72 extraction dates to existing class=2 rows and re-register the
+/// security-master dataset version in one transaction. Used by
+/// `source_store replay --scope exchange --db ...`; the daily item writes the
+/// same values through the ordinary assembly.
+pub(crate) fn apply_etf_delisting(
+    c: &Connection,
+    updates: &[EtfDelistingDate],
+    evidence: &serde_json::Value,
+) -> Result<usize, Error> {
+    if updates.is_empty() {
+        return Ok(0);
+    }
+    let mut rows = read_security_master(c)?;
+    let migrations = read_code_migrations(c)?;
+    let Some(existing) = derived::read_version(c, assembly::DATASET_KIND, assembly::DATASET_KEY)?
+    else {
+        // Fresh init replays before the daily item has assembled a master.
+        // There is nothing to attach a delisting date to yet; the live item
+        // reads the same extraction batch and writes the rows itself.
+        return Ok(0);
+    };
+    let binding = existing.source_binding_digest;
+    let mut changed = 0usize;
+    let mut renamed: Vec<(Exchange, String, NaiveDate)> = Vec::new();
+    for update in updates {
+        let Some(row) = rows
+            .iter_mut()
+            .filter(|row| row.instrument_class == 2)
+            .filter(|row| row.exchange == update.exchange && row.code == update.code)
+            .max_by_key(|row| row.effective_from)
+        else {
+            continue;
+        };
+        // One function owns the live and replay row values (M3-2 PR-A2
+        // review M3): same effective_from/effective_to/reason on both paths.
+        let values = crate::official_security::etf_delisting::delisted_row_values(
+            update.announcement_date,
+            update.delisting_date,
+        );
+        // The row may already start earlier because the code first appeared
+        // in a list snapshot. `member_rows` takes the minimum there, so replay
+        // must do the same instead of moving the start to the announcement.
+        let target_from = row.effective_from.min(values.effective_from);
+        let target_known = Some(match row.known_at {
+            Some(day) => day.min(values.effective_from),
+            None => values.effective_from,
+        });
+        if row.delisting_date == Some(values.delisting_date)
+            && row.delisting_source == values.delisting_source
+            && row.delisting_reason_class == values.delisting_reason_class
+            && row.effective_to == Some(values.effective_to)
+            && row.effective_from == target_from
+            && row.known_at == target_known
+        {
+            continue;
+        }
+        if row.effective_from != target_from {
+            renamed.push((row.exchange, row.code.clone(), row.effective_from));
+            row.effective_from = target_from;
+        }
+        row.delisting_date = Some(values.delisting_date);
+        row.delisting_date_tdx = None;
+        row.delisting_source = values.delisting_source;
+        row.delisting_reason_class = values.delisting_reason_class;
+        row.effective_to = Some(values.effective_to);
+        row.known_at = target_known;
+        changed += 1;
+    }
+    if changed == 0 {
+        return Ok(0);
+    }
+    for (exchange, code, from) in &renamed {
+        c.execute(
+            "DELETE FROM security_master WHERE exchange=?1 AND code=?2 AND effective_from=?3",
+            params![exchange.as_str(), code, compact_market::epoch_day(*from)],
+        )
+        .map_err(storage)?;
+    }
+    let digest: Digest = assembly::assembly_digest(&rows, &migrations);
+    let bundle = json!({
+        "dataset": assembly::DATASET_KIND,
+        "dataset_key": assembly::DATASET_KEY,
+        "digest_format": assembly::DIGEST_FORMAT,
+        "algorithm_version": assembly::ALGORITHM_VERSION,
+        "content_digest": compact_market::digest_hex(&digest),
+        "source_binding_digest": compact_market::digest_hex(&binding),
+        "row_count": rows.len(),
+        "migration_count": migrations.len(),
+        "first_day": rows.iter().map(|row| row.effective_from).min().map(|day| day.to_string()),
+        "last_day": rows.iter().map(|row| row.effective_to.unwrap_or(row.effective_from)).max().map(|day| day.to_string()),
+        "delisting_sources": counts(rows.iter().map(|row| row.delisting_source.as_str())),
+        "etf_delisting": evidence,
+        "limitations": [
+            "D-72 extraction dates are derived facts; production code never parses a PDF",
+            "a delisting date is written only to an existing class=2 identity row"
+        ],
+    });
+    let evidence_digest = evidence_store::put_evidence(c, EvidenceKind::Derived, &bundle)?;
+    for row in &rows {
+        if updates.iter().any(|update| {
+            row.instrument_class == 2
+                && row.exchange == update.exchange
+                && row.code == update.code
+                && row.delisting_date == Some(update.delisting_date)
+        }) {
+            insert_fact(c, row, binding, evidence_digest)?;
+        }
+    }
+    let first_day = rows
+        .iter()
+        .map(|row| compact_market::epoch_day(row.effective_from))
+        .min()
+        .ok_or_else(|| integrity("security_master rows are non-empty"))?;
+    let last_day = rows
+        .iter()
+        .map(|row| compact_market::epoch_day(row.effective_to.unwrap_or(row.effective_from)))
+        .max()
+        .ok_or_else(|| integrity("security_master rows are non-empty"))?
+        .max(first_day);
+    c.execute(
+        "UPDATE derived_dataset_versions SET version_id=?3,content_digest=?4,         record_count=?5,first_day=?6,last_day=?7,evidence_digest=?8,updated_at=?9          WHERE dataset_kind=?1 AND dataset_key=?2",
+        params![
+            assembly::DATASET_KIND,
+            assembly::DATASET_KEY,
+            compact_market::digest_hex(&digest),
+            digest.as_slice(),
+            i64::try_from(rows.len()).map_err(|_| integrity("security_master row count overflow"))?,
+            first_day,
+            last_day,
+            evidence_digest.as_slice(),
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )
+    .map_err(storage)?;
+    Ok(changed)
+}
+
 /// All stored `security_master` intervals, ordered by the row identity.
 /// Used by the read model and by the round-trip tests.
 pub(crate) fn read_security_master(c: &Connection) -> Result<Vec<SecurityLifecycleFact>, Error> {

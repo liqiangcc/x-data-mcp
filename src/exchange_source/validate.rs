@@ -182,8 +182,10 @@ pub fn parse_page(
     })?;
     match format {
         PagingFormat::SsePageHelp | PagingFormat::SsePageHelpBeginPage => parse_sse(&value),
+        PagingFormat::SsePageHelpUnpaged => parse_sse_unpaged(&value),
         PagingFormat::SseSoaPageNo => parse_sse_soa(&value),
         PagingFormat::SzseMetadata => parse_szse(&value, declared_tabkey),
+        PagingFormat::SzseAnnouncement => parse_szse_announcement(&value),
         PagingFormat::SzseMetadataV2 => parse_szse_v2(&value),
         PagingFormat::SzseMetadataV1 => parse_szse_first_block(&value),
         PagingFormat::SzseXlsx => unreachable!("XLSX is read before the JSON envelope"),
@@ -225,6 +227,96 @@ fn parse_sse_soa(value: &Value) -> Result<PageEnvelope, ValidateError> {
         page_count: clamp_u32(page_count),
         rows: rows.len(),
         total: help.get("total").and_then(number),
+    })
+}
+
+/// `commonQuery.do` announcement index (XDM-176 §2): the rows live in
+/// `result`, the paging parameters are echoed but not applied, and a quiet
+/// window answers `pageCount=null`/`total=0`. One request is one (unpaged)
+/// page, so `page_count` is 1 whenever rows are present; an empty window is
+/// still one complete answer and is decided by the 0-row policy.
+fn parse_sse_unpaged(value: &Value) -> Result<PageEnvelope, ValidateError> {
+    let help = value.get("pageHelp").and_then(Value::as_object);
+    let rows = value
+        .get("result")
+        .and_then(Value::as_array)
+        .or_else(|| {
+            help.and_then(|help| help.get("data"))
+                .and_then(Value::as_array)
+        })
+        .ok_or_else(|| ValidateError::Format {
+            detail: "missing result array".to_string(),
+        })?;
+    let page = help
+        .and_then(|help| help.get("pageNo"))
+        .and_then(number)
+        .unwrap_or(1);
+    Ok(PageEnvelope {
+        page: clamp_u32(page),
+        page_count: 1,
+        rows: rows.len(),
+        total: help
+            .and_then(|help| help.get("total"))
+            .and_then(number)
+            .filter(|total| *total > 0),
+    })
+}
+
+/// SZSE `announcement/annList`: a top-level or nested `data` row array plus
+/// `announceCount`. `pageSize` is the measured 50-row cap, so the declared
+/// page count is derived from `announceCount`; a response that echoes its own
+/// `pageCount`/`pageNum` wins.
+fn parse_szse_announcement(value: &Value) -> Result<PageEnvelope, ValidateError> {
+    let data = value.get("data").ok_or_else(|| ValidateError::Format {
+        detail: "missing data object/array".to_string(),
+    })?;
+    let (rows, metadata) = match data {
+        Value::Array(rows) => (rows, value),
+        Value::Object(object) => {
+            let rows = object
+                .get("data")
+                .and_then(Value::as_array)
+                .ok_or_else(|| ValidateError::Format {
+                    detail: "nested data.data is not an array".to_string(),
+                })?;
+            (rows, data)
+        }
+        _ => {
+            return Err(ValidateError::Format {
+                detail: "data is neither an array nor an object".to_string(),
+            });
+        }
+    };
+    let total = metadata
+        .get("announceCount")
+        .and_then(number)
+        .or_else(|| value.get("announceCount").and_then(number));
+    let page = value
+        .get("pageNum")
+        .and_then(number)
+        .or_else(|| metadata.get("pageNum").and_then(number))
+        .or_else(|| value.get("pageNo").and_then(number))
+        .unwrap_or(1);
+    let page_size = value
+        .get("pageSize")
+        .and_then(number)
+        .filter(|size| *size > 0)
+        .unwrap_or(50);
+    let page_count = value
+        .get("pageCount")
+        .and_then(number)
+        .or_else(|| metadata.get("pageCount").and_then(number))
+        .map(clamp_u32)
+        .unwrap_or_else(|| {
+            total
+                .map(|total| u32::try_from(total.div_ceil(page_size)).unwrap_or(u32::MAX))
+                .unwrap_or_else(|| u32::from(!rows.is_empty()))
+        });
+    Ok(PageEnvelope {
+        page: clamp_u32(page),
+        page_count,
+        rows: rows.len(),
+        total,
     })
 }
 
