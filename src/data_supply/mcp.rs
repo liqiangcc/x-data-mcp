@@ -422,9 +422,20 @@ impl DataApi {
         } else if !self.source_ready() {
             production_blocking_reasons.push(self.source_block());
         }
+        // The compact (no-filter) catalog stays tool-only and byte-bounded;
+        // a dataset/operation request gets the detailed series shapes.
+        let series = if detailed || args.dataset.is_some() {
+            super::registry::series_capabilities()
+                .into_iter()
+                .filter(|row| args.dataset.is_none_or(|dataset| row.dataset == dataset))
+                .collect()
+        } else {
+            vec![]
+        };
         encode(Capabilities {
             capability_revision: "generic-data-v10".into(),
             items,
+            series,
             max_batch_entities: 100,
             max_page_size: 1000,
             max_snapshot_rows: 100000,
@@ -731,6 +742,10 @@ fn mapped(e: Error) -> ApiError {
     }
     let code = match &e {
         Error::Invalid(s) if s == "forbidden" => "forbidden",
+        Error::Invalid(s) if s.starts_with("adjustment_required_for_etf") => {
+            "adjustment_required_for_etf"
+        }
+        Error::Invalid(s) if s.starts_with("adjustment_unavailable") => "adjustment_unavailable",
         Error::Invalid(_) => "invalid_arguments",
         Error::Integrity(_) | Error::Base(_) => "integrity_error",
         Error::NotFound => "version_not_found",

@@ -847,6 +847,7 @@ fn supply_reads_on_schema21() {
                 selection: Selection::Single {
                     entity: sec.clone(),
                 },
+                adjustment: None,
                 page_size: 10,
                 cursor: None,
             },
@@ -871,6 +872,7 @@ fn supply_reads_on_schema21() {
                 as_of: None,
             },
             version: VersionChoice::LatestPerEntity {},
+            adjustment: None,
             page_size: 100,
             cursor: None,
             fields: None,
@@ -922,6 +924,7 @@ fn supply_reads_on_schema21() {
                 end_year: 2025,
             },
             version: VersionChoice::LatestPerEntity {},
+            adjustment: None,
             page_size: 100,
             cursor: None,
             fields: None,

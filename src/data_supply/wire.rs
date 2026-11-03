@@ -491,6 +491,23 @@ pub enum VersionChoice {
     ExplicitVersionMap { versions: Vec<VersionBinding> },
     CatalogVersion { version_id: String },
 }
+// `market.daily` read 口径 (M3-2 PR-C, D-70 Q4). Omitted means `qfq`; an ETF
+// must request `raw` because no forward series is delivered (fail closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum AdjustmentChoice {
+    Raw,
+    Qfq,
+}
+impl AdjustmentChoice {
+    pub fn stored(self) -> crate::market_data::Adjustment {
+        match self {
+            Self::Raw => crate::market_data::Adjustment::Raw,
+            Self::Qfq => crate::market_data::Adjustment::Forward,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Query {
@@ -499,6 +516,11 @@ pub struct Query {
     pub selection: Selection,
     pub filter: Filter,
     pub version: VersionChoice,
+    // Omitted keeps the pre-M3-2 behavior (`qfq` for A shares) byte for
+    // byte; an ETF must name `raw`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "daily_adjustment")]
+    pub adjustment: Option<AdjustmentChoice>,
     #[serde(default = "default_page")]
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
@@ -515,6 +537,12 @@ pub struct Query {
 /// `anyOf` wrapper. `tools/list` is byte-budgeted (v8 #387 §6.3).
 fn date_or_null(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({"type": ["string", "null"], "format": "date"})
+}
+
+/// Compact optional 口径 schema (v8 §6.3 byte budget): the same spelling as
+/// [`AdjustmentChoice`], with no `$defs` entry or prose per tool schema.
+fn daily_adjustment(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": ["string", "null"], "enum": ["raw", "qfq", null]})
 }
 
 pub fn default_page() -> usize {
@@ -584,6 +612,10 @@ pub enum Row {
         close: String,
         volume: Option<String>,
         amount: Option<String>,
+        /// D-72 derived mark for ETF bars whose stored volume and amount are
+        /// both zero. Absent on A-share rows, so their wire bytes do not move.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        no_trade: Option<bool>,
     },
     Catalog {
         entity: Security,
@@ -639,6 +671,11 @@ pub struct VersionsQuery {
     pub dataset: Dataset,
     pub contract_version: ReadContractVersion,
     pub selection: Selection,
+    // Same `market.daily` 口径 contract as `Query::adjustment`: the version
+    // list must resolve the same series the data read would.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "daily_adjustment")]
+    pub adjustment: Option<AdjustmentChoice>,
     #[serde(default = "default_page")]
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
@@ -698,6 +735,18 @@ pub struct Metadata {
     /// complete run yet — never guessed from a page's `as_of`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verified_through: Option<chrono::NaiveDate>,
+    /// ETF series precision (M3-2 PR-C): 3 for the raw 厘 series. Absent for
+    /// A-share/index rows so their metadata bytes do not change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_scale: Option<u32>,
+    /// ETF survival/tradability facts (D-72): the last bar with `volume>0`.
+    /// Different from `delisting_date`; backtest windows end here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_trade_date: Option<chrono::NaiveDate>,
+    /// ETF termination date from `security_master.delisting_date`. Absent means
+    /// unknown (no D-72 extraction yet), never inferred from the last bar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delisting_date: Option<chrono::NaiveDate>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

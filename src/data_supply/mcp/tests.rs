@@ -1529,6 +1529,16 @@ fn query_data_daily_reads_only_the_forward_口径() {
     assert_eq!(page["records"].as_array().unwrap().len(), 1);
     assert_eq!(page["records"][0]["close"], "10.05");
     assert_ne!(page["records"][0]["close"], "11.00");
+    // A-share bytes stay additive-free (M3-2 PR-C): no ETF-only row/metadata
+    // fields appear just because `market.daily` learned the `adjustment` knob.
+    assert!(page["records"][0].get("no_trade").is_none());
+    let metadata = &page["version_manifest"][0]["metadata"];
+    for field in ["price_scale", "last_trade_date", "delisting_date"] {
+        assert!(
+            metadata.get(field).is_none(),
+            "A-share metadata grew {field}"
+        );
+    }
     // The manifest version is the forward series row, not the raw one.
     let MarketBackend::Compact(repo) = &fixture.backend else {
         panic!("fixture must open the compact backend");
@@ -2794,4 +2804,43 @@ fn refresh_status_of_is_a_read_and_rejects_combined_arguments() {
     // a full-mode plan was listed is asserted here.
     assert!(!reply["planned"].as_array().unwrap().is_empty());
     assert!(f.backend.read_source_refresh_runs().unwrap().is_empty());
+}
+
+/// M3-2 PR-C: ETF 口径 failures are stable wire error codes, not a silent raw
+/// answer and not an empty page (D-70 Q4).
+#[test]
+fn etf_adjustment_failures_have_stable_error_codes() {
+    let missing = super::mapped(crate::market_storage::Error::Invalid(
+        "adjustment_required_for_etf: specify adjustment".into(),
+    ));
+    assert_eq!(missing.code, "adjustment_required_for_etf");
+    let unavailable = super::mapped(crate::market_storage::Error::Invalid(
+        "adjustment_unavailable: ETF 前复权 is not delivered".into(),
+    ));
+    assert_eq!(unavailable.code, "adjustment_unavailable");
+}
+
+/// `get_data_capabilities` carries the series shapes as data: the ETF raw
+/// shape is 3dp/份 with 100-share quantization, and it is never a default.
+#[test]
+fn capabilities_express_the_etf_raw_shape_and_units() {
+    let f = fixture();
+    let caps = f
+        .api
+        .call("get_data_capabilities", json!({"dataset": "market.daily"}))
+        .unwrap();
+    let etf = caps["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["dataset"] == json!("market.daily") && row["instrument_class"] == json!("etf")
+        })
+        .expect("ETF daily shape is declared");
+    assert_eq!(etf["adjustment"], json!("raw"));
+    assert_eq!(etf["price_scale"], json!(3));
+    assert_eq!(etf["price_unit"], json!("yuan"));
+    assert_eq!(etf["volume_unit"], json!("share"));
+    assert_eq!(etf["volume_quantum"], json!(100));
+    assert_eq!(etf["default"], json!(false));
 }

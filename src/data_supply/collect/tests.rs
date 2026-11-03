@@ -13,7 +13,10 @@ use crate::acquire::{AcquireService, Source};
 use crate::compact_market::EvidenceKind;
 use crate::data_supply::Access;
 use crate::data_supply::generation::{Bound, GenerationSource, SOURCE_GENERATION_KEY};
-use crate::data_supply::wire::{CatalogScope, Dataset, Selection, WriteSelection};
+use crate::data_supply::query::Queries;
+use crate::data_supply::wire::{
+    AdjustmentChoice, CatalogScope, Dataset, Query, Row, Selection, VersionsQuery, WriteSelection,
+};
 use crate::sqlite_market::backend::MarketBackend;
 use crate::sqlite_market::{evidence_store, series_commit};
 use crate::sqlite_supply::SqliteSupply;
@@ -97,7 +100,7 @@ fn etf_days() -> Vec<u8> {
     [
         day_record(day_u32(2), [41680, 41820, 41600, 41780], 0.0, 10_000),
         day_record(day_u32(1), [41780, 41900, 41700, 41860], 0.0, 11_000),
-        day_record(day_u32(0), [41860, 42000, 41800, 41950], 0.0, 12_000),
+        day_record(day_u32(0), [41860, 42000, 41800, 41953], 0.0, 12_000),
     ]
     .concat()
 }
@@ -403,6 +406,21 @@ fn control(f: &Fixture) -> TaskControl<SqliteTasks> {
 
 fn payload(version: &str, selection: Value) -> Value {
     json!({"dataset": "market.daily", "contract_version": version, "selection": selection})
+}
+
+fn daily_read(code: &str, adjustment: Option<&str>) -> Query {
+    let mut value = json!({
+        "dataset": "market.daily",
+        "contract_version": "v1",
+        "selection": {"kind": "single", "entity": {"exchange": "sh", "code": code}},
+        "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
+        "version": {"kind": "latest_per_entity"},
+        "page_size": 100
+    });
+    if let Some(adjustment) = adjustment {
+        value["adjustment"] = json!(adjustment);
+    }
+    serde_json::from_value(value).unwrap()
 }
 
 fn task_id(accepted: &crate::task_control::Acceptance) -> String {
@@ -728,7 +746,7 @@ fn etf_listed_ever_collects_raw_daily_and_reports_absent() {
             ))
         })
         .unwrap();
-    assert_eq!(facts.0, (2, 3, 41_950));
+    assert_eq!(facts.0, (2, 3, 41_953));
     assert_eq!(facts.1, (Some(4_293_795_000), Some(100)));
     assert_eq!(facts.2, 3, "delisted tail zero bars are preserved");
     assert_eq!(facts.3.len(), 1);
@@ -756,6 +774,130 @@ fn etf_listed_ever_collects_raw_daily_and_reports_absent() {
             .4
             .iter()
             .all(|event| { event.basis_status == crate::market_data::FactorBasisStatus::Pending })
+    );
+
+    // M3-2 PR-C read face: ETF is visible only at the explicit raw 口径,
+    // with 3dp values and the D-72 trade/delisting facts in metadata.
+    let queries = Queries::new(SqliteSupply {
+        market: f.backend.clone(),
+    });
+    let page = queries
+        .query(daily_read("510050", Some("raw")), &Access::local())
+        .unwrap();
+    assert_eq!(page.records.len(), 3);
+    let Row::Market {
+        close, no_trade, ..
+    } = &page.records[2]
+    else {
+        panic!("expected a market row");
+    };
+    assert_eq!(close, "41.953", "ETF close keeps its 厘 precision");
+    assert_eq!(*no_trade, None);
+    let meta = page.version_manifest[0].metadata.as_ref().unwrap();
+    assert_eq!(meta.price_scale, Some(3));
+    assert_eq!(
+        meta.adjustment.as_ref().and_then(|a| a.value.as_deref()),
+        Some("raw")
+    );
+    assert_eq!(
+        meta.last_trade_date,
+        Some(crate::calendar::shanghai_today() - chrono::Days::new(0))
+    );
+    assert_eq!(
+        meta.delisting_date, None,
+        "current ETF has no delisting date"
+    );
+
+    let version_query = |adjustment| VersionsQuery {
+        dataset: Dataset::Daily,
+        contract_version: crate::data_supply::wire::ReadContractVersion::V1,
+        selection: Selection::Single {
+            entity: crate::data_supply::wire::Security::parse("sh.510050").unwrap(),
+        },
+        adjustment,
+        page_size: 10,
+        cursor: None,
+    };
+    let versions = queries
+        .versions(version_query(Some(AdjustmentChoice::Raw)), &Access::local())
+        .unwrap();
+    assert_eq!(versions.items.len(), 1);
+    let version_error = queries
+        .versions(version_query(None), &Access::local())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        version_error.contains("adjustment_required_for_etf"),
+        "{version_error}"
+    );
+
+    let missing = queries
+        .query(daily_read("510050", None), &Access::local())
+        .unwrap_err()
+        .to_string();
+    assert!(missing.contains("adjustment_required_for_etf"), "{missing}");
+    let qfq = queries
+        .query(daily_read("510050", Some("qfq")), &Access::local())
+        .unwrap_err()
+        .to_string();
+    assert!(qfq.contains("adjustment_unavailable"), "{qfq}");
+
+    let delisted = queries
+        .query(daily_read("510070", Some("raw")), &Access::local())
+        .unwrap();
+    let marks: Vec<Option<bool>> = delisted
+        .records
+        .iter()
+        .map(|row| match row {
+            Row::Market { no_trade, .. } => *no_trade,
+            _ => panic!("expected market rows"),
+        })
+        .collect();
+    assert_eq!(marks, vec![None, Some(true), Some(true)]);
+    let meta = delisted.version_manifest[0].metadata.as_ref().unwrap();
+    assert_eq!(
+        meta.last_trade_date,
+        Some(crate::calendar::shanghai_today() - chrono::Days::new(4)),
+        "last volume>0 bar, not the zero-volume tail"
+    );
+    assert_eq!(
+        meta.delisting_date,
+        crate::compact_market::epoch_date(20000).ok(),
+        "master delisting_date, not the last bar"
+    );
+    // The v2 columnar projection carries the same ETF facts, and the
+    // `no_trade` column appears only because this ETF really has zero bars.
+    let columnar = queries
+        .query_v2(daily_read("510070", Some("raw")), &Access::local())
+        .unwrap();
+    assert_eq!(columnar["metadata"]["price_scale"], json!(3));
+    assert_eq!(
+        columnar["metadata"]["last_trade_date"],
+        json!((crate::calendar::shanghai_today() - chrono::Days::new(4)).to_string())
+    );
+    assert_eq!(columnar["columns"]["no_trade"], json!([[null, true, true]]));
+
+    // Added requirement (Claude PR-A review): an ETF series without its main
+    // table row must fail closed, never fall back to the stock 2dp read.
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.tx(|c| {
+        c.execute(
+            "DELETE FROM security_master WHERE exchange='sh' AND code='510050'",
+            [],
+        )
+        .map_err(|e| crate::market_storage::Error::Storage(e.to_string()))?;
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+    let missing_master = queries
+        .query(daily_read("510050", Some("raw")), &Access::local())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        missing_master.contains("no security_master row"),
+        "{missing_master}"
     );
 }
 

@@ -307,16 +307,23 @@ impl ReadRepository for SqliteSupply {
                     if latest {
                         // SPEC §6.1 list_data_versions on schema 21: at most one
                         // (current) entry per entity.
-                        // AC-M1-10: the public version list resolves stock
-                        // 前复权 series only (index/ETF are export-only).
-                        let (adjustment, instrument_class) = dataset_shape(args.dataset)
-                            .ok_or_else(|| invalid("dataset has no price series"))?;
-                        if let Some(row)=crate::sqlite_market::series::read_visible_series(
+                        // AC-M1-10 / M3-2 PR-C: the public version list
+                        // resolves the same entity shape as head/query. An
+                        // ETF without explicit `adjustment=raw` fails closed.
+                        let Some(shape) = dataset_shape(
+                            c,
+                            args.dataset,
+                            &entity,
+                            requested_adjustment(args.adjustment),
+                        )?
+                        else {
+                            continue;
+                        };
+                        if let Some(row)=crate::sqlite_market::series::read_visible_shaped(
                             c,
                             &entity.symbol(),
                             args.dataset.period().unwrap(),
-                            adjustment,
-                            instrument_class,
+                            shape,
                         )? {
                             result.push(VersionInfo{version_ref:series_version_ref(args.dataset,&entity,&row),published_at:series_timestamp(&row.updated_at)?});
                         }
@@ -501,19 +508,15 @@ fn catalog_members(
     Ok((id, members))
 }
 
-/// The 口径/品种 pair a versioned price dataset serves (v8 PR-4, #387 §4.2).
-/// `market.index` is raw/point; `market.daily`/`market.yearly` keep the stock
-/// 前复权 shape. Datasets without a price series return `None`.
-fn dataset_shape(dataset: Dataset) -> Option<(crate::market_data::Adjustment, i64)> {
+/// The dataset class a versioned price read serves. `market.daily` and
+/// `market.yearly` resolve the entity's 品种 from storage; `market.index` is
+/// the dedicated raw index shape (M3-2 PR-C §6 P8).
+fn read_series_kind(dataset: Dataset) -> Option<crate::sqlite_market::series::ReadSeriesKind> {
+    use crate::sqlite_market::series::ReadSeriesKind;
     match dataset {
-        Dataset::Daily | Dataset::Yearly => Some((
-            crate::market_data::Adjustment::Forward,
-            crate::market_data::INSTRUMENT_CLASS_STOCK,
-        )),
-        Dataset::Index => Some((
-            crate::market_data::Adjustment::Raw,
-            crate::market_data::INSTRUMENT_CLASS_INDEX,
-        )),
+        Dataset::Daily => Some(ReadSeriesKind::Daily),
+        Dataset::Yearly => Some(ReadSeriesKind::Yearly),
+        Dataset::Index => Some(ReadSeriesKind::Index),
         Dataset::Catalog
         | Dataset::AdjustmentEvents
         | Dataset::Calendar
@@ -527,12 +530,32 @@ fn dataset_shape(dataset: Dataset) -> Option<(crate::market_data::Adjustment, i6
     }
 }
 
+fn requested_adjustment(value: Option<AdjustmentChoice>) -> Option<crate::market_data::Adjustment> {
+    value.map(AdjustmentChoice::stored)
+}
+
+/// The one shape resolution head/visibility/availability/version listing use.
+/// `Ok(None)` means the dataset has no price series for this entity (absent),
+/// not a stock fallback.
+fn dataset_shape(
+    c: &Connection,
+    dataset: Dataset,
+    entity: &Security,
+    requested: Option<crate::market_data::Adjustment>,
+) -> Result<Option<crate::sqlite_market::series::SeriesShape>, Error> {
+    let Some(kind) = read_series_kind(dataset) else {
+        return Ok(None);
+    };
+    crate::sqlite_market::series::resolve_read_shape(c, &entity.symbol(), kind, requested)
+}
+
 /// Head resolution for one dataset: schema 22 asks the dataset's own shape;
 /// the legacy schema keeps its `data_versions` head (and has no index series).
 fn dataset_head(
     c: &Connection,
     dataset: Dataset,
     entity: &Security,
+    requested: Option<crate::market_data::Adjustment>,
 ) -> Result<Option<String>, Error> {
     let period = dataset
         .period()
@@ -546,29 +569,41 @@ fn dataset_head(
             },
         );
     }
-    let (adjustment, instrument_class) =
-        dataset_shape(dataset).ok_or_else(|| invalid("dataset has no price series"))?;
-    Ok(crate::sqlite_market::series::read_visible_series(
-        c,
-        &entity.symbol(),
-        period,
-        adjustment,
-        instrument_class,
-    )?
-    .map(|row| row.version_id))
+    let Some(shape) = dataset_shape(c, dataset, entity, requested)? else {
+        return Ok(None);
+    };
+    Ok(
+        crate::sqlite_market::series::read_visible_shaped(c, &entity.symbol(), period, shape)?
+            .map(|row| row.version_id),
+    )
 }
 
 /// True when a pinned id belongs to another dataset's shape. Replaces the
 /// single `instrument_class=0` check (M1 PR-5) with the same dataset-aware
 /// predicate head resolution uses.
-fn dataset_invisible(c: &Connection, dataset: Dataset, id: &str) -> Result<bool, Error> {
+fn dataset_invisible(
+    c: &Connection,
+    dataset: Dataset,
+    entity: &Security,
+    id: &str,
+    requested: Option<crate::market_data::Adjustment>,
+) -> Result<bool, Error> {
     if !crate::sqlite_market::is_latest_only_schema(c)? {
         return Ok(false);
     }
-    let Some((adjustment, instrument_class)) = dataset_shape(dataset) else {
+    if read_series_kind(dataset).is_none() {
         return Ok(false);
+    }
+    let Some(shape) = dataset_shape(c, dataset, entity, requested)? else {
+        // A price dataset that serves no shape for this entity (for example
+        // an index asked through `market.daily`) never becomes readable just
+        // because the version id is known.
+        return Ok(true);
     };
-    crate::sqlite_market::series::is_invisible_version(c, id, adjustment, instrument_class)
+    Ok(
+        crate::sqlite_market::series::read_series_by_version_id(c, id)?
+            .is_some_and(|row| row.shape() != shape),
+    )
 }
 
 fn derived_reference(
@@ -612,6 +647,9 @@ fn derived_manifest(
                 c,
                 &registration.dataset_kind,
             )?,
+            price_scale: None,
+            last_trade_date: None,
+            delisting_date: None,
         }),
         stale: None,
         as_of_day: None,
@@ -776,6 +814,9 @@ pub(crate) fn query(
                 lineage: None,
                 index: None,
                 verified_through: None,
+                price_scale: None,
+                last_trade_date: None,
+                delisting_date: None,
             }),
 
             stale: None,
@@ -830,13 +871,14 @@ pub(crate) fn query(
         }
     } else {
         let latest_only = crate::sqlite_market::is_latest_only_schema(c)?;
+        let requested = requested_adjustment(plan.args.adjustment);
         for entity in &plan.entities {
             let id = match &plan.args.version {
                 VersionChoice::ExplicitVersionMap { versions } => versions
                     .iter()
                     .find(|v| &v.entity == entity)
                     .map(|v| v.version_id.clone()),
-                _ => dataset_head(c, plan.args.dataset, entity)?,
+                _ => dataset_head(c, plan.args.dataset, entity, requested)?,
             };
             let Some(id) = id else {
                 result.manifest.push(ManifestEntry {
@@ -856,7 +898,7 @@ pub(crate) fn query(
             // readable just because its id is known.
             if latest_only
                 && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
-                && dataset_invisible(c, plan.args.dataset, &id)?
+                && dataset_invisible(c, plan.args.dataset, entity, &id, requested)?
             {
                 result.manifest.push(ManifestEntry {
                     entity: Some(entity.clone()),
@@ -869,13 +911,17 @@ pub(crate) fn query(
                 });
                 continue;
             }
+            let series = if latest_only {
+                crate::sqlite_market::series::read_series_by_version_id(c, &id)?
+            } else {
+                None
+            };
             let mut stale_mark: Option<(String, chrono::NaiveDate)> = None;
             if latest_only
                 && plan.args.dataset == Dataset::Yearly
-                && let Some(series) =
-                    crate::sqlite_market::series::read_series_by_version_id(c, &id)?
+                && let Some(series) = &series
             {
-                match crate::sqlite_market::series::yearly_state(c, &series)? {
+                match crate::sqlite_market::series::yearly_state(c, series)? {
                     crate::sqlite_market::series::YearlyState::Fresh => {}
                     crate::sqlite_market::series::YearlyState::Behind { as_of_day } => {
                         stale_mark = Some((
@@ -920,12 +966,16 @@ pub(crate) fn query(
             // fields such as the index exclusion count cannot drift between
             // the two read surfaces.
             let meta = if latest_only {
-                let series = crate::sqlite_market::series::read_series_by_version_id(c, &id)?
+                let series = series
+                    .as_ref()
                     .ok_or_else(|| Error::Integrity("version id names no current series".into()))?;
-                series_metadata(c, &series)?
+                series_metadata(c, series)?
             } else {
                 metadata(c, &r, plan.args.dataset)
             };
+            let etf_series = series.as_ref().is_some_and(|series| {
+                series.instrument_class == crate::market_data::INSTRUMENT_CLASS_ETF
+            });
             let mut meta_scan = YearlyMetaScan::new();
             let reference = market_ref(plan.args.dataset, entity, &r);
             result.manifest.push(ManifestEntry {
@@ -996,6 +1046,10 @@ pub(crate) fn query(
                     close: b.close.to_string(),
                     volume: b.volume.map(|v| v.to_string()),
                     amount: b.amount.map(|v| v.to_string()),
+                    no_trade: (etf_series
+                        && b.volume == Some(rust_decimal::Decimal::ZERO)
+                        && b.amount == Some(rust_decimal::Decimal::ZERO))
+                    .then_some(true),
                 });
                 if result.rows.len() > MAX_ROWS {
                     return Err(invalid("snapshot row budget exceeded"));
@@ -1047,12 +1101,13 @@ fn availability_stats(
     if plan.args.dataset == Dataset::AdjustmentEvents {
         return event_stats(c, plan, entity);
     }
+    let requested = requested_adjustment(plan.args.adjustment);
     let id = match &plan.args.version {
         VersionChoice::ExplicitVersionMap { versions } => versions
             .iter()
             .find(|v| &v.entity == entity)
             .map(|v| v.version_id.clone()),
-        _ => dataset_head(c, plan.args.dataset, entity)?,
+        _ => dataset_head(c, plan.args.dataset, entity, requested)?,
     };
     let Some(id) = id else {
         return Ok((
@@ -1074,7 +1129,7 @@ fn availability_stats(
     // AC-M1-10: same visibility boundary as `query`, including explicit pins.
     if crate::sqlite_market::is_latest_only_schema(c)?
         && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
-        && dataset_invisible(c, plan.args.dataset, &id)?
+        && dataset_invisible(c, plan.args.dataset, entity, &id, requested)?
     {
         return Ok((
             Some(ManifestEntry {
@@ -1330,6 +1385,9 @@ fn metadata(
         index,
         // Bars come from the published series, not from a refresh-run table.
         verified_through: None,
+        price_scale: None,
+        last_trade_date: None,
+        delisting_date: None,
     }
 }
 
@@ -2163,9 +2221,10 @@ fn verify_versions_meta_conn(
                 if row.entity != entity.symbol() || Some(row.period) != r.dataset.period() {
                     return Err(Error::Integrity("version entity/dataset mismatch".into()));
                 }
-                if let Some((adjustment, instrument_class)) = dataset_shape(r.dataset)
-                    && (row.adjustment != adjustment || row.instrument_class != instrument_class)
-                {
+                let Some(shape) = dataset_shape(c, r.dataset, entity, Some(row.adjustment))? else {
+                    return Err(Error::Integrity("version dataset shape mismatch".into()));
+                };
+                if row.shape() != shape {
                     return Err(Error::Integrity("version dataset shape mismatch".into()));
                 }
                 series_version_ref(r.dataset, entity, &row)
@@ -2757,6 +2816,18 @@ fn series_metadata(
     } else {
         None
     };
+    let etf = series.instrument_class == crate::market_data::INSTRUMENT_CLASS_ETF;
+    let price_scale = etf.then_some(series.price_scale);
+    let last_trade_date = if etf {
+        crate::sqlite_market::series::last_trade_day(c, series.series_key)?
+    } else {
+        None
+    };
+    let delisting_date = if etf {
+        etf_delisting_date(c, &series.entity)?
+    } else {
+        None
+    };
     Ok(Metadata {
         source: evidence.source,
         published_at: series_timestamp(&series.updated_at)?,
@@ -2774,7 +2845,44 @@ fn series_metadata(
         // refresh-run table (`issue-446` §5.3 applies to the four read-only
         // source items).
         verified_through: None,
+        price_scale,
+        last_trade_date,
+        delisting_date,
     })
+}
+
+/// ETF termination date from the main table. Absent (unknown) and present
+/// (D-72 extraction) are distinct wire states; conflicting rows fail closed.
+fn etf_delisting_date(c: &Connection, entity: &str) -> Result<Option<chrono::NaiveDate>, Error> {
+    let (exchange, code) = entity
+        .split_once('.')
+        .ok_or_else(|| Error::Integrity("non-canonical ETF entity".into()))?;
+    let mut statement = c
+        .prepare(
+            "SELECT DISTINCT delisting_date FROM security_master WHERE exchange=?1 AND code=?2",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(params![exchange, code], |row| row.get::<_, Option<i64>>(0))
+        .map_err(storage)?;
+    let mut dates = std::collections::BTreeSet::new();
+    for row in rows {
+        dates.insert(row.map_err(storage)?);
+    }
+    match dates.len() {
+        0 => Ok(None),
+        1 => dates
+            .into_iter()
+            .next()
+            .flatten()
+            .map(|day| {
+                crate::compact_market::epoch_date(day).map_err(|e| Error::Integrity(e.to_string()))
+            })
+            .transpose(),
+        _ => Err(Error::Integrity(format!(
+            "security_master delisting_date conflict for {entity}"
+        ))),
+    }
 }
 
 /// `availability` facts for schema 21: the window COUNT/MIN/MAX rides the
@@ -2791,8 +2899,12 @@ fn series_stats(
     if series.entity != entity.symbol() || Some(series.period) != plan.args.dataset.period() {
         return Err(Error::Integrity("version entity/dataset mismatch".into()));
     }
-    if let Some((adjustment, instrument_class)) = dataset_shape(plan.args.dataset)
-        && (series.adjustment != adjustment || series.instrument_class != instrument_class)
+    if let Some(shape) = dataset_shape(
+        c,
+        plan.args.dataset,
+        entity,
+        requested_adjustment(plan.args.adjustment),
+    )? && series.shape() != shape
     {
         return Err(Error::Integrity("version dataset shape mismatch".into()));
     }
