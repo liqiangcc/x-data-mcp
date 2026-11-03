@@ -491,18 +491,18 @@ fn execute(
         // exchange lists, never from a code prefix. The branch is independent
         // of A-1/A-2: without a source store it stays `pending_source`, and the
         // A-share rows are written exactly as before.
-        let (etf, etf_evidence) = match crate::official_security::etf_list::run_source(
-            market, today, policy,
-        )
-        .map_err(|error| {
-            Error::Invalid(format!("ETF identity source: {}: {error}", error.code()))
-        })? {
-            crate::official_security::etf_list::RunSource::Pending(pending) => (None, Value::Null),
-            crate::official_security::etf_list::RunSource::Admitted(admitted) => {
-                let evidence = admitted.evidence();
-                (Some(admitted), evidence)
-            }
-        };
+        let (etf, etf_pending, etf_evidence) =
+            match crate::official_security::etf_list::run_source(market, today, policy).map_err(
+                |error| Error::Invalid(format!("ETF identity source: {}: {error}", error.code())),
+            )? {
+                crate::official_security::etf_list::RunSource::Pending(pending) => {
+                    (None, Some(pending), Value::Null)
+                }
+                crate::official_security::etf_list::RunSource::Admitted(admitted) => {
+                    let evidence = admitted.evidence();
+                    (Some(admitted), None, evidence)
+                }
+            };
         let mut assembled = assembly::assemble_security_master(
             &snapshot.facts.lifecycle,
             &snapshot.facts.arrangements,
@@ -523,12 +523,11 @@ fn execute(
                 )
                 .map_err(|error| Error::Invalid(error.to_string()))?;
             }
-            None => assembled.pending_sources.push(assembly::PendingSource {
-                dataset: assembly::DATASET_KIND,
-                source: "etf_list",
-                reason: "the M3 source store is not configured for this process \
-                         (X_DATA_MCP_SOURCE_STORE); ETF identity stays pending_source",
-            }),
+            None => {
+                if let Some(pending) = etf_pending {
+                    assembled.pending_sources.push(pending);
+                }
+            }
         }
         if !etf_facts.is_empty() {
             let mut etf_rows = assembly::member_rows(&etf_facts)

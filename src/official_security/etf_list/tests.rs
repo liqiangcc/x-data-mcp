@@ -12,6 +12,7 @@ use chrono::NaiveDate;
 use super::*;
 use crate::exchange_source::select::Freshness;
 use crate::security_master::assembly::{ExchangeSource, PendingSource, assemble_security_master};
+use crate::security_master::{DelistingReason, DelistingSource, IssuerResolution};
 
 const SSE: &[u8] =
     include_bytes!("../../../tests/fixtures/exchange-etf-list/sse_etf_list_synthetic.json");
