@@ -142,3 +142,192 @@ fn item_ids_are_unique_and_never_collide_with_security_items() {
             .all(|i| i.frozen_inputs.get(SOURCE_GENERATION_KEY) == Some(&Value::Null))
     );
 }
+
+// ---------------------------------------------------------------------------
+// M3-2 PR-A: ETF failure is local to the ETF part of the main table.
+// ---------------------------------------------------------------------------
+
+fn a_share_assembly() -> assembly::Assembly {
+    use crate::security_master::{
+        DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
+        SecurityLifecycleFact,
+    };
+    let tdx = vec![SecurityLifecycleFact {
+        exchange: Exchange::Sh,
+        code: "600000".into(),
+        effective_from: chrono::NaiveDate::from_ymd_opt(1999, 11, 10).unwrap(),
+        effective_to: None,
+        instrument_class: 0,
+        issuer_key: None,
+        issuer_resolution: IssuerResolution::CodeDate,
+        listing_date: chrono::NaiveDate::from_ymd_opt(1999, 11, 10),
+        listing_date_tdx: chrono::NaiveDate::from_ymd_opt(1999, 11, 10),
+        listing_source: ListingSource::TdxSsdate,
+        b_listing_date: None,
+        delisting_date: None,
+        delisting_date_tdx: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        arrangement_start: None,
+        arrangement_end: None,
+        listing_conflict: false,
+        delisting_conflict: false,
+        known_at: None,
+    }];
+    assembly::assemble_security_master(
+        &tdx,
+        &[],
+        assembly::ExchangeSource::Pending(PendingSource {
+            dataset: assembly::DATASET_KIND,
+            source: "exchange_list",
+            reason: "test",
+        }),
+        &[],
+    )
+    .unwrap()
+}
+
+fn etf_member(exchange: crate::security_master::Exchange, code: &str) -> assembly::MemberFact {
+    assembly::MemberFact {
+        exchange,
+        code: code.into(),
+        first_seen: chrono::NaiveDate::from_ymd_opt(2026, 11, 3).unwrap(),
+        known_at: chrono::NaiveDate::from_ymd_opt(2026, 11, 3).unwrap(),
+        listing_date: Some(chrono::NaiveDate::from_ymd_opt(2005, 2, 23).unwrap()),
+        listing_source: crate::security_master::ListingSource::ExchangeList,
+        listing_date_tdx: Some(chrono::NaiveDate::from_ymd_opt(2005, 2, 23).unwrap()),
+    }
+}
+
+fn class_zero(
+    rows: &[crate::security_master::SecurityLifecycleFact],
+) -> Vec<crate::security_master::SecurityLifecycleFact> {
+    rows.iter()
+        .filter(|row| row.instrument_class == 0)
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn an_etf_failure_keeps_the_previous_class_two_rows_and_still_writes_a_shares() {
+    let mut assembled = a_share_assembly();
+    let before = class_zero(&assembled.rows);
+    let previous =
+        assembly::member_rows(&[etf_member(crate::security_master::Exchange::Sh, "510050")])
+            .unwrap();
+    let report = merge_etf_identity(
+        &mut assembled,
+        previous.clone(),
+        EtfAttempt::Failed {
+            code: "source_invalid".into(),
+            detail: "the xlsx shape changed".into(),
+        },
+    );
+    assert_eq!(report.failure.as_ref().unwrap().0, "source_invalid");
+    assert_eq!(report.evidence["status"], "failed");
+    assert_eq!(report.evidence["preserved_rows"], 1);
+    assert_eq!(class_zero(&assembled.rows), before);
+    let class_two: Vec<_> = assembled
+        .rows
+        .iter()
+        .filter(|row| row.instrument_class == 2)
+        .cloned()
+        .collect();
+    assert_eq!(class_two, previous);
+}
+
+#[test]
+fn an_etf_fact_or_member_error_is_a_partial_failure_and_keeps_previous_rows() {
+    let mut assembled = a_share_assembly();
+    let before = class_zero(&assembled.rows);
+    let previous =
+        assembly::member_rows(&[etf_member(crate::security_master::Exchange::Sz, "159901")])
+            .unwrap();
+    let report = merge_etf_identity(
+        &mut assembled,
+        previous.clone(),
+        EtfAttempt::Facts {
+            facts: Err((
+                "member_listing_conflict".into(),
+                "listing day differs".into(),
+            )),
+            evidence: json!({"parser_version": "etf-list-v1"}),
+        },
+    );
+    assert_eq!(
+        report.failure.as_ref().unwrap().0,
+        "member_listing_conflict"
+    );
+    assert_eq!(report.evidence["status"], "failed");
+    assert_eq!(report.evidence["preserved_rows"], 1);
+    assert_eq!(class_zero(&assembled.rows), before);
+    let class_two: Vec<_> = assembled
+        .rows
+        .iter()
+        .filter(|row| row.instrument_class == 2)
+        .cloned()
+        .collect();
+    assert_eq!(class_two, previous);
+}
+
+#[test]
+fn an_etf_pending_source_keeps_previous_rows_without_failing_the_item() {
+    let mut assembled = a_share_assembly();
+    let before = class_zero(&assembled.rows);
+    let previous =
+        assembly::member_rows(&[etf_member(crate::security_master::Exchange::Sh, "510050")])
+            .unwrap();
+    let report = merge_etf_identity(
+        &mut assembled,
+        previous.clone(),
+        EtfAttempt::Pending(PendingSource {
+            dataset: assembly::DATASET_KIND,
+            source: "etf_list",
+            reason: "no frozen list",
+        }),
+    );
+    assert!(report.failure.is_none());
+    assert_eq!(report.evidence["status"], "pending");
+    assert_eq!(report.evidence["preserved_rows"], 1);
+    assert_eq!(class_zero(&assembled.rows), before);
+    let class_two: Vec<_> = assembled
+        .rows
+        .iter()
+        .filter(|row| row.instrument_class == 2)
+        .cloned()
+        .collect();
+    assert_eq!(class_two, previous);
+}
+
+#[test]
+fn a_successful_etf_attempt_replaces_previous_rows_and_keeps_a_shares() {
+    let mut assembled = a_share_assembly();
+    let before = class_zero(&assembled.rows);
+    let previous =
+        assembly::member_rows(&[etf_member(crate::security_master::Exchange::Sh, "510050")])
+            .unwrap();
+    let new = vec![
+        etf_member(crate::security_master::Exchange::Sh, "510050"),
+        etf_member(crate::security_master::Exchange::Sz, "159901"),
+    ];
+    let report = merge_etf_identity(
+        &mut assembled,
+        previous,
+        EtfAttempt::Facts {
+            facts: Ok(new),
+            evidence: json!({"parser_version": "etf-list-v1"}),
+        },
+    );
+    assert!(report.failure.is_none());
+    assert_eq!(report.evidence["status"], "ok");
+    assert_eq!(report.evidence["member_count"], 2);
+    assert_eq!(class_zero(&assembled.rows), before);
+    assert_eq!(
+        assembled
+            .rows
+            .iter()
+            .filter(|row| row.instrument_class == 2)
+            .count(),
+        2
+    );
+}

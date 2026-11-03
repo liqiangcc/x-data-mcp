@@ -515,3 +515,109 @@ fn the_digest_is_stable_and_covers_migrations_flags_and_known_at() {
     dated[0].known_at = Some(day(2025, 2, 17));
     assert_ne!(digest, assembly_digest(&dated, &[]));
 }
+
+// ---------------------------------------------------------------------------
+// M3-2 PR-A: the source-agnostic member writer.
+// ---------------------------------------------------------------------------
+
+fn member(
+    exchange: Exchange,
+    code: &str,
+    first_seen: NaiveDate,
+    listing_date: Option<NaiveDate>,
+    listing_source: ListingSource,
+) -> MemberFact {
+    MemberFact {
+        exchange,
+        code: code.into(),
+        first_seen,
+        known_at: first_seen,
+        listing_date,
+        listing_source,
+        listing_date_tdx: listing_date,
+    }
+}
+
+#[test]
+fn member_rows_merge_two_sources_and_write_class_two_without_a_delisting_date() {
+    let facts = vec![
+        member(
+            Exchange::Sh,
+            "510050",
+            day(2026, 11, 3),
+            Some(day(2005, 2, 23)),
+            ListingSource::ExchangeList,
+        ),
+        // The same code from a second admitted list: the earliest appearance
+        // wins, the listing day agrees, and the writer must not emit two rows.
+        member(
+            Exchange::Sh,
+            "510050",
+            day(2026, 10, 1),
+            Some(day(2005, 2, 23)),
+            ListingSource::ExchangeList,
+        ),
+        member(
+            Exchange::Sz,
+            "159901",
+            day(2026, 11, 3),
+            None,
+            ListingSource::Unknown,
+        ),
+    ];
+    let rows = member_rows(&facts).unwrap();
+    assert_eq!(rows.len(), 2);
+    let sh = rows
+        .iter()
+        .find(|row| row.exchange == Exchange::Sh)
+        .unwrap();
+    assert_eq!(sh.instrument_class, 2);
+    assert_eq!(sh.effective_from, day(2026, 10, 1));
+    assert_eq!(sh.known_at, Some(day(2026, 10, 1)));
+    assert_eq!(sh.issuer_key.as_deref(), Some("510050"));
+    assert_eq!(sh.issuer_resolution, IssuerResolution::IssuerKey);
+    assert_eq!(sh.listing_source, ListingSource::ExchangeList);
+    assert!(sh.delisting_date.is_none());
+    assert!(sh.delisting_date_tdx.is_none());
+    let sz = rows
+        .iter()
+        .find(|row| row.exchange == Exchange::Sz)
+        .unwrap();
+    assert_eq!(sz.listing_source, ListingSource::Unknown);
+    assert!(sz.delisting_date.is_none());
+}
+
+#[test]
+fn member_rows_fail_closed_when_two_sources_disagree_about_the_listing_day() {
+    let facts = vec![
+        member(
+            Exchange::Sh,
+            "510050",
+            day(2026, 11, 3),
+            Some(day(2005, 2, 23)),
+            ListingSource::ExchangeList,
+        ),
+        member(
+            Exchange::Sh,
+            "510050",
+            day(2026, 11, 3),
+            Some(day(2005, 2, 24)),
+            ListingSource::ExchangeList,
+        ),
+    ];
+    let error = member_rows(&facts).unwrap_err();
+    assert_eq!(error.code(), "member_listing_conflict");
+}
+
+#[test]
+fn member_rows_reject_a_listing_day_without_a_source() {
+    let facts = vec![member(
+        Exchange::Sz,
+        "159901",
+        day(2026, 11, 3),
+        Some(day(2015, 1, 5)),
+        ListingSource::Unknown,
+    )];
+    let error = member_rows(&facts).unwrap_err();
+    assert_eq!(error.code(), "member_listing_source_invalid");
+}

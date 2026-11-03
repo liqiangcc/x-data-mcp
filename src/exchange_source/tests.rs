@@ -1244,6 +1244,9 @@ fn every_source_has_one_disabled_reuse_rule() {
             SourceId::SzseListing | SourceId::SzseShortName => {
                 (ReuseClass::Table, TailScope::FirstPageProbe)
             }
+            SourceId::SseEtfList | SourceId::SzseEtfList => {
+                (ReuseClass::Table, TailScope::WholeTable)
+            }
         };
         assert_eq!(policy.class, class, "{}", source.as_str());
         assert_eq!(policy.tail, tail, "{}", source.as_str());

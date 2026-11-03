@@ -275,11 +275,16 @@ fn universe_scope(dataset: Dataset, selection: &Selection) -> Result<(), Error> 
         Some(CatalogScope::CurrentShSzA) => Err(invalid(
             "selection.scope current_sh_sz_a is the catalog default; omit scope",
         )),
-        Some(CatalogScope::ShSzAListedEver) => {
+        Some(
+            scope @ (CatalogScope::ShSzAListedEver
+            | CatalogScope::ShSzEtfCurrent
+            | CatalogScope::ShSzEtfListedEver),
+        ) => {
             if dataset != Dataset::Daily {
-                return Err(invalid(
-                    "selection.scope sh_sz_a_listed_ever is only supported for market.daily",
-                ));
+                return Err(invalid(&format!(
+                    "selection.scope {} is only supported for market.daily",
+                    scope_name(*scope)
+                )));
             }
             if catalog_version.is_some() {
                 return Err(invalid(
@@ -290,6 +295,15 @@ fn universe_scope(dataset: Dataset, selection: &Selection) -> Result<(), Error> 
         }
     }
 }
+fn scope_name(scope: CatalogScope) -> &'static str {
+    match scope {
+        CatalogScope::CurrentShSzA => "current_sh_sz_a",
+        CatalogScope::ShSzAListedEver => "sh_sz_a_listed_ever",
+        CatalogScope::ShSzEtfCurrent => "sh_sz_etf_current",
+        CatalogScope::ShSzEtfListedEver => "sh_sz_etf_listed_ever",
+    }
+}
+
 fn checked_members(
     dataset: Dataset,
     mut members: Vec<Security>,
@@ -324,7 +338,8 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
     {
         return Err(invalid(
             "securities.catalog only supports scope current_sh_sz_a; \
-             sh_sz_a_listed_ever is a market.daily start_collection v2 scope",
+             sh_sz_a_listed_ever / sh_sz_etf_current / sh_sz_etf_listed_ever \
+             are market.daily scopes resolved from the main table",
         ));
     }
     let mut e = match (dataset, s) {
@@ -863,4 +878,26 @@ pub fn unique_refs(refs: &[VersionRef]) -> Vec<VersionRef> {
         .filter(|r| seen.insert((r.dataset, r.version_id.clone())))
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn etf_universe_scopes_are_daily_only_and_not_a_catalog() {
+        let selection = Selection::Universe {
+            catalog_version: None,
+            scope: Some(CatalogScope::ShSzEtfCurrent),
+        };
+        assert!(universe_scope(Dataset::Daily, &selection).is_ok());
+        let error = universe_scope(Dataset::Index, &selection).unwrap_err();
+        assert!(error.to_string().contains("sh_sz_etf_current"));
+
+        let with_catalog = Selection::Universe {
+            catalog_version: Some("catalog-1".into()),
+            scope: Some(CatalogScope::ShSzEtfListedEver),
+        };
+        assert!(universe_scope(Dataset::Daily, &with_catalog).is_err());
+    }
 }

@@ -31,6 +31,7 @@ use crate::security_master::{
 
 pub mod a1a2;
 pub mod a3;
+pub mod etf_list;
 pub mod risk_warnings;
 pub mod security_names;
 
@@ -510,6 +511,11 @@ pub struct SecurityFacts {
     /// acceptance, #391). Carried through so the first writer of the main
     /// table can report them in its item evidence.
     pub duplicates_collapsed: Vec<CollapsedDuplicate>,
+    /// `base.dbf` `SSDATE` for **every** row, including funds and other
+    /// non-A-share rows. The ETF identity writer takes the SZSE listing day
+    /// from here (D-47/D-70 Q1); A-share rows keep using `lifecycle` and are
+    /// unaffected by this extra map.
+    pub all_listing_dates: BTreeMap<(u8, String), NaiveDate>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -826,6 +832,11 @@ pub fn parse_security_facts(
             .push(event);
     }
 
+    let all_listing_dates: BTreeMap<(u8, String), NaiveDate> = base
+        .rows
+        .iter()
+        .filter_map(|row| row.ssdate.map(|day| ((row.market, row.code.clone()), day)))
+        .collect();
     let mut used_arrangement = BTreeSet::new();
     let mut lifecycle = Vec::new();
     let mut capital = Vec::new();
@@ -947,6 +958,7 @@ pub fn parse_security_facts(
         current_shares,
         skipped,
         duplicates_collapsed: base.duplicates_collapsed.clone(),
+        all_listing_dates,
     })
 }
 

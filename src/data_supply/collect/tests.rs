@@ -385,6 +385,48 @@ fn catalog_read_rejects_the_scope() {
 }
 
 #[test]
+fn etf_scopes_are_wire_values_but_catalog_rejects_them() {
+    // The new scopes are part of the wire enum (v10) and resolve from the main
+    // table for `market.daily`; the catalog read/write entries must reject them
+    // instead of degrading to the current A-share subset.
+    assert_eq!(
+        serde_json::to_value(CatalogScope::ShSzEtfCurrent).unwrap(),
+        json!("sh_sz_etf_current")
+    );
+    assert_eq!(
+        serde_json::to_value(CatalogScope::ShSzEtfListedEver).unwrap(),
+        json!("sh_sz_etf_listed_ever")
+    );
+    let error = crate::data_supply::query::entities(
+        Dataset::Catalog,
+        &Selection::Catalog {
+            scope: CatalogScope::ShSzEtfCurrent,
+        },
+        &Access::local(),
+    )
+    .unwrap_err();
+    assert_scope_rejected(error, "current_sh_sz_a");
+}
+
+#[test]
+fn v2_scope_collection_does_not_silently_collect_etf_in_pr_a() {
+    let (backend, _dir) = market();
+    let contract = ListedEverCollectionContract {
+        repository: SqliteSupply { market: backend },
+        generation: None,
+    };
+    let error = contract
+        .decode(json!({
+            "dataset": "market.daily",
+            "request_id": "etf-scope",
+            "contract_version": "v2",
+            "selection": {"kind": "scope", "scope": "sh_sz_etf_current"}
+        }))
+        .unwrap_err();
+    assert_scope_rejected(error, "sh_sz_a_listed_ever");
+}
+
+#[test]
 fn resolution_budget_is_1_to_500() {
     assert!(ListedEverCollectionContract::budget(1).is_ok());
     assert!(ListedEverCollectionContract::budget(500).is_ok());

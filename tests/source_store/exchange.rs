@@ -1086,3 +1086,46 @@ fn a_multi_window_run_reuses_every_quarter_and_merges_the_evidence() {
     assert_eq!(reused.evidence.policy.class.as_str(), "window");
     assert_eq!(store.records().unwrap().len(), 2);
 }
+
+/// M3-2 PR-A: the two ETF identity lists are ordinary exchange sources. Their
+/// bytes are frozen and indexed by the same entry, `replay --scope exchange`
+/// rebuilds both rows from the store alone, and `--verify-only` matches.
+#[test]
+fn etf_identity_lists_are_indexed_and_replay_matches() {
+    const SSE_ETF: &[u8] =
+        include_bytes!("../fixtures/exchange-etf-list/sse_etf_list_synthetic.json");
+    const SZSE_ETF: &[u8] =
+        include_bytes!("../fixtures/exchange-etf-list/szse_etf_list_synthetic.xlsx");
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    {
+        let backend = open(&db);
+        for (kind, plan) in x_data_mcp::official_security::etf_list::plans() {
+            let body = match kind {
+                x_data_mcp::official_security::etf_list::ListKind::Sse => SSE_ETF,
+                x_data_mcp::official_security::etf_list::ListKind::Szse => SZSE_ETF,
+            };
+            let request = plan.request(1, None, "", "");
+            let response = ok(body.to_vec(), "etf");
+            let envelope = parse_page(plan.format, None, body).unwrap();
+            freeze_page(
+                &store,
+                &backend,
+                &request,
+                &response,
+                &envelope,
+                plan.format.parser_version(),
+                BasisStatus::ApprovedSource,
+                "2026-11-03T02:00:00Z",
+            )
+            .unwrap();
+        }
+    }
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 2);
+    let verify = cli(&store, &db, "verify");
+    assert_eq!(verify["scopes"][0]["database"], "match");
+    assert_eq!(verify["scopes"][0]["snapshots"], 2);
+}

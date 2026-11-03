@@ -423,7 +423,7 @@ impl DataApi {
             production_blocking_reasons.push(self.source_block());
         }
         encode(Capabilities {
-            capability_revision: "generic-data-v9".into(),
+            capability_revision: "generic-data-v10".into(),
             items,
             max_batch_entities: 100,
             max_page_size: 1000,
@@ -1095,7 +1095,7 @@ impl DataApi {
                     // A tail costs 28 requests (a probe-triggered whole table is
                     // the documented exception), so the optional wait is cheap
                     // and the caller sees the result. Its upper bound is
-                    // `docs/contracts/generic-data-v9.md` §1.1.
+                    // `docs/contracts/generic-data-v10.md` §1.1.
                     crate::source_refresh::wire::RefreshMode::Tail => crate::source_refresh::run(
                         &store,
                         &self.queries.repository.market,

@@ -1,6 +1,7 @@
 # generic-data-v9 契约（来源刷新 ops 工具）
 
 **状态**：**已部署**（2026-11-02，preview.42 fresh init）；当前部署为 `generic-data-v9` / compact schema 26。
+main 上 M3-2 PR-A 已把代码面能力修订升到 [`generic-data-v10`](generic-data-v10.md)（未部署）。
 本文件只记录 v9 相对 [generic-data-v8](generic-data-v8.md) 的增量，v8 的读取面、任务面、
 错误码与部署约束继续有效。三个入口合计注册 25 项（`ops` 入口 16），schema 26。
 

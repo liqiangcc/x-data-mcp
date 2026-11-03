@@ -165,6 +165,18 @@ pub fn parse_page(
     declared_tabkey: Option<&str>,
     body: &[u8],
 ) -> Result<PageEnvelope, ValidateError> {
+    if format == PagingFormat::SzseXlsx {
+        let sheet = super::xlsx::read_first_sheet(body).map_err(|error| ValidateError::Format {
+            detail: error.to_string(),
+        })?;
+        let rows = sheet.data_rows();
+        return Ok(PageEnvelope {
+            page: 1,
+            page_count: 1,
+            rows,
+            total: Some(rows as u64),
+        });
+    }
     let value: Value = serde_json::from_slice(body).map_err(|error| ValidateError::Format {
         detail: format!("not JSON: {error}"),
     })?;
@@ -174,6 +186,7 @@ pub fn parse_page(
         PagingFormat::SzseMetadata => parse_szse(&value, declared_tabkey),
         PagingFormat::SzseMetadataV2 => parse_szse_v2(&value),
         PagingFormat::SzseMetadataV1 => parse_szse_first_block(&value),
+        PagingFormat::SzseXlsx => unreachable!("XLSX is read before the JSON envelope"),
     }
 }
 

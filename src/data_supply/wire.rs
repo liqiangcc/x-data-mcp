@@ -415,6 +415,13 @@ pub enum CatalogScope {
     // and read paths reject it instead of degrading to a subset.
     #[serde(rename = "sh_sz_a_listed_ever")]
     ShSzAListedEver,
+    // M3-2 PR-A (D-70 Q5): ETF member scopes resolved from the main table.
+    // Never a catalog scope: `securities.catalog` rejects every value except
+    // `current_sh_sz_a` at runtime and its schema advertises only that one.
+    #[serde(rename = "sh_sz_etf_current")]
+    ShSzEtfCurrent,
+    #[serde(rename = "sh_sz_etf_listed_ever")]
+    ShSzEtfListedEver,
 }
 /// Catalog selections only ever accept `current_sh_sz_a`. Runtime rejects the
 /// listed-ever scope; the schema must not advertise it either.
@@ -425,7 +432,14 @@ fn current_catalog_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema 
 /// read selection (the catalog scope is what `catalog` already means), so the
 /// schema must not advertise `current_sh_sz_a` here either.
 fn listed_ever_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({"type": "string", "enum": ["sh_sz_a_listed_ever"]})
+    schemars::json_schema!({
+        "type": "string",
+        "enum": [
+            "sh_sz_a_listed_ever",
+            "sh_sz_etf_current",
+            "sh_sz_etf_listed_ever"
+        ]
+    })
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

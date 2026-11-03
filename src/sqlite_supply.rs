@@ -353,11 +353,32 @@ impl ReadRepository for SqliteSupply {
                 // main table, not a catalog snapshot. A member without a
                 // published series answers `absent` per series; the member set
                 // itself is not silently reduced to what the catalog holds.
-                if scope == Some(CatalogScope::ShSzAListedEver) {
+                if matches!(
+                    scope,
+                    Some(
+                        CatalogScope::ShSzAListedEver
+                            | CatalogScope::ShSzEtfCurrent
+                            | CatalogScope::ShSzEtfListedEver
+                    )
+                ) {
                     debug_assert_eq!(dataset, Dataset::Daily);
+                    let scope = scope.expect("matched a scope above");
                     return self.market.read(|c| {
-                        let entities =
-                            crate::research::universe::listed_ever_entities(c).map_err(storage)?;
+                        let entities = match scope {
+                            CatalogScope::ShSzAListedEver => {
+                                crate::research::universe::listed_ever_entities(c)
+                            }
+                            CatalogScope::ShSzEtfCurrent => {
+                                crate::research::universe::etf_current_entities(c)
+                            }
+                            CatalogScope::ShSzEtfListedEver => {
+                                crate::research::universe::etf_listed_ever_entities(c)
+                            }
+                            CatalogScope::CurrentShSzA => {
+                                unreachable!("the catalog scope is not a universe scope")
+                            }
+                        }
+                        .map_err(storage)?;
                         let members = entities
                             .iter()
                             .map(|entity| Security::parse(entity).map_err(Error::Integrity))
