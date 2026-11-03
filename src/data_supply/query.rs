@@ -36,6 +36,10 @@ impl QueryPlan {
     pub fn new(mut args: Query, access: &Access) -> Result<Self, Error> {
         access.require(args.dataset, None)?;
         page_size(args.page_size)?;
+        // M3-2 PR-C (D-70 Q4): only `market.daily` has a read 口径 switch.
+        if args.adjustment.is_some() && args.dataset != Dataset::Daily {
+            return Err(invalid("adjustment is supported only for market.daily"));
+        }
         // v2 shape only (v8 PR-3, #387 §4.3): `fields` projects columns, so a
         // v1 request carrying it is rejected rather than silently ignored.
         if args.contract_version == ReadContractVersion::V1 {
@@ -740,6 +744,9 @@ impl<R: ReadRepository> Queries<R> {
     ) -> Result<(VersionPage, VersionsQuery), Error> {
         access.require(args.dataset, None)?;
         page_size(args.page_size)?;
+        if args.adjustment.is_some() && args.dataset != Dataset::Daily {
+            return Err(invalid("adjustment is supported only for market.daily"));
+        }
         if args.contract_version == ReadContractVersion::V1 && args.dataset.is_v2_only() {
             return Err(invalid(&format!(
                 "{} requires contract_version v2",

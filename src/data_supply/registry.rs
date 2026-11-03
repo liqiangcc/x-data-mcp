@@ -315,11 +315,109 @@ pub struct IndustryFacet {
     pub name: String,
     pub members: u64,
 }
+/// One price-series shape `get_data_capabilities` exposes (M3-2 PR-C
+/// §9.2/§9.4). It is data, not a second tool: clients use it to tell the
+/// A-share 2dp/6dp shapes from the ETF raw 3dp/share shape before querying.
+#[derive(Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SeriesCapability {
+    pub dataset: Dataset,
+    pub instrument_class: String,
+    pub adjustment: String,
+    pub price_scale: u32,
+    pub price_unit: String,
+    pub volume_unit: String,
+    /// Per-bar volume precision when the stored bars are quantized (ETF 手日).
+    pub volume_quantum: Option<u32>,
+    /// The shape a request that omits `adjustment` resolves to, where that is
+    /// representable (A shares / index). ETF raw is deliberately not a default.
+    pub default: bool,
+}
+
+pub fn series_capabilities() -> Vec<SeriesCapability> {
+    let row = |dataset: Dataset,
+               instrument_class: &str,
+               adjustment: &str,
+               price_scale: u32,
+               price_unit: &str,
+               volume_unit: &str,
+               volume_quantum: Option<u32>,
+               default: bool| {
+        SeriesCapability {
+            dataset,
+            instrument_class: instrument_class.into(),
+            adjustment: adjustment.into(),
+            price_scale,
+            price_unit: price_unit.into(),
+            volume_unit: volume_unit.into(),
+            volume_quantum,
+            default,
+        }
+    };
+    vec![
+        row(
+            Dataset::Daily,
+            "stock",
+            "raw",
+            2,
+            "yuan",
+            "share",
+            None,
+            false,
+        ),
+        row(
+            Dataset::Daily,
+            "stock",
+            "qfq",
+            6,
+            "yuan",
+            "share",
+            None,
+            true,
+        ),
+        row(
+            Dataset::Daily,
+            "etf",
+            "raw",
+            3,
+            "yuan",
+            "share",
+            Some(100),
+            false,
+        ),
+        row(
+            Dataset::Yearly,
+            "stock",
+            "qfq",
+            6,
+            "yuan",
+            "share",
+            None,
+            true,
+        ),
+        row(
+            Dataset::Index,
+            "index",
+            "raw",
+            2,
+            "point",
+            "hand",
+            None,
+            true,
+        ),
+    ]
+}
+
 #[derive(Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
     pub capability_revision: String,
     pub items: Vec<Capability>,
+    /// Price-series 口径/精度/单位 facts (M3-2 PR-C). Additive: tool items are
+    /// unchanged. Omitted from the compact no-filter catalog so that response
+    /// stays a pure tool table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<Vec<SeriesCapability>>,
     pub max_batch_entities: usize,
     pub max_page_size: usize,
     pub max_snapshot_rows: usize,

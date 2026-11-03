@@ -26,7 +26,9 @@ pub struct PageMeta<'a> {
 /// Allowed `fields` per dataset (v8 §4.2). Defaults are the design's core
 /// column set; the remaining fields are opt-in so the common response stays
 /// small (for example the catalog's industry status/reason).
-pub const DAILY_FIELDS: &[&str] = &["open", "high", "low", "close", "volume", "amount"];
+pub const DAILY_FIELDS: &[&str] = &[
+    "open", "high", "low", "close", "volume", "amount", "no_trade",
+];
 pub const YEARLY_FIELDS: &[&str] = &[
     "open",
     "high",
@@ -251,6 +253,9 @@ const METADATA_KEYS: &[&str] = &[
     "lineage",
     "index",
     "verified_through",
+    "price_scale",
+    "last_trade_date",
+    "delisting_date",
 ];
 
 fn metadata_value(metadata: &Metadata, key: &str) -> Value {
@@ -285,6 +290,15 @@ fn metadata_value(metadata: &Metadata, key: &str) -> Value {
         // refresh run has confirmed the dataset's sources yet.
         "verified_through" => metadata
             .verified_through
+            .map_or(Value::Null, |day| json!(day.to_string())),
+        "price_scale" => metadata
+            .price_scale
+            .map_or(Value::Null, |scale| json!(scale)),
+        "last_trade_date" => metadata
+            .last_trade_date
+            .map_or(Value::Null, |day| json!(day.to_string())),
+        "delisting_date" => metadata
+            .delisting_date
             .map_or(Value::Null, |day| json!(day.to_string())),
         _ => Value::Null,
     }
@@ -431,6 +445,7 @@ fn market_cell(row: &Row, field: &str) -> Value {
         close,
         volume,
         amount,
+        no_trade,
         first_trading_date,
         last_trading_date,
         year_unfinished,
@@ -446,6 +461,7 @@ fn market_cell(row: &Row, field: &str) -> Value {
         "close" => json!(close),
         "volume" => volume.as_ref().map_or(Value::Null, |value| json!(value)),
         "amount" => amount.as_ref().map_or(Value::Null, |value| json!(value)),
+        "no_trade" => no_trade.map_or(Value::Null, |value| json!(value)),
         "first_trading_date" => {
             first_trading_date.map_or(Value::Null, |day| json!(day.to_string()))
         }

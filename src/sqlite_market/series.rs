@@ -407,22 +407,285 @@ pub(crate) fn read_series_adjusted(
     )
 }
 
-/// The series the public (MCP) read surface resolves: **stock 前复权 only**
-/// (issue-383 §6.3, AC-M1-10). Index and (later) ETF series are export-only;
-/// this function is the one place that visibility predicate is written, so
-/// `query_data`/`list_data_versions` cannot drift from it.
+/// The dataset class a public price read serves (M3-2 PR-C §6 P8).
+/// `sqlite_supply` maps its wire `Dataset` onto this so the resolution logic
+/// stays in one place and does not depend on the wire layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadSeriesKind {
+    Daily,
+    Yearly,
+    Index,
+}
+
+impl ReadSeriesKind {
+    fn period(self) -> Period {
+        match self {
+            Self::Daily | Self::Index => Period::Day,
+            Self::Yearly => Period::Year,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StoredShape {
+    adjustment: Adjustment,
+    instrument_class: i64,
+    price_scale: u32,
+}
+
+fn stored_shapes(c: &Connection, entity: &str, period: Period) -> Result<Vec<StoredShape>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT adjustment,instrument_class,price_scale FROM market_series \
+             WHERE entity=?1 AND period=?2 ORDER BY adjustment",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(
+            params![entity, super::compact_repo::period_code(period)],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .map_err(storage)?;
+    let mut shapes = Vec::new();
+    for row in rows {
+        let (adjustment, instrument_class, price_scale) = row.map_err(storage)?;
+        shapes.push(StoredShape {
+            adjustment: decode_adjustment(adjustment)?,
+            instrument_class: decode_instrument_class(instrument_class)?,
+            price_scale: decode_price_scale(price_scale)?,
+        });
+    }
+    Ok(shapes)
+}
+
+/// The stored `security_master` class for one canonical entity. More than one
+/// distinct class for the same code is a data conflict, not a reason to pick
+/// one. This intentionally considers all identity intervals for the code: a
+/// reused code with an old row of another class fails closed rather than
+/// silently resolving from the newest interval.
+fn master_instrument_class(c: &Connection, entity: &str) -> Result<Option<i64>, Error> {
+    let Some((exchange, code)) = entity.split_once('.') else {
+        return Err(invalid(format!("non-canonical entity {entity}")));
+    };
+    let mut statement = c
+        .prepare(
+            "SELECT DISTINCT instrument_class FROM security_master WHERE exchange=?1 AND code=?2",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(params![exchange, code], |row| row.get::<_, i64>(0))
+        .map_err(storage)?;
+    let mut classes = Vec::new();
+    for row in rows {
+        classes.push(row.map_err(storage)?);
+    }
+    match classes.as_slice() {
+        [] => Ok(None),
+        [class] => Ok(Some(*class)),
+        _ => Err(integrity(format!(
+            "security_master instrument_class conflict for {entity}: {classes:?}"
+        ))),
+    }
+}
+
+/// Resolve the one shape the public read surface serves for `(entity, kind)`.
+///
+/// The stored `market_series` row is authoritative for 品种/精度, and the main
+/// table must agree with it (M3-2 PR-C, Claude review of PR-A #511):
+///
+/// * an ETF needs an explicit `adjustment=raw`; omitting it or asking `qfq`
+///   fails closed (`adjustment_required_for_etf` / `adjustment_unavailable`),
+///   never a silent raw answer or an empty page;
+/// * a stored ETF row without a `security_master` row is an integrity failure,
+///   never a fallback to the stock 2dp shape;
+/// * a stored row whose class/scale disagrees with the resolved shape fails;
+/// * `Ok(None)` means "this dataset serves no price series for the entity"
+///   (an index queried through `market.daily`, or an unknown entity with no
+///   stored rows), which the caller reports as absent.
+pub(crate) fn resolve_read_shape(
+    c: &Connection,
+    entity: &str,
+    kind: ReadSeriesKind,
+    requested: Option<Adjustment>,
+) -> Result<Option<SeriesShape>, Error> {
+    let period = kind.period();
+    let stored = stored_shapes(c, entity, period)?;
+    if kind == ReadSeriesKind::Index {
+        let shape = SeriesShape::INDEX_UNITS;
+        for row in &stored {
+            if row.adjustment == shape.adjustment
+                && (row.instrument_class != shape.instrument_class
+                    || row.price_scale != shape.price_scale)
+            {
+                return Err(integrity(format!(
+                    "index series shape mismatch for {entity}: class {} scale {}",
+                    row.instrument_class, row.price_scale
+                )));
+            }
+        }
+        return Ok(Some(shape));
+    }
+    let master = master_instrument_class(c, entity)?;
+    let Some(master_class) = master else {
+        // Legacy compact fixtures and pre-main-table snapshots can carry a
+        // stock series without a master row. A stored ETF/index row is
+        // ambiguous and fails closed; an unambiguous stock row keeps the
+        // pre-M3-2 stock resolution so A-share behavior does not change.
+        if stored
+            .iter()
+            .any(|row| row.instrument_class == crate::market_data::INSTRUMENT_CLASS_ETF)
+        {
+            return Err(integrity(format!(
+                "series shape unresolved: {entity} has a stored ETF series but no security_master row"
+            )));
+        }
+        if stored.is_empty()
+            || stored
+                .iter()
+                .any(|row| row.instrument_class != INSTRUMENT_CLASS_STOCK)
+        {
+            return Ok(None);
+        }
+        let shape = SeriesShape::stock(requested.unwrap_or(Adjustment::Forward));
+        validate_expected_shape(entity, &stored, shape)?;
+        return Ok(Some(shape));
+    };
+    if master_class == crate::market_data::INSTRUMENT_CLASS_INDEX {
+        // `market.daily`/`market.yearly` never serve an index level; the
+        // dedicated `market.index` dataset resolves it above.
+        return Ok(None);
+    }
+    for row in &stored {
+        if row.instrument_class != master_class {
+            return Err(integrity(format!(
+                "series shape mismatch for {entity}: security_master class {master_class} vs stored class {}",
+                row.instrument_class
+            )));
+        }
+    }
+    // D-70 Q6: the first ETF delivery has no yearly series. Yearly requests
+    // for an ETF are absent (like an index asked through market.daily), not
+    // `adjustment_required_for_etf`; a stored ETF yearly row would contradict
+    // the delivery boundary and fails closed.
+    if kind == ReadSeriesKind::Yearly && master_class == crate::market_data::INSTRUMENT_CLASS_ETF {
+        if !stored.is_empty() {
+            return Err(integrity(format!(
+                "ETF yearly series unexpectedly exists for {entity}"
+            )));
+        }
+        return Ok(None);
+    }
+    let shape = match master_class {
+        INSTRUMENT_CLASS_STOCK => SeriesShape::stock(requested.unwrap_or(Adjustment::Forward)),
+        crate::market_data::INSTRUMENT_CLASS_ETF => match requested {
+            None => {
+                return Err(invalid(
+                    "adjustment_required_for_etf: market.daily serves an ETF only at adjustment=raw; specify adjustment explicitly",
+                ));
+            }
+            Some(Adjustment::Forward) => {
+                return Err(invalid(
+                    "adjustment_unavailable: ETF 前复权 is not delivered; use adjustment=raw",
+                ));
+            }
+            Some(Adjustment::Raw) => SeriesShape::etf(Adjustment::Raw),
+        },
+        other => {
+            return Err(integrity(format!(
+                "unknown security_master instrument_class {other} for {entity}"
+            )));
+        }
+    };
+    validate_expected_shape(entity, &stored, shape)?;
+    Ok(Some(shape))
+}
+
+/// The stored row for `shape.adjustment`, when present, must carry exactly the
+/// resolved 品种/精度. A 3dp ETF stored as 2dp (or vice versa) is an integrity
+/// failure, not a value to reinterpret.
+fn validate_expected_shape(
+    entity: &str,
+    stored: &[StoredShape],
+    shape: SeriesShape,
+) -> Result<(), Error> {
+    for row in stored {
+        if row.adjustment == shape.adjustment
+            && (row.instrument_class != shape.instrument_class
+                || row.price_scale != shape.price_scale)
+        {
+            return Err(integrity(format!(
+                "series shape mismatch for {entity}: stored class {} scale {} vs resolved class {} scale {}",
+                row.instrument_class, row.price_scale, shape.instrument_class, shape.price_scale
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The series the public (MCP) read surface resolves. It shares
+/// [`resolve_read_shape`] with head/visibility/availability, so a new 品种
+/// cannot be visible on one path and hidden on another.
 pub(crate) fn read_public_series(
     c: &Connection,
     entity: &str,
     period: Period,
 ) -> Result<Option<SeriesRow>, Error> {
-    read_visible_series(
-        c,
-        entity,
-        period,
-        Adjustment::Forward,
-        INSTRUMENT_CLASS_STOCK,
-    )
+    let kind = match period {
+        Period::Day => ReadSeriesKind::Daily,
+        Period::Year => ReadSeriesKind::Yearly,
+    };
+    let Some(shape) = resolve_read_shape(c, entity, kind, Some(Adjustment::Forward))? else {
+        return Ok(None);
+    };
+    read_visible_shaped(c, entity, period, shape)
+}
+
+/// [`read_visible_series`] with the full shape: price_scale is part of the
+/// identity, so a row at the right class/口径 but the wrong precision is an
+/// integrity failure rather than a readable series.
+pub(crate) fn read_visible_shaped(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+    shape: SeriesShape,
+) -> Result<Option<SeriesRow>, Error> {
+    let row = read_visible_series(c, entity, period, shape.adjustment, shape.instrument_class)?;
+    if let Some(row) = &row
+        && row.shape() != shape
+    {
+        return Err(integrity(format!(
+            "stored series shape mismatch for {entity}: class {} scale {} vs resolved class {} scale {}",
+            row.instrument_class, row.price_scale, shape.instrument_class, shape.price_scale
+        )));
+    }
+    Ok(row)
+}
+
+/// Last bar with `volume > 0` (D-72). This is the tradable-window upper bound;
+/// zero-volume tail bars remain in the series but do not move this date.
+pub(crate) fn last_trade_day(
+    c: &Connection,
+    series_key: i64,
+) -> Result<Option<chrono::NaiveDate>, Error> {
+    // Walk the (series_key, trade_day) primary key backwards and stop at the
+    // first bar with volume; unlike MAX(...) over the same predicate this does
+    // not scan the whole series.
+    let day: Option<i64> = c
+        .query_row(
+            "SELECT trade_day FROM series_bars WHERE series_key=?1 AND volume > 0 ORDER BY trade_day DESC LIMIT 1",
+            params![series_key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(storage)?;
+    day.map(|day| compact_market::epoch_date(day).map_err(|e| integrity(e.to_string())))
+        .transpose()
 }
 
 /// The dataset-parameterised visibility predicate (v8 PR-4, #387 §4.2): the
@@ -448,22 +711,6 @@ pub(crate) fn read_visible_series(
             adjustment.code(),
             instrument_class
         ],
-    )
-}
-
-/// True when `version_id` names a series whose 口径/品种 is not the one the
-/// requested dataset serves (v8 PR-4). A pinned raw stock id is as invisible
-/// to `market.daily` as an index id is.
-pub(crate) fn is_invisible_version(
-    c: &Connection,
-    version_id: &str,
-    adjustment: Adjustment,
-    instrument_class: i64,
-) -> Result<bool, Error> {
-    Ok(
-        read_series_by_version_id(c, version_id)?.is_some_and(|row| {
-            row.adjustment != adjustment || row.instrument_class != instrument_class
-        }),
     )
 }
 

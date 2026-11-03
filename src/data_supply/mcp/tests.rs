@@ -517,6 +517,126 @@ fn query_yearly(version: Value) -> Value {
     })
 }
 
+/// D-70 Q6: ETF has no yearly series. A yearly request sees it as absent —
+/// never `adjustment_required_for_etf` — and a mixed batch still serves the
+/// A-share member normally.
+#[test]
+fn yearly_requests_treat_etf_as_absent_without_breaking_a_share_members() {
+    let f = fixture();
+    let daily_task = task(&f, SYMBOL, 1, "day", "req-etf-yearly-daily");
+    let daily = publish_daily(
+        &f,
+        &daily_task,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
+    let yearly_task = task(&f, SYMBOL, 1, "year", "req-etf-yearly");
+    commit_yearly_plan(
+        &f,
+        &yearly_task,
+        "item-1",
+        SYMBOL,
+        None,
+        &daily.version_id,
+        None,
+    );
+    seed_security_master(&f, &[("sh.600006", None), ("sh.510050", None)]);
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        c.execute(
+            "UPDATE security_master SET instrument_class=2 WHERE exchange='sh' AND code='510050'",
+            [],
+        )
+        .map_err(|e| crate::market_storage::Error::Storage(e.to_string()))?;
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+
+    let etf = json!({"kind":"single","entity":{"exchange":"sh","code":"510050"}});
+    let mixed = json!({
+        "kind":"batch",
+        "entities":[
+            {"exchange":"sh","code":"600006"},
+            {"exchange":"sh","code":"510050"}
+        ]
+    });
+    let body = |selection: Value| {
+        json!({
+            "dataset":"market.yearly",
+            "contract_version":"v1",
+            "selection":selection,
+            "filter":{"kind":"yearly","start_year":2019,"end_year":2030},
+            "version":{"kind":"latest_per_entity"},
+            "page_size":100
+        })
+    };
+
+    let single = f.api.call("query_data", body(etf.clone())).unwrap();
+    assert_eq!(single["version_manifest"][0]["status"], "absent");
+    assert!(single["records"].as_array().unwrap().is_empty());
+
+    let batch = f.api.call("query_data", body(mixed.clone())).unwrap();
+    let manifests = batch["version_manifest"].as_array().unwrap();
+    let by_code = |code: &str| {
+        manifests
+            .iter()
+            .find(|entry| entry["entity"]["code"] == json!(code))
+            .unwrap()
+    };
+    assert_eq!(by_code("510050")["status"], "absent");
+    assert_eq!(by_code("600006")["status"], "present");
+    assert!(
+        batch["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["entity"]["code"] == json!("600006"))
+    );
+
+    let availability = f
+        .api
+        .call("get_data_availability", body(etf.clone()))
+        .unwrap();
+    assert_eq!(availability["items"][0]["availability"], "absent");
+    let mixed_availability = f
+        .api
+        .call("get_data_availability", body(mixed.clone()))
+        .unwrap();
+    let availability_by_code = |code: &str| {
+        mixed_availability["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["entity"]["code"] == json!(code))
+            .unwrap()
+    };
+    assert_eq!(availability_by_code("510050")["availability"], "absent");
+    assert_ne!(
+        availability_by_code("600006")["availability"],
+        "absent",
+        "the A-share member must not be dragged into the ETF absence"
+    );
+
+    let versions = |selection: Value| {
+        json!({
+            "dataset":"market.yearly",
+            "contract_version":"v1",
+            "selection":selection,
+            "page_size":100
+        })
+    };
+    let etf_versions = f.api.call("list_data_versions", versions(etf)).unwrap();
+    assert!(etf_versions["items"].as_array().unwrap().is_empty());
+    let mixed_versions = f.api.call("list_data_versions", versions(mixed)).unwrap();
+    let items = mixed_versions["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["version_ref"]["entity"]["code"], json!("600006"));
+}
+
 #[test]
 fn yearly_wire_reports_fresh_behind_and_stale_pins() {
     let f = fixture();
@@ -1529,6 +1649,16 @@ fn query_data_daily_reads_only_the_forward_口径() {
     assert_eq!(page["records"].as_array().unwrap().len(), 1);
     assert_eq!(page["records"][0]["close"], "10.05");
     assert_ne!(page["records"][0]["close"], "11.00");
+    // A-share bytes stay additive-free (M3-2 PR-C): no ETF-only row/metadata
+    // fields appear just because `market.daily` learned the `adjustment` knob.
+    assert!(page["records"][0].get("no_trade").is_none());
+    let metadata = &page["version_manifest"][0]["metadata"];
+    for field in ["price_scale", "last_trade_date", "delisting_date"] {
+        assert!(
+            metadata.get(field).is_none(),
+            "A-share metadata grew {field}"
+        );
+    }
     // The manifest version is the forward series row, not the raw one.
     let MarketBackend::Compact(repo) = &fixture.backend else {
         panic!("fixture must open the compact backend");
@@ -2794,4 +2924,43 @@ fn refresh_status_of_is_a_read_and_rejects_combined_arguments() {
     // a full-mode plan was listed is asserted here.
     assert!(!reply["planned"].as_array().unwrap().is_empty());
     assert!(f.backend.read_source_refresh_runs().unwrap().is_empty());
+}
+
+/// M3-2 PR-C: ETF 口径 failures are stable wire error codes, not a silent raw
+/// answer and not an empty page (D-70 Q4).
+#[test]
+fn etf_adjustment_failures_have_stable_error_codes() {
+    let missing = super::mapped(crate::market_storage::Error::Invalid(
+        "adjustment_required_for_etf: specify adjustment".into(),
+    ));
+    assert_eq!(missing.code, "adjustment_required_for_etf");
+    let unavailable = super::mapped(crate::market_storage::Error::Invalid(
+        "adjustment_unavailable: ETF 前复权 is not delivered".into(),
+    ));
+    assert_eq!(unavailable.code, "adjustment_unavailable");
+}
+
+/// `get_data_capabilities` carries the series shapes as data: the ETF raw
+/// shape is 3dp/份 with 100-share quantization, and it is never a default.
+#[test]
+fn capabilities_express_the_etf_raw_shape_and_units() {
+    let f = fixture();
+    let caps = f
+        .api
+        .call("get_data_capabilities", json!({"dataset": "market.daily"}))
+        .unwrap();
+    let etf = caps["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["dataset"] == json!("market.daily") && row["instrument_class"] == json!("etf")
+        })
+        .expect("ETF daily shape is declared");
+    assert_eq!(etf["adjustment"], json!("raw"));
+    assert_eq!(etf["price_scale"], json!(3));
+    assert_eq!(etf["price_unit"], json!("yuan"));
+    assert_eq!(etf["volume_unit"], json!("share"));
+    assert_eq!(etf["volume_quantum"], json!(100));
+    assert_eq!(etf["default"], json!(false));
 }

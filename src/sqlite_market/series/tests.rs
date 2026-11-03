@@ -362,6 +362,80 @@ fn seed_yearly(
     yearly
 }
 
+/// D-70 Q6: a stored ETF yearly row contradicts the delivery boundary. The
+/// reader must fail closed, not treat it as absent or as an A-share series.
+#[test]
+fn a_stored_etf_yearly_series_is_an_integrity_failure() {
+    let (_dir, _tasks, c) = db();
+    let (evidence, generation) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, generation);
+    let entity = "sh.510050";
+    let bars = vec![CompactBar {
+        trade_day: day(2020, 12, 31),
+        open_units: 1_000_000,
+        high_units: 1_001_000,
+        low_units: 999_000,
+        close_units: 1_000_000,
+        volume: Some(100),
+        amount: Some("100".into()),
+        r7_raw: None,
+    }];
+    let shape = SeriesShape::etf(Adjustment::Forward);
+    let digest = fold_bars(entity, Period::Year, shape, &bars).unwrap();
+    let seq = commit_event(
+        &c,
+        event(
+            entity,
+            Period::Year,
+            "first_publish",
+            None,
+            digest,
+            (evidence, binding),
+            "fp-etf-y",
+        ),
+        "fp-etf-y",
+    );
+    let key = insert_series(
+        &c,
+        &NewSeries {
+            entity: entity.into(),
+            period: Period::Year,
+            adjustment: Adjustment::Forward,
+            instrument_class: crate::market_data::INSTRUMENT_CLASS_ETF,
+            price_scale: compact_market::PRICE_SCALE_QFQ,
+            content_digest: digest,
+            record_count: 1,
+            first_day: bars[0].trade_day,
+            last_day: bars[0].trade_day,
+            coverage_status: CoverageStatus::Complete,
+            source_binding_digest: binding,
+            evidence_digest: evidence,
+            last_event_seq: seq,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        },
+    )
+    .unwrap();
+    insert_bars(&c, key, &bars).unwrap();
+    c.execute(
+        "INSERT INTO security_master(exchange,code,effective_from,effective_to,\
+         instrument_class,issuer_resolution,listing_date,listing_source,\
+         delisting_date,delisting_source,delisting_reason_class,listing_conflict,\
+         delisting_conflict,source_binding_digest,evidence_digest) \
+         VALUES('sh','510050',0,NULL,2,'code_date',0,'exchange_list',\
+         NULL,'unknown','other',0,0,?1,?2)",
+        params![binding.as_slice(), evidence.as_slice()],
+    )
+    .unwrap();
+    let error = resolve_read_shape(&c, entity, ReadSeriesKind::Yearly, None).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("ETF yearly series unexpectedly exists"),
+        "{error}"
+    );
+}
+
 fn security() -> Security {
     Security {
         exchange: Exchange::Sh,
@@ -847,6 +921,7 @@ fn supply_reads_on_schema21() {
                 selection: Selection::Single {
                     entity: sec.clone(),
                 },
+                adjustment: None,
                 page_size: 10,
                 cursor: None,
             },
@@ -871,6 +946,7 @@ fn supply_reads_on_schema21() {
                 as_of: None,
             },
             version: VersionChoice::LatestPerEntity {},
+            adjustment: None,
             page_size: 100,
             cursor: None,
             fields: None,
@@ -922,6 +998,7 @@ fn supply_reads_on_schema21() {
                 end_year: 2025,
             },
             version: VersionChoice::LatestPerEntity {},
+            adjustment: None,
             page_size: 100,
             cursor: None,
             fields: None,
