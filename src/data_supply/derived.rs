@@ -595,7 +595,7 @@ fn execute(
         // class=2 rows, write the A-share assembly, and report the ETF failure
         // as an item-level partial failure (`ItemFailure::Evidence`).
         let previous_class_two = market
-            .read(|c| crate::sqlite_market::security::read_security_master(c))?
+            .read(crate::sqlite_market::security::read_security_master)?
             .into_iter()
             .filter(|row| row.instrument_class == 2)
             .collect::<Vec<_>>();
