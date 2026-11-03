@@ -265,6 +265,111 @@ fn an_invalid_or_overdue_etf_list_is_reported_as_a_source_error() {
     assert_eq!(error.code(), "source_refresh_overdue");
 }
 
+fn sse_etf_list_body(rows: &[(&str, &str)]) -> Vec<u8> {
+    let data: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(code, listing)| {
+            serde_json::json!({
+                "fundCode": code,
+                "secNameFull": format!("合成ETF{code}"),
+                "listingDate": listing,
+                "subClass": "01",
+                "INDEX_CODE": "000001",
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "pageHelp": {
+            "pageNo": 1,
+            "pageCount": 1,
+            "total": data.len(),
+            "data": data,
+        }
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// PR-A2 monotonic identity: the newest list no longer contains a code, but the
+/// union keeps its class=2 row and `current` excludes it.
+#[test]
+fn a_code_that_disappears_from_the_newest_list_keeps_its_class_two_row() {
+    let scenario = Scenario::new();
+    let sse_plan = etf_list::plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == etf_list::ListKind::Sse)
+        .unwrap()
+        .1;
+    let szse_plan = etf_list::plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == etf_list::ListKind::Szse)
+        .unwrap()
+        .1;
+    let older = sse_etf_list_body(&[("510050", "2005-02-23"), ("510070", "2010-01-01")]);
+    let newer = sse_etf_list_body(&[("510050", "2005-02-23")]);
+    freeze(
+        &scenario,
+        &sse_plan,
+        1,
+        None,
+        "",
+        "",
+        &older,
+        "2026-10-30T02:00:00Z",
+    );
+    freeze(
+        &scenario,
+        &sse_plan,
+        1,
+        None,
+        "",
+        "",
+        &newer,
+        "2026-10-31T02:00:00Z",
+    );
+    freeze(
+        &scenario,
+        &szse_plan,
+        1,
+        None,
+        "",
+        "",
+        SZSE_ETF_LIST,
+        "2026-10-31T02:00:00Z",
+    );
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SseEtfList,
+        "2026-10-31",
+        "2026-10-31T03:00:00Z",
+    );
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SzseEtfList,
+        "2026-10-31",
+        "2026-10-31T03:00:00Z",
+    );
+    let admitted = etf_list::read(&scenario.store, &scenario.market, day(2026, 11, 1)).unwrap();
+    assert_eq!(admitted.rows.len(), 1 + 770);
+    assert_eq!(admitted.history.len(), 2 + 770);
+    assert_eq!(
+        admitted.effective_to[&(Exchange::Sh, "510070".to_string())],
+        day(2026, 10, 31)
+    );
+    let identity = etf_list::identity_rows(&admitted, &std::collections::BTreeMap::new()).unwrap();
+    let removed = identity
+        .iter()
+        .find(|row| row.exchange == Exchange::Sh && row.code == "510070")
+        .expect("the historical row stays in class=2");
+    assert_eq!(removed.instrument_class, 2);
+    assert_eq!(removed.effective_to, Some(day(2026, 10, 31)));
+    assert!(
+        identity
+            .iter()
+            .any(|row| row.exchange == Exchange::Sh && row.code == "510050")
+    );
+}
+
 // ------------------------------------------------- daily items, no request ---
 
 /// A fake exchange transport that counts every attempt and refuses it. The

@@ -141,6 +141,20 @@ pub struct MemberFact {
     pub listing_source: ListingSource,
     /// TDX `base.dbf SSDATE` when known, kept verbatim on the row.
     pub listing_date_tdx: Option<NaiveDate>,
+    /// Exclusive end of the identity interval. `None` means the newest list
+    /// still contains the code (or no list observation bounds it). A historical
+    /// member keeps its row and gets the first observation that no longer
+    /// contained it.
+    pub effective_to: Option<NaiveDate>,
+    /// Exact delisting-effective day from a frozen announcement extraction.
+    pub delisting_date: Option<NaiveDate>,
+    pub delisting_source: DelistingSource,
+    /// Announcement day (evidence only; it is not the effective day, D-71).
+    pub announcement_date: Option<NaiveDate>,
+    pub announcement_url: Option<String>,
+    /// `doc_sha256` of the frozen announcement PDF that proved
+    /// `delisting_date`; `None` when the identity came from the index only.
+    pub extraction: Option<String>,
 }
 
 /// Why a member fact cannot become a main-table row.
@@ -212,6 +226,21 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
                 if current.listing_date_tdx.is_none() {
                     current.listing_date_tdx = fact.listing_date_tdx;
                 }
+                current.effective_to = match (current.effective_to, fact.effective_to) {
+                    (None, None) => None,
+                    (Some(day), None) | (None, Some(day)) => Some(day),
+                    (Some(left), Some(right)) => Some(left.min(right)),
+                };
+                if current.delisting_date.is_none() && fact.delisting_date.is_some() {
+                    current.delisting_date = fact.delisting_date;
+                    current.delisting_source = fact.delisting_source;
+                    current.announcement_date = fact.announcement_date;
+                    current.announcement_url = fact.announcement_url.clone();
+                    current.extraction = fact.extraction.clone();
+                } else if current.announcement_date.is_none() {
+                    current.announcement_date = fact.announcement_date;
+                    current.announcement_url = fact.announcement_url.clone();
+                }
                 match (current.listing_date, fact.listing_date) {
                     (Some(left), Some(right)) if left != right => {
                         return Err(MemberRowError::ListingConflict {
@@ -235,7 +264,7 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
             exchange,
             code: code.clone(),
             effective_from: fact.first_seen,
-            effective_to: None,
+            effective_to: fact.effective_to,
             instrument_class: 2,
             issuer_key: Some(code),
             issuer_resolution: IssuerResolution::IssuerKey,
@@ -243,9 +272,13 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
             listing_date_tdx: fact.listing_date_tdx,
             listing_source: fact.listing_source,
             b_listing_date: None,
-            delisting_date: None,
+            delisting_date: fact.delisting_date,
             delisting_date_tdx: None,
-            delisting_source: DelistingSource::Unknown,
+            delisting_source: if fact.delisting_date.is_some() {
+                fact.delisting_source
+            } else {
+                DelistingSource::Unknown
+            },
             delisting_reason_class: DelistingReason::Unknown,
             arrangement_start: None,
             arrangement_end: None,

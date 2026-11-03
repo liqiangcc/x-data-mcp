@@ -94,23 +94,27 @@ pub enum SourceId {
     SseBulletin,
     SseSuspension,
     SseEtfList,
+    SseFundDelistAnn,
     SzseListing,
     SzseDelisting,
     SzseShortName,
     SzseEtfList,
+    SzseEtfNoticeAnn,
 }
 
 impl SourceId {
-    pub const ALL: [SourceId; 9] = [
+    pub const ALL: [SourceId; 11] = [
         Self::SseListing,
         Self::SseDelisting,
         Self::SseBulletin,
         Self::SseSuspension,
         Self::SseEtfList,
+        Self::SseFundDelistAnn,
         Self::SzseListing,
         Self::SzseDelisting,
         Self::SzseShortName,
         Self::SzseEtfList,
+        Self::SzseEtfNoticeAnn,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -120,10 +124,12 @@ impl SourceId {
             Self::SseBulletin => "sse_bulletin",
             Self::SseSuspension => "sse_suspension",
             Self::SseEtfList => "sse_etf_list",
+            Self::SseFundDelistAnn => "sse_fund_delist_ann",
             Self::SzseListing => "szse_listing",
             Self::SzseDelisting => "szse_delisting",
             Self::SzseShortName => "szse_short_name",
             Self::SzseEtfList => "szse_etf_list",
+            Self::SzseEtfNoticeAnn => "szse_etf_notice_ann",
         }
     }
 
@@ -140,10 +146,13 @@ impl SourceId {
             | Self::SseDelisting
             | Self::SseBulletin
             | Self::SseSuspension
-            | Self::SseEtfList => "https://www.sse.com.cn/",
-            Self::SzseListing | Self::SzseDelisting | Self::SzseShortName | Self::SzseEtfList => {
-                "https://www.szse.cn/"
-            }
+            | Self::SseEtfList
+            | Self::SseFundDelistAnn => "https://www.sse.com.cn/",
+            Self::SzseListing
+            | Self::SzseDelisting
+            | Self::SzseShortName
+            | Self::SzseEtfList
+            | Self::SzseEtfNoticeAnn => "https://www.szse.cn/",
         }
     }
 

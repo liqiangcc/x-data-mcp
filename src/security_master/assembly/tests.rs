@@ -535,6 +535,12 @@ fn member(
         listing_date,
         listing_source,
         listing_date_tdx: listing_date,
+        effective_to: None,
+        delisting_date: None,
+        delisting_source: DelistingSource::Unknown,
+        announcement_date: None,
+        announcement_url: None,
+        extraction: None,
     }
 }
 

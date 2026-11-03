@@ -196,6 +196,12 @@ fn etf_member(exchange: crate::security_master::Exchange, code: &str) -> assembl
         listing_date: Some(chrono::NaiveDate::from_ymd_opt(2005, 2, 23).unwrap()),
         listing_source: crate::security_master::ListingSource::ExchangeList,
         listing_date_tdx: Some(chrono::NaiveDate::from_ymd_opt(2005, 2, 23).unwrap()),
+        effective_to: None,
+        delisting_date: None,
+        delisting_source: crate::security_master::DelistingSource::Unknown,
+        announcement_date: None,
+        announcement_url: None,
+        extraction: None,
     }
 }
 
@@ -252,6 +258,7 @@ fn an_etf_fact_or_member_error_is_a_partial_failure_and_keeps_previous_rows() {
                 "listing day differs".into(),
             )),
             evidence: json!({"parser_version": "etf-list-v1"}),
+            failure: None,
         },
     );
     assert_eq!(
@@ -316,6 +323,7 @@ fn a_successful_etf_attempt_replaces_previous_rows_and_keeps_a_shares() {
         EtfAttempt::Facts {
             facts: Ok(new),
             evidence: json!({"parser_version": "etf-list-v1"}),
+            failure: None,
         },
     );
     assert!(report.failure.is_none());

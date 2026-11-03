@@ -310,6 +310,9 @@ enum EtfAttempt {
     Facts {
         facts: Result<Vec<assembly::MemberFact>, (String, String)>,
         evidence: Value,
+        /// A partial source failure (the delisted branch) that must not erase
+        /// the current-list facts but still ends the item as a failure.
+        failure: Option<(String, String)>,
     },
     Failed {
         code: String,
@@ -355,6 +358,7 @@ fn merge_etf_identity(
         EtfAttempt::Facts {
             facts,
             evidence: source_evidence,
+            failure: source_failure,
         } => match facts.and_then(|facts| {
             assembly::member_rows(&facts)
                 .map_err(|error| (error.code().to_string(), error.to_string()))
@@ -363,10 +367,11 @@ fn merge_etf_identity(
                 let count = new_rows.len();
                 rows = new_rows;
                 evidence = json!({
-                    "status": "ok",
+                    "status": if source_failure.is_some() { "partial" } else { "ok" },
                     "member_count": count,
                     "source": source_evidence,
                 });
+                failure = source_failure;
             }
             Err((code, detail)) => {
                 rows = previous;
@@ -604,13 +609,122 @@ fn execute(
                 EtfAttempt::Pending(pending)
             }
             Ok(crate::official_security::etf_list::RunSource::Admitted(admitted)) => {
-                let evidence = admitted.evidence();
-                let facts = crate::official_security::etf_list::member_facts(
+                let current_evidence = admitted.evidence();
+                let current_entities: std::collections::BTreeSet<String> = admitted
+                    .rows
+                    .iter()
+                    .map(|row| format!("{}.{}", row.exchange.as_str(), row.code))
+                    .collect();
+                let mut facts = crate::official_security::etf_list::member_facts(
                     &admitted,
                     &snapshot.facts.all_listing_dates,
                 )
                 .map_err(|error| (error.code().to_string(), error.to_string()));
-                EtfAttempt::Facts { facts, evidence }
+                // PR-A2: candidates are `hsjday` ETF-segment members absent
+                // from the newest list. Identity still requires an announcement
+                // hit; the code prefix alone is never a class source.
+                let day_members = session
+                    .day_member_symbols()
+                    .map_err(|error| Error::Invalid(error.to_string()));
+                let (delisted_evidence, delisted_failure) = match day_members {
+                    Err(error) => (
+                        json!({"status": "failed", "code": "day_members_unavailable",
+                               "detail": error.to_string()}),
+                        Some(("day_members_unavailable".to_string(), error.to_string())),
+                    ),
+                    Ok(day_members) => {
+                        let candidates = crate::official_security::etf_delisting::candidates(
+                            day_members.iter(),
+                            &current_entities,
+                        );
+                        let mut last_bars = std::collections::BTreeMap::new();
+                        for entity in &candidates {
+                            match session.day_last_bar(entity) {
+                                Ok(Some(day)) => {
+                                    last_bars.insert(entity.clone(), day);
+                                }
+                                Ok(None) => {}
+                                Err(error) => {
+                                    return Err(ItemFailure::Plain(Error::Invalid(format!(
+                                        "ETF delisting candidate {entity} `.day` member: {error}"
+                                    ))));
+                                }
+                            }
+                        }
+                        match crate::official_security::etf_delisting::run_source(
+                            market, today, policy,
+                        ) {
+                            Ok(crate::official_security::etf_delisting::RunSource::Pending {
+                                reason,
+                            }) => (
+                                json!({
+                                    "status": "pending",
+                                    "reason": reason,
+                                    "candidate_count": candidates.len(),
+                                }),
+                                None,
+                            ),
+                            Ok(crate::official_security::etf_delisting::RunSource::Admitted {
+                                announcements,
+                                extractions,
+                            }) => {
+                                let extra = crate::official_security::etf_delisting::member_facts(
+                                    &candidates,
+                                    &announcements,
+                                    &extractions,
+                                    &snapshot.facts.all_listing_dates,
+                                    &last_bars,
+                                );
+                                match extra {
+                                    Ok(extra) => {
+                                        let added = extra.len();
+                                        if let Ok(facts) = &mut facts {
+                                            facts.extend(extra);
+                                        }
+                                        (
+                                            json!({
+                                                "status": "ok",
+                                                "candidate_count": candidates.len(),
+                                                "identity_count": added,
+                                                "announcements": announcements.evidence(),
+                                                "extractions": extractions.evidence(),
+                                                "last_bar_count": last_bars.len(),
+                                            }),
+                                            None,
+                                        )
+                                    }
+                                    Err(error) => (
+                                        json!({
+                                            "status": "failed",
+                                            "code": error.code(),
+                                            "detail": error.to_string(),
+                                            "candidate_count": candidates.len(),
+                                        }),
+                                        Some((error.code().to_string(), error.to_string())),
+                                    ),
+                                }
+                            }
+                            Err(error) => (
+                                json!({
+                                    "status": "failed",
+                                    "code": error.code(),
+                                    "detail": error.to_string(),
+                                    "candidate_count": candidates.len(),
+                                }),
+                                Some((error.code().to_string(), error.to_string())),
+                            ),
+                        }
+                    }
+                };
+                let evidence = json!({
+                    "current": current_evidence,
+                    "delisted": delisted_evidence,
+                });
+                EtfAttempt::Facts {
+                    facts,
+                    evidence,
+                    failure: delisted_failure,
+                }
             }
             Err(error) => EtfAttempt::Failed {
                 code: error.code().to_string(),

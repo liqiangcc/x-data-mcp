@@ -13,7 +13,12 @@ Usage:
 
 The request is one JSON object on stdin:
 
-    {"url": "https://...", "headers": {"Referer": "...", "User-Agent": "..."}}
+    {"url": "https://...", "headers": {"Referer": "...", "User-Agent": "..."},
+     "method": "GET"}
+
+`method` defaults to GET. A POST request carries its raw JSON body in
+`"body"`; the body is sent verbatim and is part of the Rust request
+fingerprint, so the helper never reinterprets it.
 
 and one JSON object is printed on stdout:
 
@@ -42,10 +47,20 @@ def _request(payload):
     headers = payload.get("headers") or {}
     if not isinstance(headers, dict):
         raise SystemExit("headers must be an object")
+    method = payload.get("method") or "GET"
+    if method not in ("GET", "POST"):
+        raise SystemExit("method must be GET or POST")
+    body = payload.get("body")
+    data = None
+    if body is not None:
+        if not isinstance(body, str):
+            raise SystemExit("body must be a string")
+        data = body.encode("utf-8")
     return urllib.request.Request(
         url,
+        data=data,
         headers={str(k): str(v) for k, v in headers.items()},
-        method="GET",
+        method=method,
     )
 
 

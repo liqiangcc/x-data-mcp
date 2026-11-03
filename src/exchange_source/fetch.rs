@@ -225,6 +225,20 @@ impl AcquisitionPlan {
             segment.apply_with(&mut params, from_param, to_param, self.date_format);
             request = request.with_params(&params);
         }
+        if self.format == PagingFormat::SzseAnnouncement {
+            let text = |name: &str| request.params.get(name).cloned().unwrap_or_default();
+            // The endpoint takes one JSON body: the date window, the channel and
+            // the paging fields. `stock` is omitted on purpose: the channel is
+            // already ETF-only, and constraining it to a candidate list would
+            // hide an announcement for a code the day-member scan missed.
+            let body = serde_json::json!({
+                "seDate": [text("seDateStart"), text("seDateEnd")],
+                "channelCode": [text("channelCode")],
+                "pageSize": text("pageSize").parse::<u32>().unwrap_or(50),
+                "pageNum": text("pageNum").parse::<u32>().unwrap_or(page),
+            });
+            request = request.post_json(body);
+        }
         request
     }
 }
@@ -549,9 +563,20 @@ impl<'a> Entry<'a> {
                 None => match self.reuse_page(plan, &fingerprint)? {
                     Some((state, envelope)) => (state, envelope),
                     None => {
+                        let mut headers = default_headers(plan.source_id);
+                        if request.is_post() {
+                            headers
+                                .insert("Content-Type".to_string(), "application/json".to_string());
+                        }
                         let http = HttpRequest {
-                            url: request.display_url(),
-                            headers: default_headers(plan.source_id),
+                            url: if request.is_post() {
+                                request.url.clone()
+                            } else {
+                                request.display_url()
+                            },
+                            headers,
+                            method: request.method.clone(),
+                            body: request.body.clone(),
                         };
                         let response = match self.client.get(&http) {
                             Ok(response) => response,

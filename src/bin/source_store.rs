@@ -11,8 +11,9 @@
 //! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all]
 //!                     [--db <market.sqlite>] [--verify-only]
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
-//! source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir>
-//!                     [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+//! source_store import --store <dir> --index <archive-index.jsonl|extract.csv> --blobs <dir>
+//!                     [--tiers A,B] [--kind industry|exchange]
+//!                     [--format archive|etf-delisting] [--batch <id>] [--dry-run]
 //! source_store register-generation-member --store <dir> --generation <manifest sha> \
 //!                     --generation-dir <installed generation directory>
 //! source_store exempt --db <market.sqlite> --generation <manifest sha> \
@@ -58,8 +59,8 @@ usage:
   source_store verify --store <dir> \
 [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
 [--db <market.sqlite>]
-  source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
-[--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+  source_store import --store <dir> --index <archive-index.jsonl|extract.csv> --blobs <dir> \
+[--tiers A,B] [--kind industry|exchange] [--format archive|etf-delisting] [--batch <id>] [--dry-run]
   source_store register-generation-member --store <dir> --generation <manifest sha> \
 --generation-dir <installed generation directory>
   source_store exempt --db <market.sqlite> --generation <manifest sha> \
@@ -101,6 +102,7 @@ fn run(args: &[String]) -> Result<i32, String> {
     let mut kind: Option<String> = None;
     let mut batch: Option<String> = None;
     let mut dry_run = false;
+    let mut format = import::ImportFormat::Archive;
     let mut generation: Option<String> = None;
     let mut generation_dir: Option<PathBuf> = None;
     let mut missing: Option<String> = None;
@@ -131,6 +133,17 @@ fn run(args: &[String]) -> Result<i32, String> {
             "--batch" => batch = Some(value(args, position + 1)?),
             "--verify-only" => verify_only = true,
             "--dry-run" => dry_run = true,
+            "--format" => {
+                format = match value(args, position + 1)?.as_str() {
+                    "archive" => import::ImportFormat::Archive,
+                    "etf-delisting" => import::ImportFormat::EtfDelisting,
+                    other => {
+                        return Err(format!(
+                            "unknown import format {other} (archive|etf-delisting)"
+                        ));
+                    }
+                };
+            }
             "--generation" => generation = Some(value(args, position + 1)?),
             "--generation-dir" => generation_dir = Some(PathBuf::from(value(args, position + 1)?)),
             "--missing" => missing = Some(value(args, position + 1)?),
@@ -187,6 +200,7 @@ fn run(args: &[String]) -> Result<i32, String> {
                 kind,
                 dry_run,
                 batch,
+                format,
             };
             match import::import(&store, &index_path, &blobs_dir, &options) {
                 Ok(report) => {
@@ -310,6 +324,7 @@ fn needs_value(flag: &str) -> bool {
             | "--missing"
             | "--reason"
             | "--recorded-by"
+            | "--format"
     )
 }
 

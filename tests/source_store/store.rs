@@ -322,3 +322,66 @@ fn invalid_index_line_is_a_hard_error() {
     assert_eq!(error.code(), "source_store_manifest_invalid");
     assert!(error.to_string().contains(":4:"), "{error}");
 }
+
+/// D-72: a PDF + extraction CSV batch imports through the same manifest/sha
+/// path, and repeating the import writes nothing. No exchange bytes and no
+/// real PDF content are committed; the PDF is a synthetic byte string.
+#[test]
+fn etf_delisting_extraction_import_is_verified_and_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let blobs = dir.path().join("pdfs");
+    fs::create_dir_all(&blobs).unwrap();
+    let pdf = b"%PDF-1.4\nsynthetic delisting announcement\n%%EOF\n";
+    fs::write(blobs.join("ann.pdf"), pdf).unwrap();
+    let pdf_sha = sha256(pdf);
+    let csv = format!(
+        "entity,delisting_date,announcement_date,source_id,doc_url,doc_sha256,page_no,snippet,extractor,extracted_at,confidence,last_operating_day,registration_date\n\
+         sz.159986,2026-01-10,2026-01-02,szse_etf_notice_ann,https://example.invalid/ann.pdf,{pdf_sha},1,\"终止上市日, 2026-01-10\",synthetic-v1,2026-01-11T00:00:00Z,high,2026-01-09,\n"
+    );
+    let index = dir.path().join("extract.csv");
+    fs::write(&index, &csv).unwrap();
+    let store = SourceStore::new(dir.path().join("store"));
+    let options = import_mod::ImportOptions {
+        format: import_mod::ImportFormat::EtfDelisting,
+        batch: Some("fixture-delisting".to_string()),
+        ..import_mod::ImportOptions::default()
+    };
+    let first = import_mod::import(&store, &index, &blobs, &options).unwrap();
+    assert_eq!(first.status, "ok");
+    assert_eq!(first.imported.len(), 2, "one PDF + one extraction CSV");
+    assert_eq!(first.manifest_lines_added, 2);
+    let records = store.records().unwrap();
+    assert!(records.iter().any(|record| {
+        record.source_id == x_data_mcp::official_security::etf_delisting::PDF_SOURCE_ID
+    }));
+    let extraction = records
+        .iter()
+        .find(|record| {
+            record.source_id == x_data_mcp::official_security::etf_delisting::EXTRACT_SOURCE_ID
+        })
+        .expect("extraction CSV registered");
+    assert_eq!(
+        extraction.parser_version.as_deref(),
+        Some(x_data_mcp::official_security::etf_delisting::EXTRACT_PARSER_VERSION)
+    );
+    let read = x_data_mcp::official_security::etf_delisting::read_extractions(
+        &store,
+        &std::collections::BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(read.records.len(), 1);
+    assert_eq!(
+        read.records[&(
+            x_data_mcp::security_master::Exchange::Sz,
+            "159986".to_string()
+        )]
+            .delisting_date,
+        chrono::NaiveDate::from_ymd_opt(2026, 1, 10).unwrap()
+    );
+
+    let second = import_mod::import(&store, &index, &blobs, &options).unwrap();
+    assert_eq!(second.imported.len(), 0);
+    assert_eq!(second.already_present.len(), 2);
+    assert_eq!(second.manifest_lines_added, 0);
+    assert_eq!(store.records().unwrap().len(), records.len());
+}

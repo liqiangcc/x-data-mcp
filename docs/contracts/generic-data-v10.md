@@ -15,8 +15,10 @@
 
 ### 1.1 scope 词汇的作用域
 
-- `sh_sz_etf_current`：`security_master` 中 `instrument_class=2` 且来自当前已冻结 ETF 名单的成员。
-- `sh_sz_etf_listed_ever`：首期等于当前 ETF 身份集；PR-B 写入 ETF 日线后并入已有 ETF 序列。
+- `sh_sz_etf_current`：`security_master` 中 `instrument_class=2`、身份区间仍开放且未被退市公告
+  关闭的成员（最新名单成员）。
+- `sh_sz_etf_listed_ever`：所有已冻结 ETF 名单快照 ∪ 退市公告命中的 class=2 成员；移出名单
+  不删行，PR-B 写入 ETF 日线后还并入已有 ETF 序列。
 - 两个新值**只**由主表解析入口接受：`market.daily` 的 `selection.kind=universe` 与 v2
   `start_collection` 的 `selection.kind=scope`。`securities.catalog`（读与写）拒绝它们，
   错误信息指向 `current_sh_sz_a`。
@@ -32,6 +34,10 @@ ETF 身份来源在来源库注册，不新增 MCP 工具：
 |---|---|---|---|
 | `sse_etf_list` | SSE `commonSoaQuery.do?sqlId=FUND_LIST` | 沪市 ETF 身份 + `listingDate` + `subClass` + `INDEX_CODE` | `etf-list-v1` |
 | `szse_etf_list` | SZSE `ShowReport?SHOWTYPE=xlsx&CATALOGID=1945` | 深市 ETF 身份（上市日取 `base.dbf SSDATE`） | `etf-list-v1` |
+| `sse_fund_delist_ann` | SSE `commonQuery.do?sqlId=COMMON_PL_JJXX_JJGG_L&TITLE=终止上市` | 沪市退市 ETF 公告索引（按季分段，分页无效） | `etf-delist-ann-v1` |
+| `szse_etf_notice_ann` | SZSE `announcement/annList`（POST，`channelCode=etf_notice_disc`） | 深市退市 ETF 公告索引（`pageSize=50`、`announceCount` 为总数） | `etf-delist-ann-v1` |
+| `etf_delist_pdf` | 人工确认的终止上市公告 PDF | D-72 精确退市日原文证据 | `pdf-v1`（只冻结，不解析） |
+| `etf_delist_extract` | D-72 提取 CSV | 每条带 `doc_sha256`/页码/片段/提取器/置信度 | `etf-delist-extract-v1` |
 
 `ebs` 只是报价锚，不是身份来源（D-70 Q1）。两个来源的冻结字节、`exchange_source_snapshots`
 索引行与 `replay --scope exchange` 语义沿用 M3 §6/§9.4；`parser_version` 在快照清单里仍是
@@ -41,12 +47,16 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
 ### 1.3 写入语义
 
 - `security_master` 增加 `instrument_class=2` 行；`listing_source` 沪市 `exchange_list`、
-  深市 `tdx_ssdate`；`delisting_date=NULL`（名单移除不等于退市）。
-- `effective_from`/`known_at` 是该成员第一次出现在已冻结名单快照的获取日。
+  深市 `tdx_ssdate`。名单移除不等于退市：移出名单的成员保留 class=2 行并以第一次缺失
+  观测作 `effective_to`；只有 D-71 公告命中才把身份标为退市 ETF。
+- `effective_from`/`known_at` 是该成员第一次出现在已冻结名单快照或退市公告的日期。
+- 退市 ETF：`delisting_date` 仅在 D-72 提取结果存在时写精确日（`delisting_source=exchange_list`，
+  证据里带 PDF sha 与提取记录）；只有公告索引时保持 `NULL`（unknown），公告日作为证据另存。
 - 身份写入器是来源无关的：各来源产出 `security_master::assembly::MemberFact`，
   `member_rows` 统一合并（同一代码取最早出现、上市日冲突 fail-closed）并写 class=2 行。
-  PR-A2 的退市 ETF 名单只需新增来源/解析器与事实，不复制写入逻辑。
 - A 股 `security_master` 行内容不变；`market_series`、A 股导出与 A 股 `query_data` 输出不变。
+- 无新 migration：D-72 的提取记录与 PDF 只进来源库；`security_master` 现有列足够表达
+  `delisting_date`/`effective_to`。
 
 ## 2. 未验证 / 部署前待办
 

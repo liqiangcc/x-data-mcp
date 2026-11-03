@@ -175,6 +175,17 @@ impl RefreshFixture {
             .to_string()
             .into_bytes());
         }
+        if url.contains("COMMON_PL_JJXX_JJGG_L") {
+            // M3-2 PR-A2: the SSE announcement index is unpaged and a quiet
+            // quarter is a complete empty `result` array.
+            return Ok(
+                br#"{"pageHelp":{"pageNo":1,"pageCount":null,"total":0},"result":[]}"#.to_vec(),
+            );
+        }
+        if url.contains("announcement/annList") {
+            // M3-2 PR-A2: SZSE ETF notice channel, no rows in this fixture.
+            return Ok(br#"{"announceCount":0,"pageNum":1,"data":[]}"#.to_vec());
+        }
         if url.contains("commonQuery.do") {
             return Ok(sse_page(1, 1, 1));
         }
@@ -410,9 +421,9 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         fixture.calls()
     );
     assert_eq!(first.requests as usize, fixture.calls());
-    assert_eq!(first.scope.len(), 9);
-    assert_eq!(first.planned.len(), 16);
-    assert_eq!(first.sources.len(), 9);
+    assert_eq!(first.scope.len(), 11);
+    assert_eq!(first.planned.len(), 20);
+    assert_eq!(first.sources.len(), 11);
     let short = first
         .sources
         .iter()
@@ -433,7 +444,7 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
     assert_eq!(runs[0].status, "succeeded");
     assert_eq!(runs[0].verified_through.as_deref(), Some("2026-11-02"));
     let source_rows = backend.read_source_refresh_run_sources(&run_id).unwrap();
-    assert_eq!(source_rows.len(), 9);
+    assert_eq!(source_rows.len(), 11);
     let listing = source_rows
         .iter()
         .find(|row| row.source_id == "sse_listing")
@@ -468,8 +479,9 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
     );
     assert_eq!(second.status, RefreshStatus::Succeeded);
     assert_eq!(
-        second.requests, 24,
-        "probes must not refetch whole tables; the two ETF lists are tables and do"
+        second.requests, 28,
+        "probes must not refetch whole tables; the two ETF lists are tables and do, \
+         and the two announcement sources add their two tail windows each"
     );
     let short = second
         .sources
@@ -536,7 +548,7 @@ fn full_run_observes_every_source() {
         &[],
     );
     assert_eq!(report.status, RefreshStatus::Succeeded);
-    assert_eq!(report.requests, 312);
+    assert_eq!(report.requests, 488);
     assert_eq!(report.requests as usize, fixture.calls());
     assert_eq!(report.changed, 0, "first observation is not a revision");
     for source in &report.sources {
@@ -831,7 +843,7 @@ fn dry_run_lists_the_plan_and_touches_nothing() {
     assert_eq!(report.status, RefreshStatus::Planned);
     assert!(report.dry_run);
     assert!(report.run_id.is_none());
-    assert_eq!(report.planned.len(), 16);
+    assert_eq!(report.planned.len(), 20);
     assert!(report.scope.contains(&"sse_etf_list".to_string()));
     assert!(report.scope.contains(&"szse_etf_list".to_string()));
     assert!(report.sources.iter().all(|source| source.requests == 0));
@@ -1050,7 +1062,7 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
     assert_eq!(started.requests, 0);
     assert_eq!(
         started.planned.len(),
-        302,
+        478,
         "the immediate reply carries the full plan, not results"
     );
     let run_id = started.run_id.clone().unwrap();
@@ -1067,7 +1079,7 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
     fixture.release();
     let report = wait_for_run(&backend, &run_id);
     assert_eq!(report.status, RefreshStatus::Succeeded);
-    assert_eq!(report.requests, 312);
+    assert_eq!(report.requests, 488);
     assert_eq!(report.requests as usize, fixture.calls());
     assert!(report.finished_at.is_some());
     assert_eq!(report.verified_through.as_deref(), Some("2026-11-02"));
@@ -1080,7 +1092,7 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
         "a completed background run advances the durable verified date"
     );
     // The reply is readable after the fact through the same durable record.
-    assert_eq!(super::status_of(&backend, &run_id).unwrap().requests, 312);
+    assert_eq!(super::status_of(&backend, &run_id).unwrap().requests, 488);
     // The guard is released: the next run (here a tail) may start.
     let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
     assert_eq!(next.mode, RefreshMode::Tail);

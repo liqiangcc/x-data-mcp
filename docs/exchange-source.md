@@ -392,6 +392,26 @@ D-70 Q1 准入的两份 ETF 名录也走同一入口，不另起抓取链路：
   行数/页数索引。`ebs` 只是报价锚，不是身份来源（D-70 Q1）。
 - 空名单、重复代码、SSE `pageHelp.total` 与行数不符、SSE 缺 `listingDate`、SZSE 行数
   低于形状下界都 fail-closed；名单移除不写退市日（§3.3）。
+- 身份是**单调**的：读取时取所有已冻结名单快照的并集，首次出现定 `effective_from`；
+  较新快照移出的代码保留 class=2 行并以第一次缺失观测作 `effective_to`，
+  `sh_sz_etf_current` 不再包含它、`sh_sz_etf_listed_ever` 仍包含。
+
+### 6.2 退市 ETF 公告索引与 PDF 提取（M3-2 PR-A2）
+
+D-71 准入的两个公告索引也走同一入口：
+
+- `sse_fund_delist_ann`：`commonQuery.do?sqlId=COMMON_PL_JJXX_JJGG_L&TITLE=终止上市`，
+  按 `START_DATE`/`END_DATE` 分季；分页参数被回显但行集不变（`total=0`、`pageCount=null`），
+  所以用 `exchange-sse-unpaged-page-v1` 信封，一次响应就是该窗口全量。
+- `szse_etf_notice_ann`：`announcement/annList`，POST JSON（`seDate`、`channelCode=["etfNotice_disc"]`、
+  `pageNum`、`pageSize=50`）；`pageSize` 会被静默截到 50，必须按 `announceCount` 分页，
+  同一公告按 URL 去重。信封解析器 `exchange-szse-announcement-page-v1`。
+- 两个来源只产生**候选 ∩ 公告命中**的退市 ETF 身份；代码段或「`hsjday` 有、名单无」单独
+  不构成身份（D-71）。公告日作为证据另存，不等于终止上市生效日。
+- D-72 的 PDF 与提取 CSV 通过 `source_store import --format etf-delisting` 冻结
+  （`etf_delist_pdf` / `etf_delist_extract`），`replay --scope exchange --db` 把提取结果写进
+  已有 class=2 行的 `delisting_date`；生产代码不解析 PDF。校验
+  `公告日 ≤ 终止上市日 ≤ 公告日 + 9 天` 且终止上市日晚于 `.day` 末根 bar，违反 fail-closed。
 
 ## 7. PR-2 当时的非目标（历史）
 

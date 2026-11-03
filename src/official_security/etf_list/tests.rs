@@ -87,6 +87,8 @@ fn identity_rows_are_class_two_and_keep_the_two_listing_sources() {
         .collect();
     let admitted = Admitted {
         rows,
+        history: Vec::new(),
+        effective_to: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -135,6 +137,8 @@ fn a_szse_code_without_a_tdx_ssdate_keeps_an_unknown_listing_day() {
         .collect();
     let admitted = Admitted {
         rows,
+        history: Vec::new(),
+        effective_to: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -199,6 +203,8 @@ fn etf_rows_do_not_change_the_a_share_security_master_rows() {
         .collect();
     let admitted = Admitted {
         rows,
+        history: Vec::new(),
+        effective_to: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -245,6 +251,8 @@ fn etf_rows_do_not_change_the_a_share_security_master_rows() {
 fn the_adapter_evidence_pins_the_business_parser_version() {
     let admitted = Admitted {
         rows: parse(ListKind::Sse, SSE).unwrap(),
+        history: Vec::new(),
+        effective_to: BTreeMap::new(),
         first_seen: BTreeMap::new(),
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),

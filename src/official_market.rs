@@ -651,6 +651,60 @@ pub struct MaterializeSession<'a> {
 }
 
 impl MaterializeSession<'_> {
+    /// Symbols carried by the session's `.day` archive (`sh.600000` form).
+    pub fn day_member_symbols(&self) -> Result<std::collections::BTreeSet<String>, SourceError> {
+        let index = self.source.archive_index(&self.source.day)?;
+        let index = index
+            .lock()
+            .map_err(|_| SourceError::Invocation("archive index cache poisoned".into()))?;
+        Ok(index
+            .members
+            .keys()
+            .filter_map(|name| MaterializeSession::day_member_symbol(name.as_str()))
+            .collect())
+    }
+
+    /// The last calendar day a symbol's `.day` member records (M3-2 PR-A2).
+    ///
+    /// The announcement extraction's delisting day must be strictly after this
+    /// bar. Only the date is read; no price/volume interpretation happens here,
+    /// so a retired ETF with a hand-day marker cannot fail this check for a
+    /// normalization reason.
+    pub fn day_last_bar(&self, symbol: &str) -> Result<Option<NaiveDate>, SourceError> {
+        let (market, code) = Self::split_symbol(symbol)?;
+        let names = Self::day_names(market, code);
+        let index = self.source.archive_index(&self.source.day)?;
+        let mut index = index
+            .lock()
+            .map_err(|_| SourceError::Invocation("archive index cache poisoned".into()))?;
+        let mut found = Vec::new();
+        for name in &names {
+            if let Some(indices) = index.members.get(name) {
+                found.extend(indices.iter().copied());
+            }
+        }
+        if found.is_empty() {
+            return Ok(None);
+        }
+        if found.len() > 1 {
+            return Err(SourceError::InvalidResponse(format!(
+                "{symbol}: both `.day` member spellings are present; refusing to guess"
+            )));
+        }
+        let entry = index.archive.by_index(found[0]).map_err(|error| {
+            SourceError::InvalidResponse(format!("{symbol} `.day` member: {error}"))
+        })?;
+        let limit = entry.size();
+        let mut bytes = Vec::with_capacity(limit as usize);
+        entry.take(limit).read_to_end(&mut bytes).map_err(|error| {
+            SourceError::InvalidResponse(format!("{symbol} `.day` member: {error}"))
+        })?;
+        let bars = crate::day_file::parse(&bytes).map_err(|error| {
+            SourceError::InvalidResponse(format!("{symbol} `.day` member malformed: {error}"))
+        })?;
+        Ok(bars.last().map(|bar| bar.date))
+    }
+
     /// The inspected source this session decodes against.
     pub fn source(&self) -> &TdxMarketSource {
         self.source
