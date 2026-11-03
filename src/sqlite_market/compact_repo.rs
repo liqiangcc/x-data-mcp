@@ -2188,16 +2188,20 @@ fn collection_item_commit(
     expected_revision: u64,
 ) -> Result<Receipt, Error> {
     compact_market::canonical_entity(&item.symbol).map_err(integrity)?;
+    let (adjustment, shape) = match &item.etf {
+        Some(_) => (
+            crate::market_data::Adjustment::Raw,
+            series::SeriesShape::etf(crate::market_data::Adjustment::Raw),
+        ),
+        None => (
+            crate::market_data::Adjustment::Forward,
+            series::SeriesShape::FORWARD_STOCK_UNITS,
+        ),
+    };
     let bars: Vec<CompactBar> = item
         .bars
         .iter()
-        .map(|b| {
-            CompactBar::from_bar(
-                b,
-                Period::Day,
-                series::SeriesShape::FORWARD_STOCK_UNITS.price_scale,
-            )
-        })
+        .map(|b| CompactBar::from_bar(b, Period::Day, shape.price_scale))
         .collect::<Result<Vec<_>, _>>()
         .map_err(integrity)?;
     if bars.is_empty() {
@@ -2244,35 +2248,35 @@ fn collection_item_commit(
         symbol: item.symbol.clone(),
         period: Period::Day,
     };
-    series_commit::commit_item_tx(
-        c,
-        &series_commit::Commit {
-            result_id: &item.publication_id,
-            task_id: &item.task_id,
-            item_id: &item.item_id,
-            run_id: &item.run_id,
-            occupancy_key: &scope.occupancy_key(),
-            expected_task_revision: expected_revision,
-            entity: &item.symbol,
-            period: Period::Day,
-            adjustment: crate::market_data::Adjustment::Forward,
-            base_version_id: None,
-            change: series_commit::SeriesChange::FirstPublish { bars: &bars },
-            range_start_day: bars[0].trade_day,
-            range_end_day: bars[bars.len() - 1].trade_day,
-            algorithm_version: series_commit::COLLECTION_ALGO,
-            window_digest: Some(series_commit::window_fold(&bars)?),
-            source_binding_digest: Some(binding),
-            evidence_digest: Some(evidence),
-            coverage_status: Some(item.coverage.status),
-            metadata_changed: false,
-            event_evidence_digest: evidence,
-            published_at: Some(item.published_at),
-            staged_version_id: Some(item.version_id.as_str()),
-            defer_task_row: true,
-        },
-        item.raw.as_ref(),
-    )
+    let commit = series_commit::Commit {
+        result_id: &item.publication_id,
+        task_id: &item.task_id,
+        item_id: &item.item_id,
+        run_id: &item.run_id,
+        occupancy_key: &scope.occupancy_key(),
+        expected_task_revision: expected_revision,
+        entity: &item.symbol,
+        period: Period::Day,
+        adjustment,
+        base_version_id: None,
+        change: series_commit::SeriesChange::FirstPublish { bars: &bars },
+        range_start_day: bars[0].trade_day,
+        range_end_day: bars[bars.len() - 1].trade_day,
+        algorithm_version: series_commit::COLLECTION_ALGO,
+        window_digest: Some(series_commit::window_fold(&bars)?),
+        source_binding_digest: Some(binding),
+        evidence_digest: Some(evidence),
+        coverage_status: Some(item.coverage.status),
+        metadata_changed: false,
+        event_evidence_digest: evidence,
+        published_at: Some(item.published_at),
+        staged_version_id: Some(item.version_id.as_str()),
+        defer_task_row: true,
+    };
+    match &item.etf {
+        Some(etf) => series_commit::commit_etf_tx(c, &commit, &etf.factors, &etf.capital),
+        None => series_commit::commit_item_tx(c, &commit, item.raw.as_ref()),
+    }
 }
 
 // ---------------------------------------------------------------------------

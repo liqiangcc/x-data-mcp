@@ -68,6 +68,7 @@ fn event(ordinal: i64, effective_day: NaiveDate, c: [f32; 4]) -> AdjustmentEvent
         c_bits: c.map(f32::to_bits),
         factors: c.map(|value| gbbq::normalize_factor(value).unwrap()),
         known_at: None,
+        basis_status: crate::market_data::FactorBasisStatus::Verified,
     }
 }
 
@@ -193,6 +194,51 @@ fn replace_stores_the_parsed_facts_and_registers_one_version() {
     assert_eq!(evidence["dataset_key"], ENTITY);
     assert_eq!(evidence["algorithm_version"], "gbbq-cat1-2dp-v1");
     assert_eq!(evidence["content_digest"], written.version_id);
+}
+
+#[test]
+fn etf_category_eleven_facts_carry_pending_basis_without_changing_cat1_evidence() {
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let mut cat11 = event(1, day(2021, 4, 12), [0.0, 0.0, 2.0, 0.0]);
+    cat11.category = 11;
+    cat11.basis_status = FactorBasisStatus::Pending;
+    let cat1 = event(0, day(2025, 3, 31), [0.661, 0.0, 0.0, 0.0]);
+    let written = replace_adjustment_events(
+        &c,
+        &set(ENTITY, vec![cat1, cat11], 0),
+        binding,
+        "task-etf",
+        "item-etf",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(written.algorithm_version, ETF_ADJUSTMENT_EVENTS_ALGORITHM);
+    let stored = read_adjustment_events(&c, ENTITY).unwrap();
+    assert_eq!(stored[0].basis_status, FactorBasisStatus::Verified);
+    assert_eq!(stored[1].category, 11);
+    assert_eq!(stored[1].basis_status, FactorBasisStatus::Pending);
+    let (_, canonical) = evidence_store::read_evidence(&c, &written.evidence_digest).unwrap();
+    let evidence: Value = serde_json::from_str(&canonical).unwrap();
+    assert_eq!(evidence["categories"], json!([1, 11]));
+    assert_eq!(evidence["basis_statuses"], json!(["verified", "pending"]));
+
+    // The A-share cat1-only path keeps the old evidence shape and label.
+    let cat1_only = event(0, day(2025, 3, 31), [0.661, 0.0, 0.0, 0.0]);
+    let plain = replace_adjustment_events(
+        &c,
+        &set(ENTITY, vec![cat1_only], 0),
+        binding,
+        "task-a",
+        "item-a",
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(plain.algorithm_version, ADJUSTMENT_EVENTS_ALGORITHM);
+    let (_, canonical) = evidence_store::read_evidence(&c, &plain.evidence_digest).unwrap();
+    let evidence: Value = serde_json::from_str(&canonical).unwrap();
+    assert!(evidence.get("categories").is_none());
+    assert!(evidence.get("basis_statuses").is_none());
 }
 
 #[test]

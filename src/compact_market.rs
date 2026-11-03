@@ -17,11 +17,27 @@ pub type Digest = [u8; 32];
 pub const MAX_PRICE_SCALE: u32 = 6;
 /// A-share raw prices in 分: `price_scale=2` (`.day` 原值, issue-383 §4.1).
 pub const PRICE_SCALE_CENTS: u32 = 2;
+/// ETF raw prices in 厘: `price_scale=3` (M3-2 §6 P1, D-28). The `.day`
+/// integer is the same 元 value ×1000; writing it at scale 2 would silently
+/// publish 10× the price because the coarser decimal is still representable.
+pub const PRICE_SCALE_LI: u32 = 3;
 /// Forward-adjusted series precision: `price_scale=6` (1e-6 元), written by
 /// `qfq-exact-v1` (issue-383 §4.2/§4.3). The forward chain is composed over
 /// exact rationals and rounded once, so the stored integer *is* the rounded
 /// value — there is no further rounding a reader could apply.
 pub const PRICE_SCALE_QFQ: u32 = 6;
+
+/// `.day` r7 marker TDX writes when the u32 volume field carries hands
+/// instead of shares. Only the high 24 bits are fixed; the low byte varies.
+pub(crate) const HAND_VOLUME_MARKER: u32 = 0xC364_0000;
+pub(crate) const HAND_VOLUME_MARKER_MASK: u32 = 0xFFFF_FF00;
+
+/// True when a raw r7 word carries the hand-volume marker. The marker alone
+/// is never trusted: [`crate::official_market`] additionally checks
+/// amount/volume consistency before converting hands to shares.
+pub(crate) fn hand_volume_marked(r7_raw: u32) -> bool {
+    (r7_raw & HAND_VOLUME_MARKER_MASK) == HAND_VOLUME_MARKER
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {

@@ -1,5 +1,5 @@
 //! Descriptor-based local filesystem capability used by runtime locks.
-use std::{fs::File, io, os::fd::AsRawFd};
+use std::{fs::File, io, os::fd::AsRawFd as _};
 fn supported(kind: u64) -> bool {
     // Linux UAPI include/uapi/linux/magic.h: ext2/3/4, XFS, Btrfs, tmpfs.
     matches!(kind, 0xef53 | 0x58465342 | 0x9123683e | 0x01021994)
@@ -36,13 +36,18 @@ mod tests {
     #[test]
     fn unsafe_env_opt_out_accepts_any_file() {
         let f = tempfile::NamedTempFile::new().unwrap();
-        // SAFETY: single-threaded access to this variable; no other test
-        // reads X_DATA_MCP_UNSAFE_NONLOCAL_FS concurrently.
+        // Preserve an operator-provided opt-out: removing it would make every
+        // later test on an unsupported filesystem (e.g. a sandbox overlay)
+        // fail for the wrong reason.
+        let previous = std::env::var_os("X_DATA_MCP_UNSAFE_NONLOCAL_FS");
+        // SAFETY: the test module is the only writer of this variable.
         unsafe { std::env::set_var("X_DATA_MCP_UNSAFE_NONLOCAL_FS", "1") };
         let accepted = supported_file(f.as_file());
-        // SAFETY: restoring the pre-test environment; same single-threaded
-        // argument as the set above.
-        unsafe { std::env::remove_var("X_DATA_MCP_UNSAFE_NONLOCAL_FS") };
+        // SAFETY: restore the pre-test value instead of deleting it.
+        match previous {
+            Some(value) => unsafe { std::env::set_var("X_DATA_MCP_UNSAFE_NONLOCAL_FS", value) },
+            None => unsafe { std::env::remove_var("X_DATA_MCP_UNSAFE_NONLOCAL_FS") },
+        }
         assert!(accepted.unwrap());
     }
 }

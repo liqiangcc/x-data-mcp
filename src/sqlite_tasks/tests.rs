@@ -1235,10 +1235,10 @@ fn hex32(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
 }
 
-/// Schema 26 length/order assertion (issue-446 §9.1/§9.3): the fixed array
-/// length, the schema constant and the `schema_migrations` rows must agree, and
-/// the tail of the chain must be the refresh-run step and the step before it
-/// the M3 index tables. 022/023/024 stay immutable.
+/// Schema 27 length/order assertion (issue-446 §9.1/§9.3, M3-2 PR-B): the
+/// fixed array length, the schema constant and the `schema_migrations` rows
+/// must agree, and the tail of the chain must be the ETF factor step, with the
+/// previous steps kept immutable. 022/023/024/025/026 stay immutable.
 #[test]
 fn compact_migration_chain_matches_schema_version() {
     assert_eq!(
@@ -1248,34 +1248,41 @@ fn compact_migration_chain_matches_schema_version() {
     );
     let tail = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 1];
     assert!(
-        tail.contains("PRIMARY KEY(snapshot_id, request_fingerprint)")
-            && tail.contains("CREATE TABLE source_refresh_runs(")
-            && tail.contains("CREATE TABLE source_refresh_run_sources(")
-            && tail.contains("CREATE TABLE source_refresh_run_members(")
-            && tail.contains("owner_instance TEXT")
-            && tail.contains("elapsed_ms INTEGER NOT NULL"),
-        "the tail of the compact chain is not migration 026"
+        tail.contains("category IN (1,11)")
+            && tail.contains("basis_status TEXT NOT NULL")
+            && tail.contains("CREATE TABLE adjustment_events_v27("),
+        "the tail of the compact chain is not migration 027"
     );
     let previous = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 2];
     assert!(
-        previous.contains("CREATE TABLE industry_snapshots(")
-            && previous.contains("CREATE TABLE industry_assignments(")
-            && previous.contains("CREATE TABLE exchange_source_snapshots(")
-            && previous.contains("CREATE TABLE generation_facts(")
-            && previous.contains("CREATE TABLE retire_exemptions(")
-            && previous.contains("ADD COLUMN min_band_ticks INTEGER"),
-        "migration 025 was not kept immutable before 026"
+        previous.contains("PRIMARY KEY(snapshot_id, request_fingerprint)")
+            && previous.contains("CREATE TABLE source_refresh_runs(")
+            && previous.contains("CREATE TABLE source_refresh_run_sources(")
+            && previous.contains("CREATE TABLE source_refresh_run_members(")
+            && previous.contains("owner_instance TEXT")
+            && previous.contains("elapsed_ms INTEGER NOT NULL"),
+        "migration 026 was not kept immutable before 027"
     );
     let before_that = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 3];
     assert!(
-        before_that.contains("CREATE TABLE capital_events_v24(")
-            && before_that.contains("category IN (2,3,5,7,8,9,10)"),
-        "migration 024 was not kept immutable before 025"
+        before_that.contains("CREATE TABLE industry_snapshots(")
+            && before_that.contains("CREATE TABLE industry_assignments(")
+            && before_that.contains("CREATE TABLE exchange_source_snapshots(")
+            && before_that.contains("CREATE TABLE generation_facts(")
+            && before_that.contains("CREATE TABLE retire_exemptions(")
+            && before_that.contains("ADD COLUMN min_band_ticks INTEGER"),
+        "migration 025 was not kept immutable before 026"
     );
     let earlier = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 4];
     assert!(
-        earlier.contains("CREATE TABLE security_master(")
-            && earlier.contains("CREATE TABLE price_limit_rules("),
+        earlier.contains("CREATE TABLE capital_events_v24(")
+            && earlier.contains("category IN (2,3,5,7,8,9,10)"),
+        "migration 024 was not kept immutable before 025"
+    );
+    let earliest = COMPACT_MIGRATIONS[COMPACT_MIGRATIONS.len() - 5];
+    assert!(
+        earliest.contains("CREATE TABLE security_master(")
+            && earliest.contains("CREATE TABLE price_limit_rules("),
         "migration 023 was not kept immutable before 024"
     );
     let dir = tempfile::tempdir().unwrap();
@@ -1355,9 +1362,10 @@ fn schema24_builds_on_fresh_init_and_empty_upgrade() {
     }
 }
 
-/// M3 PR-1 + refresh R2: schema 26 builds on both init paths — the fresh
-/// compact init and the empty 18 -> compact upgrade — with `user_version=26`,
-/// the five M3 index tables and the three refresh-run tables created empty,
+/// M3 PR-1 + refresh R2 + M3-2 PR-B: schema 27 builds on both init paths — the
+/// fresh compact init and the empty 18 -> compact upgrade — with
+/// `user_version=27`, the five M3 index tables and the three refresh-run tables
+/// created empty,
 /// `price_limit_rules.min_band_ticks` present and NULL everywhere, and clean
 /// foreign keys. The chain is fresh-init only (D-08); the separate
 /// refused-not-upgraded test covers what a schema-24 file gets.
@@ -1377,7 +1385,7 @@ fn schema26_builds_on_fresh_init_and_empty_upgrade() {
         assert_eq!(
             raw_user_version(&path),
             COMPACT_SCHEMA_VERSION,
-            "user_version must be 26 (fresh={fresh})"
+            "user_version must be 27 (fresh={fresh})"
         );
         let c = Connection::open(&path).unwrap();
         for table in [
@@ -1416,7 +1424,7 @@ fn schema26_builds_on_fresh_init_and_empty_upgrade() {
             .exists([])
             .unwrap();
         assert!(!broken, "foreign key violations (fresh={fresh})");
-        for version in [24, 25, 26] {
+        for version in [24, 25, 26, 27] {
             let rows: i64 = c
                 .query_row(
                     "SELECT count(*) FROM schema_migrations WHERE version=?1",

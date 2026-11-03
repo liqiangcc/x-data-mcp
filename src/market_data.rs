@@ -289,7 +289,34 @@ pub struct Provenance {
     #[serde(default)]
     pub snapshot_inputs: Option<Vec<SnapshotInputBinding>>,
 }
-/// One category-1 corporate-action event of one entity — a 解析事实
+/// Evidence tier attached to one stored factor fact (M3-2 PR-B). A category-1
+/// dividend is the M1-verified semantics; a category-11 share conversion is
+/// stored as a fact but its price factor is not used by any forward chain yet
+/// (D-70 Q3), so it stays `pending` instead of claiming QFQ verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FactorBasisStatus {
+    Verified,
+    Pending,
+}
+
+impl FactorBasisStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Pending => "pending",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "verified" => Self::Verified,
+            "pending" => Self::Pending,
+            _ => return None,
+        })
+    }
+}
+
+/// One corporate-action event of one entity — a 解析事实
 /// (separation point 2, issue-383 §3.6).
 ///
 /// Two times are deliberately kept apart (separation point 3):
@@ -319,6 +346,10 @@ pub struct AdjustmentEvent {
     pub factors: [Decimal; 4],
     /// 知晓时间; `None` = unknown, which is the only M1 value.
     pub known_at: Option<NaiveDate>,
+    /// Per-row evidence tier. A-share category-1 facts keep `Verified`;
+    /// ETF category-11 facts are stored as `Pending` until the forward chain
+    /// is separately admitted (M3-2 AC-M3-2-6).
+    pub basis_status: FactorBasisStatus,
 }
 
 /// The whole parsed factor set of one entity plus the records this build

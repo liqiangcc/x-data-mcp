@@ -1848,6 +1848,7 @@ fn seed_adjustment_events(fixture: &Fixture, symbol: &str) {
             c_bits: [0; 4],
             factors: [Decimal::new(150, 2); 4],
             known_at: None,
+            basis_status: crate::market_data::FactorBasisStatus::Verified,
         }],
         excluded: 0,
     };

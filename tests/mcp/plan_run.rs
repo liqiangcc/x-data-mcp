@@ -2231,6 +2231,7 @@ fn seed_daily_heads_at(r: &Rig, symbols: &[String], epoch_days: &[i64]) {
                     }],
                 }),
                 raw: None,
+                etf: None,
             });
         }
         for res in backend

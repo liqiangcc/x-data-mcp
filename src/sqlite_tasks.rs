@@ -46,15 +46,17 @@ pub(crate) const MIGRATIONS: [&str; 18] = [
 /// `price_limit_rules.min_band_ticks` floor column (issue-446 §9.1/§9.2,
 /// owner 2026-10-29) — structure only, no writer. Schema 26 keys the exchange
 /// index by `(snapshot_id, request_fingerprint)` and adds the refresh-run
-/// record (issue-446 §5.2/§5.6, R2). Every step stays fresh-init only, never
-/// in-place: a file built by another schema revision is refused, not upgraded
-/// (D-08).
-pub const COMPACT_SCHEMA_VERSION: u32 = 26;
+/// record (issue-446 §5.2/§5.6, R2). Schema 27 (M3-2 PR-B) widens
+/// `adjustment_events.category` to 1/11 and adds the per-row `basis_status`;
+/// category 11 stays a fact and is never applied to the price chain. Every
+/// step stays fresh-init only, never in-place: a file built by another schema
+/// revision is refused, not upgraded (D-08).
+pub const COMPACT_SCHEMA_VERSION: u32 = 27;
 /// Fixed-length array on purpose: the length is a compile-time assertion that
 /// `COMPACT_SCHEMA_VERSION == MIGRATIONS.len() + COMPACT_MIGRATIONS.len()`, and
 /// the order is asserted at open time by the positional checksum comparison in
 /// `check_schema` (a reordered or edited migration file fails closed).
-pub(crate) const COMPACT_MIGRATIONS: [&str; 8] = [
+pub(crate) const COMPACT_MIGRATIONS: [&str; 9] = [
     include_str!("../migrations/tasks/019_compact_market.sql"),
     include_str!("../migrations/tasks/020_evidence_parts.sql"),
     include_str!("../migrations/tasks/021_latest_only.sql"),
@@ -63,6 +65,7 @@ pub(crate) const COMPACT_MIGRATIONS: [&str; 8] = [
     include_str!("../migrations/tasks/024_capital_categories.sql"),
     include_str!("../migrations/tasks/025_m3_index_tables.sql"),
     include_str!("../migrations/tasks/026_source_refresh.sql"),
+    include_str!("../migrations/tasks/027_etf_factor_events.sql"),
 ];
 /// Data migrations that cannot be expressed in SQL run inside the same
 /// transaction immediately after their schema step.

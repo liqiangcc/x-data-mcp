@@ -101,7 +101,8 @@ external distribution is not authorized；它不是“服务未运行”的同�
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
 （既有库显式 upgrade 的来源版本），已部署实例为 compact schema 25，代码的
-`COMPACT_SCHEMA_VERSION` 是 26（R2 刷新 run 记录，未部署，部署前不领先生产）。Issue/Epic 中的“v15”是交付规划标签，
+`COMPACT_SCHEMA_VERSION` 是 27（R2 刷新 run 记录之后，M3-2 PR-B 的 ETF 因子事实迁移 027；未部署，
+部署实例仍是 26）。Issue/Epic 中的“v15”是交付规划标签，
 不是 schema 编号。
 
 **历史（2026-09 来源收敛口径，已被 [D-20](docs/decisions.md) 修订）：** 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →

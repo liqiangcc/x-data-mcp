@@ -278,6 +278,7 @@ impl Fixture {
                         Decimal::ZERO,
                     ],
                     known_at: None,
+                    basis_status: crate::market_data::FactorBasisStatus::Verified,
                 }],
                 excluded: 0,
             };
