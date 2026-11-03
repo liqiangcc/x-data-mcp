@@ -467,7 +467,10 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         &[],
     );
     assert_eq!(second.status, RefreshStatus::Succeeded);
-    assert_eq!(second.requests, 20, "probes must not refetch whole tables");
+    assert_eq!(
+        second.requests, 24,
+        "probes must not refetch whole tables; the two ETF lists are tables and do"
+    );
     let short = second
         .sources
         .iter()
