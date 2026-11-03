@@ -72,11 +72,37 @@ fn event(ordinal: i64, effective_day: NaiveDate, c: [f32; 4]) -> AdjustmentEvent
     }
 }
 
+fn etf_event(ordinal: i64, effective_day: NaiveDate, category: u8, c: [f32; 4]) -> AdjustmentEvent {
+    AdjustmentEvent {
+        ordinal,
+        effective_day,
+        category,
+        c_bits: c.map(f32::to_bits),
+        factors: c.map(|value| gbbq::shortest_factor(value).unwrap()),
+        known_at: None,
+        basis_status: if category == 1 {
+            FactorBasisStatus::Verified
+        } else {
+            FactorBasisStatus::Pending
+        },
+    }
+}
+
+fn etf_set(entity: &str, events: Vec<AdjustmentEvent>, excluded: usize) -> AdjustmentEventSet {
+    AdjustmentEventSet {
+        entity: entity.into(),
+        events,
+        excluded,
+        precision: FactorPrecision::EtfF32Shortest,
+    }
+}
+
 fn set(entity: &str, events: Vec<AdjustmentEvent>, excluded: usize) -> AdjustmentEventSet {
     AdjustmentEventSet {
         entity: entity.into(),
         events,
         excluded,
+        precision: FactorPrecision::Stock2dp,
     }
 }
 
@@ -197,16 +223,20 @@ fn replace_stores_the_parsed_facts_and_registers_one_version() {
 }
 
 #[test]
-fn etf_category_eleven_facts_carry_pending_basis_without_changing_cat1_evidence() {
+fn etf_factor_facts_keep_the_f32_shortest_decimal_and_a_share_stays_2dp() {
     let (_dir, _tasks, c) = db();
     let binding = seed_binding(&c);
-    let mut cat11 = event(1, day(2021, 4, 12), [0.0, 0.0, 2.0, 0.0]);
-    cat11.category = 11;
-    cat11.basis_status = FactorBasisStatus::Pending;
-    let cat1 = event(0, day(2025, 3, 31), [0.661, 0.0, 0.0, 0.0]);
+    // Design §2 anchors: 159919 c1=0.661, 159901 c3=2.0 / 5.0, and the
+    // unexplained 159830 c3=0.93584. None may be rounded to 2dp.
+    let events = vec![
+        etf_event(0, day(2025, 3, 31), 1, [0.661, 0.0, 0.0, 0.0]),
+        etf_event(1, day(2021, 4, 12), 11, [0.0, 0.0, 2.0, 0.0]),
+        etf_event(2, day(2010, 11, 22), 11, [0.0, 0.0, 5.0, 0.0]),
+        etf_event(3, day(2024, 12, 20), 11, [0.0, 0.0, 0.93584, 0.0]),
+    ];
     let written = replace_adjustment_events(
         &c,
-        &set(ENTITY, vec![cat1, cat11], 0),
+        &etf_set(ENTITY, events, 0),
         binding,
         "task-etf",
         "item-etf",
@@ -214,20 +244,51 @@ fn etf_category_eleven_facts_carry_pending_basis_without_changing_cat1_evidence(
     .unwrap()
     .unwrap();
     assert_eq!(written.algorithm_version, ETF_ADJUSTMENT_EVENTS_ALGORITHM);
+    assert_eq!(
+        written.algorithm_version,
+        "gbbq-etf-factors-f32-shortest-v1"
+    );
     let stored = read_adjustment_events(&c, ENTITY).unwrap();
+    // Read back the stored decimal text, not the in-memory input.
+    let expect = |text: &str| text.parse::<Decimal>().unwrap();
+    assert_eq!(stored[0].factors[0], expect("0.661"));
+    assert_eq!(stored[1].factors[2], expect("2"));
+    assert_eq!(stored[2].factors[2], expect("5"));
+    assert_eq!(stored[3].factors[2], expect("0.93584"));
     assert_eq!(stored[0].basis_status, FactorBasisStatus::Verified);
     assert_eq!(stored[1].category, 11);
     assert_eq!(stored[1].basis_status, FactorBasisStatus::Pending);
+
     let (_, canonical) = evidence_store::read_evidence(&c, &written.evidence_digest).unwrap();
     let evidence: Value = serde_json::from_str(&canonical).unwrap();
-    assert_eq!(evidence["categories"], json!([1, 11]));
-    assert_eq!(evidence["basis_statuses"], json!(["verified", "pending"]));
+    assert_eq!(evidence["categories"], json!([1, 11, 11, 11]));
+    assert_eq!(
+        evidence["basis_statuses"],
+        json!(["verified", "pending", "pending", "pending"])
+    );
+    assert_eq!(evidence["factor_precision"], "f32-shortest");
 
-    // The A-share cat1-only path keeps the old evidence shape and label.
-    let cat1_only = event(0, day(2025, 3, 31), [0.661, 0.0, 0.0, 0.0]);
+    // A mismatched factor text is not a f32 shortest round-trip: fail closed.
+    let mut wrong = etf_event(0, day(2025, 3, 31), 1, [0.661, 0.0, 0.0, 0.0]);
+    wrong.factors[0] = expect("0.66");
+    let error = replace_adjustment_events(
+        &c,
+        &etf_set(ENTITY, vec![wrong], 0),
+        binding,
+        "task-bad",
+        "item-bad",
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("shortest round-trip"));
+
+    // The A-share cat1 path keeps 2dp HALF_UP and its old evidence shape/label.
     let plain = replace_adjustment_events(
         &c,
-        &set(ENTITY, vec![cat1_only], 0),
+        &set(
+            ENTITY,
+            vec![event(0, day(2025, 3, 31), [0.661, 0.0, 0.0, 0.0])],
+            0,
+        ),
         binding,
         "task-a",
         "item-a",
@@ -235,10 +296,13 @@ fn etf_category_eleven_facts_carry_pending_basis_without_changing_cat1_evidence(
     .unwrap()
     .unwrap();
     assert_eq!(plain.algorithm_version, ADJUSTMENT_EVENTS_ALGORITHM);
+    let stored = read_adjustment_events(&c, ENTITY).unwrap();
+    assert_eq!(stored[0].factors[0], expect("0.66"));
     let (_, canonical) = evidence_store::read_evidence(&c, &plain.evidence_digest).unwrap();
     let evidence: Value = serde_json::from_str(&canonical).unwrap();
     assert!(evidence.get("categories").is_none());
     assert!(evidence.get("basis_statuses").is_none());
+    assert!(evidence.get("factor_precision").is_none());
 }
 
 #[test]

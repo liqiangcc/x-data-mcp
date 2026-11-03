@@ -3,8 +3,9 @@
 //! that is not a bar series.
 //!
 //! Layer position (separation points 1/2): `adjustment_events` holds the
-//! 解析事实 — the immutable f32 factor bits plus the 2dp business decimals
-//! derived from them — and `derived_dataset_versions` holds only identity and
+//! 解析事实 — the immutable f32 factor bits plus the business decimals derived
+//! from them (A-share 2dp, ETF f32 shortest round-trip) — and
+//! `derived_dataset_versions` holds only identity and
 //! audit for datasets whose rows live in their own typed table. Nothing here
 //! knows a source name: the adapter (`official_market`) hands over an
 //! [`AdjustmentEventSet`].
@@ -22,7 +23,7 @@ use sha2::{Digest as _, Sha256};
 
 use super::{evidence_store, integrity, storage};
 use crate::compact_market::{self, Digest, EvidenceKind};
-use crate::market_data::{AdjustmentEvent, AdjustmentEventSet, FactorBasisStatus};
+use crate::market_data::{AdjustmentEvent, AdjustmentEventSet, FactorBasisStatus, FactorPrecision};
 use crate::market_storage::Error;
 
 /// `derived_dataset_versions.dataset_kind` of the factor set (§3.7).
@@ -34,7 +35,7 @@ pub(crate) const ADJUSTMENT_EVENTS_DIGEST_FORMAT: &str = "adjustment-events-v1";
 pub(crate) const ADJUSTMENT_EVENTS_ALGORITHM: &str = "gbbq-cat1-2dp-v1";
 /// Derivation label when the set also carries category-11 ETF share
 /// conversions. A-share sets keep the unchanged cat1 label above.
-const ETF_ADJUSTMENT_EVENTS_ALGORITHM: &str = "gbbq-etf-factors-2dp-v1";
+const ETF_ADJUSTMENT_EVENTS_ALGORITHM: &str = "gbbq-etf-factors-f32-shortest-v1";
 /// Why every stored `known_at` is NULL (BR-M1-9). Part of the evidence text so
 /// the limitation travels with the data instead of living in a doc only.
 const KNOWN_AT_REASON: &str = "the source carries only the ex-rights (effective) date; no announcement date exists, \
@@ -332,9 +333,23 @@ pub(crate) fn replace_adjustment_events(
                 "only category-1 and category-11 factor facts are stored (other categories stay excluded)",
             ));
         }
-        for factor in event.factors {
-            if factor.round_dp(2) != factor {
-                return Err(integrity("factor is not a 2dp business decimal"));
+        match set.precision {
+            FactorPrecision::Stock2dp => {
+                for factor in event.factors {
+                    if factor.round_dp(2) != factor {
+                        return Err(integrity("factor is not a 2dp business decimal"));
+                    }
+                }
+            }
+            FactorPrecision::EtfF32Shortest => {
+                for (index, factor) in event.factors.iter().enumerate() {
+                    let shortest = f32::from_bits(event.c_bits[index]).to_string();
+                    if factor.to_string() != shortest {
+                        return Err(integrity(
+                            "ETF factor is not the source f32 shortest round-trip decimal",
+                        ));
+                    }
+                }
             }
         }
     }
@@ -448,10 +463,9 @@ pub(crate) fn replace_adjustment_events(
 /// category-11 fact gets the ETF label; a pure category-1 set (the whole
 /// A-share path) keeps the original label byte for byte.
 fn event_algorithm(set: &AdjustmentEventSet) -> &'static str {
-    if set.events.iter().any(|event| event.category == 11) {
-        ETF_ADJUSTMENT_EVENTS_ALGORITHM
-    } else {
-        ADJUSTMENT_EVENTS_ALGORITHM
+    match set.precision {
+        FactorPrecision::Stock2dp => ADJUSTMENT_EVENTS_ALGORITHM,
+        FactorPrecision::EtfF32Shortest => ETF_ADJUSTMENT_EVENTS_ALGORITHM,
     }
 }
 
@@ -484,10 +498,11 @@ fn factor_evidence(set: &AdjustmentEventSet, digest: &Digest) -> Result<Value, E
         "known_at_reason": KNOWN_AT_REASON,
     });
     // Keep a pure A-share factor set's evidence byte-identical: the
-    // category/status breakdown is added only when a category-11 ETF fact is
-    // present (M3-2 PR-B).
-    if set.events.iter().any(|event| event.category == 11) {
+    // category/status/precision breakdown is added only for the ETF precision
+    // (M3-2 PR-B).
+    if set.precision == FactorPrecision::EtfF32Shortest {
         let map = value.as_object_mut().expect("factor evidence is an object");
+        map.insert("factor_precision".into(), json!(set.precision.as_str()));
         map.insert(
             "categories".into(),
             json!(

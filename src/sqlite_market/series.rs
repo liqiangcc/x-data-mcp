@@ -575,47 +575,7 @@ pub(crate) struct RawDailySpan {
 /// Every stock 不复权 daily series, keyed by entity. One row per series, so the
 /// result is bounded by the entity count (thousands), never by the bar count.
 pub(crate) fn raw_daily_spans(c: &Connection) -> Result<BTreeMap<String, RawDailySpan>, Error> {
-    let mut statement = c
-        .prepare(
-            "SELECT entity,series_key,first_day,last_day,price_scale FROM market_series \
-             WHERE period=?1 AND adjustment=?2 AND instrument_class=?3 ORDER BY entity",
-        )
-        .map_err(storage)?;
-    let rows = statement
-        .query_map(
-            params![
-                super::compact_repo::period_code(Period::Day),
-                Adjustment::Raw.code(),
-                INSTRUMENT_CLASS_STOCK
-            ],
-            |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, i64>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                    r.get::<_, i64>(4)?,
-                ))
-            },
-        )
-        .map_err(storage)?;
-    let mut spans = BTreeMap::new();
-    for row in rows {
-        let (entity, series_key, first_day, last_day, price_scale) = row.map_err(storage)?;
-        spans.insert(
-            entity,
-            RawDailySpan {
-                series_key,
-                first_day: crate::compact_market::epoch_date(first_day)
-                    .map_err(|error| invalid(error.to_string()))?,
-                last_day: crate::compact_market::epoch_date(last_day)
-                    .map_err(|error| invalid(error.to_string()))?,
-                price_scale: u32::try_from(price_scale)
-                    .map_err(|_| invalid("negative price_scale"))?,
-            },
-        );
-    }
-    Ok(spans)
+    raw_daily_spans_for(c, INSTRUMENT_CLASS_STOCK)
 }
 
 /// ETF 不复权 daily series registrations, keyed by entity (M3-2 PR-B).

@@ -734,11 +734,23 @@ fn etf_listed_ever_collects_raw_daily_and_reports_absent() {
     assert_eq!(facts.3.len(), 1);
     assert_eq!(facts.3[0].category, 1);
     assert_eq!(
+        facts.3[0].factors[0],
+        "0.661".parse::<rust_decimal::Decimal>().unwrap()
+    );
+    assert_eq!(
         facts.3[0].basis_status,
         crate::market_data::FactorBasisStatus::Verified
     );
     assert_eq!(facts.4.len(), 2);
     assert!(facts.4.iter().all(|event| event.category == 11));
+    assert_eq!(
+        facts
+            .4
+            .iter()
+            .map(|event| event.factors[2].to_string())
+            .collect::<Vec<_>>(),
+        vec!["2".to_string(), "5".to_string()]
+    );
     assert!(
         facts
             .4

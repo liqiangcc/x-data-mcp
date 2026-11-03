@@ -81,8 +81,11 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
 - ETF 单位证据：`price_unit=yuan`（3dp）、`volume_unit=share`、`amount_unit=yuan`；
   不复权 evidence 明确 cat1/cat11 只作事实、不进入价格链。
 - 因子事实：`adjustment_events` 在 schema 27 允许 category 1 与 11，并新增逐行
-  `basis_status`（`verified`/`pending`）。A 股 cat1 行仍为 `verified`，evidence 形状不变；
-  ETF cat11 行标 `pending`，且不参与任何前复权链（D-70 Q3）。
+  `basis_status`（`verified`/`pending`）。A 股 cat1 行仍为 `verified`、`c1..c4` 仍是
+  2dp HALF_UP，evidence 形状不变；ETF cat1/cat11 的 `c1..c4` 按源 f32 最短往返十进制
+  （`0.661`/`0.93584`/`2`）存储、`c_bits_*` 原样，`algorithm_version` 为
+  `gbbq-etf-factors-f32-shortest-v1`；ETF cat11 行标 `pending`，且不参与任何前复权链
+  （D-70 Q3）。
 - 首采/补采仍用 `market.daily` `start_collection` v2；Q4 的 `adjustment` 读取参数与
   ETF 不复权读面属于 PR-C，不在本契约的 PR-B 增量内。
 - D-72：退市 ETF 尾部零成交 bar 原样入库，不截断、不补齐；深市尾部缺 bar 不补。

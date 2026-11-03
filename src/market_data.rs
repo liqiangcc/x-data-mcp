@@ -316,6 +316,25 @@ impl FactorBasisStatus {
     }
 }
 
+/// How a factor set's `c1..c4` decimals were derived. The M1 2dp HALF_UP
+/// contract is the A-share gbbq rule; ETF factor facts keep the source f32's
+/// shortest round-trip decimal so cat1/cat11 values (0.661, 0.93584, ...) are
+/// not rounded away before a future forward chain can use them (M3-2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FactorPrecision {
+    Stock2dp,
+    EtfF32Shortest,
+}
+
+impl FactorPrecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stock2dp => "2dp",
+            Self::EtfF32Shortest => "f32-shortest",
+        }
+    }
+}
+
 /// One corporate-action event of one entity — a 解析事实
 /// (separation point 2, issue-383 §3.6).
 ///
@@ -328,9 +347,10 @@ impl FactorBasisStatus {
 ///   effective date but no known-at date.
 ///
 /// `c_bits` is the immutable fact (the source's f32 bit patterns verbatim);
-/// `factors` is the derived 2dp business decimal (`gbbq-cat1-2dp-v1`). The
-/// relation `normalize(c_bits) == factors` is bound by a test, so "the factors
-/// can be recomputed" is an executable assertion rather than a promise.
+/// `factors` is the derived business decimal for the set's [`FactorPrecision`]
+/// (A-share 2dp `gbbq-cat1-2dp-v1`, ETF f32 shortest round-trip). The relation
+/// between the stored text and `c_bits` is validated by the writer, so "the
+/// factors can be recomputed" is an executable assertion rather than a promise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdjustmentEvent {
     /// Decode order within the entity: a stable ordinal that keeps same-day
@@ -338,11 +358,13 @@ pub struct AdjustmentEvent {
     pub ordinal: i64,
     /// 生效日, as the same epoch-day integer `series_bars.trade_day` uses.
     pub effective_day: NaiveDate,
-    /// Category as decoded; M1 stores only the verified value 1.
+    /// Category as decoded: 1 for A-share/ETF dividends, 11 for ETF share
+    /// conversions. Other categories are excluded, never coerced.
     pub category: u8,
     /// C1..C4 exactly as stored by the source (f32 bit patterns).
     pub c_bits: [u32; 4],
-    /// C1..C4 as the derived 2dp business decimals (stored as `c1..c4`).
+    /// C1..C4 as the set's derived business decimals (stored as `c1..c4`):
+    /// A-share 2dp HALF_UP, or the ETF source f32 shortest round-trip.
     pub factors: [Decimal; 4],
     /// 知晓时间; `None` = unknown, which is the only M1 value.
     pub known_at: Option<NaiveDate>,
@@ -355,15 +377,20 @@ pub struct AdjustmentEvent {
 /// The whole parsed factor set of one entity plus the records this build
 /// refuses to interpret (issue-383 §3.6).
 ///
-/// Non-category-1 records are never stored: their semantics are not verified.
-/// They survive only as the `excluded` count in the evidence bundle, which is
-/// the same accounting the per-security event binding already used.
+/// Besides category 1, ETF category 11 is stored as a fact (M3-2); all other
+/// categories are never stored because their semantics are not verified. They
+/// survive only as the `excluded` count in the evidence bundle, which is the
+/// same accounting the per-security event binding already used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdjustmentEventSet {
     pub entity: String,
     /// Ordered by `ordinal` (the source's decode order).
     pub events: Vec<AdjustmentEvent>,
     pub excluded: usize,
+    /// Which derivation rule produced `factors`. The writer validates the
+    /// decimals against this choice instead of applying the A-share 2dp rule
+    /// to ETF f32 facts.
+    pub precision: FactorPrecision,
 }
 
 impl AdjustmentEventSet {
@@ -375,6 +402,7 @@ impl AdjustmentEventSet {
             entity: entity.into(),
             events: Vec::new(),
             excluded: 0,
+            precision: FactorPrecision::Stock2dp,
         }
     }
 

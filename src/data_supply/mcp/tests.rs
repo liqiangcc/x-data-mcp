@@ -1851,6 +1851,7 @@ fn seed_adjustment_events(fixture: &Fixture, symbol: &str) {
             basis_status: crate::market_data::FactorBasisStatus::Verified,
         }],
         excluded: 0,
+        precision: crate::market_data::FactorPrecision::Stock2dp,
     };
     repo.write(|c| {
         crate::sqlite_market::derived::replace_adjustment_events(

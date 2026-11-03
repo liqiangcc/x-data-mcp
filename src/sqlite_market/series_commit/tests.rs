@@ -3773,6 +3773,7 @@ fn factor_fixture() -> (
             basis_status: crate::market_data::FactorBasisStatus::Verified,
         }],
         excluded: 0,
+        precision: crate::market_data::FactorPrecision::Stock2dp,
     };
     (records, event, factors)
 }

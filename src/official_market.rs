@@ -193,7 +193,9 @@ fn etf_raw_adjustment_evidence(excluded: usize, cat1: usize, cat11: usize) -> Ad
     AdjustmentEvidence::confirmed(
         Adjustment::Raw.as_str(),
         format!(
-            ".day OHLC promoted verbatim with price_scale=3 (厘, no adjustment);              {cat1} category-1 and {cat11} category-11 ETF factor facts are stored              but not applied to raw prices ({excluded} other records excluded uninterpreted); {DECLARED_SCOPE}"
+            ".day OHLC promoted verbatim with price_scale=3 (厘, no adjustment); \
+             {cat1} category-1 and {cat11} category-11 ETF factor facts are stored \
+             but not applied to raw prices ({excluded} other records excluded uninterpreted); {DECLARED_SCOPE}"
         ),
     )
 }
@@ -1100,7 +1102,12 @@ impl MaterializeSession<'_> {
     pub fn factor_set(&self, symbol: &str) -> Result<AdjustmentEventSet, SourceError> {
         let (market, code) = Self::split_symbol(symbol)?;
         let (events, excluded) = self.security_events(market, code)?;
-        Self::parsed_factor_set(symbol, &events, excluded)
+        Self::parsed_factor_set(
+            symbol,
+            &events,
+            excluded,
+            crate::market_data::FactorPrecision::Stock2dp,
+        )
     }
 
     /// The ETF price-factor facts (M3-2 PR-B): category 1 (每 10 份派现) and
@@ -1121,7 +1128,12 @@ impl MaterializeSession<'_> {
                 excluded += 1;
             }
         }
-        let set = Self::parsed_factor_set(symbol, &admitted, excluded)?;
+        let set = Self::parsed_factor_set(
+            symbol,
+            &admitted,
+            excluded,
+            crate::market_data::FactorPrecision::EtfF32Shortest,
+        )?;
         Ok((set, admitted, excluded))
     }
 
@@ -1129,6 +1141,7 @@ impl MaterializeSession<'_> {
         symbol: &str,
         events: &[gbbq::Event],
         excluded: usize,
+        precision: crate::market_data::FactorPrecision,
     ) -> Result<AdjustmentEventSet, SourceError> {
         let mut parsed = Vec::with_capacity(events.len());
         for (ordinal, event) in events.iter().enumerate() {
@@ -1144,9 +1157,11 @@ impl MaterializeSession<'_> {
                 effective_day,
                 category: event.category,
                 c_bits: event.c_raw.map(f32::to_bits),
-                factors: event
-                    .factors()
-                    .map_err(|e| SourceError::InvalidResponse(format!("gbbq factor: {e}")))?,
+                factors: match precision {
+                    crate::market_data::FactorPrecision::Stock2dp => event.factors(),
+                    crate::market_data::FactorPrecision::EtfF32Shortest => event.shortest_factors(),
+                }
+                .map_err(|e| SourceError::InvalidResponse(format!("gbbq factor: {e}")))?,
                 known_at: None,
                 basis_status: if event.category == 1 {
                     crate::market_data::FactorBasisStatus::Verified
@@ -1159,6 +1174,7 @@ impl MaterializeSession<'_> {
             entity: symbol.into(),
             events: parsed,
             excluded,
+            precision,
         })
     }
 
@@ -3953,6 +3969,11 @@ mod archive_cache_tests {
                 .price_unit
                 .reason
                 .contains("price_scale=3")
+        );
+        assert!(
+            !batch.adjustment_evidence.reason.contains("  "),
+            "ETF evidence text must not carry continuation indentation: {}",
+            batch.adjustment_evidence.reason
         );
         assert_eq!(
             batch.unit_currency.volume_unit.value.as_deref(),
