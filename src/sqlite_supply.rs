@@ -2853,6 +2853,9 @@ fn series_metadata(
 
 /// ETF termination date from the main table. Absent (unknown) and present
 /// (D-72 extraction) are distinct wire states; conflicting rows fail closed.
+/// The `DISTINCT` covers every identity interval for the code on purpose: a
+/// reused code whose old interval carried a different delisting date is
+/// ambiguous and must not be resolved by silently taking the newest row.
 fn etf_delisting_date(c: &Connection, entity: &str) -> Result<Option<chrono::NaiveDate>, Error> {
     let (exchange, code) = entity
         .split_once('.')

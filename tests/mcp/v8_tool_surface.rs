@@ -305,6 +305,10 @@ fn capabilities_follow_the_entry_and_match_the_tools_list() {
         "research compact catalog is {} B",
         serde_json::to_vec(&compact).unwrap().len()
     );
+    assert!(
+        compact.get("series").is_none(),
+        "compact catalog must stay a pure tool table"
+    );
 
     // Detailed view (dataset + operation) is byte-identical to the registry.
     let detail = research

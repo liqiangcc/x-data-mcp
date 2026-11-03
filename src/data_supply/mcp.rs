@@ -424,14 +424,12 @@ impl DataApi {
         }
         // The compact (no-filter) catalog stays tool-only and byte-bounded;
         // a dataset/operation request gets the detailed series shapes.
-        let series = if detailed || args.dataset.is_some() {
+        let series = (detailed || args.dataset.is_some()).then(|| {
             super::registry::series_capabilities()
                 .into_iter()
                 .filter(|row| args.dataset.is_none_or(|dataset| row.dataset == dataset))
                 .collect()
-        } else {
-            vec![]
-        };
+        });
         encode(Capabilities {
             capability_revision: "generic-data-v10".into(),
             items,

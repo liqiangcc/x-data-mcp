@@ -466,7 +466,9 @@ fn stored_shapes(c: &Connection, entity: &str, period: Period) -> Result<Vec<Sto
 
 /// The stored `security_master` class for one canonical entity. More than one
 /// distinct class for the same code is a data conflict, not a reason to pick
-/// one.
+/// one. This intentionally considers all identity intervals for the code: a
+/// reused code with an old row of another class fails closed rather than
+/// silently resolving from the newest interval.
 fn master_instrument_class(c: &Connection, entity: &str) -> Result<Option<i64>, Error> {
     let Some((exchange, code)) = entity.split_once('.') else {
         return Err(invalid(format!("non-canonical entity {entity}")));
@@ -567,12 +569,24 @@ pub(crate) fn resolve_read_shape(
             )));
         }
     }
+    // D-70 Q6: the first ETF delivery has no yearly series. Yearly requests
+    // for an ETF are absent (like an index asked through market.daily), not
+    // `adjustment_required_for_etf`; a stored ETF yearly row would contradict
+    // the delivery boundary and fails closed.
+    if kind == ReadSeriesKind::Yearly && master_class == crate::market_data::INSTRUMENT_CLASS_ETF {
+        if !stored.is_empty() {
+            return Err(integrity(format!(
+                "ETF yearly series unexpectedly exists for {entity}"
+            )));
+        }
+        return Ok(None);
+    }
     let shape = match master_class {
         INSTRUMENT_CLASS_STOCK => SeriesShape::stock(requested.unwrap_or(Adjustment::Forward)),
         crate::market_data::INSTRUMENT_CLASS_ETF => match requested {
             None => {
                 return Err(invalid(
-                    "adjustment_required_for_etf: market.daily serves an ETF only at adjustment=raw;                      specify adjustment explicitly",
+                    "adjustment_required_for_etf: market.daily serves an ETF only at adjustment=raw; specify adjustment explicitly",
                 ));
             }
             Some(Adjustment::Forward) => {
@@ -659,12 +673,16 @@ pub(crate) fn last_trade_day(
     c: &Connection,
     series_key: i64,
 ) -> Result<Option<chrono::NaiveDate>, Error> {
+    // Walk the (series_key, trade_day) primary key backwards and stop at the
+    // first bar with volume; unlike MAX(...) over the same predicate this does
+    // not scan the whole series.
     let day: Option<i64> = c
         .query_row(
-            "SELECT MAX(trade_day) FROM series_bars WHERE series_key=?1 AND volume > 0",
+            "SELECT trade_day FROM series_bars WHERE series_key=?1 AND volume > 0              ORDER BY trade_day DESC LIMIT 1",
             params![series_key],
             |row| row.get(0),
         )
+        .optional()
         .map_err(storage)?;
     day.map(|day| compact_market::epoch_date(day).map_err(|e| integrity(e.to_string())))
         .transpose()

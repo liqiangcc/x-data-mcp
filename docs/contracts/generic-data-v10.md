@@ -101,10 +101,15 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
   - 省略 `adjustment` → `adjustment_required_for_etf`（显式错误，不返回空页、不静默 raw）；
   - `adjustment=qfq` → `adjustment_unavailable`（ETF 前复权未交付）；
   - `adjustment=raw` → `market.daily` 返回 3dp（厘）/份的不复权 bar。
+- `market.yearly` 对 ETF 返回 `absent`（D-70 Q6：首期不出 ETF 年线），与 index 经
+  `market.daily` 的处理一致；单只 ETF 与 batch 中的 ETF 成员都只是 absent，不影响同一 batch
+  的 A 股成员。真出现 ETF 年线存储行时按 `integrity_error` fail-closed。
 - shape 解析只有一个入口：head、可见性、availability、version list 与
   `read_public_series` 都按 `market_series` 行的 `instrument_class`/`price_scale` 解析，
   并要求 `security_master` 的品种一致。ETF 序列主表缺行、或存储的 class/scale 与解析结果
   不一致时返回 `integrity_error`，绝不回退成股票 2dp 读法。
+- shape 与 `delisting_date` 对同一 code 的**全部** `security_master` 历史行取 `DISTINCT`；
+  出现多个 class 或多个退市日时 fail-closed（代码复用场景有意如此），不静默取最新行。
 
 **版本元数据（可加字段，A 股不出现）**
 

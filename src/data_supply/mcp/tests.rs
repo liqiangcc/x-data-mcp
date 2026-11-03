@@ -517,6 +517,108 @@ fn query_yearly(version: Value) -> Value {
     })
 }
 
+/// D-70 Q6: ETF has no yearly series. A yearly request sees it as absent —
+/// never `adjustment_required_for_etf` — and a mixed batch still serves the
+/// A-share member normally.
+#[test]
+fn yearly_requests_treat_etf_as_absent_without_breaking_a_share_members() {
+    let f = fixture();
+    let daily_task = task(&f, SYMBOL, 1, "day", "req-etf-yearly-daily");
+    let daily = publish_daily(
+        &f,
+        &daily_task,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
+    let yearly_task = task(&f, SYMBOL, 1, "year", "req-etf-yearly");
+    commit_yearly_plan(
+        &f,
+        &yearly_task,
+        "item-1",
+        SYMBOL,
+        None,
+        &daily.version_id,
+        None,
+    );
+    seed_security_master(&f, &[("sh.600006", None), ("sh.510050", None)]);
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        c.execute(
+            "UPDATE security_master SET instrument_class=2 WHERE exchange='sh' AND code='510050'",
+            [],
+        )
+        .map_err(|e| crate::market_storage::Error::Storage(e.to_string()))?;
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+
+    let etf = json!({"kind":"single","entity":{"exchange":"sh","code":"510050"}});
+    let mixed = json!({
+        "kind":"batch",
+        "entities":[
+            {"exchange":"sh","code":"600006"},
+            {"exchange":"sh","code":"510050"}
+        ]
+    });
+    let body = |selection: Value| {
+        json!({
+            "dataset":"market.yearly",
+            "contract_version":"v1",
+            "selection":selection,
+            "filter":{"kind":"yearly","start_year":2019,"end_year":2030},
+            "version":{"kind":"latest_per_entity"},
+            "page_size":100
+        })
+    };
+
+    let single = f.api.call("query_data", body(etf.clone())).unwrap();
+    assert_eq!(single["version_manifest"][0]["status"], "absent");
+    assert!(single["records"].as_array().unwrap().is_empty());
+
+    let batch = f.api.call("query_data", body(mixed.clone())).unwrap();
+    let manifests = batch["version_manifest"].as_array().unwrap();
+    let by_code = |code: &str| {
+        manifests
+            .iter()
+            .find(|entry| entry["entity"]["code"] == json!(code))
+            .unwrap()
+    };
+    assert_eq!(by_code("510050")["status"], "absent");
+    assert_eq!(by_code("600006")["status"], "present");
+    assert!(
+        batch["records"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["entity"]["code"] == json!("600006"))
+    );
+
+    let availability = f
+        .api
+        .call("get_data_availability", body(etf.clone()))
+        .unwrap();
+    assert_eq!(availability["items"][0]["availability"], "absent");
+
+    let versions = |selection: Value| {
+        json!({
+            "dataset":"market.yearly",
+            "contract_version":"v1",
+            "selection":selection,
+            "page_size":100
+        })
+    };
+    let etf_versions = f.api.call("list_data_versions", versions(etf)).unwrap();
+    assert!(etf_versions["items"].as_array().unwrap().is_empty());
+    let mixed_versions = f.api.call("list_data_versions", versions(mixed)).unwrap();
+    let items = mixed_versions["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["version_ref"]["entity"]["code"], json!("600006"));
+}
+
 #[test]
 fn yearly_wire_reports_fresh_behind_and_stale_pins() {
     let f = fixture();

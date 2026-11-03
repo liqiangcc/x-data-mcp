@@ -414,8 +414,10 @@ pub struct Capabilities {
     pub capability_revision: String,
     pub items: Vec<Capability>,
     /// Price-series 口径/精度/单位 facts (M3-2 PR-C). Additive: tool items are
-    /// unchanged.
-    pub series: Vec<SeriesCapability>,
+    /// unchanged. Omitted from the compact no-filter catalog so that response
+    /// stays a pure tool table.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub series: Option<Vec<SeriesCapability>>,
     pub max_batch_entities: usize,
     pub max_page_size: usize,
     pub max_snapshot_rows: usize,
