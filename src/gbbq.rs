@@ -136,6 +136,26 @@ impl Event {
         }
         Ok(out)
     }
+
+    /// ETF factor facts: the same f32 values at shortest round-trip precision.
+    pub fn shortest_factors(&self) -> Result<[Decimal; 4], Error> {
+        let mut out = [Decimal::ZERO; 4];
+        for (index, raw) in self.c_raw.iter().enumerate() {
+            out[index] = shortest_factor(*raw).ok_or(Error::NonFiniteFactor { index })?;
+        }
+        Ok(out)
+    }
+}
+
+/// The source f32's shortest round-trip decimal, with no HALF_UP step. ETF
+/// factor facts use this rule (M3-2): `0.661` stays `0.661`, `0.93584` stays
+/// `0.93584`, and `2.0` becomes `2`. This is deliberately the Rust `f32`
+/// Display text, not an f64 expansion such as `0.6610000133514404`.
+pub fn shortest_factor(raw: f32) -> Option<Decimal> {
+    if !raw.is_finite() {
+        return None;
+    }
+    Decimal::from_str(&raw.to_string()).ok()
 }
 
 /// Normalize one raw f32 factor to the business-decimal 2dp HALF_UP value.

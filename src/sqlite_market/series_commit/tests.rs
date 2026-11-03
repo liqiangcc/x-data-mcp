@@ -1074,6 +1074,7 @@ fn collection_rejects_unconfirmed_unit_evidence_and_existing_series() {
             security_event_sha256: "0e".repeat(32),
             generation_evidence: generation_evidence(),
             raw: None,
+            etf: None,
         }
     }
 
@@ -1263,6 +1264,7 @@ fn typed_and_envelope_paths_store_identical_series_bytes() {
         security_event_sha256: "0e".repeat(32),
         generation_evidence: generation_evidence(),
         raw: None,
+        etf: None,
     };
     let out = repo_b
         .commit_collection_batch(&task_b, &[item])
@@ -3768,8 +3770,10 @@ fn factor_fixture() -> (
             c_bits: event.c_raw.map(f32::to_bits),
             factors: event.factors().unwrap(),
             known_at: None,
+            basis_status: crate::market_data::FactorBasisStatus::Verified,
         }],
         excluded: 0,
+        precision: crate::market_data::FactorPrecision::Stock2dp,
     };
     (records, event, factors)
 }

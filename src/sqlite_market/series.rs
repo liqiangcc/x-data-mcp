@@ -83,6 +83,20 @@ impl SeriesShape {
         }
     }
 
+    /// ETF series (M3-2 §6 P1/P2, D-28): 不复权 keeps the `.day` 厘
+    /// integers (`price_scale=3`); a future 前复权 series uses the same 1e-6
+    /// 元 precision as stocks. PR-B writes only the raw shape.
+    pub(crate) const fn etf(adjustment: Adjustment) -> Self {
+        Self {
+            adjustment,
+            instrument_class: crate::market_data::INSTRUMENT_CLASS_ETF,
+            price_scale: match adjustment {
+                Adjustment::Raw => compact_market::PRICE_SCALE_LI,
+                Adjustment::Forward => compact_market::PRICE_SCALE_QFQ,
+            },
+        }
+    }
+
     /// Index benchmark series (issue-383 §6.3): 0.01 点 (`price_scale=2`),
     /// 不复权 only — an index level has no corporate action, so it never has
     /// a forward series and never feeds a yearly derivation.
@@ -561,6 +575,20 @@ pub(crate) struct RawDailySpan {
 /// Every stock 不复权 daily series, keyed by entity. One row per series, so the
 /// result is bounded by the entity count (thousands), never by the bar count.
 pub(crate) fn raw_daily_spans(c: &Connection) -> Result<BTreeMap<String, RawDailySpan>, Error> {
+    raw_daily_spans_for(c, INSTRUMENT_CLASS_STOCK)
+}
+
+/// ETF 不复权 daily series registrations, keyed by entity (M3-2 PR-B).
+/// Kept separate from [`raw_daily_spans`] so A-share consumers of the stock
+/// shape never start seeing ETF rows.
+pub(crate) fn etf_raw_daily_spans(c: &Connection) -> Result<BTreeMap<String, RawDailySpan>, Error> {
+    raw_daily_spans_for(c, crate::market_data::INSTRUMENT_CLASS_ETF)
+}
+
+fn raw_daily_spans_for(
+    c: &Connection,
+    instrument_class: i64,
+) -> Result<BTreeMap<String, RawDailySpan>, Error> {
     let mut statement = c
         .prepare(
             "SELECT entity,series_key,first_day,last_day,price_scale FROM market_series \
@@ -572,7 +600,7 @@ pub(crate) fn raw_daily_spans(c: &Connection) -> Result<BTreeMap<String, RawDail
             params![
                 super::compact_repo::period_code(Period::Day),
                 Adjustment::Raw.code(),
-                INSTRUMENT_CLASS_STOCK
+                instrument_class
             ],
             |r| {
                 Ok((
@@ -1984,12 +2012,27 @@ pub(crate) fn insert_bars(
     series_key: i64,
     bars: &[CompactBar],
 ) -> Result<(), Error> {
+    // D-70 Q9: only ETF hand-recorded bars carry `volume_quantum=100`.
+    // A-share hand bars keep the historical NULL even when their r7 marker
+    // is present, so an A-share series' stored bytes stay unchanged.
+    let instrument_class = c
+        .query_row(
+            "SELECT instrument_class FROM market_series WHERE series_key=?1",
+            params![series_key],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(storage)?;
     let mut statement = c
         .prepare(
-            "INSERT INTO series_bars(series_key,trade_day,open_units,high_units,low_units,close_units,volume,amount,r7_raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO series_bars(series_key,trade_day,open_units,high_units,low_units,close_units,volume,amount,r7_raw,volume_quantum) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         )
         .map_err(storage)?;
     for bar in bars {
+        let volume_quantum = (instrument_class == crate::market_data::INSTRUMENT_CLASS_ETF
+            && bar
+                .r7_raw
+                .is_some_and(crate::compact_market::hand_volume_marked))
+        .then_some(100i64);
         statement
             .execute(params![
                 series_key,
@@ -2001,6 +2044,7 @@ pub(crate) fn insert_bars(
                 bar.volume,
                 bar.amount,
                 bar.r7_raw,
+                volume_quantum,
             ])
             .map_err(storage)?;
     }

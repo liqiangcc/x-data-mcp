@@ -3,8 +3,9 @@
 //! that is not a bar series.
 //!
 //! Layer position (separation points 1/2): `adjustment_events` holds the
-//! 解析事实 — the immutable f32 factor bits plus the 2dp business decimals
-//! derived from them — and `derived_dataset_versions` holds only identity and
+//! 解析事实 — the immutable f32 factor bits plus the business decimals derived
+//! from them (A-share 2dp, ETF f32 shortest round-trip) — and
+//! `derived_dataset_versions` holds only identity and
 //! audit for datasets whose rows live in their own typed table. Nothing here
 //! knows a source name: the adapter (`official_market`) hands over an
 //! [`AdjustmentEventSet`].
@@ -22,7 +23,7 @@ use sha2::{Digest as _, Sha256};
 
 use super::{evidence_store, integrity, storage};
 use crate::compact_market::{self, Digest, EvidenceKind};
-use crate::market_data::{AdjustmentEvent, AdjustmentEventSet};
+use crate::market_data::{AdjustmentEvent, AdjustmentEventSet, FactorBasisStatus, FactorPrecision};
 use crate::market_storage::Error;
 
 /// `derived_dataset_versions.dataset_kind` of the factor set (§3.7).
@@ -32,6 +33,9 @@ pub(crate) const ADJUSTMENT_EVENTS_DIGEST_FORMAT: &str = "adjustment-events-v1";
 /// Derivation label in `algorithm_version` (§4.4): the 2dp factor
 /// normalization the digest input is built from.
 pub(crate) const ADJUSTMENT_EVENTS_ALGORITHM: &str = "gbbq-cat1-2dp-v1";
+/// Derivation label when the set also carries category-11 ETF share
+/// conversions. A-share sets keep the unchanged cat1 label above.
+const ETF_ADJUSTMENT_EVENTS_ALGORITHM: &str = "gbbq-etf-factors-f32-shortest-v1";
 /// Why every stored `known_at` is NULL (BR-M1-9). Part of the evidence text so
 /// the limitation travels with the data instead of living in a doc only.
 const KNOWN_AT_REASON: &str = "the source carries only the ex-rights (effective) date; no announcement date exists, \
@@ -248,7 +252,7 @@ pub(crate) fn read_adjustment_events(
     let mut statement = c
         .prepare(
             "SELECT ordinal,effective_day,category,c_bits_1,c_bits_2,c_bits_3,c_bits_4,\
-             c1,c2,c3,c4,known_at FROM adjustment_events WHERE entity=?1 ORDER BY ordinal",
+             c1,c2,c3,c4,known_at,basis_status FROM adjustment_events WHERE entity=?1 ORDER BY ordinal",
         )
         .map_err(storage)?;
     let rows = statement
@@ -266,6 +270,7 @@ pub(crate) fn read_adjustment_events(
                 r.get::<_, String>(9)?,
                 r.get::<_, String>(10)?,
                 r.get::<_, Option<String>>(11)?,
+                r.get::<_, String>(12)?,
             ))
         })
         .map_err(storage)?;
@@ -298,6 +303,8 @@ pub(crate) fn read_adjustment_events(
             ],
             factors,
             known_at,
+            basis_status: FactorBasisStatus::parse(&raw.12)
+                .ok_or_else(|| integrity("stored factor basis_status is unregistered"))?,
         });
     }
     Ok(events)
@@ -321,14 +328,28 @@ pub(crate) fn replace_adjustment_events(
 ) -> Result<Option<DerivedVersionRow>, Error> {
     compact_market::canonical_entity(&set.entity).map_err(|e| integrity(e.to_string()))?;
     for event in &set.events {
-        if event.category != 1 {
+        if !matches!(event.category, 1 | 11) {
             return Err(integrity(
-                "only category-1 events are stored (unverified categories stay excluded)",
+                "only category-1 and category-11 factor facts are stored (other categories stay excluded)",
             ));
         }
-        for factor in event.factors {
-            if factor.round_dp(2) != factor {
-                return Err(integrity("factor is not a 2dp business decimal"));
+        match set.precision {
+            FactorPrecision::Stock2dp => {
+                for factor in event.factors {
+                    if factor.round_dp(2) != factor {
+                        return Err(integrity("factor is not a 2dp business decimal"));
+                    }
+                }
+            }
+            FactorPrecision::EtfF32Shortest => {
+                for (index, factor) in event.factors.iter().enumerate() {
+                    let shortest = f32::from_bits(event.c_bits[index]).to_string();
+                    if factor.to_string() != shortest {
+                        return Err(integrity(
+                            "ETF factor is not the source f32 shortest round-trip decimal",
+                        ));
+                    }
+                }
             }
         }
     }
@@ -360,9 +381,9 @@ pub(crate) fn replace_adjustment_events(
     for event in &set.events {
         c.execute(
             "INSERT INTO adjustment_events(entity,ordinal,effective_day,category,\
-             c_bits_1,c_bits_2,c_bits_3,c_bits_4,c1,c2,c3,c4,\
+             c_bits_1,c_bits_2,c_bits_3,c_bits_4,c1,c2,c3,c4,basis_status,\
              source_binding_digest,evidence_digest,known_at) \
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 set.entity,
                 event.ordinal,
@@ -376,6 +397,7 @@ pub(crate) fn replace_adjustment_events(
                 event.factors[1].to_string(),
                 event.factors[2].to_string(),
                 event.factors[3].to_string(),
+                event.basis_status.as_str(),
                 source_binding_digest.as_slice(),
                 evidence_digest.as_slice(),
                 event.known_at.map(|day| day.to_string()),
@@ -422,7 +444,7 @@ pub(crate) fn replace_adjustment_events(
             record_count,
             first_day,
             last_day,
-            ADJUSTMENT_EVENTS_ALGORITHM,
+            event_algorithm(set),
             source_binding_digest.as_slice(),
             evidence_digest.as_slice(),
             task_id,
@@ -437,6 +459,16 @@ pub(crate) fn replace_adjustment_events(
     ))
 }
 
+/// Label of the factor normalisation a set carries. A set with any
+/// category-11 fact gets the ETF label; a pure category-1 set (the whole
+/// A-share path) keeps the original label byte for byte.
+fn event_algorithm(set: &AdjustmentEventSet) -> &'static str {
+    match set.precision {
+        FactorPrecision::Stock2dp => ADJUSTMENT_EVENTS_ALGORITHM,
+        FactorPrecision::EtfF32Shortest => ETF_ADJUSTMENT_EVENTS_ALGORITHM,
+    }
+}
+
 /// The `derived` evidence bundle of one factor set: how it was interpreted,
 /// what was deliberately excluded, and that the 知晓时间 is unknown.
 fn factor_evidence(set: &AdjustmentEventSet, digest: &Digest) -> Result<Value, Error> {
@@ -448,11 +480,11 @@ fn factor_evidence(set: &AdjustmentEventSet, digest: &Digest) -> Result<Value, E
         .events
         .last()
         .ok_or_else(|| integrity("evidence requires a non-empty event set"))?;
-    Ok(json!({
+    let mut value = json!({
         "dataset": ADJUSTMENT_EVENTS_KIND,
         "dataset_key": set.entity,
         "digest_format": ADJUSTMENT_EVENTS_DIGEST_FORMAT,
-        "algorithm_version": ADJUSTMENT_EVENTS_ALGORITHM,
+        "algorithm_version": event_algorithm(set),
         "content_digest": compact_market::digest_hex(digest),
         "event_count": set.events.len(),
         // Records this build refuses to interpret: counted, never stored.
@@ -464,7 +496,33 @@ fn factor_evidence(set: &AdjustmentEventSet, digest: &Digest) -> Result<Value, E
         // read the factor set as "known when effective".
         "known_at": "unknown",
         "known_at_reason": KNOWN_AT_REASON,
-    }))
+    });
+    // Keep a pure A-share factor set's evidence byte-identical: the
+    // category/status/precision breakdown is added only for the ETF precision
+    // (M3-2 PR-B).
+    if set.precision == FactorPrecision::EtfF32Shortest {
+        let map = value.as_object_mut().expect("factor evidence is an object");
+        map.insert("factor_precision".into(), json!(set.precision.as_str()));
+        map.insert(
+            "categories".into(),
+            json!(
+                set.events
+                    .iter()
+                    .map(|event| event.category)
+                    .collect::<Vec<_>>()
+            ),
+        );
+        map.insert(
+            "basis_statuses".into(),
+            json!(
+                set.events
+                    .iter()
+                    .map(|event| event.basis_status.as_str())
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
+    Ok(value)
 }
 
 #[cfg(test)]

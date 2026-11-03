@@ -278,8 +278,10 @@ impl Fixture {
                         Decimal::ZERO,
                     ],
                     known_at: None,
+                    basis_status: crate::market_data::FactorBasisStatus::Verified,
                 }],
                 excluded: 0,
+                precision: crate::market_data::FactorPrecision::Stock2dp,
             };
             derived::replace_adjustment_events(c, &set, binding, "task-factor", "item-factor")
                 .unwrap();

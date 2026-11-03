@@ -33,12 +33,29 @@ fn day_record(date: u32, ohlc: [u32; 4], amount: f32, volume: u32) -> [u8; 32] {
     r[24..28].copy_from_slice(&volume.to_le_bytes());
     r
 }
+fn day_record_r7(date: u32, ohlc: [u32; 4], amount: f32, volume: u32, r7: u32) -> [u8; 32] {
+    let mut r = day_record(date, ohlc, amount, volume);
+    r[28..32].copy_from_slice(&r7.to_le_bytes());
+    r
+}
 fn gbbq_record(market: u8, code: &str, date_raw: u32, category: u8) -> [u8; 29] {
+    gbbq_factor_record(market, code, date_raw, category, [0.0; 4])
+}
+fn gbbq_factor_record(
+    market: u8,
+    code: &str,
+    date_raw: u32,
+    category: u8,
+    c: [f32; 4],
+) -> [u8; 29] {
     let mut clear = [0u8; 29];
     clear[0] = market;
     clear[1..1 + code.len()].copy_from_slice(code.as_bytes());
     clear[8..12].copy_from_slice(&date_raw.to_le_bytes());
     clear[12] = category;
+    for (index, value) in c.iter().enumerate() {
+        clear[13 + index * 4..17 + index * 4].copy_from_slice(&value.to_le_bytes());
+    }
     crate::gbbq::encrypt_record(&clear)
 }
 fn gbbq_member(records: &[[u8; 29]]) -> Vec<u8> {
@@ -75,6 +92,41 @@ fn days() -> Vec<u8> {
 fn one_day() -> Vec<u8> {
     day_record(day_u32(0), [1128, 1130, 1125, 1129], 0.0, 100).to_vec()
 }
+/// ETF 3dp bars: raw integers are 厘 (41.780 元 = 41_780), never 分.
+fn etf_days() -> Vec<u8> {
+    [
+        day_record(day_u32(2), [41680, 41820, 41600, 41780], 0.0, 10_000),
+        day_record(day_u32(1), [41780, 41900, 41700, 41860], 0.0, 11_000),
+        day_record(day_u32(0), [41860, 42000, 41800, 41950], 0.0, 12_000),
+    ]
+    .concat()
+}
+/// Hand-recorded ETF bar (`sz159338` anchor): volume_raw is hands, so the
+/// source value is 42,937,950 and the true share count is ×100. Amount is the
+/// same 4.293795e9 shares at ~1.15 元, inside the day's raw/1000 range.
+fn etf_hand_days() -> Vec<u8> {
+    [
+        day_record(day_u32(1), [1140, 1160, 1130, 1150], 0.0, 1_000),
+        day_record_r7(
+            day_u32(0),
+            [1150, 1160, 1140, 1158],
+            4_937_864_250.0,
+            42_937_950,
+            0xC364_0053,
+        ),
+    ]
+    .concat()
+}
+/// Delisted ETF tail: the final two bars have zero volume and zero amount
+/// and must stay in the series byte-for-byte (D-72).
+fn etf_delisted_days() -> Vec<u8> {
+    [
+        day_record(day_u32(4), [2000, 2050, 1990, 2040], 2_040_000.0, 1_000),
+        day_record(day_u32(3), [2040, 2060, 2030, 2050], 0.0, 0),
+        day_record(day_u32(2), [2050, 2050, 2050, 2050], 0.0, 0),
+    ]
+    .concat()
+}
 
 /// Mirror snapshot: five codes with bars, two members without any bar, and
 /// enough filler members that the two empty ones stay outside the
@@ -95,6 +147,11 @@ fn write_mirror(dir: &Path) {
         gbbq_record(1, "600103", 20240101, 1),
         gbbq_record(1, "600104", 20240101, 1),
         gbbq_record(1, "600105", 20240101, 1),
+        // M3-2 §12 provenance (synthetic records, not exchange bytes):
+        // sz159919 2025-03-31 cat1 c1=0.661; sz159901 2021-04-12 cat11 c3=2.
+        gbbq_factor_record(0, "159919", 20250331, 1, [0.661, 0.0, 0.0, 0.0]),
+        gbbq_factor_record(0, "159901", 20210412, 11, [0.0, 0.0, 2.0, 0.0]),
+        gbbq_factor_record(0, "159901", 20101122, 11, [0.0, 0.0, 5.0, 0.0]),
     ];
     write_zip(
         &dir.join("gbbq.zip"),
@@ -118,6 +175,14 @@ fn write_mirror(dir: &Path) {
     }
     members.push(("sh\\lday\\sh600901.day", empty));
     members.push(("sz\\lday\\sz000101.day", empty));
+    let etf = etf_days();
+    let etf_hand = etf_hand_days();
+    let etf_delisted = etf_delisted_days();
+    members.push(("sh\\lday\\sh510050.day", etf.as_slice()));
+    members.push(("sz\\lday\\sz159919.day", etf.as_slice()));
+    members.push(("sz\\lday\\sz159901.day", etf.as_slice()));
+    members.push(("sz\\lday\\sz159338.day", etf_hand.as_slice()));
+    members.push(("sh\\lday\\sh510070.day", etf_delisted.as_slice()));
     write_zip(&dir.join("hsjday.zip"), &members);
 }
 fn drive(service: &AcquireService) {
@@ -222,6 +287,34 @@ fn seed_master(backend: &MarketBackend) -> String {
                     code,
                     from,
                     to,
+                    binding.as_slice(),
+                    evidence.as_slice()
+                ],
+            )
+            .unwrap();
+        }
+        // M3-2 PR-B ETF fixtures: three current class=2 members with `.day`,
+        // one delisted member (D-72 close, tail zero bars), and one list-only
+        // member with no `.day` that must be reported absent.
+        for (exchange, code, to, delisting_source) in [
+            ("sh", "510050", None, "unknown"),
+            ("sz", "159919", None, "unknown"),
+            ("sz", "159901", None, "unknown"),
+            ("sz", "159338", None, "unknown"),
+            ("sh", "510070", Some(20000i64), "exchange_list"),
+            ("sh", "589001", None, "unknown"),
+        ] {
+            c.execute(
+                "INSERT INTO security_master(exchange,code,effective_from,effective_to,\
+                 instrument_class,issuer_resolution,listing_date,listing_source,\
+                 delisting_date,delisting_source,delisting_reason_class,listing_conflict,\
+                 delisting_conflict,source_binding_digest,evidence_digest) \
+                 VALUES(?1,?2,0,?3,2,'code_date',0,'exchange_list',?3,?4,'other',0,0,?5,?6)",
+                rusqlite::params![
+                    exchange,
+                    code,
+                    to,
+                    delisting_source,
                     binding.as_slice(),
                     evidence.as_slice()
                 ],
@@ -409,21 +502,23 @@ fn etf_scopes_are_wire_values_but_catalog_rejects_them() {
 }
 
 #[test]
-fn v2_scope_collection_does_not_silently_collect_etf_in_pr_a() {
+fn v2_scope_collection_accepts_the_etf_scopes() {
     let (backend, _dir) = market();
     let contract = ListedEverCollectionContract {
         repository: SqliteSupply { market: backend },
         generation: None,
     };
-    let error = contract
-        .decode(json!({
-            "dataset": "market.daily",
-            "request_id": "etf-scope",
-            "contract_version": "v2",
-            "selection": {"kind": "scope", "scope": "sh_sz_etf_current"}
-        }))
-        .unwrap_err();
-    assert_scope_rejected(error, "sh_sz_a_listed_ever");
+    for scope in ["sh_sz_etf_current", "sh_sz_etf_listed_ever"] {
+        let value = contract
+            .normalize(json!({
+                "dataset": "market.daily",
+                "request_id": "etf-scope",
+                "contract_version": "v2",
+                "selection": {"kind": "scope", "scope": scope}
+            }))
+            .unwrap();
+        assert_eq!(value["selection"]["scope"], json!(scope));
+    }
 }
 
 #[test]
@@ -479,10 +574,188 @@ fn candidates_are_ordinary_a_shares_without_a_series() {
         fact(Exchange::Bj, "830001", 0),
     ];
     let has_series = BTreeSet::from(["sh.600002".to_string()]);
-    let got = ListedEverCollectionContract::candidates(&rows, &has_series);
+    let got =
+        ListedEverCollectionContract::candidates(&rows, &has_series, CatalogScope::ShSzAListedEver);
     assert_eq!(
         got,
         BTreeSet::from(["sh.600001".to_string(), "sz.000004".to_string()])
+    );
+}
+
+#[test]
+fn etf_scopes_admit_class_two_only() {
+    use crate::security_master::Exchange;
+    let current = fact(Exchange::Sh, "510050", 2);
+    let delisted = {
+        let mut row = fact(Exchange::Sh, "510070", 2);
+        row.effective_to = Some(chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap());
+        row.delisting_source = crate::security_master::DelistingSource::ExchangeList;
+        row
+    };
+    let rows = [
+        fact(Exchange::Sh, "600001", 0),
+        fact(Exchange::Sh, "000001", 1),
+        current.clone(),
+        delisted.clone(),
+    ];
+    let has_series = BTreeSet::new();
+    assert_eq!(
+        ListedEverCollectionContract::candidates(&rows, &has_series, CatalogScope::ShSzEtfCurrent),
+        BTreeSet::from(["sh.510050".to_string()])
+    );
+    assert_eq!(
+        ListedEverCollectionContract::candidates(
+            &rows,
+            &has_series,
+            CatalogScope::ShSzEtfListedEver
+        ),
+        BTreeSet::from(["sh.510050".to_string(), "sh.510070".to_string()])
+    );
+    let existing = BTreeSet::from(["sh.510050".to_string()]);
+    assert_eq!(
+        ListedEverCollectionContract::candidates(&rows, &existing, CatalogScope::ShSzEtfListedEver),
+        BTreeSet::from(["sh.510070".to_string()])
+    );
+}
+
+#[test]
+fn etf_listed_ever_collects_raw_daily_and_reports_absent() {
+    let f = fixture();
+    let control = control(&f);
+    let accepted = control
+        .accept(
+            "req-etf-listed-ever",
+            CommandKey {
+                operation: "start_collection".into(),
+                dataset: "market.daily".into(),
+                contract_version: "v2".into(),
+            },
+            payload(
+                "v2",
+                json!({"kind":"scope","scope":"sh_sz_etf_listed_ever"}),
+            ),
+        )
+        .unwrap();
+    let id = task_id(&accepted);
+    let snapshot = control.read_task(&id).unwrap();
+    let symbols: Vec<String> = snapshot
+        .items
+        .iter()
+        .map(|item| item.spec.target["symbol"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        symbols,
+        vec![
+            "sh.510050",
+            "sh.510070",
+            "sz.159338",
+            "sz.159901",
+            "sz.159919"
+        ]
+    );
+    for item in &snapshot.items {
+        assert_eq!(
+            item.spec.frozen_inputs["scope"],
+            json!("sh_sz_etf_listed_ever")
+        );
+        assert_eq!(item.spec.frozen_inputs["absent_count"], json!(1));
+        assert_eq!(
+            item.spec.frozen_inputs["absent"],
+            json!([{"entity":"sh.589001","reason":"source_member_absent"}])
+        );
+    }
+
+    let done = crate::data_supply::worker::run_once(
+        &control,
+        &f.backend,
+        None,
+        Some(&f.generation),
+        crate::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+
+    let facts = f
+        .backend
+        .read(|c| {
+            use crate::market_data::{Adjustment, Period};
+            let etf = crate::sqlite_market::series::read_series_adjusted(
+                c,
+                "sh.510050",
+                Period::Day,
+                Adjustment::Raw,
+            )?
+            .unwrap();
+            let etf_bars = crate::sqlite_market::series::all_bars(c, etf.series_key)?;
+            let hand = crate::sqlite_market::series::read_series_adjusted(
+                c,
+                "sz.159338",
+                Period::Day,
+                Adjustment::Raw,
+            )?
+            .unwrap();
+            let hand_bars = crate::sqlite_market::series::all_bars(c, hand.series_key)?;
+            let delisted = crate::sqlite_market::series::read_series_adjusted(
+                c,
+                "sh.510070",
+                Period::Day,
+                Adjustment::Raw,
+            )?
+            .unwrap();
+            let delisted_bars =
+                crate::sqlite_market::series::all_bars(c, delisted.series_key)?;
+            let quantum: Option<i64> = c
+                .query_row(
+                    "SELECT volume_quantum FROM series_bars WHERE series_key=?1 ORDER BY trade_day DESC LIMIT 1",
+                    rusqlite::params![hand.series_key],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            Ok((
+                (
+                    etf.instrument_class,
+                    etf.price_scale,
+                    etf_bars.last().unwrap().close_units,
+                ),
+                (
+                    hand_bars.last().unwrap().volume,
+                    quantum,
+                ),
+                delisted_bars.len(),
+                crate::sqlite_market::derived::read_adjustment_events(c, "sz.159919")?,
+                crate::sqlite_market::derived::read_adjustment_events(c, "sz.159901")?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(facts.0, (2, 3, 41_950));
+    assert_eq!(facts.1, (Some(4_293_795_000), Some(100)));
+    assert_eq!(facts.2, 3, "delisted tail zero bars are preserved");
+    assert_eq!(facts.3.len(), 1);
+    assert_eq!(facts.3[0].category, 1);
+    assert_eq!(
+        facts.3[0].factors[0],
+        "0.661".parse::<rust_decimal::Decimal>().unwrap()
+    );
+    assert_eq!(
+        facts.3[0].basis_status,
+        crate::market_data::FactorBasisStatus::Verified
+    );
+    assert_eq!(facts.4.len(), 2);
+    assert!(facts.4.iter().all(|event| event.category == 11));
+    assert_eq!(
+        facts
+            .4
+            .iter()
+            .map(|event| event.factors[2].to_string())
+            .collect::<Vec<_>>(),
+        vec!["2".to_string(), "5".to_string()]
+    );
+    assert!(
+        facts
+            .4
+            .iter()
+            .all(|event| { event.basis_status == crate::market_data::FactorBasisStatus::Pending })
     );
 }
 

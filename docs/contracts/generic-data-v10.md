@@ -1,7 +1,9 @@
 # generic-data-v10 契约（M3-2 ETF 身份与 scope 词汇）
 
 **状态**：**代码面（未部署）**。当前部署仍是 [generic-data-v9](generic-data-v9.md) / compact schema 26；
-本文件记录 main 上第一个改 wire 的 M3-2 PR（PR-A，Refs #509）带来的增量。
+本文件记录 M3-2 第一个改 wire 的 PR-A（Refs #509）带来的增量，以及后续 PR-B 对同一 revision
+的补充（不再次升 capability revision）。代码的 fresh compact schema 已是 27（PR-B 的
+`027_etf_factor_events.sql`），部署实例仍是 26。
 
 ## 1. 相对 v9 的增量
 
@@ -11,6 +13,7 @@
 | data 工具数 | ops 16 / research 5 / maint 9 | **不变** |
 | `CatalogScope` 取值 | `current_sh_sz_a`、`sh_sz_a_listed_ever` | 增加 `sh_sz_etf_current`、`sh_sz_etf_listed_ever` |
 | `market.daily` 默认 universe | 目录版本（A 股） | **不变** |
+| `market.daily` ETF 采集 | 无 | v2 `selection.kind=scope` 接受两个 ETF scope；只写不复权日线 |
 | `securities.catalog` | 只接受 `current_sh_sz_a` | **不变**（新值在运行时被拒绝） |
 
 ### 1.1 scope 词汇的作用域
@@ -23,8 +26,12 @@
   `start_collection` 的 `selection.kind=scope`。`securities.catalog`（读与写）拒绝它们，
   错误信息指向 `current_sh_sz_a`。
 - `market.daily` 不填 `selection.scope` 时仍解析目录版本（A 股），成员集与 v9 相同。
-- PR-A 的 `start_collection` 仍只实现 `sh_sz_a_listed_ever`；ETF scope 的采集在 PR-B 落地，
-  当前返回显式错误而不是静默降级。
+- PR-B 的 v2 `start_collection` 已实现 `sh_sz_etf_current` 与 `sh_sz_etf_listed_ever`：
+  成员只取 `instrument_class=2`（不得放宽成所有 class），预算 1..500；名单有、`.day` 无的成员
+  以 `absent` + `reason=source_member_absent`（空成员为 `source_member_empty`）写入每个 item 的
+  frozen evidence，不静默丢、也不伪造成失败 item。A 股 `sh_sz_a_listed_ever` 的成员/报告口径不变。
+- ETF 采集不按 `security_master.effective_from/effective_to` 截取历史 bar：这两个字段是身份观测/
+  退市上界，不是上市区间；上市日在 `listing_date`，可交易上界按 D-72 取「最后有成交日」。
 
 ### 1.2 来源与解析器
 
@@ -60,8 +67,28 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
 - 身份写入器是来源无关的：各来源产出 `security_master::assembly::MemberFact`，
   `member_rows` 统一合并（同一代码取最早出现、上市日冲突 fail-closed）并写 class=2 行。
 - A 股 `security_master` 行内容不变；`market_series`、A 股导出与 A 股 `query_data` 输出不变。
-- 无新 migration：D-72 的提取记录与 PDF 只进来源库；`security_master` 现有列足够表达
-  `delisting_date`/`effective_to`。
+- PR-A/PR-A2 无新 migration：D-72 的提取记录与 PDF 只进来源库；`security_master` 现有列足够表达
+  `delisting_date`/`effective_to`。PR-B 例外：cat11 事实与逐行 `basis_status` 需要
+  `027_etf_factor_events.sql`（fresh compact schema 27），仍按 D-08 全新 init，不做原地升级。
+
+### 1.4 PR-B：精度、量纲与不复权日线
+
+- `.day` 价格按品种取 scale：股票 `price_scale=2`（分），ETF `price_scale=3`（厘）；
+  ETF 必须走 `SeriesShape::etf`，写成 2dp 是静默 10× 错价。股票路径的常量与输出不变。
+- 成交量统一为**份**：股票手日月额一致性按 divisor=100 判定，ETF 按 divisor=1000；
+  手日仍 ×100 还原，ETF 手日另写 `volume_quantum=100`，A 股既有手日保持 NULL（D-70 Q9）。
+  r7 标记与量额一致性矛盾时 ETF 的 item 失败，不写部分序列。
+- ETF 单位证据：`price_unit=yuan`（3dp）、`volume_unit=share`、`amount_unit=yuan`；
+  不复权 evidence 明确 cat1/cat11 只作事实、不进入价格链。
+- 因子事实：`adjustment_events` 在 schema 27 允许 category 1 与 11，并新增逐行
+  `basis_status`（`verified`/`pending`）。A 股 cat1 行仍为 `verified`、`c1..c4` 仍是
+  2dp HALF_UP，evidence 形状不变；ETF cat1/cat11 的 `c1..c4` 按源 f32 最短往返十进制
+  （`0.661`/`0.93584`/`2`）存储、`c_bits_*` 原样，`algorithm_version` 为
+  `gbbq-etf-factors-f32-shortest-v1`；ETF cat11 行标 `pending`，且不参与任何前复权链
+  （D-70 Q3）。
+- 首采/补采仍用 `market.daily` `start_collection` v2；Q4 的 `adjustment` 读取参数与
+  ETF 不复权读面属于 PR-C，不在本契约的 PR-B 增量内。
+- D-72：退市 ETF 尾部零成交 bar 原样入库，不截断、不补齐；深市尾部缺 bar 不补。
 
 ## 2. 未验证 / 部署前待办
 

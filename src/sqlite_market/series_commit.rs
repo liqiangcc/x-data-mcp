@@ -470,43 +470,94 @@ fn commit_factor_set(
     forward: &Commit,
     raw: &crate::market_data::RawBatch,
 ) -> Result<(), Error> {
-    let _span = crate::stage_trace::span("daily.commit.factor_set");
-    if raw.factors.entity != forward.entity {
-        return Err(integrity("factor set belongs to another entity"));
-    }
     let head =
         series::read_series_adjusted(c, forward.entity, forward.period, Adjustment::Forward)?
             .ok_or_else(|| integrity("paired daily commit lost its forward head"))?;
-    // The registration row is the read model's handle; the commit only needs
-    // the write to have happened (a non-empty set always registers).
+    write_entity_facts(
+        c,
+        forward.entity,
+        head.source_binding_digest,
+        &raw.factors,
+        &raw.capital,
+        forward.task_id,
+        forward.item_id,
+    )
+}
+
+/// Store one entity's factor/capital facts bound to the series that was just
+/// committed. Shared by the paired A-share path and the ETF 不复权-only path
+/// so both prove "these facts and these prices are the same input".
+fn write_entity_facts(
+    c: &Connection,
+    entity: &str,
+    source_binding_digest: Digest,
+    factors: &crate::market_data::AdjustmentEventSet,
+    capital: &crate::security_master::CapitalEventSet,
+    task_id: &str,
+    item_id: &str,
+) -> Result<(), Error> {
+    let _span = crate::stage_trace::span("daily.commit.factor_set");
+    if factors.entity != entity {
+        return Err(integrity("factor set belongs to another entity"));
+    }
     let _ = {
         let _span = crate::stage_trace::span("daily.commit.adjustment_events");
-        derived::replace_adjustment_events(
-            c,
-            &raw.factors,
-            head.source_binding_digest,
-            forward.task_id,
-            forward.item_id,
-        )?
+        derived::replace_adjustment_events(c, factors, source_binding_digest, task_id, item_id)?
     };
-    // §12.1: the same gbbq decode also carries the entity's capital facts, and
-    // they are written in the same transaction as the prices they belong to.
-    // The set's entity must be this series' — a mismatched batch is a wiring
-    // bug, never a silent cross-entity write.
-    if raw.capital.entity != forward.entity {
+    if capital.entity != entity {
         return Err(integrity("capital set belongs to another entity"));
     }
     let _ = {
         let _span = crate::stage_trace::span("daily.commit.capital_events");
-        security::replace_capital_events(
-            c,
-            &raw.capital,
-            head.source_binding_digest,
-            forward.task_id,
-            forward.item_id,
-        )?
+        security::replace_capital_events(c, capital, source_binding_digest, task_id, item_id)?
     };
     Ok(())
+}
+
+/// ETF first-publication commit (M3-2 PR-B): one 不复权 series at
+/// `instrument_class=2, price_scale=3`, plus the category-1/11 facts in the
+/// same transaction. There is no forward series to finish as a pair.
+pub(crate) fn commit_etf_tx(
+    c: &Connection,
+    w: &Commit,
+    factors: &crate::market_data::AdjustmentEventSet,
+    capital: &crate::security_master::CapitalEventSet,
+) -> Result<Receipt, Error> {
+    if w.period != Period::Day || w.adjustment != Adjustment::Raw {
+        return Err(integrity(
+            "ETF series are daily 不复权 only (no forward/yearly in PR-B)",
+        ));
+    }
+    let finish = if w.defer_task_row {
+        ItemFinish::ItemRowOnly
+    } else {
+        ItemFinish::ItemAndTask
+    };
+    if let Some(event) = series::event_by_result(c, w.result_id)? {
+        if event.task_id != w.task_id || event.item_id != w.item_id {
+            return Err(Error::Conflict("result identity conflict".into()));
+        }
+        consume_staged(c, w.staged_version_id)?;
+        return Ok(Receipt {
+            publication_id: w.result_id.into(),
+            version_id: series::version_id(&event.new_content_digest),
+            task_id: w.task_id.into(),
+            task_revision: event.task_revision as u64,
+        });
+    }
+    let receipt = commit_series_inner(c, w, finish, series::SeriesShape::etf(Adjustment::Raw))?;
+    let head = series::read_series_adjusted(c, w.entity, w.period, Adjustment::Raw)?
+        .ok_or_else(|| integrity("ETF commit lost its raw head"))?;
+    write_entity_facts(
+        c,
+        w.entity,
+        head.source_binding_digest,
+        factors,
+        capital,
+        w.task_id,
+        w.item_id,
+    )?;
+    Ok(receipt)
 }
 
 /// Write the raw 口径 half of a daily item. The raw series is the source

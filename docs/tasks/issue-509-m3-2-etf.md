@@ -29,7 +29,9 @@
    `raw/1000` 精确相等，`raw/100` 命中 0；ETF 量是**份**，3,819 根「手日」bar（61 只）按标记
    `0xC36400xx` + 量额一致性全部识别，按「分」口径 0 根通过。价格精度与量纲的改动点集中在
    `official_market.rs` 与 `SeriesShape`，**schema 26 已经支持** `instrument_class=2`、
-   `price_scale=3`、`volume_quantum`，**不需要新 migration**（§10）。
+   `price_scale=3`、`volume_quantum`。PR-B 实施时发现因子事实要同时存 cat11 与逐行
+   `basis_status`，而 schema 26 的 `adjustment_events.category` 只允许 1，因此追加了
+   `027_etf_factor_events.sql`（fresh compact schema 27），见 §10.1 的实施注记。
 3. **缺口**：`hsjday` 有、现名单无的 **128** 只（候选退市，全部有 `base.dbf` 行）；名单有、`.day` 无的
    **86** 只（全沪市 526/551/589 段，而 `hsjday` 这三段**各 0 成员**，同期 2026 年上市的 306 只都在，
    所以不是「新上市滞后」，是源覆盖缺段）。这两类都不能静默处理（§4）。
@@ -383,7 +385,7 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
 | P15 | `src/data_supply/columnar.rs:29` | 读面列集无 `price_scale` | 值本身是 decimal（`to_bar` 已按 scale 解码），读不需要 scale；建议版本元数据**加** `price_scale`（可加性字段，§9.2） |
 | P16 | `src/data_supply/collect.rs:320-336` | 首采候选只收 class=0 | 新 scope 分支收 class=2；不得放宽成"所有 class" |
 | P17 | `src/data_supply/delisted_series.rs:250-258` | 退市检查只对 class=0 | 本批不改（ETF 退市身份未知）；写明"ETF 不参与该检查" |
-| P18 | `migrations/tasks/022_research_data.sql:29-37/70-90/106-108` | class 0/1/2、scale 0..6、`volume_quantum` | **无需 migration**；只有 Q5 选"进 catalog"才需要 027 |
+| P18 | `migrations/tasks/022_research_data.sql:29-37/70-90/106-108` | class 0/1/2、scale 0..6、`volume_quantum` | 价格/量纲列**无需 migration**；PR-B 的 cat11 + 逐行 `basis_status` 另加 027（§10.1） |
 
 **为什么现在才发现**：M1 已把价格单位从"分"改成"按序列 scale"（schema 22），XDM-15 的 `cents()`
 清单（2dp 拒绝 3dp）已过期；真正剩余的是 `.day` 适配器的写入/校验、读面可见性与导出的品种过滤。
@@ -441,6 +443,10 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
   （159919 2025-03-31，§2.1）；内部一致性 925/967（±1.5%）。
 - cat11：`c3` = **份额倍数**，价格因子 `1/c3`。用官方前收锚定 3 个事件（159901 2021-04-12 `c3=2`、
   2010-11-22 `c3=5`；另 XDM-15 的 159901 之外 1 个）；内部一致性 175/176（±6%）。
+- **ETF 因子存储口径（PR-B）**：cat1/cat11 的 `c1..c4` 按源 f32 的**最短往返十进制**存储
+  （`0.661`、`0.93584`、`2`），`c_bits_*` 原样保留；不套用 A 股的 2dp HALF_UP
+  （`gbbq-cat1-2dp-v1` 仍是 A 股口径）。ETF 集合的 `algorithm_version` 为
+  `gbbq-etf-factors-f32-shortest-v1`，后续前复权直接使用这些事实值。
 - cat11 的 `c3` 分布（名单成员）：`2.0` 82、`0.01` 25（货币 ETF，多在首根 bar 之前）、`3.0` 25、
   `5.0` 7、`4.0` 7、`10.0` 5、`2.5` 4、`1.5` 3、`0.1` 2，其余为单个非整数
   （0.19–0.95 / 1.1–11.8 等，多为分级/折算类历史基金）。
@@ -555,8 +561,11 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 
 - **不需要**：`instrument_class IN (0,1,2)`、`price_scale BETWEEN 0 AND 6`、`series_bars.*_units`、
   `volume_quantum`、`yearly_series_lineage.base_instrument_class` 都已存在（§2.3）。
-- 只有 Q5 选择"把 ETF 放进 `securities.catalog`"时，才需要 migration 027（`catalog_members.instrument_class`）；
-  推荐方案（§5.3）避免它。
+- 价格/量纲列不需要 migration。**PR-B 实施注记（偏离本节原结论）**：因子事实要求 cat1/cat11
+  都落行且逐行带 `basis_status`，而 022 的 `adjustment_events.category CHECK(category=1)` 不允许
+  cat11，因此 PR-B 增加 `027_etf_factor_events.sql`（重建该表，category 允许 1/11，新增
+  `basis_status`），fresh compact schema 变为 27；仍按 D-08 全新 init，不做原地升级。
+  Q5 推荐的"不进 catalog"不变，不需要 `catalog_members.instrument_class`。
 - 来源快照使用既有 `exchange_source_snapshots` + 来源库（M3 §9.4），不需要新表；ETF 名单新增
   `source_id` 两个值，属数据不是 schema。
 

@@ -105,14 +105,45 @@ fn amount_decimal(bits: u32) -> Option<Decimal> {
 /// A hand-recorded bar is only precise to 100 shares: the source field
 /// dropped the remainder, and the contract has no per-bar volume precision
 /// field to carry that limit (see the XDM-19 issue).
-fn normalized_volume(record: &day_file::RawDayRecord) -> Option<Decimal> {
+fn normalized_volume(record: &day_file::RawDayRecord, price_divisor: Decimal) -> Option<Decimal> {
+    decide_volume(record, price_divisor).ok().flatten()
+}
+
+/// ETF 口径 volume decision (M3-2 §7.1): the same marker+amount rule as
+/// stocks, with the ETF price divisor (1000). A contradictory record is an
+/// item failure — never a guess and never a partially written series.
+fn checked_volume(
+    record: &day_file::RawDayRecord,
+    price_divisor: Decimal,
+) -> Result<Option<Decimal>, SourceError> {
+    decide_volume(record, price_divisor).map_err(|detail| {
+        SourceError::InvalidResponse(format!(
+            ".day volume unit is contradictory on {}: {detail}",
+            record.date
+        ))
+    })
+}
+
+fn decide_volume(
+    record: &day_file::RawDayRecord,
+    price_divisor: Decimal,
+) -> Result<Option<Decimal>, &'static str> {
     let marked = (record.r7_raw & HAND_VOLUME_MARKER_MASK) == HAND_VOLUME_MARKER;
-    let consistent = hands_consistent(record);
+    let consistent = hands_consistent(record, price_divisor);
     match (marked, consistent) {
-        (true, true) => Some(Decimal::from(record.volume_raw) * Decimal::from(SHARES_PER_HAND)),
-        (true, false) | (false, true) => None,
-        (false, false) => Some(Decimal::from(record.volume_raw)),
+        (true, true) => Ok(Some(
+            Decimal::from(record.volume_raw) * Decimal::from(SHARES_PER_HAND),
+        )),
+        (true, false) => Err("the r7 hand marker is present but amount/volume disagrees"),
+        (false, true) => Err("amount/volume matches hands but the r7 hand marker is absent"),
+        (false, false) => Ok(Some(Decimal::from(record.volume_raw))),
     }
+}
+
+/// `10^price_scale`: the `.day` integer's 元 divisor. Stock 2dp = 100,
+/// ETF 3dp = 1000 (M3-2 §7.1).
+fn price_divisor(price_scale: u32) -> Decimal {
+    Decimal::from(10u64.pow(price_scale))
 }
 
 /// Raw 口径 evidence: the `.day` prices are the fact itself; category-1
@@ -122,6 +153,49 @@ fn raw_adjustment_evidence(excluded: usize) -> AdjustmentEvidence {
         Adjustment::Raw.as_str(),
         format!(
             ".day OHLC promoted verbatim (fen, no adjustment); category==1 GBBQ events are not applied to raw prices ({excluded} non-category-1 records excluded uninterpreted); {DECLARED_SCOPE}"
+        ),
+    )
+}
+
+/// Unit evidence of an ETF 不复权 series (M3-2 §7.1/P6): `.day` OHLC is 厘
+/// (yuan at 3dp), volume is 份, amount is 元. The hand-recorded volume is
+/// restored to shares (×100) and the per-bar precision is carried by
+/// `volume_quantum=100`, so the evidence must not reuse the A-share "fen"
+/// wording that would describe a 10× wrong price.
+fn etf_unit_evidence() -> UnitCurrencyEvidence {
+    UnitCurrencyEvidence {
+        price_currency: EvidenceValue::confirmed(
+            "CNY",
+            "ETF `.day` raw OHLC are 厘 integers of yuan-denominated prices; 861/861 SSE prev_close and 558/558 SZSE OHLC match raw/1000 (M3-2 §2.1)",
+        ),
+        price_unit: EvidenceValue::confirmed(
+            "yuan",
+            "ETF `.day` price unit is yuan at price_scale=3 (厘); raw/100 matches 0/861 SSE and 0/558 SZSE samples, so 2dp is a 10× misprice",
+        ),
+        volume_unit: EvidenceValue::confirmed(
+            "share",
+            "ETF `.day` volume is 份; hand-recorded bars (r7 marker + amount/volume consistency) are multiplied by 100 and stored with volume_quantum=100",
+        ),
+        amount_currency: EvidenceValue::confirmed(
+            "CNY",
+            "ETF `.day` amount is f32 yuan; 557/558 SZSE samples match the official 万元×1e4 value within 1000 元",
+        ),
+        amount_unit: EvidenceValue::confirmed(
+            "yuan",
+            "ETF `.day` amount is f32 yuan and is never converted or adjustment-scaled",
+        ),
+    }
+}
+
+/// 不复权 evidence for an ETF series. Category 1 and category 11 records are
+/// parsed as facts, but neither is applied to prices (D-70 Q3).
+fn etf_raw_adjustment_evidence(excluded: usize, cat1: usize, cat11: usize) -> AdjustmentEvidence {
+    AdjustmentEvidence::confirmed(
+        Adjustment::Raw.as_str(),
+        format!(
+            ".day OHLC promoted verbatim with price_scale=3 (厘, no adjustment); \
+             {cat1} category-1 and {cat11} category-11 ETF factor facts are stored \
+             but not applied to raw prices ({excluded} other records excluded uninterpreted); {DECLARED_SCOPE}"
         ),
     )
 }
@@ -170,7 +244,7 @@ fn index_adjustment_evidence() -> AdjustmentEvidence {
 /// recorded amount buy exactly `volume` hands at a price inside the day's
 /// own range? Zero volume/amount makes the ratio undefined, which is not a
 /// confirmation.
-fn hands_consistent(record: &day_file::RawDayRecord) -> bool {
+fn hands_consistent(record: &day_file::RawDayRecord, price_divisor: Decimal) -> bool {
     if record.volume_raw == 0 {
         return false;
     }
@@ -182,8 +256,8 @@ fn hands_consistent(record: &day_file::RawDayRecord) -> bool {
     }
     let hands = Decimal::from(record.volume_raw) * Decimal::from(SHARES_PER_HAND);
     let vwap = amount / hands;
-    let low = Decimal::from(record.ohlc_raw[2]) / Decimal::from(100);
-    let high = Decimal::from(record.ohlc_raw[1]) / Decimal::from(100);
+    let low = Decimal::from(record.ohlc_raw[2]) / price_divisor;
+    let high = Decimal::from(record.ohlc_raw[1]) / price_divisor;
     (low..=high).contains(&vwap)
 }
 
@@ -488,6 +562,14 @@ pub struct MaterializedPair {
     /// The entity's parsed category-1 factor facts (§3.6).
     pub factors: AdjustmentEventSet,
     /// The entity's capital facts from the same gbbq decode (§12.1).
+    pub capital: crate::security_master::CapitalEventSet,
+}
+
+/// One ETF's 不复权-only write set (M3-2 PR-B). There is no forward series:
+/// category 1/11 events travel as facts, never as QFQ input (D-70 Q3).
+pub struct MaterializedEtf {
+    pub raw: MarketDataBatch,
+    pub factors: AdjustmentEventSet,
     pub capital: crate::security_master::CapitalEventSet,
 }
 
@@ -1020,6 +1102,47 @@ impl MaterializeSession<'_> {
     pub fn factor_set(&self, symbol: &str) -> Result<AdjustmentEventSet, SourceError> {
         let (market, code) = Self::split_symbol(symbol)?;
         let (events, excluded) = self.security_events(market, code)?;
+        Self::parsed_factor_set(
+            symbol,
+            &events,
+            excluded,
+            crate::market_data::FactorPrecision::Stock2dp,
+        )
+    }
+
+    /// The ETF price-factor facts (M3-2 PR-B): category 1 (每 10 份派现) and
+    /// category 11 (份额折算) are stored as neutral facts. No price is
+    /// adjusted from them; category 11 carries `pending` basis status because
+    /// only three events are price-anchored (D-70 Q3).
+    fn etf_factor_set(
+        &self,
+        symbol: &str,
+        all: &[gbbq::Event],
+    ) -> Result<(AdjustmentEventSet, Vec<gbbq::Event>, usize), SourceError> {
+        let mut admitted = Vec::new();
+        let mut excluded = 0usize;
+        for event in all {
+            if matches!(event.category, 1 | 11) {
+                admitted.push(event.clone());
+            } else {
+                excluded += 1;
+            }
+        }
+        let set = Self::parsed_factor_set(
+            symbol,
+            &admitted,
+            excluded,
+            crate::market_data::FactorPrecision::EtfF32Shortest,
+        )?;
+        Ok((set, admitted, excluded))
+    }
+
+    fn parsed_factor_set(
+        symbol: &str,
+        events: &[gbbq::Event],
+        excluded: usize,
+        precision: crate::market_data::FactorPrecision,
+    ) -> Result<AdjustmentEventSet, SourceError> {
         let mut parsed = Vec::with_capacity(events.len());
         for (ordinal, event) in events.iter().enumerate() {
             let effective_day = event_day(event.date_raw).ok_or_else(|| {
@@ -1034,16 +1157,24 @@ impl MaterializeSession<'_> {
                 effective_day,
                 category: event.category,
                 c_bits: event.c_raw.map(f32::to_bits),
-                factors: event
-                    .factors()
-                    .map_err(|e| SourceError::InvalidResponse(format!("gbbq factor: {e}")))?,
+                factors: match precision {
+                    crate::market_data::FactorPrecision::Stock2dp => event.factors(),
+                    crate::market_data::FactorPrecision::EtfF32Shortest => event.shortest_factors(),
+                }
+                .map_err(|e| SourceError::InvalidResponse(format!("gbbq factor: {e}")))?,
                 known_at: None,
+                basis_status: if event.category == 1 {
+                    crate::market_data::FactorBasisStatus::Verified
+                } else {
+                    crate::market_data::FactorBasisStatus::Pending
+                },
             });
         }
         Ok(AdjustmentEventSet {
             entity: symbol.into(),
             events: parsed,
             excluded,
+            precision,
         })
     }
 
@@ -1089,7 +1220,7 @@ impl MaterializeSession<'_> {
                 sha256: crate::hash::sha256(&day_bytes),
             },
             Adjustment::Raw,
-            Self::raw_bars(&raw_bars)?,
+            Self::raw_bars(&raw_bars, compact_market::PRICE_SCALE_CENTS)?,
             &events,
             excluded,
         )?;
@@ -1109,6 +1240,112 @@ impl MaterializeSession<'_> {
             forward,
             factors: self.factor_set(symbol)?,
             capital: self.capital_set(symbol)?,
+        })
+    }
+
+    /// One ETF's 不复权 daily facts from a single member read (M3-2 PR-B).
+    /// Prices are `.day` 厘 integers (scale 3); volume/amount are promoted
+    /// with the ETF price divisor (1000); a contradictory hand marker fails
+    /// before anything is staged. Category-1/11 factor facts come from the
+    /// same gbbq decode and are committed with this series.
+    pub fn materialize_etf(&self, symbol: &str) -> Result<MaterializedEtf, SourceError> {
+        let (market, code) = Self::split_symbol(symbol)?;
+        let source = self.source;
+        let (day_member, day_bytes) =
+            self.member_bytes(&source.day, &Self::day_names(market, code))?;
+        let raw_bars = day_file::parse(&day_bytes)
+            .map_err(|e| SourceError::InvalidResponse(format!(".day member malformed: {e}")))?;
+        if raw_bars.is_empty() {
+            return Err(SourceError::InvalidResponse(
+                ".day member carries no records".into(),
+            ));
+        }
+        let all_events = self.security_all_events(market, code)?;
+        let (factors, admitted, excluded) = self.etf_factor_set(symbol, &all_events)?;
+        let bars = Self::etf_raw_bars(&raw_bars)?;
+        let raw = self.assemble_etf_daily(
+            symbol,
+            DayMemberRead {
+                member: day_member,
+                sha256: crate::hash::sha256(&day_bytes),
+            },
+            bars,
+            &admitted,
+            excluded,
+        )?;
+        Ok(MaterializedEtf {
+            raw,
+            factors,
+            capital: self.capital_set(symbol)?,
+        })
+    }
+
+    /// Build the ETF batch: the same snapshot bindings as a stock batch, but
+    /// ETF unit/adjustment evidence and no gbbq category-1 interpretation.
+    fn assemble_etf_daily(
+        &self,
+        symbol: &str,
+        day: DayMemberRead,
+        bars: Vec<Bar>,
+        events: &[gbbq::Event],
+        excluded: usize,
+    ) -> Result<MarketDataBatch, SourceError> {
+        let source = self.source;
+        let cat1 = events.iter().filter(|event| event.category == 1).count();
+        let cat11 = events.iter().filter(|event| event.category == 11).count();
+        let gbbq = self.decoded_gbbq()?;
+        let acquired_at = source
+            .day
+            .acquisition_completed_at
+            .max(source.gbbq.acquisition_completed_at);
+        let day_binding = SnapshotInputBinding {
+            role: serde_json::to_value(source.day.role)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            member: day.member,
+            archive_sha256: source.day.sha256.clone(),
+            member_sha256: day.sha256,
+        };
+        let gbbq_binding = SnapshotInputBinding {
+            role: serde_json::to_value(source.gbbq.role)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string(),
+            member: gbbq.member.clone(),
+            archive_sha256: source.gbbq.sha256.clone(),
+            member_sha256: gbbq.sha256.clone(),
+        };
+        let events_binding = SnapshotInputBinding {
+            role: SECURITY_EVENTS_ROLE.into(),
+            member: format!("gbbq#{symbol}"),
+            archive_sha256: source.gbbq.sha256.clone(),
+            member_sha256: security_events_digest(events, excluded),
+        };
+        Ok(MarketDataBatch {
+            symbol: symbol.into(),
+            period: Period::Day,
+            adjustment: Adjustment::Raw,
+            bars,
+            provenance: Provenance {
+                source: SOURCE_NAME.into(),
+                source_period: "day".into(),
+                source_adjustment: Adjustment::Raw.as_str().into(),
+                symbol: symbol.into(),
+                acquired_at,
+                adapter_version: ADAPTER_VERSION.into(),
+                yearly_derivation: None,
+                snapshot_inputs: Some(vec![day_binding, gbbq_binding, events_binding]),
+            },
+            coverage: CoverageEvidence::complete(format!(
+                "complete .day member history from inspected snapshot manifest {}; \
+                 tail zero-volume bars are preserved as recorded (no truncation, no fill); {DECLARED_SCOPE}",
+                source.manifest_sha256
+            )),
+            unit_currency: etf_unit_evidence(),
+            adjustment_evidence: etf_raw_adjustment_evidence(excluded, cat1, cat11),
         })
     }
 
@@ -1264,7 +1501,7 @@ impl MaterializeSession<'_> {
         }
         let (events, excluded) = self.security_events(market, code)?;
         let bars = match adjustment {
-            Adjustment::Raw => Self::raw_bars(&raw_bars)?,
+            Adjustment::Raw => Self::raw_bars(&raw_bars, compact_market::PRICE_SCALE_CENTS)?,
             Adjustment::Forward => Self::qfq_bars(&raw_bars, &events)?,
         };
         self.assemble_daily(
@@ -1298,20 +1535,45 @@ impl MaterializeSession<'_> {
     /// fen integers as 2dp yuan with no transform; volume/amount come from
     /// the same #381 decisions the forward series uses, so both 口径 carry
     /// identical volume/amount (issue-383 §4.1, AC-M1-1).
-    fn raw_bars(raw_bars: &[crate::day_file::RawDayRecord]) -> Result<Vec<Bar>, SourceError> {
-        Ok(raw_bars
-            .iter()
-            .map(|raw| Bar {
+    fn raw_bars(
+        raw_bars: &[crate::day_file::RawDayRecord],
+        price_scale: u32,
+    ) -> Result<Vec<Bar>, SourceError> {
+        Self::raw_bars_with(raw_bars, price_scale, false)
+    }
+
+    /// ETF 不复权 bars: `.day` integers are 厘 (scale 3), and a contradictory
+    /// hand marker/amount pair fails the item instead of publishing an
+    /// unknown-unit volume (M3-2 §7.1, AC-M3-2-3).
+    fn etf_raw_bars(raw_bars: &[crate::day_file::RawDayRecord]) -> Result<Vec<Bar>, SourceError> {
+        Self::raw_bars_with(raw_bars, compact_market::PRICE_SCALE_LI, true)
+    }
+
+    fn raw_bars_with(
+        raw_bars: &[crate::day_file::RawDayRecord],
+        price_scale: u32,
+        strict_volume: bool,
+    ) -> Result<Vec<Bar>, SourceError> {
+        let divisor = price_divisor(price_scale);
+        let mut bars = Vec::with_capacity(raw_bars.len());
+        for raw in raw_bars {
+            let volume = if strict_volume {
+                checked_volume(raw, divisor)?
+            } else {
+                normalized_volume(raw, divisor)
+            };
+            bars.push(Bar {
                 date: raw.date,
-                open: Decimal::new(i64::from(raw.ohlc_raw[0]), 2),
-                high: Decimal::new(i64::from(raw.ohlc_raw[1]), 2),
-                low: Decimal::new(i64::from(raw.ohlc_raw[2]), 2),
-                close: Decimal::new(i64::from(raw.ohlc_raw[3]), 2),
-                volume: normalized_volume(raw),
+                open: Decimal::new(i64::from(raw.ohlc_raw[0]), price_scale),
+                high: Decimal::new(i64::from(raw.ohlc_raw[1]), price_scale),
+                low: Decimal::new(i64::from(raw.ohlc_raw[2]), price_scale),
+                close: Decimal::new(i64::from(raw.ohlc_raw[3]), price_scale),
+                volume,
                 amount: amount_decimal(raw.amount_float32_bits),
                 r7_raw: Some(raw.r7_raw),
-            })
-            .collect())
+            });
+        }
+        Ok(bars)
     }
 
     /// Map verified-raw `.day` records through the exact QFQ event chain into
@@ -1341,7 +1603,7 @@ impl MaterializeSession<'_> {
                 high: b.high,
                 low: b.low,
                 close: b.close,
-                volume: normalized_volume(raw),
+                volume: normalized_volume(raw, price_divisor(compact_market::PRICE_SCALE_CENTS)),
                 amount: amount_decimal(b.amount_float32_bits),
                 r7_raw: Some(b.r7_raw),
             })
@@ -1871,7 +2133,8 @@ impl TdxRangeProvider<'_> {
             }
             Continuity::Append { tail, .. } => {
                 let tail_bars = MaterializeSession::qfq_bars(&tail, &events)?;
-                let raw_tail = MaterializeSession::raw_bars(&tail)?;
+                let raw_tail =
+                    MaterializeSession::raw_bars(&tail, compact_market::PRICE_SCALE_CENTS)?;
                 let all_tail_in_range = tail_bars
                     .iter()
                     .all(|bar| range.start <= bar.date && bar.date <= range.end);
@@ -2160,7 +2423,8 @@ impl RangeProvider for TdxRangeProvider<'_> {
             Continuity::Append { tail, .. } => {
                 let mut bars = base.batch.bars.clone();
                 bars.extend(MaterializeSession::qfq_bars(&tail, &events)?);
-                let raw_tail = MaterializeSession::raw_bars(&tail)?;
+                let raw_tail =
+                    MaterializeSession::raw_bars(&tail, compact_market::PRICE_SCALE_CENTS)?;
                 let batch = self.session.assemble_daily(
                     &symbol,
                     DayMemberRead {
@@ -2802,6 +3066,15 @@ pub struct CollectionCandidate {
     /// The 不复权 side committed in the same transaction (issue-383 §9.1);
     /// `None` only for fixtures that do not model the raw series.
     pub raw: Option<crate::market_data::RawBatch>,
+    /// ETF-only facts: when present this candidate writes one 不复权 series
+    /// at `instrument_class=2, price_scale=3` (no forward side) and stores the
+    /// category-1/11 facts in the same transaction (M3-2 PR-B).
+    pub etf: Option<EtfCollectionFacts>,
+}
+
+pub struct EtfCollectionFacts {
+    pub factors: crate::market_data::AdjustmentEventSet,
+    pub capital: crate::security_master::CapitalEventSet,
 }
 
 /// Repository surface for collection publication: generic commit plus the
@@ -3116,14 +3389,44 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "existing daily head requires the update_data range path".into(),
             ));
         }
-        let pair = match self.session {
-            Some(session) => session.materialize_pair(symbol),
-            None => self.source.materialize_session().materialize_pair(symbol),
-        }
-        .map_err(|e| Error::Invalid(e.to_string()))?;
-        let (raw_batch, batch, factors, capital) =
-            (pair.raw, pair.forward, pair.factors, pair.capital);
+        let etf_scope = matches!(
+            binding.item.spec.frozen_inputs["scope"].as_str(),
+            Some("sh_sz_etf_current" | "sh_sz_etf_listed_ever")
+        );
         let id = crate::hash::sha256(serde_json::json!([task_id, item_id]).to_string().as_bytes());
+        let (batch, raw, etf) = if etf_scope {
+            let materialized = match self.session {
+                Some(session) => session.materialize_etf(symbol),
+                None => self.source.materialize_session().materialize_etf(symbol),
+            }
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+            (
+                materialized.raw,
+                None,
+                Some(EtfCollectionFacts {
+                    factors: materialized.factors,
+                    capital: materialized.capital,
+                }),
+            )
+        } else {
+            let pair = match self.session {
+                Some(session) => session.materialize_pair(symbol),
+                None => self.source.materialize_session().materialize_pair(symbol),
+            }
+            .map_err(|e| Error::Invalid(e.to_string()))?;
+            let (raw_batch, batch, factors, capital) =
+                (pair.raw, pair.forward, pair.factors, pair.capital);
+            (
+                batch,
+                Some(crate::market_data::RawBatch::new(
+                    raw_batch.bars,
+                    raw_batch.adjustment_evidence,
+                    factors,
+                    capital,
+                )),
+                None,
+            )
+        };
         let (records, _) =
             publish::validate_and_deduplicate(&batch).map_err(|e| Error::Invalid(e.to_string()))?;
         let inputs = batch.provenance.snapshot_inputs.clone().unwrap_or_default();
@@ -3157,12 +3460,8 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
                 "manifest_sha256": self.source.manifest_sha256(),
                 "snapshot_inputs": inputs,
             }),
-            raw: Some(crate::market_data::RawBatch::new(
-                raw_batch.bars,
-                raw_batch.adjustment_evidence,
-                factors,
-                capital,
-            )),
+            raw,
+            etf,
         }))
     }
 
@@ -3179,6 +3478,19 @@ impl<'a, R: DailyCollectionRepository + Clone> TdxDailyRunner<'a, R> {
             .ok_or_else(|| Error::Integrity("collection item target missing symbol".into()))?;
         if target["period"] != Value::String("day".into()) {
             return Err(Error::Invalid("collection target is not daily".into()));
+        }
+        // The envelope path below is the stock pair (forward 2dp + raw 2dp).
+        // ETF items must be written by the typed raw path (`collection_candidate`
+        // -> `commit_etf_tx`); a fallback here must fail closed instead of
+        // silently publishing ETF prices as a stock series.
+        if matches!(
+            binding.item.spec.frozen_inputs["scope"].as_str(),
+            Some("sh_sz_etf_current" | "sh_sz_etf_listed_ever")
+        ) {
+            return Err(Error::Invalid(
+                "ETF collection must use the typed raw path; refusing stock-side materialization"
+                    .into(),
+            ));
         }
         let scope = Scope {
             symbol: symbol.into(),
@@ -3609,5 +3921,138 @@ mod archive_cache_tests {
             serde_json::to_vec(&again.forward).unwrap(),
             serde_json::to_vec(&cold.forward).unwrap()
         );
+    }
+    fn raw_record(ohlc: [u32; 4], amount: f32, volume: u32, r7: u32) -> day_file::RawDayRecord {
+        let mut record = [0u8; 32];
+        record[0..4].copy_from_slice(&20250102u32.to_le_bytes());
+        for (index, price) in ohlc.iter().enumerate() {
+            record[4 + index * 4..8 + index * 4].copy_from_slice(&price.to_le_bytes());
+        }
+        record[20..24].copy_from_slice(&amount.to_bits().to_le_bytes());
+        record[24..28].copy_from_slice(&volume.to_le_bytes());
+        record[28..32].copy_from_slice(&r7.to_le_bytes());
+        day_file::parse(&record).unwrap().pop().unwrap()
+    }
+
+    #[test]
+    fn etf_prices_are_written_at_three_decimals_not_stock_cents() {
+        // Synthetic reproduction of the §12 fixtures. Real provenance:
+        // sh510050.day sha256 02f0e517...e2e16; its close is 41.780 元, so the
+        // `.day` integer 41_780 must decode at scale 3. Writing scale 2 would
+        // silently publish 417.80 (a 10× misprice).
+        let records = [
+            day_record(20250102, 41_780, 10_000),
+            day_record(20250103, 41_950, 11_000),
+        ]
+        .concat();
+        let (_dir, source) = source(&records, &gbbq_member(&[]));
+        let batch = source
+            .materialize_session()
+            .materialize_etf("sh.600006")
+            .unwrap()
+            .raw;
+        assert_eq!(
+            batch.bars[0].close,
+            rust_decimal::Decimal::new(41_780, compact_market::PRICE_SCALE_LI)
+        );
+        assert_ne!(
+            batch.bars[0].close,
+            rust_decimal::Decimal::new(41_780, compact_market::PRICE_SCALE_CENTS)
+        );
+        assert_eq!(
+            batch.unit_currency.price_unit.value.as_deref(),
+            Some("yuan")
+        );
+        assert!(
+            batch
+                .unit_currency
+                .price_unit
+                .reason
+                .contains("price_scale=3")
+        );
+        assert!(
+            !batch.adjustment_evidence.reason.contains("  "),
+            "ETF evidence text must not carry continuation indentation: {}",
+            batch.adjustment_evidence.reason
+        );
+        assert_eq!(
+            batch.unit_currency.volume_unit.value.as_deref(),
+            Some("share")
+        );
+        assert_eq!(
+            crate::sqlite_market::series::SeriesShape::etf(Adjustment::Raw).price_scale,
+            compact_market::PRICE_SCALE_LI
+        );
+        assert_eq!(
+            crate::sqlite_market::series::SeriesShape::stock(Adjustment::Raw).price_scale,
+            compact_market::PRICE_SCALE_CENTS,
+            "the stock path must stay at 2dp"
+        );
+    }
+
+    #[test]
+    fn etf_hand_marker_and_amount_consistency_have_four_explicit_branches() {
+        let divisor = price_divisor(compact_market::PRICE_SCALE_LI);
+        let consistent = raw_record([1000, 1200, 900, 1000], 10_500.0, 100, 0xC364_0053);
+        let inconsistent = raw_record([1000, 1200, 900, 1000], 1.0, 100, 0xC364_0053);
+        let unmarked_consistent = raw_record([1000, 1200, 900, 1000], 10_500.0, 100, 0x0001_0000);
+        let unmarked_inconsistent = raw_record([1000, 1200, 900, 1000], 1.0, 100, 0x0001_0000);
+
+        assert_eq!(
+            decide_volume(&consistent, divisor),
+            Ok(Some(rust_decimal::Decimal::new(10_000, 0)))
+        );
+        assert!(decide_volume(&inconsistent, divisor).is_err());
+        assert!(decide_volume(&unmarked_consistent, divisor).is_err());
+        assert_eq!(
+            decide_volume(&unmarked_inconsistent, divisor),
+            Ok(Some(rust_decimal::Decimal::new(100, 0)))
+        );
+
+        // A contradictory ETF bar fails the whole item before any commit.
+        assert!(MaterializeSession::etf_raw_bars(&[inconsistent]).is_err());
+        assert!(MaterializeSession::etf_raw_bars(&[unmarked_consistent]).is_err());
+    }
+
+    #[test]
+    fn stock_volume_decisions_and_prices_keep_the_existing_two_decimal_path() {
+        let divisor = price_divisor(compact_market::PRICE_SCALE_CENTS);
+        let marked = raw_record([1000, 1200, 900, 1000], 11_000.0, 10, 0xC364_0053);
+        let shares = raw_record([1000, 1200, 900, 1000], 1.0, 10, 0x0001_0000);
+        assert_eq!(
+            normalized_volume(&marked, divisor),
+            Some(rust_decimal::Decimal::new(1000, 0))
+        );
+        assert_eq!(
+            normalized_volume(&shares, divisor),
+            Some(rust_decimal::Decimal::new(10, 0))
+        );
+        let bars = MaterializeSession::raw_bars(
+            &[raw_record([1128, 1130, 1125, 1129], 0.0, 100, 0)],
+            compact_market::PRICE_SCALE_CENTS,
+        )
+        .unwrap();
+        assert_eq!(bars[0].close, rust_decimal::Decimal::new(1129, 2));
+    }
+
+    #[test]
+    fn etf_tail_zero_volume_bars_are_preserved_verbatim() {
+        let records = [
+            day_record(20250102, 2_040, 1_000),
+            day_record(20250103, 2_050, 0),
+            day_record(20250106, 2_050, 0),
+        ]
+        .concat();
+        let (_dir, source) = source(&records, &gbbq_member(&[]));
+        let batch = source
+            .materialize_session()
+            .materialize_etf("sh.600006")
+            .unwrap()
+            .raw;
+        assert_eq!(batch.bars.len(), 3);
+        for bar in &batch.bars[1..] {
+            assert_eq!(bar.volume, Some(rust_decimal::Decimal::ZERO));
+            assert_eq!(bar.amount, Some(rust_decimal::Decimal::ZERO));
+        }
     }
 }

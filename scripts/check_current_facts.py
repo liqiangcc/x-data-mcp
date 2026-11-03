@@ -12,7 +12,7 @@ EXPECTED_LEGACY_SCHEMA = 18
 # deployment fact and is read from docs/STATUS.md (see DEPLOYED_SCHEMA_ROW):
 # the code constant may be ahead of it, e.g. schema 25 built by M3 PR-1 before
 # the preview.39 phase-g deployment; since preview.39 deployed == code == 25.
-EXPECTED_COMPACT_SCHEMA = 26
+EXPECTED_COMPACT_SCHEMA = 27
 # Registry/code fact (v8 PR-2 added list_catalog_facets: 23 -> 24; refresh R2
 # adds refresh_exchange_sources: 24 -> 25).
 EXPECTED_DATA_TOOLS = 25

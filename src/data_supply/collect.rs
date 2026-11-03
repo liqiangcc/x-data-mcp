@@ -294,12 +294,18 @@ impl ListedEverCollectionContract {
                     return Err(invalid("contract_version v2 required"));
                 }
                 match selection {
-                    WriteSelection::Scope { scope } if *scope == CatalogScope::ShSzAListedEver => {}
+                    WriteSelection::Scope {
+                        scope:
+                            scope @ (CatalogScope::ShSzAListedEver
+                            | CatalogScope::ShSzEtfCurrent
+                            | CatalogScope::ShSzEtfListedEver),
+                    } => {
+                        let _ = scope;
+                    }
                     WriteSelection::Scope { .. } => {
                         return Err(invalid(
-                            "v2 scope collection accepts sh_sz_a_listed_ever only; \
-                             sh_sz_etf_current / sh_sz_etf_listed_ever are resolved \
-                             by the read path in PR-A and collected in PR-B",
+                            "v2 scope collection accepts sh_sz_a_listed_ever, \
+                             sh_sz_etf_current or sh_sz_etf_listed_ever only",
                         ));
                     }
                     _ => {
@@ -322,10 +328,24 @@ impl ListedEverCollectionContract {
     fn candidates(
         rows: &[crate::security_master::SecurityLifecycleFact],
         has_series: &BTreeSet<String>,
+        scope: CatalogScope,
     ) -> BTreeSet<String> {
         rows.iter()
             .filter(|row| {
-                row.instrument_class == 0
+                let class_matches = match scope {
+                    CatalogScope::ShSzAListedEver => row.instrument_class == 0,
+                    CatalogScope::ShSzEtfCurrent => {
+                        i64::from(row.instrument_class) == crate::market_data::INSTRUMENT_CLASS_ETF
+                            && row.effective_to.is_none()
+                            && row.delisting_source
+                                == crate::security_master::DelistingSource::Unknown
+                    }
+                    CatalogScope::ShSzEtfListedEver => {
+                        i64::from(row.instrument_class) == crate::market_data::INSTRUMENT_CLASS_ETF
+                    }
+                    CatalogScope::CurrentShSzA => false,
+                };
+                class_matches
                     && matches!(
                         row.exchange,
                         crate::security_master::Exchange::Sh | crate::security_master::Exchange::Sz
@@ -353,7 +373,7 @@ impl ListedEverCollectionContract {
     /// The frozen resolution: master rows, series presence, generation member
     /// set and member sizes. Split from `resolve` so the pure filters and the
     /// budget can be unit-tested without a source.
-    fn resolve_scope(&self) -> Result<ListedEverResolution, task::Error> {
+    fn resolve_scope(&self, scope: CatalogScope) -> Result<ListedEverResolution, task::Error> {
         let (version, rows, has_series) = self
             .repository
             .market
@@ -363,7 +383,11 @@ impl ListedEverCollectionContract {
                     crate::security_master::assembly::DATASET_KIND,
                 )?;
                 let rows = crate::sqlite_market::security::read_security_master(c)?;
-                let spans = crate::sqlite_market::series::raw_daily_spans(c)?;
+                let spans = if scope == CatalogScope::ShSzAListedEver {
+                    crate::sqlite_market::series::raw_daily_spans(c)?
+                } else {
+                    crate::sqlite_market::series::etf_raw_daily_spans(c)?
+                };
                 Ok((
                     version,
                     rows,
@@ -386,11 +410,21 @@ impl ListedEverCollectionContract {
         let members = source
             .day_member_symbols()
             .map_err(|e| invalid(format!("listed-ever member listing failed: {e}")))?;
-        let candidates = Self::candidates(&rows, &has_series);
+        let candidates = Self::candidates(&rows, &has_series, scope);
         let mut selected = Vec::new();
         let mut skipped_no_bars = Vec::new();
+        let mut absent = Vec::new();
         for entity in &candidates {
             if !members.contains(entity) {
+                // ETF scopes must report the list-has/day-has-not gap instead
+                // of silently dropping it (M3-2 §4.2, AC-M3-2-5). A-share
+                // listed-ever keeps its historical skip behavior.
+                if scope != CatalogScope::ShSzAListedEver {
+                    absent.push(AbsentMember {
+                        entity: entity.clone(),
+                        reason: "source_member_absent",
+                    });
+                }
                 continue;
             }
             let size = source
@@ -398,7 +432,14 @@ impl ListedEverCollectionContract {
                 .map_err(|e| invalid(format!("listed-ever member lookup failed: {e}")))?
                 .ok_or_else(|| invalid("listed member disappeared during resolution"))?;
             if size < DAY_RECORD_BYTES {
-                skipped_no_bars.push(entity.clone());
+                if scope == CatalogScope::ShSzAListedEver {
+                    skipped_no_bars.push(entity.clone());
+                } else {
+                    absent.push(AbsentMember {
+                        entity: entity.clone(),
+                        reason: "source_member_empty",
+                    });
+                }
             } else {
                 let (exchange, code) = entity
                     .split_once('.')
@@ -417,6 +458,8 @@ impl ListedEverCollectionContract {
         Ok(ListedEverResolution {
             entities: selected,
             skipped_no_bars,
+            absent,
+            scope,
             security_master_version_id: version.version_id,
             security_master_content_digest: crate::research::read::hex(&version.content_digest),
             generation_id,
@@ -425,9 +468,17 @@ impl ListedEverCollectionContract {
     }
 }
 
+#[derive(Debug, Clone)]
+struct AbsentMember {
+    entity: String,
+    reason: &'static str,
+}
+
 struct ListedEverResolution {
     entities: Vec<Security>,
     skipped_no_bars: Vec<String>,
+    absent: Vec<AbsentMember>,
+    scope: CatalogScope,
     security_master_version_id: String,
     security_master_content_digest: String,
     generation_id: String,
@@ -447,12 +498,29 @@ impl Contract for ListedEverCollectionContract {
     }
     fn resolve(&self, v: &Value) -> Result<FrozenWork, task::Error> {
         let c = self.decode(v.clone())?;
-        let Collection::Daily { .. } = &c else {
-            unreachable!("decode accepts market.daily only")
+        let Collection::Daily {
+            selection: WriteSelection::Scope { scope },
+            ..
+        } = &c
+        else {
+            unreachable!("decode accepts market.daily scope selections only")
         };
-        let resolution = self.resolve_scope()?;
-        let evidence = json!({
-            "scope": "sh_sz_a_listed_ever",
+        let resolution = self.resolve_scope(*scope)?;
+        let scope_name = match resolution.scope {
+            CatalogScope::ShSzAListedEver => "sh_sz_a_listed_ever",
+            CatalogScope::ShSzEtfCurrent => "sh_sz_etf_current",
+            CatalogScope::ShSzEtfListedEver => "sh_sz_etf_listed_ever",
+            CatalogScope::CurrentShSzA => {
+                unreachable!("v2 scope collection rejects the catalog default")
+            }
+        };
+        let absent: Vec<Value> = resolution
+            .absent
+            .iter()
+            .map(|member| json!({"entity": member.entity, "reason": member.reason}))
+            .collect();
+        let mut evidence = json!({
+            "scope": scope_name,
             "security_master_version_id": resolution.security_master_version_id,
             "security_master_content_digest": resolution.security_master_content_digest,
             "generation_id": resolution.generation_id,
@@ -461,6 +529,13 @@ impl Contract for ListedEverCollectionContract {
             "skipped_no_bars": resolution.skipped_no_bars,
             "skipped_no_bars_count": resolution.skipped_no_bars.len(),
         });
+        // A-share listed-ever keeps its exact historical evidence shape; the
+        // absent report is an ETF-scope field (M3-2 AC-M3-2-5).
+        if resolution.scope != CatalogScope::ShSzAListedEver {
+            let map = evidence.as_object_mut().expect("evidence is an object");
+            map.insert("absent".into(), json!(absent));
+            map.insert("absent_count".into(), json!(resolution.absent.len()));
+        }
         let mut items = Vec::with_capacity(resolution.entities.len());
         let mut scopes = BTreeSet::new();
         for entity in resolution.entities {
