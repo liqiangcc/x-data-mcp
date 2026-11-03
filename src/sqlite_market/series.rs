@@ -678,7 +678,7 @@ pub(crate) fn last_trade_day(
     // not scan the whole series.
     let day: Option<i64> = c
         .query_row(
-            "SELECT trade_day FROM series_bars WHERE series_key=?1 AND volume > 0              ORDER BY trade_day DESC LIMIT 1",
+            "SELECT trade_day FROM series_bars WHERE series_key=?1 AND volume > 0 ORDER BY trade_day DESC LIMIT 1",
             params![series_key],
             |row| row.get(0),
         )
