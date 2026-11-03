@@ -602,6 +602,24 @@ fn yearly_requests_treat_etf_as_absent_without_breaking_a_share_members() {
         .call("get_data_availability", body(etf.clone()))
         .unwrap();
     assert_eq!(availability["items"][0]["availability"], "absent");
+    let mixed_availability = f
+        .api
+        .call("get_data_availability", body(mixed.clone()))
+        .unwrap();
+    let availability_by_code = |code: &str| {
+        mixed_availability["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["entity"]["code"] == json!(code))
+            .unwrap()
+    };
+    assert_eq!(availability_by_code("510050")["availability"], "absent");
+    assert_ne!(
+        availability_by_code("600006")["availability"],
+        "absent",
+        "the A-share member must not be dragged into the ETF absence"
+    );
 
     let versions = |selection: Value| {
         json!({
