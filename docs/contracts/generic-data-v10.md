@@ -252,4 +252,10 @@ v3），所以 ETF 列并入 v4，不再升 v5。读取方以 `manifest.files[].
   research **12,021 B**（预算 12,200）、ops **30,488 B**（预算 30,800）、maint
   **13,523 B**（预算 14,500）。相对 PR-B 合并基线（research 11,823 / ops 30,290）各
   **+198 B**，来自 `adjustment` 字段；仍在 v9 §2 的已批准上限内，未申请新上限。
+- PR-C2 实测（CI 同一测试的失败输出，`tools/list over budget`）：research **12,021 B**（不变，
+  这两个工具不在 research 入口）、ops **30,918 B**、maint **13,523 B**（不变）。ops 相对 PR-C 基线
+  **+430 B**，来自 `plan_market_update`/`run_market_update` 两个 `market.daily` 分支的可选
+  `scope` 字段与 `PlanScope` 枚举定义。这超出 v9 §2 的 30,800 B 上限 118 B，按 v9 §2 的
+  「已批准上限 + 已记录面增长」规则把 ops 上限调为 **31,000 B**（余量 82 B）；这是本 PR
+  唯一的预算变更，**需 owner 在审核时确认**。research/maint 上限不动。
 - 本契约只随部署事实翻转时更新 [STATUS](../STATUS.md) 与严格 Skill 的 `capability_revision`。
