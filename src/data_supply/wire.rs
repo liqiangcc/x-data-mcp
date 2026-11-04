@@ -451,13 +451,11 @@ impl PlanScope {
         matches!(self, Self::ShSzEtfCurrent | Self::ShSzAAndEtfCurrent)
     }
 }
-/// Compact optional [`PlanScope`] schema (v8 §6.3 byte budget): the same two
-/// spellings, with no `$defs` entry or prose per tool schema.
+/// Compact optional [`PlanScope`] schema (v8 §6.3 byte budget): only the two
+/// spellings, with no `$defs` entry, `type` or prose. The field is optional,
+/// so absence (not `null`) means the A-share-only plan.
 fn plan_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({
-        "type": ["string", "null"],
-        "enum": ["sh_sz_etf_current", "sh_sz_a_and_etf_current", null]
-    })
+    schemars::json_schema!({"enum": ["sh_sz_etf_current", "sh_sz_a_and_etf_current"]})
 }
 /// Catalog selections only ever accept `current_sh_sz_a`. Runtime rejects the
 /// listed-ever scope; the schema must not advertise it either.
