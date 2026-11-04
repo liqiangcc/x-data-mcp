@@ -423,13 +423,13 @@ pub enum CatalogScope {
     #[serde(rename = "sh_sz_etf_listed_ever")]
     ShSzEtfListedEver,
 }
-/// Member scope a `market.daily` plan/run may request (M3-2 PR-C2).
-///
-/// Omitted means the pre-M3-2 A-share-only plan; `sh_sz_etf_current` is the
-/// ETF-only batch and `sh_sz_a_and_etf_current` is the combined batch Q8 uses
-/// for the "ETF 与 A 股同任务" measurement. The A-share-only canonical plan is
-/// byte-identical to the pre-M3-2 digest because an absent scope is omitted
-/// from the canonical payload.
+// Member scope a `market.daily` plan/run may request (M3-2 PR-C2).
+//
+// Omitted means the pre-M3-2 A-share-only plan; `sh_sz_etf_current` is the
+// ETF-only batch and `sh_sz_a_and_etf_current` is the combined batch Q8 uses
+// for the "ETF 与 A 股同任务" measurement. The A-share-only canonical plan is
+// byte-identical to the pre-M3-2 digest because an absent scope is omitted
+// from the canonical payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum PlanScope {
     #[serde(rename = "sh_sz_etf_current")]
@@ -1338,7 +1338,8 @@ pub enum PlanMarketUpdate {
     Daily {
         contract_version: ContractVersion,
         end_date: Option<NaiveDate>,
-        /// Omitted keeps the A-share-only plan byte-for-byte unchanged.
+        // Omitted keeps the A-share-only plan byte-for-byte unchanged. A plain
+        // comment on purpose: a doc comment would enter `tools/list`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<PlanScope>,
     },
@@ -1443,8 +1444,9 @@ pub enum RunMarketUpdate {
         request_id: String,
         target_day: NaiveDate,
         plan_id: String,
-        /// Must match the scope the plan was resolved with; omitted means
-        /// the A-share-only plan.
+        // Must match the scope the plan was resolved with; omitted means the
+        // A-share-only plan. A plain comment: a doc comment would enter
+        // `tools/list`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<PlanScope>,
     },

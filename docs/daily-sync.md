@@ -288,6 +288,35 @@ error/evidence 里列出实体，run 收尾
 时直接跳过；若这条观测会改变**已公布**区间的起点，日更 fail-closed 指向
 `source_store replay --scope industry`，不要手工改表。
 
+### ETF 批次（M3-2 PR-C2，默认关闭，可选）
+
+ETF 日更是 `plan_market_update`/`run_market_update` 的一个可选范围，不是新工具，也没有新的
+编排脚本：仓库里没有日更 plan/run 的脚本，编排在 Skill/操作员侧，所以这里只定义调用形态。
+**默认的 A 股批次不变**：不传 `scope` 时 plan、`plan_id`、item 与结果与改动前逐字节相同。
+
+开关（Skill/操作员侧，默认关）打开时，在 A 股批次**之后**追加一个 ETF 批次：
+
+```text
+plan_market_update {dataset: market.daily, contract_version: v1, end_date: D, scope: sh_sz_etf_current}
+→ run_market_update {…, request_id, target_day, plan_id, scope: sh_sz_etf_current}   # scope 与 plan 相同
+→ run_worker_once / get_task_progress（同 A 股批次）
+```
+
+- 成员：`sh_sz_etf_current` ∩ 已有 ETF 不复权序列。首次采集仍走 `start_collection` v2
+  （`sh_sz_etf_listed_ever`/`sh_sz_etf_current`），日更 plan 不会把没有序列的 ETF 列为 eligible。
+  退市 ETF 不在 current，不进日更。
+- 同一时刻只能有一个未终态的 `market.daily` 更新任务（`plan_in_progress`），所以 A 股批次终态后
+  再发 ETF 批次。想同任务就用 `scope: sh_sz_a_and_etf_current`（含 17 个派生 item）；ETF-only
+  任务**不**追加派生 item。
+- ETF item 的结果：`no_change` / `metadata`（只有事件摘要变化）/ 追加尾部 bar；非前缀改写以
+  `etf_history_rewrite` 失败并给出首个差异日，操作员按「ETF 不复权历史不应变」调查来源，
+  不用 `update_data` 补漏或 `retry_task` 重试。ETF item 失败不影响同任务的 A 股 item。
+- 年线：`market.yearly` 的 plan 不含 ETF，也没有 `scope` 参数（D-70 Q6）。
+- 验收读回：`query_data` 带 `adjustment: raw`（ETF 省略口径会报 `adjustment_required_for_etf`），
+  3dp 与 `last_trade_date` 应前进到目标日。
+- 耗时：SLO 第 1 行的 A 股口径不含 ETF；ETF 单任务、同任务、分任务三种形态在上线任务里按
+  [generic-data-v10](contracts/generic-data-v10.md) §1.7 的参数形态各测一次，未测不写 PASS。
+
 ### 来源刷新（v9：`refresh_exchange_sources`，四个同源 item 的输入）
 
 v9 起四个同源 item（`derived:security_master`、`derived:security_names`、

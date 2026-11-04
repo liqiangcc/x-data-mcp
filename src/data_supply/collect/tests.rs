@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 const LISTED_EVER: &str = "sh_sz_a_listed_ever";
 
-fn day_record(date: u32, ohlc: [u32; 4], amount: f32, volume: u32) -> [u8; 32] {
+pub(super) fn day_record(date: u32, ohlc: [u32; 4], amount: f32, volume: u32) -> [u8; 32] {
     let mut r = [0u8; 32];
     r[0..4].copy_from_slice(&date.to_le_bytes());
     for (i, w) in ohlc.iter().enumerate() {
@@ -36,15 +36,21 @@ fn day_record(date: u32, ohlc: [u32; 4], amount: f32, volume: u32) -> [u8; 32] {
     r[24..28].copy_from_slice(&volume.to_le_bytes());
     r
 }
-fn day_record_r7(date: u32, ohlc: [u32; 4], amount: f32, volume: u32, r7: u32) -> [u8; 32] {
+pub(super) fn day_record_r7(
+    date: u32,
+    ohlc: [u32; 4],
+    amount: f32,
+    volume: u32,
+    r7: u32,
+) -> [u8; 32] {
     let mut r = day_record(date, ohlc, amount, volume);
     r[28..32].copy_from_slice(&r7.to_le_bytes());
     r
 }
-fn gbbq_record(market: u8, code: &str, date_raw: u32, category: u8) -> [u8; 29] {
+pub(super) fn gbbq_record(market: u8, code: &str, date_raw: u32, category: u8) -> [u8; 29] {
     gbbq_factor_record(market, code, date_raw, category, [0.0; 4])
 }
-fn gbbq_factor_record(
+pub(super) fn gbbq_factor_record(
     market: u8,
     code: &str,
     date_raw: u32,
@@ -61,14 +67,14 @@ fn gbbq_factor_record(
     }
     crate::gbbq::encrypt_record(&clear)
 }
-fn gbbq_member(records: &[[u8; 29]]) -> Vec<u8> {
+pub(super) fn gbbq_member(records: &[[u8; 29]]) -> Vec<u8> {
     let mut bytes = (records.len() as u32).to_le_bytes().to_vec();
     for r in records {
         bytes.extend_from_slice(r);
     }
     bytes
 }
-fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
+pub(super) fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
     let file = std::fs::File::create(path).unwrap();
     let mut w = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
@@ -80,7 +86,7 @@ fn write_zip(path: &Path, members: &[(&str, &[u8])]) {
 }
 /// `yyyymmdd` for a day relative to today: the acquisition probe requires
 /// the freshest sampled bar to sit inside its tolerance window.
-fn day_u32(days_ago: u64) -> u32 {
+pub(super) fn day_u32(days_ago: u64) -> u32 {
     let day = crate::calendar::shanghai_today() - chrono::Days::new(days_ago);
     day.format("%Y%m%d").to_string().parse().unwrap()
 }
@@ -188,7 +194,7 @@ fn write_mirror(dir: &Path) {
     members.push(("sh\\lday\\sh510070.day", etf_delisted.as_slice()));
     write_zip(&dir.join("hsjday.zip"), &members);
 }
-fn drive(service: &AcquireService) {
+pub(super) fn drive(service: &AcquireService) {
     for _ in 0..16 {
         if service.worker_once().unwrap().is_none() {
             break;
@@ -247,7 +253,7 @@ fn fixture() -> Fixture {
 /// Seven `security_master` rows (all delisted except sh.600101) + one
 /// registration row. Direct SQL is intentional: the writer path is M2's, not
 /// what this test proves.
-fn seed_master(backend: &MarketBackend) -> String {
+pub(super) fn seed_master(backend: &MarketBackend) -> String {
     let MarketBackend::Compact(repo) = backend else {
         panic!("fixture must open the compact backend");
     };
@@ -976,7 +982,7 @@ fn listed_ever_scope_resolves_master_intersection_and_skips_existing_heads() {
     assert_scope_rejected(error, "empty");
 }
 
-fn set_private(path: &Path) {
+pub(super) fn set_private(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
 }

@@ -1,7 +1,7 @@
 # generic-data-v10 契约（M3-2 ETF 身份与 scope 词汇）
 
 **状态**：**代码面（未部署）**。当前部署仍是 [generic-data-v9](generic-data-v9.md) / compact schema 26；
-本文件记录 M3-2 第一个改 wire 的 PR-A（Refs #509）带来的增量，以及后续 PR-B/PR-C 对同一
+本文件记录 M3-2 第一个改 wire 的 PR-A（Refs #509）带来的增量，以及后续 PR-B/PR-C/PR-C2 对同一
 revision 的补充（不再次升 capability revision）。代码的 fresh compact schema 已是 27（PR-B 的
 `027_etf_factor_events.sql`），部署实例仍是 26。
 
@@ -187,6 +187,63 @@ v3），所以 ETF 列并入 v4，不再升 v5。读取方以 `manifest.files[].
   （见 `src/research/tests/etf.rs`）。
 - 两个日线文件与 universe 文件因新增列，整体 sha256 相对改动前必然不同；「改动前」的 v3/v4 字节
   不可复现，因为 `snapshot_id` 本来就含 schema 字符串。
+
+### 1.7 PR-C2：ETF 日更（`plan_market_update` / `run_market_update`）
+
+**输入参数（只对 `market.daily` 生效）**
+
+- `plan_market_update` 与 `run_market_update` 的 `market.daily` 分支增加可选 `scope`：
+  - 省略：与 v9 相同，只含「当前 A 股目录 ∩ 已采集」。省略 `scope` 时 `plan_id` 的规范载荷、
+    `PlanView` 响应与冻结 item 的字节都**不变**（`scope`、`series` 键在值缺席时不序列化，
+    由 `plan_id_matches_canonical_byte_format` 的固定摘要锁定）。
+  - `sh_sz_etf_current`：只含「`sh_sz_etf_current`（`security_master` class=2、身份区间开放、
+    退市来源仍 unknown）∩ 已有 ETF 不复权序列」。退市 ETF（不在 current）与名单有、`.day` 无的
+    成员都不进日更。
+  - `sh_sz_a_and_etf_current`：上面两类放在同一个计划、同一个任务里（Q8 的「同任务」形态）。
+    这是为避免每个组合都占一个新取值而加的第三个枚举值，不是两个 scope 的列表；ETF 与 A 股
+    分任务就是各发一次 plan/run。
+- `scope` 进入 `plan_id` 的规范载荷（仅在存在时），所以同一时刻三种范围的 `plan_id` 互不相同；
+  `run_market_update` 必须带与 plan 相同的 `scope`，否则重算出的计划不同，返回 `plan_stale`。
+  `market.yearly` 的 plan/run 没有 `scope` 字段（带上会被拒绝），其成员集不含 ETF
+  （D-70 Q6）。
+- ETF 计划 item 的 base 通过 `resolve_read_shape(…, Daily, Some(Raw))` + `read_visible_shaped`
+  解析（`SeriesShape::etf(Raw)`，3dp），不走股票 forward/raw 成对的 head 逻辑；冻结输入带
+  `"series":"etf_raw"`，执行器据此走 ETF 路径。`refresh_range` 为 `[first_day, target_day]`，
+  不含 `proven_gap_ranges`。
+
+**ETF item 语义（只有不复权一条序列，不碰股票 forward/raw 成对逻辑）**
+
+| 来源变化 | 结果 |
+|---|---|
+| `.day` 成员字节与 base 相同，且 cat1/cat11 事件摘要不变 | `no_change`（版本不变，`data_versions +0`） |
+| `.day` 成员字节相同，事件摘要变（例如新增一次分红） | `metadata`：不写 bar，更新来源绑定，同一事务整组重写该 ETF 的 cat1/cat11 因子事实 |
+| `.day` 成员是 base 成员的前缀追加（新日期都晚于 base 末根） | 追加尾部 bar；手日 bar ×100 并写 `volume_quantum=100`；同一事务整组重写因子事实 |
+| 追加的尾部有 bar 落在 accepted range 之外（plan 的 `end_date` 早于成员最新一根） | item 失败，`etf_update_unverified:`；来源绑定指向整个成员，存储序列必须是成员到最新 bar 的前缀，所以不做部分发布，用覆盖最新 bar 的 `end_date` 重新 plan |
+| 其他任何变化（改写历史、截短、重叠） | item 失败，错误以 `etf_history_rewrite:` 开头并带 `first_different_day=YYYY-MM-DD`；**不**整段重写，序列与因子事实保持原样 |
+| 标记与量额矛盾（手日标记存在但量额不一致，或反之） | item 失败（`.day volume unit is contradictory on <date>`），不部分写 |
+
+- ETF 的连续性证明只看 `.day` 成员字节：不复权价格与 cat1/cat11 事件无关，事件摘要变化不构成
+  「历史被改写」（股票路径里事件摘要变化会让 QFQ 链失效，ETF 没有 QFQ 链）。
+- 不复权 evidence 文本不再带 cat1/cat11 计数（PR-B 的文本含计数；ETF 尚未部署，所以直接去掉）：
+  版本 evidence 在 typed 更新中逐字节比较，一次新分红不能被看成价格序列的语义漂移。
+- 回执只有 raw 事件（没有 forward 事件）；重放与 `item_receipt` 在 forward 缺席时回落到 raw 事件，
+  股票 item 总有 forward 事件，查询不变。
+- ETF item 失败不影响同一任务里的 A 股 item（各自在自己的事务里记录结果）。ETF item 不进 typed
+  批量准备，逐 item 执行（见部署前待办里的 SLO 实测）。
+- **ETF-only 计划不追加 17 个服务器内部派生 item**（9 个指数基准、交易日历、5 个全市场数据集、
+  行业快照、退市序列检查）：它们是 A 股/全局事实，不计入 ETF 批次的耗时。含 A 股的计划
+  （省略 `scope` 或 `sh_sz_a_and_etf_current`）保持原样。
+- 退市序列检查（`derived:delisted_series_check`）仍只登记 `instrument_class=0`（设计 P17），
+  有退市日和不复权序列的 ETF 不登记、也不进 `skipped`；有测试断言。
+
+**部署前测量要用的参数形态（本 PR 不测 SLO，§11.3 的 A/B 在上线任务里做）**
+
+| 形态 | `plan_market_update` | `run_market_update` | 说明 |
+|---|---|---|---|
+| A 股单任务（基线，不变） | `{"dataset":"market.daily","contract_version":"v1","end_date":D}` | 加 `request_id`、`target_day`、`plan_id` | 与 v9 完全相同 |
+| ETF 单任务 | 同上加 `"scope":"sh_sz_etf_current"` | 同上加同一 `scope` | ~1,631 item，无派生 item |
+| A 股 + ETF 同任务 | 同上加 `"scope":"sh_sz_a_and_etf_current"` | 同上加同一 `scope` | ~6,869 item，含 17 个派生 item |
+| ETF 与 A 股分任务 | 先 A 股单任务，完成后再 ETF 单任务（同一时刻只能有一个未终态的 `market.daily` 更新任务，`plan_in_progress`） | | 两次耗时分别记录 |
 
 ## 2. 字节预算与部署前待办
 

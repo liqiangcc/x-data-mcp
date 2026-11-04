@@ -1022,20 +1022,21 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             }
             "update_data" | "backfill_data" => {}
             _ => {
-                return Err(Error::Invalid(
-                    "ETF items support update_data only".into(),
-                ));
+                return Err(Error::Invalid("ETF items support update_data only".into()));
             }
         }
         let range = parsed.union()?;
         let Some(facts) = self.repository.update_base_facts(&parsed.base_version_id)? else {
             return Err(Error::NotFound);
         };
-        let Some(base_window) = self.repository.base_bars_in_range(
-            &parsed.base_version_id,
-            range.start,
-            range.end,
-        )?
+        if facts.integrity_sha256 != parsed.base_integrity_sha256 {
+            return Err(Error::Integrity(
+                "ETF base differs from accepted digest".into(),
+            ));
+        }
+        let Some(base_window) =
+            self.repository
+                .base_bars_in_range(&parsed.base_version_id, range.start, range.end)?
         else {
             return Err(Error::NotFound);
         };

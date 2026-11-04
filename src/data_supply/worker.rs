@@ -242,9 +242,26 @@ pub fn run_once(
     // are appended to the accepted task before any entity commit, so no
     // entity item can terminal-ize the task ahead of them; execution still
     // runs them after every entity item (indices first, calendar last).
+    // M3-2 PR-C2: an ETF-only plan (every entity item carries the ETF marker)
+    // maintains no derived datasets. The calendar, the benchmark indices, the
+    // A-share risk/suspension derivations and the delisted-series check are
+    // A-share facts (ETF bars never enter the calendar derivation), so the
+    // separately timed ETF batch must not pay for them. A combined or A-share
+    // plan keeps them unchanged.
+    let etf_only = {
+        let mut entity_items = candidate
+            .items
+            .iter()
+            .filter(|item| !crate::task_control::derived::is_derived(&item.spec.item_id))
+            .peekable();
+        entity_items.peek().is_some()
+            && entity_items
+                .all(|item| crate::market_update::tasks::is_etf_frozen(&item.spec.frozen_inputs))
+    };
     let plan_run_daily = candidate.task.key.operation == "update_data"
         && candidate.task.key.dataset == "market.daily"
-        && candidate.task.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION;
+        && candidate.task.key.contract_version == crate::data_supply::plan::RUN_CONTRACT_VERSION
+        && !etf_only;
     let derived = if plan_run_daily {
         // The generation binding is copied from an entity item: a task's
         // items are uniformly bound (`source_session` above refuses a mixed

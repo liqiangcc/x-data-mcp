@@ -1192,6 +1192,108 @@ mod tests {
         );
     }
 
+    fn etf_item(entity: &str) -> PlanItem {
+        PlanItem::Daily(DailyPlanItem {
+            entity: entity.into(),
+            base_version_id: "v-etf".into(),
+            base_integrity_sha256: "cc".repeat(32),
+            refresh_range: PlanRange {
+                start_date: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+            },
+            proven_gap_ranges: vec![],
+            series: Some(PlanSeries::EtfRaw),
+        })
+    }
+
+    /// M3-2 PR-C2: an absent scope and an absent series marker leave the
+    /// canonical bytes alone (the A-share `plan_id` golden above), while the
+    /// ETF/combined plans carry both so their digests cannot collide.
+    #[test]
+    fn scope_and_series_markers_are_omitted_for_a_shares_and_bound_for_etf() {
+        let a_item = PlanItem::Daily(DailyPlanItem {
+            entity: "sh.600000".into(),
+            base_version_id: "v-1".into(),
+            base_integrity_sha256: "aa".repeat(32),
+            refresh_range: PlanRange {
+                start_date: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+            },
+            proven_gap_ranges: vec![],
+            series: None,
+        });
+        let build = |scope: Option<PlanScope>, items: Vec<PlanItem>| Plan {
+            dataset: Dataset::Daily,
+            scope,
+            generation_id: Some("gen-x".into()),
+            target_day: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+            items,
+            ineligible: vec![],
+        };
+        let a_only = build(None, vec![a_item.clone()]);
+        let canonical = serde_json::to_string(&a_only.canonical()).unwrap();
+        assert!(!canonical.contains("scope"), "{canonical}");
+        assert!(!canonical.contains("series"), "{canonical}");
+
+        let etf = build(Some(PlanScope::ShSzEtfCurrent), vec![etf_item("sh.510050")]);
+        let canonical = serde_json::to_string(&etf.canonical()).unwrap();
+        assert!(
+            canonical.contains(r#""scope":"sh_sz_etf_current""#),
+            "{canonical}"
+        );
+        assert!(canonical.contains(r#""series":"etf_raw""#), "{canonical}");
+
+        let combined = build(
+            Some(PlanScope::ShSzAAndEtfCurrent),
+            vec![a_item, etf_item("sh.510050")],
+        );
+        let ids = [
+            a_only.plan_id().unwrap(),
+            etf.plan_id().unwrap(),
+            combined.plan_id().unwrap(),
+        ];
+        assert_eq!(
+            ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            3,
+            "{ids:?}"
+        );
+        assert!(PlanScope::ShSzAAndEtfCurrent.includes_a());
+        assert!(PlanScope::ShSzAAndEtfCurrent.includes_etf());
+        assert!(!PlanScope::ShSzEtfCurrent.includes_a());
+        assert!(PlanScope::ShSzEtfCurrent.includes_etf());
+    }
+
+    /// The frozen item of an ETF plan member names the raw series path; the
+    /// A-share item's frozen bytes have no such key.
+    #[test]
+    fn frozen_item_carries_the_etf_marker_only_for_etf_members() {
+        let generation = Value::Null;
+        let etf = item_spec(etf_item("sh.510050"), "pid", &generation);
+        assert_eq!(etf.frozen_inputs["series"], json!("etf_raw"));
+        assert!(crate::market_update::tasks::is_etf_frozen(
+            &etf.frozen_inputs
+        ));
+        let a = item_spec(
+            PlanItem::Daily(DailyPlanItem {
+                entity: "sh.600000".into(),
+                base_version_id: "v-1".into(),
+                base_integrity_sha256: "aa".repeat(32),
+                refresh_range: PlanRange {
+                    start_date: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+                    end_date: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+                },
+                proven_gap_ranges: vec![],
+                series: None,
+            }),
+            "pid",
+            &generation,
+        );
+        assert!(a.frozen_inputs.get("series").is_none());
+        assert!(!crate::market_update::tasks::is_etf_frozen(
+            &a.frozen_inputs
+        ));
+    }
+
     fn inelig(entity: &str, reason: &str) -> PlanIneligible {
         PlanIneligible {
             entity: entity.into(),

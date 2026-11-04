@@ -2990,6 +2990,14 @@ fn task_facts_series(
                 .map_err(|_| Error::Integrity("event digest malformed".into()))?,
         ))
     };
+    // Items that wrote a forward event: for those the raw event is only the
+    // paired audit. A raw-only item (an ETF has no forward series; M3-2
+    // PR-C2) has no other event, so its raw event is the item's result.
+    let forward_items: std::collections::BTreeSet<String> = events
+        .iter()
+        .filter(|row| row.1 == 1 && row.2 == crate::market_data::Adjustment::Forward.code())
+        .map(|row| row.5.clone())
+        .collect();
     let mut publications = Vec::new();
     let mut range_results = Vec::new();
     let mut yearly_results = Vec::new();
@@ -3009,8 +3017,12 @@ fn task_facts_series(
         }
         // The MCP task surface projects the forward 口径 only: the raw event
         // is the same item's internal audit, not a second item result
-        // (issue-383 §9.1; AC-M1-10 keeps the wire shape unchanged).
-        if period == 1 && adjustment != crate::market_data::Adjustment::Forward.code() {
+        // (issue-383 §9.1; AC-M1-10 keeps the wire shape unchanged). An item
+        // without a forward event (ETF) is projected through its raw event.
+        if period == 1
+            && adjustment != crate::market_data::Adjustment::Forward.code()
+            && forward_items.contains(&item_id)
+        {
             continue;
         }
         evidenced_items.insert(item_id.clone());
