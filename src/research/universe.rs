@@ -367,11 +367,13 @@ pub fn member_intervals_with_etf(c: &Connection) -> Result<Vec<MemberInterval>, 
     Ok(intervals)
 }
 
+type RawSpans = BTreeMap<String, series::RawDailySpan>;
+
 fn class_intervals(
     c: &Connection,
     rows: &[SecurityLifecycleFact],
     migrations: &[CodeMigrationFact],
-    spans: &BTreeMap<String, series::RawDailySpan>,
+    spans: &RawSpans,
     instrument_class: i64,
 ) -> Result<Vec<MemberInterval>, Error> {
     let mut intervals = Vec::new();
