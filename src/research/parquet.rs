@@ -45,7 +45,7 @@ use super::{
     SUSPENSIONS_FILE, SeriesEntry, SnapshotPlan, UNIVERSE_INTERVALS_COLUMNS,
     UNIVERSE_INTERVALS_FILE,
 };
-use crate::market_data::{Adjustment, INSTRUMENT_CLASS_STOCK};
+use crate::market_data::{Adjustment, INSTRUMENT_CLASS_ETF, INSTRUMENT_CLASS_STOCK};
 
 const DAILY_SCHEMA: &str = "
 message daily {
@@ -60,6 +60,8 @@ message daily {
   OPTIONAL FIXED_LEN_BYTE_ARRAY(9) amount (DECIMAL(20,2));
   OPTIONAL INT32 r7_raw (INTEGER(32,false));
   OPTIONAL INT32 volume_quantum;
+  REQUIRED INT32 instrument_class (INTEGER(8,true));
+  OPTIONAL BOOLEAN no_trade;
 }";
 
 const FACTOR_SCHEMA: &str = "
@@ -236,6 +238,9 @@ struct DailyBatch {
     r7_def: Vec<i16>,
     quantum: Vec<i32>,
     quantum_def: Vec<i16>,
+    instrument_class: Vec<i32>,
+    no_trade: Vec<bool>,
+    no_trade_def: Vec<i16>,
     rows: usize,
 }
 
@@ -279,6 +284,21 @@ impl DailyBatch {
             }
             None => self.quantum_def.push(0),
         }
+        self.instrument_class
+            .push(i32_value(entry.instrument_class)?);
+        // D-72 `no_trade`: derived from the stored bar for ETF rows only; a
+        // stock row has no such marker (NULL), so the A-share rows keep their
+        // meaning. The same predicate the read surface applies.
+        if entry.instrument_class == INSTRUMENT_CLASS_ETF {
+            self.no_trade
+                .push(crate::sqlite_market::series::is_no_trade_bar(
+                    row.volume.map(rust_decimal::Decimal::from),
+                    row.amount,
+                ));
+            self.no_trade_def.push(1);
+        } else {
+            self.no_trade_def.push(0);
+        }
         self.rows += 1;
         Ok(())
     }
@@ -299,6 +319,9 @@ impl DailyBatch {
         self.r7_def.clear();
         self.quantum.clear();
         self.quantum_def.clear();
+        self.instrument_class.clear();
+        self.no_trade.clear();
+        self.no_trade_def.clear();
         self.rows = 0;
     }
 }
@@ -400,6 +423,28 @@ fn flush_daily(
             .map_err(parquet_error)?;
         column.close().map_err(parquet_error)?;
     }
+    {
+        let mut column = group
+            .next_column()
+            .map_err(parquet_error)?
+            .ok_or_else(|| Error::Parquet("missing instrument_class column".into()))?;
+        column
+            .typed::<Int32Type>()
+            .write_batch(&batch.instrument_class, None, None)
+            .map_err(parquet_error)?;
+        column.close().map_err(parquet_error)?;
+    }
+    {
+        let mut column = group
+            .next_column()
+            .map_err(parquet_error)?
+            .ok_or_else(|| Error::Parquet("missing no_trade column".into()))?;
+        column
+            .typed::<BoolType>()
+            .write_batch(&batch.no_trade, Some(&batch.no_trade_def), None)
+            .map_err(parquet_error)?;
+        column.close().map_err(parquet_error)?;
+    }
     group.close().map_err(parquet_error)?;
     batch.clear();
     Ok(())
@@ -418,7 +463,10 @@ fn write_daily(
     let mut batch = DailyBatch::default();
     let mut rows = 0i64;
     for entry in plan.series.iter().filter(|entry| {
-        entry.instrument_class == INSTRUMENT_CLASS_STOCK && entry.adjustment == adjustment
+        matches!(
+            entry.instrument_class,
+            INSTRUMENT_CLASS_STOCK | INSTRUMENT_CLASS_ETF
+        ) && entry.adjustment == adjustment
     }) {
         let count = read::for_each_bar(
             c,
@@ -1021,6 +1069,9 @@ message universe_intervals {
   OPTIONAL INT32 member_to (DATE);
   REQUIRED BINARY basis (STRING);
   REQUIRED BINARY flags (STRING);
+  REQUIRED INT32 instrument_class (INTEGER(8,true));
+  OPTIONAL INT32 last_trade_date (DATE);
+  OPTIONAL INT32 delisting_date (DATE);
 }";
 
 const INDUSTRY_ASSIGNMENTS_SCHEMA: &str = "
@@ -1213,6 +1264,9 @@ const UNIVERSE_INTERVALS_SPEC: TableSpec = TableSpec {
         ColumnType::DateOpt,
         ColumnType::Text,
         ColumnType::Text,
+        ColumnType::Int8,
+        ColumnType::DateOpt,
+        ColumnType::DateOpt,
     ],
     schema: UNIVERSE_INTERVALS_SCHEMA,
 };
@@ -1547,6 +1601,9 @@ fn universe_interval_rows(c: &Connection, plan: &SnapshotPlan) -> Result<Vec<Row
                 opt_date(row.member_to),
                 text(row.basis.as_str()),
                 join_flags(&flags),
+                Some(Cell::Int8(row.instrument_class)),
+                opt_date(row.last_trade_date),
+                opt_date(row.delisting_date),
             ]
         })
         .collect())

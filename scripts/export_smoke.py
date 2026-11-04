@@ -68,6 +68,10 @@ CONTRACT = {
         "amount": DECIMAL_20_2,
         "r7_raw": pa.uint32(),
         "volume_quantum": pa.int32(),
+        # v4 (M3-2 PR-D): 0 stock / 2 ETF; `no_trade` is NULL on stock rows and
+        # true/false on ETF rows (derived: volume = 0 AND amount = 0, D-72).
+        "instrument_class": pa.int8(),
+        "no_trade": pa.bool_(),
     },
     "daily_qfq.parquet": {
         "entity": pa.string(),
@@ -81,6 +85,10 @@ CONTRACT = {
         "amount": DECIMAL_20_2,
         "r7_raw": pa.uint32(),
         "volume_quantum": pa.int32(),
+        # v4 (M3-2 PR-D): 0 stock / 2 ETF; `no_trade` is NULL on stock rows and
+        # true/false on ETF rows (derived: volume = 0 AND amount = 0, D-72).
+        "instrument_class": pa.int8(),
+        "no_trade": pa.bool_(),
     },
     "factors.parquet": {
         "entity": pa.string(),
@@ -199,6 +207,11 @@ CONTRACT = {
         "member_to": pa.date32(),
         "basis": pa.string(),
         "flags": pa.string(),
+        # v4 (M3-2 PR-D): ETF rows carry both D-72 dates; both are NULL on
+        # stock rows (a stock's end is `member_to`).
+        "instrument_class": pa.int8(),
+        "last_trade_date": pa.date32(),
+        "delisting_date": pa.date32(),
     },
     # M3 whole-market files (#446 §10.4). `source_snapshot_sha256` is the
     # `tdxhy.cfg` content that proved the interval, so an assignment can be
@@ -233,8 +246,10 @@ CONTRACT = {
 # The snapshots this reader accepts. v2 stays readable: a directory written
 # before #446 PR-9 has no M3 files and the five-column universe file. v4
 # (XDM-157) adds `derived[].verified_through` (optional, only when a complete
-# refresh run proves it) and the security-names/risk-warning registrations; its
-# files and columns are v3's, so every check below is `>= 3`.
+# refresh run proves it) and the security-names/risk-warning registrations. The
+# ETF delivery (M3-2 PR-D) is part of v4 too: the two daily files and the
+# universe file gain the trailing columns in `V4_ADDED`, so a v2/v3 directory
+# is checked against the shorter contract it was written with.
 SCHEMAS = {
     "x-data-mcp.research-snapshot.v2": 2,
     "x-data-mcp.research-snapshot.v3": 3,
@@ -242,6 +257,15 @@ SCHEMAS = {
 }
 V3_ONLY_FILES = ("industry_assignments.parquet", "code_migrations.parquet")
 V2_UNIVERSE_COLUMNS = ("entity", "member_from", "member_to", "basis", "flags")
+V4_ADDED = {
+    "daily_raw.parquet": ("instrument_class", "no_trade"),
+    "daily_qfq.parquet": ("instrument_class", "no_trade"),
+    "universe_intervals.parquet": (
+        "instrument_class",
+        "last_trade_date",
+        "delisting_date",
+    ),
+}
 
 
 def contract_for(name: str, version: int) -> dict[str, pa.DataType] | None:
@@ -254,6 +278,12 @@ def contract_for(name: str, version: int) -> dict[str, pa.DataType] | None:
             return None
         if name == "universe_intervals.parquet":
             return {column: expected[column] for column in V2_UNIVERSE_COLUMNS}
+    if version < 4 and name in V4_ADDED:
+        return {
+            column: dtype
+            for column, dtype in expected.items()
+            if column not in V4_ADDED[name]
+        }
     return expected
 
 # The day column each file orders by; the M2 files are intervals, so their
@@ -375,6 +405,68 @@ def check_with_duckdb(name: str, path: pathlib.Path, rows: int) -> None:
         connection.close()
 
 
+def check_etf_rows(directory: pathlib.Path) -> None:
+    """M3-2 PR-D semantics a column-type check cannot see (D-70 Q7, D-72).
+
+    * `daily_raw`: class is 0 or 2; `no_trade` is NULL exactly on stock rows;
+      an ETF `no_trade` row really has volume 0 and amount 0 and a traded ETF
+      row does not; ETF prices are 3dp (`price_scale` 3).
+    * `daily_qfq`: no ETF row (an ETF has no 前复权 series).
+    * `universe_intervals`: the two dates exist on ETF rows only, and the last
+      traded day never falls after the termination date.
+    """
+    if duckdb is None:
+        return
+    connection = duckdb.connect()
+    try:
+        raw = directory / "daily_raw.parquet"
+        if raw.is_file():
+            source = f"read_parquet({sql_path(raw)})"
+            bad_class = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE instrument_class NOT IN (0, 2)"
+            ).fetchone()[0]
+            check(bad_class == 0, f"daily_raw: {bad_class} rows with a class other than 0/2")
+            marker = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE (instrument_class = 0) <> (no_trade IS NULL)"
+            ).fetchone()[0]
+            check(marker == 0, f"daily_raw: {marker} rows where no_trade nullness disagrees with the class")
+            wrong = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE instrument_class = 2 AND "
+                "no_trade <> (coalesce(volume, -1) = 0 AND coalesce(amount, -1) = 0)"
+            ).fetchone()[0]
+            check(wrong == 0, f"daily_raw: {wrong} ETF rows whose no_trade is not volume=0 AND amount=0")
+            scale = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE instrument_class = 2 AND price_scale <> 3"
+            ).fetchone()[0]
+            check(scale == 0, f"daily_raw: {scale} ETF rows not at price_scale 3")
+            etf_rows, flagged = connection.execute(
+                f"SELECT count(*), count(*) FILTER (WHERE no_trade) FROM {source} "
+                "WHERE instrument_class = 2"
+            ).fetchone()
+            print(f"ok   daily_raw.parquet: {etf_rows} ETF rows, {flagged} no_trade")
+        qfq = directory / "daily_qfq.parquet"
+        if qfq.is_file():
+            leaked = connection.execute(
+                f"SELECT count(*) FROM read_parquet({sql_path(qfq)}) WHERE instrument_class <> 0"
+            ).fetchone()[0]
+            check(leaked == 0, f"daily_qfq: {leaked} non-stock rows (ETF has no 前复权)")
+        universe = directory / "universe_intervals.parquet"
+        if universe.is_file():
+            source = f"read_parquet({sql_path(universe)})"
+            stray = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE instrument_class <> 2 AND "
+                "(last_trade_date IS NOT NULL OR delisting_date IS NOT NULL)"
+            ).fetchone()[0]
+            check(stray == 0, f"universe_intervals: {stray} non-ETF rows carry an ETF date")
+            inverted = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE last_trade_date > delisting_date"
+            ).fetchone()[0]
+            check(inverted == 0, f"universe_intervals: {inverted} rows trade after the termination date")
+            print("ok   universe_intervals.parquet: ETF dates are consistent")
+    finally:
+        connection.close()
+
+
 def check_snapshot(directory: pathlib.Path) -> None:
     manifest_path = directory / "manifest.json"
     check(manifest_path.is_file(), f"{directory}: manifest.json is missing")
@@ -442,6 +534,9 @@ def check_snapshot(directory: pathlib.Path) -> None:
         )
         print(f"ok   derived {entry.get('dataset')}: verified_through {day}")
 
+    if version >= 4:
+        check_etf_rows(directory)
+
     # The owner decision (#381 option 1, D-34): the column exists in the
     # exported schema even while M1 stores NULL.
     if (directory / "daily_raw.parquet").is_file() and duckdb is not None:
@@ -471,6 +566,16 @@ def self_check() -> None:
         check(
             contract_for(name, 2) is None and contract_for(name, 3) is not None,
             f"{name}: version-gated contract is wrong",
+        )
+    # M3-2 PR-D: the ETF columns exist from v4 on only, appended after the v3
+    # columns, so a v3 directory is still read with the contract it was
+    # written with.
+    for name, added in V4_ADDED.items():
+        before = list(contract_for(name, 3))
+        after = list(contract_for(name, 4))
+        check(
+            after == before + list(added),
+            f"{name}: v4 columns are not the v3 ones plus {list(added)}",
         )
 
     for name, expected in CONTRACT.items():

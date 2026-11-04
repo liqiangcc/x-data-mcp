@@ -688,6 +688,59 @@ pub(crate) fn last_trade_day(
         .transpose()
 }
 
+/// ETF termination date from the main table (D-72). Absent (`None`) means the
+/// date is unknown; a present value is the extracted announcement date.
+/// Conflicting rows fail closed.
+///
+/// The `DISTINCT` covers every identity interval for the code on purpose: a
+/// reused code whose old interval carried a different delisting date is
+/// ambiguous and must not be resolved by silently taking the newest row. The
+/// read surface (`sqlite_supply`) and the research export share this function
+/// so both report the same `delisting_date`.
+pub(crate) fn etf_delisting_date(
+    c: &Connection,
+    entity: &str,
+) -> Result<Option<chrono::NaiveDate>, Error> {
+    let (exchange, code) = entity
+        .split_once('.')
+        .ok_or_else(|| integrity("non-canonical ETF entity"))?;
+    let mut statement = c
+        .prepare(
+            "SELECT DISTINCT delisting_date FROM security_master WHERE exchange=?1 AND code=?2",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(params![exchange, code], |row| row.get::<_, Option<i64>>(0))
+        .map_err(storage)?;
+    let mut dates = std::collections::BTreeSet::new();
+    for row in rows {
+        dates.insert(row.map_err(storage)?);
+    }
+    match dates.len() {
+        0 => Ok(None),
+        1 => dates
+            .into_iter()
+            .next()
+            .flatten()
+            .map(|day| compact_market::epoch_date(day).map_err(|e| integrity(e.to_string())))
+            .transpose(),
+        _ => Err(integrity(format!(
+            "security_master delisting_date conflict for {entity}"
+        ))),
+    }
+}
+
+/// D-72 `no_trade`: a bar stored as `volume = 0 ∧ amount = 0`. It is derived
+/// at read/export time and never stored; the caller applies it to ETF series
+/// only (A-share bytes carry no such marker). A bar with a missing volume or
+/// amount is not a proven zero-trade bar.
+pub(crate) fn is_no_trade_bar(
+    volume: Option<rust_decimal::Decimal>,
+    amount: Option<rust_decimal::Decimal>,
+) -> bool {
+    volume == Some(rust_decimal::Decimal::ZERO) && amount == Some(rust_decimal::Decimal::ZERO)
+}
+
 /// The dataset-parameterised visibility predicate (v8 PR-4, #387 §4.2): the
 /// read surface names the 口径 and 品种 it serves instead of relying on a
 /// single hard-coded `instrument_class=0` row. `market.daily`/`market.yearly`
