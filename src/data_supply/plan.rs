@@ -760,7 +760,7 @@ fn resolve_etf_daily_on(
         }
         items.push(PlanItem::Daily(DailyPlanItem {
             entity: symbol,
-            base_version_id: row.version_id,
+            base_version_id: row.version_id.clone(),
             base_integrity_sha256: row.version_id,
             refresh_range: PlanRange {
                 start_date: first_day,
