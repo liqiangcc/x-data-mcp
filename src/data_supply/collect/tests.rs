@@ -140,7 +140,26 @@ fn etf_delisted_days() -> Vec<u8> {
 /// Mirror snapshot: five codes with bars, two members without any bar, and
 /// enough filler members that the two empty ones stay outside the
 /// acquisition probe's deterministic 64-member sample.
-fn write_mirror(dir: &Path) {
+/// Synthetic ETF identities for batching tests (XDM-193): `sh.52xxxx` first,
+/// then `sz.16xxxx`. None collides with the named fixture members.
+fn batch_etf_codes(count: usize) -> Vec<(&'static str, String)> {
+    (0..count)
+        .map(|i| {
+            if i < 600 {
+                ("sh", format!("{:06}", 520_000 + i))
+            } else {
+                ("sz", format!("{:06}", 160_000 + i - 600))
+            }
+        })
+        .collect()
+}
+
+/// Synthetic ordinary A shares (`sh.601xxx`) for the over-budget assertion.
+fn batch_a_codes(count: usize) -> Vec<String> {
+    (0..count).map(|i| format!("{:06}", 601_000 + i)).collect()
+}
+
+fn write_mirror(dir: &Path, extra_etf: &[(&'static str, String)], extra_a: &[String]) {
     std::fs::create_dir_all(dir).unwrap();
     let tdxhy = b"1|600101|T090302|||X6102\r\n";
     write_zip(
@@ -192,6 +211,19 @@ fn write_mirror(dir: &Path) {
     members.push(("sz\\lday\\sz159901.day", etf.as_slice()));
     members.push(("sz\\lday\\sz159338.day", etf_hand.as_slice()));
     members.push(("sh\\lday\\sh510070.day", etf_delisted.as_slice()));
+    let extra_names: Vec<String> = extra_etf
+        .iter()
+        .map(|(exchange, code)| format!("{exchange}\\lday\\{exchange}{code}.day"))
+        .chain(extra_a.iter().map(|code| format!("sh\\lday\\sh{code}.day")))
+        .collect();
+    for (index, name) in extra_names.iter().enumerate() {
+        let bytes = if index < extra_etf.len() {
+            etf.as_slice()
+        } else {
+            short.as_slice()
+        };
+        members.push((name.as_str(), bytes));
+    }
     write_zip(&dir.join("hsjday.zip"), &members);
 }
 pub(super) fn drive(service: &AcquireService) {
@@ -230,8 +262,16 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_scaled(0, 0)
+}
+
+/// The base fixture plus `extra_etf` synthetic ETF and `extra_a` synthetic
+/// A-share members, each with a master row and a `.day` member.
+fn fixture_scaled(extra_etf: usize, extra_a: usize) -> Fixture {
+    let etf_codes = batch_etf_codes(extra_etf);
+    let a_codes = batch_a_codes(extra_a);
     let mirror = tempfile::tempdir().unwrap();
-    write_mirror(mirror.path());
+    write_mirror(mirror.path(), &etf_codes, &a_codes);
     let root = tempfile::tempdir().unwrap();
     let generation_id = activate(root.path(), mirror.path());
     let dir = tempfile::tempdir().unwrap();
@@ -240,6 +280,7 @@ fn fixture() -> Fixture {
     set_private(&path);
     let backend = MarketBackend::open(&SqliteTasks::new(&path)).unwrap();
     let master_version = seed_master(&backend);
+    seed_extra_master(&backend, &etf_codes, &a_codes);
     seed_series(&backend, "sh.600101");
     Fixture {
         backend,
@@ -348,6 +389,37 @@ pub(super) fn seed_master(backend: &MarketBackend) -> String {
     })
     .unwrap();
     version
+}
+
+/// Clones the `sh.510050` (ETF) or `sh.600101` (A share) master row for each
+/// synthetic code, so the digests and enum columns stay valid by construction.
+fn seed_extra_master(backend: &MarketBackend, etf: &[(&'static str, String)], a: &[String]) {
+    let MarketBackend::Compact(repo) = backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let rows = etf
+        .iter()
+        .map(|(exchange, code)| (*exchange, code.as_str(), "510050"))
+        .chain(a.iter().map(|code| ("sh", code.as_str(), "600101")));
+    repo.tx(|c| {
+        for (exchange, code, template) in rows {
+            c.execute(
+                "INSERT INTO security_master(exchange,code,effective_from,effective_to,\
+                 instrument_class,issuer_resolution,listing_date,listing_source,\
+                 delisting_date,delisting_source,delisting_reason_class,listing_conflict,\
+                 delisting_conflict,source_binding_digest,evidence_digest) \
+                 SELECT ?1,?2,effective_from,effective_to,instrument_class,issuer_resolution,\
+                 listing_date,listing_source,delisting_date,delisting_source,\
+                 delisting_reason_class,listing_conflict,delisting_conflict,\
+                 source_binding_digest,evidence_digest \
+                 FROM security_master WHERE exchange='sh' AND code=?3",
+                rusqlite::params![exchange, code, template],
+            )
+            .unwrap();
+        }
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
 }
 
 fn seed_series(backend: &MarketBackend, entity: &str) {
@@ -953,6 +1025,10 @@ fn listed_ever_scope_resolves_master_intersection_and_skips_existing_heads() {
             item.spec.frozen_inputs["skipped_no_bars"],
             json!(["sh.600901", "sz.000101"])
         );
+        // ETF-only evidence keys must not leak into the A-share shape.
+        for key in ["absent", "absent_count", "remaining_count"] {
+            assert!(item.spec.frozen_inputs.get(key).is_none(), "{key}");
+        }
     }
 
     // The v2 task executes through the same runner as v1.
@@ -994,4 +1070,125 @@ fn market() -> (MarketBackend, tempfile::TempDir) {
     set_private(&path);
     let backend = MarketBackend::open(&SqliteTasks::new(&path)).unwrap();
     (backend, dir)
+}
+
+const ETF_LISTED_EVER: &str = "sh_sz_etf_listed_ever";
+
+fn start_scope(
+    control: &TaskControl<SqliteTasks>,
+    request: &str,
+    scope: &str,
+) -> Result<crate::task_control::Acceptance, crate::task_control::Error> {
+    control.accept(
+        request,
+        CommandKey {
+            operation: "start_collection".into(),
+            dataset: "market.daily".into(),
+            contract_version: "v2".into(),
+        },
+        payload("v2", json!({"kind":"scope","scope":scope})),
+    )
+}
+
+fn run_to_end(f: &Fixture, control: &TaskControl<SqliteTasks>) {
+    let done = crate::data_supply::worker::run_once(
+        control,
+        &f.backend,
+        None,
+        Some(&f.generation),
+        crate::source_store::Policy::Optional,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(done.task.status, Status::Succeeded, "{done:?}");
+}
+
+/// XDM-193: an ETF scope takes the first 500 uncollected members per call, in
+/// canonical-entity order, and reports what is left.
+#[test]
+fn etf_scope_collects_in_batches_of_500_until_empty() {
+    // 1,100 synthetic members + the 4 named current members + sh.510070
+    // (delisted) = 1,105 members with bars; sh.589001 has no `.day`.
+    let f = fixture_scaled(1_100, 0);
+    let control = control(&f);
+    let mut expected: Vec<String> = batch_etf_codes(1_100)
+        .into_iter()
+        .map(|(exchange, code)| format!("{exchange}.{code}"))
+        .chain(
+            [
+                "sh.510050",
+                "sh.510070",
+                "sz.159338",
+                "sz.159901",
+                "sz.159919",
+            ]
+            .map(String::from),
+        )
+        .collect();
+    expected.sort();
+    assert_eq!(expected.len(), 1_105);
+
+    // The first accepted batch is non-terminal. A second call resolves the
+    // same members, so the existing scope conflict applies instead of a
+    // concurrent run over the same batch.
+    let first = start_scope(&control, "req-etf-b0", ETF_LISTED_EVER).unwrap();
+    let conflict = start_scope(&control, "req-etf-b1-dup", ETF_LISTED_EVER).unwrap_err();
+    assert!(
+        matches!(conflict, crate::task_control::Error::RangeConflict(_)),
+        "{conflict:?}"
+    );
+
+    let mut seen = BTreeSet::new();
+    let mut sizes = Vec::new();
+    let mut remaining = Vec::new();
+    for (batch, accepted) in [Some(first), None, None].into_iter().enumerate() {
+        let accepted = accepted.unwrap_or_else(|| {
+            start_scope(&control, &format!("req-etf-b{batch}"), ETF_LISTED_EVER).unwrap()
+        });
+        let snapshot = control.read_task(&task_id(&accepted)).unwrap();
+        let symbols: Vec<String> = snapshot
+            .items
+            .iter()
+            .map(|item| item.spec.target["symbol"].as_str().unwrap().to_string())
+            .collect();
+        let mut sorted = symbols.clone();
+        sorted.sort();
+        assert_eq!(symbols, sorted, "batch {batch} is not ordered");
+        let start = batch * 500;
+        assert_eq!(
+            symbols,
+            expected[start..(start + 500).min(expected.len())],
+            "batch {batch}"
+        );
+        for symbol in &symbols {
+            assert!(seen.insert(symbol.clone()), "{symbol} repeated");
+        }
+        for item in &snapshot.items {
+            let inputs = &item.spec.frozen_inputs;
+            // `absent` is counted over all candidates, before truncation.
+            assert_eq!(inputs["absent_count"], json!(1));
+            assert!(inputs["remaining_count"].is_u64());
+        }
+        sizes.push(symbols.len());
+        remaining.push(snapshot.items[0].spec.frozen_inputs["remaining_count"].clone());
+        run_to_end(&f, &control);
+    }
+    assert_eq!(sizes, vec![500, 500, 105]);
+    assert_eq!(remaining, vec![json!(605), json!(105), json!(0)]);
+    assert_eq!(seen.len(), 1_105);
+
+    // Everything with bars is collected: the fourth call is the existing
+    // empty-selection error.
+    let error = start_scope(&control, "req-etf-b4", ETF_LISTED_EVER).unwrap_err();
+    assert_scope_rejected(error, "nothing to collect");
+}
+
+/// A-share listed-ever keeps rejecting an over-budget selection whole.
+#[test]
+fn a_share_listed_ever_over_budget_is_still_rejected_whole() {
+    // 4 base candidates (600102..600105) + 600 synthetic = 604 > 500.
+    let f = fixture_scaled(0, 600);
+    let control = control(&f);
+    let error = start_scope(&control, "req-a-over", LISTED_EVER).unwrap_err();
+    assert_scope_rejected(error, "budget 1..500, got 604");
 }
