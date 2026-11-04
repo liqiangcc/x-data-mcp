@@ -66,15 +66,18 @@ fn etf_with_today() -> Vec<u8> {
 }
 fn hand_base() -> Vec<[u8; 32]> {
     vec![
-        day_record(day_u32(2), [1140, 1160, 1130, 1150], 0.0, 1_000),
-        day_record(day_u32(1), [1150, 1160, 1140, 1155], 0.0, 1_000),
+        day_record(day_u32(3), [1140, 1160, 1130, 1150], 0.0, 1_000),
+        day_record(day_u32(2), [1150, 1160, 1140, 1155], 0.0, 1_000),
     ]
 }
 /// `sz159338` anchor: 42,937,950 hands ×100 = 4,293,795,000 shares, amount
 /// 4,937,864,250 yuan = 1.15 yuan per share, inside the bar's raw/1000 range.
-fn hand_today() -> [u8; 32] {
+///
+/// Dated yesterday on purpose: once stored it is part of the next day's base
+/// window, which is the shape every later daily run sees.
+fn hand_bar() -> [u8; 32] {
     day_record_r7(
-        day_u32(0),
+        day_u32(1),
         [1150, 1160, 1140, 1158],
         4_937_864_250.0,
         42_937_950,
@@ -90,10 +93,20 @@ fn delisted_days() -> Vec<u8> {
     .concat()
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Today's ordinary bar of `sz159338`, appended after its stored hand bar.
+fn hand_ordinary_today() -> [u8; 32] {
+    day_record(day_u32(0), [1158, 1165, 1150, 1160], 0.0, 5_000)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Generation {
     First,
     Second,
+    /// Second plus one unrelated filler member, so the generation is new while
+    /// every ETF member keeps the bytes it had in the second generation.
+    Third,
+    /// Third plus an ordinary bar behind the stored hand bar of `sz159338`.
+    Fourth,
 }
 
 /// One mirror generation. Second-generation deltas, per ETF:
@@ -104,11 +117,17 @@ enum Generation {
 /// | `sz159919` | 3 bars | identical | no_change |
 /// | `sz159901` | 3 bars | identical bytes, one new cat1 event | metadata |
 /// | `sz159338` | 2 bars | + a valid hand-recorded bar | append, ×100 |
+///
+/// Third generation: every ETF member is byte-identical to the second one
+/// (`sz159338` now carries its stored hand bar in the base window). Fourth
+/// generation: `sz159338` gains an ordinary bar behind the hand bar.
 /// | `sh510300` | 3 bars | first bar rewritten + today | `etf_history_rewrite` |
 /// | `sz159922` | 3 bars | + a hand-marked bar whose amount disagrees | item failure |
 fn write_mirror(dir: &Path, generation: Generation) {
     std::fs::create_dir_all(dir).unwrap();
-    let second = generation == Generation::Second;
+    let second = generation >= Generation::Second;
+    let third = generation >= Generation::Third;
+    let fourth = generation >= Generation::Fourth;
     write_zip(
         &dir.join("base.zip"),
         &[
@@ -146,7 +165,10 @@ fn write_mirror(dir: &Path, generation: Generation) {
     let hand = {
         let mut bars = hand_base();
         if second {
-            bars.push(hand_today());
+            bars.push(hand_bar());
+        }
+        if fourth {
+            bars.push(hand_ordinary_today());
         }
         bars.concat()
     };
@@ -171,6 +193,7 @@ fn write_mirror(dir: &Path, generation: Generation) {
         bars.concat()
     };
     let delisted = delisted_days();
+    let filler_changed = day_record(day_u32(0), [1128, 1130, 1125, 1129], 0.0, 101).to_vec();
     let fillers: Vec<String> = (201..=270)
         .map(|code| format!("sh\\lday\\sh600{code:03}.day"))
         .collect();
@@ -206,8 +229,16 @@ fn write_mirror(dir: &Path, generation: Generation) {
         ),
         ("sh\\lday\\sh510070.day", delisted.as_slice()),
     ];
-    for name in &fillers {
-        members.push((name.as_str(), a_short.as_slice()));
+    for (index, name) in fillers.iter().enumerate() {
+        let last = index + 1 == fillers.len();
+        members.push((
+            name.as_str(),
+            if third && last {
+                filler_changed.as_slice()
+            } else {
+                a_short.as_slice()
+            },
+        ));
     }
     write_zip(&dir.join("hsjday.zip"), &members);
 }
@@ -380,10 +411,35 @@ fn setup() -> Env {
 }
 
 impl Env {
-    fn advance_generation(&self) {
-        write_mirror(self.mirror.path(), Generation::Second);
-        let second = install(&self.service, "req-second", Some(&self.gen_first));
-        assert_ne!(second, self.gen_first);
+    fn advance_generation(&self) -> String {
+        self.advance_to(Generation::Second, "req-second", &self.gen_first)
+    }
+    fn advance_to(&self, generation: Generation, request: &str, previous: &str) -> String {
+        write_mirror(self.mirror.path(), generation);
+        let next = install(&self.service, request, Some(previous));
+        assert_ne!(next, previous);
+        next
+    }
+    /// `volume_quantum` of every stored bar of an ETF raw series, oldest first.
+    fn quanta(&self, entity: &str) -> Vec<Option<i64>> {
+        self.backend
+            .read(|c| {
+                let row = series::read_series_adjusted(c, entity, Period::Day, Adjustment::Raw)?
+                    .expect("ETF raw series");
+                let mut statement = c
+                    .prepare(
+                        "SELECT volume_quantum FROM series_bars WHERE series_key=?1 \
+                         ORDER BY trade_day",
+                    )
+                    .unwrap();
+                let quanta = statement
+                    .query_map(rusqlite::params![row.series_key], |r| r.get(0))
+                    .unwrap()
+                    .collect::<Result<Vec<Option<i64>>, _>>()
+                    .unwrap();
+                Ok(quanta)
+            })
+            .unwrap()
     }
     fn plan(&self, dataset: &str, scope: Option<&str>) -> Value {
         let mut input = json!({
@@ -813,5 +869,77 @@ fn delisted_series_check_does_not_register_a_delisted_etf() {
             .any(|value| value.to_string().contains("510070")),
         "{:?}",
         resolution.skipped
+    );
+}
+
+#[test]
+fn stored_hand_bar_in_the_base_window_is_no_change_then_append_never_a_rewrite() {
+    // Production's second daily run: `sz159338` already stores its
+    // hand-recorded bar (×100, volume_quantum=100) and the next generation
+    // either carries the same bytes or adds an ordinary bar. The continuity
+    // comparison against the stored base window must neither call that a
+    // rewrite nor disturb the stored hand bar.
+    let env = setup();
+    let second = env.advance_generation();
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-g2", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159338"),
+        "{}",
+        error_of(&task, "sz.159338")
+    );
+    let stored = env.etf_head("sz.159338");
+    assert_eq!(stored.1, 3, "two collected bars plus the appended hand bar");
+    assert_eq!(env.quanta("sz.159338")[2], Some(100));
+
+    // (a) Same bytes: the stored hand bar sits in the base window.
+    let third = env.advance_to(Generation::Third, "req-third", &second);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let items = view["counts"]["eligible"].as_i64().unwrap();
+    assert!(items >= 1, "sz.159338 trails the target day: {view}");
+    let task = env.run("run-etf-g3", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159338"),
+        "{}",
+        error_of(&task, "sz.159338")
+    );
+    assert_eq!(
+        env.etf_head("sz.159338"),
+        stored,
+        "identical bytes keep the version (no_change)"
+    );
+    let hand = env.read_raw("sz", "159338");
+    assert_eq!(hand.len(), 3);
+    assert_eq!(volume_of(&hand[2]).as_deref(), Some("4293795000"));
+    assert_eq!(env.quanta("sz.159338")[2], Some(100));
+
+    // (b) An ordinary bar behind the stored hand bar appends.
+    env.advance_to(Generation::Fourth, "req-fourth", &third);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-g4", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159338"),
+        "{}",
+        error_of(&task, "sz.159338")
+    );
+    let (version, count, last_day) = env.etf_head("sz.159338");
+    assert_ne!(version, stored.0, "an appended bar moves the version");
+    assert_eq!(count, 4);
+    assert_eq!(
+        crate::compact_market::epoch_date(last_day).unwrap(),
+        crate::calendar::shanghai_today()
+    );
+    let rows = env.read_raw("sz", "159338");
+    assert_eq!(rows.len(), 4);
+    assert_eq!(
+        volume_of(&rows[2]).as_deref(),
+        Some("4293795000"),
+        "the stored hand bar keeps its ×100 volume"
+    );
+    assert_eq!(close_of(&rows[3]), "1.16");
+    assert_eq!(
+        env.quanta("sz.159338")[2],
+        Some(100),
+        "the stored hand bar keeps volume_quantum=100"
     );
 }

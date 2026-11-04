@@ -1020,12 +1020,9 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                     "ETF update item missing frozen refresh range".into(),
                 ));
             }
-            "backfill_data" if parsed.refresh_range.is_some() => {
-                return Err(Error::Integrity(
-                    "ETF backfill item carries a refresh range".into(),
-                ));
-            }
-            "update_data" | "backfill_data" => {}
+            "update_data" => {}
+            // The ETF provider path serves `update_data` only (it answers
+            // `None` for a backfill), so a backfill is refused up front.
             _ => {
                 return Err(Error::Invalid("ETF items support update_data only".into()));
             }

@@ -451,6 +451,14 @@ impl PlanScope {
         matches!(self, Self::ShSzEtfCurrent | Self::ShSzAAndEtfCurrent)
     }
 }
+/// Compact optional [`PlanScope`] schema (v8 §6.3 byte budget): the same two
+/// spellings, with no `$defs` entry or prose per tool schema.
+fn plan_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["string", "null"],
+        "enum": ["sh_sz_etf_current", "sh_sz_a_and_etf_current", null]
+    })
+}
 /// Catalog selections only ever accept `current_sh_sz_a`. Runtime rejects the
 /// listed-ever scope; the schema must not advertise it either.
 fn current_catalog_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
@@ -1341,6 +1349,7 @@ pub enum PlanMarketUpdate {
         // Omitted keeps the A-share-only plan byte-for-byte unchanged. A plain
         // comment on purpose: a doc comment would enter `tools/list`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(schema_with = "plan_scope")]
         scope: Option<PlanScope>,
     },
     #[serde(rename = "market.yearly")]
@@ -1448,6 +1457,7 @@ pub enum RunMarketUpdate {
         // A-share-only plan. A plain comment: a doc comment would enter
         // `tools/list`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(schema_with = "plan_scope")]
         scope: Option<PlanScope>,
     },
     #[serde(rename = "market.yearly")]
