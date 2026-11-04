@@ -52,7 +52,7 @@ EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v9"
 # stale-deployment-claim check below: the "current" regions describe the
 # deployed instance, not the code on main. Flip this constant together with
 # the Skills in the same commit at the next contract switch.
-EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v9"
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v10"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
