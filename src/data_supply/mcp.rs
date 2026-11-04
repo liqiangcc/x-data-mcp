@@ -1159,6 +1159,7 @@ impl DataApi {
                     &self.queries.repository.market,
                     self.generation.as_ref(),
                     command.dataset(),
+                    command.scope(),
                     Some(end_date),
                     today,
                 )
@@ -1216,6 +1217,7 @@ impl DataApi {
                     &self.queries.repository.market,
                     self.generation.as_ref(),
                     command.dataset(),
+                    command.scope(),
                     command.target_day(),
                     today,
                 )

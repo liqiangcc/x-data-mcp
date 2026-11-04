@@ -116,6 +116,11 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // `status_of` to `refresh_exchange_sources`, plus the `running` status and
     // an optional `finished_at` in its output. Measured ops grew 29,814 ->
     // 30,114 B (+300) and the ceiling follows the same rule: 30,500 + 300.
+    // M3-2 PR-C2 adds the optional `scope` field to the ops-only
+    // `plan_market_update` / `run_market_update` `market.daily` branches. It
+    // uses one compact inline schema (no `$defs` entry, `type` or prose), so the
+    // 30,800 ceiling is not raised.
+    // Research and maint do not carry those tools and are unchanged.
     // The research/ops budgets carry that documented surface growth; they are
     // not relaxed for any other reason.
     let budgets = [

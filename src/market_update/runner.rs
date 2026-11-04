@@ -105,6 +105,14 @@ pub enum TypedDecision {
         metadata: Option<Box<crate::market_update::TypedVersionMetadata>>,
     },
 }
+/// Typed acquisition for one ETF 不复权 item (M3-2 PR-C2): one series only,
+/// plus the factor/capital facts that the same transaction refreshes.
+pub struct TypedEtfAcquisition {
+    pub decision: TypedDecision,
+    pub evidence: Evidence,
+    pub factors: crate::market_data::AdjustmentEventSet,
+    pub capital: crate::security_master::CapitalEventSet,
+}
 /// Synchronous and read-only with respect to publication/task storage. Return
 /// only after acquisition has stopped. Trusted fixture/verifier port, not MCP.
 pub trait RangeProvider {
@@ -124,6 +132,16 @@ pub trait RangeProvider {
         _base_window: &[Bar],
         _range: &DateRange,
     ) -> Result<Option<TypedAcquisition>, SourceError> {
+        Ok(None)
+    }
+    /// ETF raw acquisition (M3-2 PR-C2). `None` keeps ETF items fail-closed:
+    /// the stock `acquire_typed` path must never write an ETF as a stock pair.
+    fn acquire_typed_etf(
+        &self,
+        _facts: &super::UpdateBaseFacts,
+        _base_window: &[Bar],
+        _range: &DateRange,
+    ) -> Result<Option<TypedEtfAcquisition>, SourceError> {
         Ok(None)
     }
     /// An independent provider for one parallel preparation worker. A
@@ -271,7 +289,9 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
             &self.run_id,
             Change::StartItem(item_id.into()),
         )?;
-        let outcome = if default_contract {
+        let outcome = if super::tasks::is_etf_frozen(&binding.item.spec.frozen_inputs) {
+            self.acquire_and_commit_etf(&binding, item_id, provider)
+        } else if default_contract {
             self.acquire_and_commit_default(&mut binding, item_id, provider)
         } else {
             self.acquire_and_commit(&mut binding, item_id, provider)
@@ -766,6 +786,11 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
                 "unsupported range execution contract".into(),
             ));
         }
+        // ETF items run on their own raw commit path; never let the stock
+        // batch preparation reinterpret them as a qfq/raw pair.
+        if super::tasks::is_etf_frozen(&binding.item.spec.frozen_inputs) {
+            return Ok(None);
+        }
         if has_receipt
             || binding.head.visible_status(&self.run_id) == Status::NeedsVerification
             || binding.item.stage != Stage::Pending
@@ -972,6 +997,117 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         )?;
         self.ensure_default_coverings(&binding.item.spec.frozen_inputs, &receipt.version_id)?;
         Ok(receipt)
+    }
+    /// ETF raw update path (M3-2 PR-C2): frozen refresh range → base facts →
+    /// full ETF materialization/continuity proof → one raw commit that also
+    /// refreshes the category-1/11 factor facts. A non-prefix rewrite is an
+    /// item failure (`etf_history_rewrite`); it is never silently rewritten.
+    fn acquire_and_commit_etf(
+        &self,
+        binding: &crate::task_control::ItemBinding,
+        item_id: &str,
+        provider: &dyn RangeProvider,
+    ) -> Result<Receipt, Error> {
+        let parsed = super::tasks::parse_default_frozen(&binding.item.spec.frozen_inputs)?;
+        if parsed.series != Some(crate::data_supply::plan::PlanSeries::EtfRaw) {
+            return Err(Error::Integrity(
+                "ETF path entered without the frozen ETF marker".into(),
+            ));
+        }
+        match binding.head.key.operation.as_str() {
+            "update_data" if parsed.refresh_range.is_none() => {
+                return Err(Error::Integrity(
+                    "ETF update item missing frozen refresh range".into(),
+                ));
+            }
+            "update_data" => {}
+            // The ETF provider path serves `update_data` only (it answers
+            // `None` for a backfill), so a backfill is refused up front.
+            _ => {
+                return Err(Error::Invalid("ETF items support update_data only".into()));
+            }
+        }
+        let range = parsed.union()?;
+        let Some(facts) = self.repository.update_base_facts(&parsed.base_version_id)? else {
+            return Err(Error::NotFound);
+        };
+        if facts.integrity_sha256 != parsed.base_integrity_sha256 {
+            return Err(Error::Integrity(
+                "ETF base differs from accepted digest".into(),
+            ));
+        }
+        let Some(base_window) =
+            self.repository
+                .base_bars_in_range(&parsed.base_version_id, range.start, range.end)?
+        else {
+            return Err(Error::NotFound);
+        };
+        let Some(acquired) = provider
+            .acquire_typed_etf(&facts, &base_window, &range)
+            .map_err(|e| Error::Invalid(e.to_string()))?
+        else {
+            return Err(Error::Invalid(
+                "etf_update_unverified: typed ETF acquisition is unavailable".into(),
+            ));
+        };
+        let current = self.repository.task_head(&binding.head.task_id)?;
+        if current.status != Status::Running
+            || current.state_revision != binding.head.state_revision
+        {
+            return Err(Error::Conflict(
+                "task changed or cancelled during acquisition".into(),
+            ));
+        }
+        let id = crate::hash::sha256(
+            serde_json::json!([binding.head.task_id, item_id])
+                .to_string()
+                .as_bytes(),
+        );
+        let command = Publication {
+            publication_id: format!("range-result-{id}"),
+            version_id: match &acquired.decision {
+                TypedDecision::Append { .. } => format!("range-version-{id}"),
+                TypedDecision::Unchanged => parsed.base_version_id.clone(),
+            },
+            task_id: binding.head.task_id.clone(),
+            item_id: item_id.into(),
+            run_id: self.run_id.clone(),
+            expected_revision: binding.head.state_revision,
+            intent: PublishIntent::Daily {
+                expected_head: Some(parsed.base_version_id.clone()),
+            },
+        };
+        if acquired.evidence.base_version_id != parsed.base_version_id
+            || acquired.evidence.base_integrity_sha256 != facts.integrity_sha256
+            || acquired.evidence.range != range
+        {
+            return Err(Error::Invalid(format!(
+                "NEEDS_VERIFICATION: {:?}",
+                Reason::BasisUnknown
+            )));
+        }
+        let continuity_evidence = serde_json::to_value(&acquired.evidence).ok();
+        let (upserts, metadata): (&[Bar], Option<&crate::market_update::TypedVersionMetadata>) =
+            match &acquired.decision {
+                TypedDecision::Unchanged => (&[], None),
+                TypedDecision::Append { upserts, metadata } => {
+                    (upserts.as_slice(), metadata.as_deref())
+                }
+            };
+        self.repository
+            .commit_etf_raw_typed(
+                &command,
+                &parsed.base_version_id,
+                &range,
+                upserts,
+                metadata,
+                continuity_evidence.as_ref(),
+                &acquired.factors,
+                &acquired.capital,
+            )?
+            .ok_or_else(|| {
+                Error::Invalid("etf_update_unverified: typed ETF commit is unavailable".into())
+            })
     }
     /// Append covering bindings for frozen gaps the committed version
     /// satisfied in full. The exact covering condition: the gap is listed in

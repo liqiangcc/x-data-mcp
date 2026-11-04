@@ -172,6 +172,10 @@ pub(crate) struct DefaultFrozen {
     #[serde(default)]
     pub refresh_range: Option<FrozenDayRange>,
     pub proven_gap_ranges: Vec<FrozenGapRange>,
+    /// M3-2 PR-C2 ETF marker. Absent for A shares; `etf_raw` routes the item
+    /// to the single 不复权 ETF commit instead of the stock qfq/raw pair.
+    #[serde(default)]
+    pub series: Option<crate::data_supply::plan::PlanSeries>,
     /// Generation binding stamped by the `Bound` decorator at acceptance
     /// (#260 D4). Shape is admitted here; the value itself is enforced at
     /// worker session open, which refuses absent/null bindings in
@@ -256,6 +260,11 @@ pub(crate) fn parse_default_frozen(
 ) -> Result<DefaultFrozen, crate::market_storage::Error> {
     serde_json::from_value(frozen.clone())
         .map_err(|e| crate::market_storage::Error::Integrity(format!("default frozen inputs: {e}")))
+}
+/// True when a frozen item names the ETF raw path (M3-2 PR-C2). The marker is
+/// shape-checked by [`parse_default_frozen`]; this helper only routes.
+pub(crate) fn is_etf_frozen(frozen: &Value) -> bool {
+    frozen.get("series").and_then(Value::as_str) == Some("etf_raw")
 }
 
 pub(crate) fn repository_error(error: crate::market_storage::Error) -> Error {

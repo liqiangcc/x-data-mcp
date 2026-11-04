@@ -570,4 +570,6 @@ pub fn is_collection_key(key: &CommandKey) -> bool {
 }
 
 #[cfg(test)]
+mod etf_update_tests;
+#[cfg(test)]
 mod tests;

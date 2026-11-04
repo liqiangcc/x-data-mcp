@@ -657,6 +657,18 @@ impl MarketRepository for SqliteCompactMarket {
 
 /// Receipt reconstruction from the event row (`result_id` is the
 /// publication id; `new_content_digest` hex is the committed version id).
+/// The item's result event: the forward event of a paired stock item, else the
+/// raw event of a single-series ETF item (M3-2 PR-C2). Stock items always have
+/// a forward event, so their lookup is unchanged.
+fn item_event(c: &Connection, task: &str, item: &str) -> Result<Option<series::EventRow>, Error> {
+    if let Some(event) =
+        series::event_by_task_item(c, task, item, crate::market_data::Adjustment::Forward)?
+    {
+        return Ok(Some(event));
+    }
+    series::event_by_task_item(c, task, item, crate::market_data::Adjustment::Raw)
+}
+
 fn receipt_for(c: &Connection, result_id: &str) -> Result<Option<Receipt>, Error> {
     Ok(series::event_by_result(c, result_id)?.map(|e| Receipt {
         publication_id: result_id.into(),
@@ -1226,13 +1238,7 @@ impl RangeRepository for SqliteCompactMarket {
                     Ok(crate::market_update::publication::RangeItemState {
                         binding: crate::sqlite_tasks::read_item_binding(c, task_id, item_id)
                             .map_err(Error::Task)?,
-                        has_receipt: series::event_by_task_item(
-                            c,
-                            task_id,
-                            item_id,
-                            crate::market_data::Adjustment::Forward,
-                        )?
-                        .is_some(),
+                        has_receipt: item_event(c, task_id, item_id)?.is_some(),
                     })
                 })
                 .collect())
@@ -1363,6 +1369,126 @@ impl RangeRepository for SqliteCompactMarket {
             Ok(Some(receipt))
         })
     }
+    fn commit_etf_raw_typed(
+        &self,
+        command: &Publication,
+        base_version_id: &str,
+        range: &crate::market_update::DateRange,
+        upserts: &[Bar],
+        metadata: Option<&crate::market_update::TypedVersionMetadata>,
+        continuity_evidence: Option<&Value>,
+        factors: &crate::market_data::AdjustmentEventSet,
+        capital: &crate::security_master::CapitalEventSet,
+    ) -> Result<Option<Receipt>, Error> {
+        self.write(|c| {
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            // Replay wins over the base lookup: a committed result id returns
+            // its receipt even after the head moved on.
+            if let Some(receipt) = receipt_for(&tx, &command.publication_id)? {
+                return Ok(Some(receipt));
+            }
+            let head =
+                series::read_series_by_version_id(&tx, base_version_id)?.ok_or(Error::NotFound)?;
+            if head.period != Period::Day
+                || head.adjustment != crate::market_data::Adjustment::Raw
+                || head.instrument_class != crate::market_data::INSTRUMENT_CLASS_ETF
+                || head.price_scale != crate::compact_market::PRICE_SCALE_LI
+            {
+                return Err(integrity(
+                    "ETF update base is not the 3dp raw ETF series shape",
+                ));
+            }
+            let (binding, evidence_d, coverage) = metadata_fields(&tx, &head, metadata)?;
+            let compact_upserts =
+                series_commit::to_compact_bars(upserts, Period::Day, head.price_scale)?;
+            // No tail: either nothing moved (`no_change`) or only the source
+            // binding/factor basis moved (`metadata`); neither writes a bar.
+            let no_tail = compact_upserts.is_empty();
+            let (range_start_day, range_end_day) = if no_tail {
+                (
+                    crate::compact_market::epoch_day(range.start),
+                    crate::compact_market::epoch_day(range.end),
+                )
+            } else {
+                (
+                    compact_upserts
+                        .iter()
+                        .map(|bar| bar.trade_day)
+                        .min()
+                        .unwrap_or(head.last_day),
+                    compact_upserts
+                        .iter()
+                        .map(|bar| bar.trade_day)
+                        .max()
+                        .unwrap_or(head.last_day),
+                )
+            };
+            let window_bars = if no_tail {
+                series::bars_in_range(&tx, head.series_key, range_start_day, range_end_day)?
+            } else {
+                compact_upserts.clone()
+            };
+            let evidence = series_commit::put_continuity_evidence(
+                &tx,
+                &ops_continuity_json(
+                    if no_tail { "unchanged" } else { "append" },
+                    base_version_id,
+                    &head.source_binding_digest,
+                    Some(head.record_count as u64 * 32),
+                    continuity_evidence,
+                ),
+            )?;
+            let metadata_moved = binding.is_some() || evidence_d.is_some();
+            let change = if !no_tail {
+                series_commit::SeriesChange::Append {
+                    upserts: compact_upserts.as_slice(),
+                }
+            } else if metadata_moved {
+                series_commit::SeriesChange::Metadata
+            } else {
+                series_commit::SeriesChange::NoChange
+            };
+            let scope = Scope {
+                symbol: head.entity.clone(),
+                period: Period::Day,
+            };
+            let receipt = series_commit::commit_etf_tx(
+                &tx,
+                &series_commit::Commit {
+                    result_id: &command.publication_id,
+                    task_id: &command.task_id,
+                    item_id: &command.item_id,
+                    run_id: &command.run_id,
+                    occupancy_key: &scope.occupancy_key(),
+                    expected_task_revision: command.expected_revision,
+                    entity: &head.entity,
+                    period: Period::Day,
+                    adjustment: crate::market_data::Adjustment::Raw,
+                    base_version_id: Some(base_version_id),
+                    change,
+                    range_start_day,
+                    range_end_day,
+                    algorithm_version: series_commit::UPDATE_ALGO,
+                    window_digest: Some(series_commit::window_fold(&window_bars)?),
+                    source_binding_digest: binding,
+                    evidence_digest: evidence_d,
+                    coverage_status: coverage,
+                    metadata_changed: metadata_moved,
+                    event_evidence_digest: evidence,
+                    published_at: None,
+                    staged_version_id: None,
+                    defer_task_row: false,
+                },
+                factors,
+                capital,
+            )?;
+            tx.commit()
+                .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
+            Ok(Some(receipt))
+        })
+    }
     fn commit_range_no_change_typed(
         &self,
         command: &Publication,
@@ -1487,15 +1613,12 @@ impl RangeRepository for SqliteCompactMarket {
     }
     fn item_receipt(&self, task: &str, item: &str) -> Result<Option<Receipt>, Error> {
         self.read(|c| {
-            Ok(
-                series::event_by_task_item(c, task, item, crate::market_data::Adjustment::Forward)?
-                    .map(|e| Receipt {
-                        publication_id: e.result_id.clone(),
-                        version_id: series::version_id(&e.new_content_digest),
-                        task_id: task.into(),
-                        task_revision: e.task_revision as u64,
-                    }),
-            )
+            Ok(item_event(c, task, item)?.map(|e| Receipt {
+                publication_id: e.result_id.clone(),
+                version_id: series::version_id(&e.new_content_digest),
+                task_id: task.into(),
+                task_revision: e.task_revision as u64,
+            }))
         })
     }
     fn transition_task(

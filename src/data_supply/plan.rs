@@ -9,8 +9,10 @@
 //! version, the active verified generation, the target day and every
 //! per-entity resolved fact, and the admitted task's frozen work is
 //! rebuilt deterministically from the same canonical payload.
-use super::wire::{Dataset, PlanCounts, PlanIneligibleEntity, PlanReasonCount, PlanView};
-use crate::market_data::Period;
+use super::wire::{
+    Dataset, PlanCounts, PlanIneligibleEntity, PlanReasonCount, PlanScope, PlanView,
+};
+use crate::market_data::{Adjustment, Period};
 use crate::market_storage::Scope;
 use crate::sqlite_market::{head, is_latest_only_schema, series};
 use crate::task_control::{CommandKey, Contract, Error, FrozenWork, ItemSpec};
@@ -86,6 +88,14 @@ pub struct PlanGap {
     pub end_date: NaiveDate,
     pub evidence_digest: String,
 }
+/// Which price series one daily item writes. Absent means the stock
+/// forward/raw pair (the pre-M3-2 behavior, byte-identical on the wire);
+/// `etf_raw` is the single 不复权 ETF series at `SeriesShape::etf(Raw)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanSeries {
+    #[serde(rename = "etf_raw")]
+    EtfRaw,
+}
 /// Eligible daily item — everything the frozen default work needs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +105,10 @@ pub struct DailyPlanItem {
     pub base_integrity_sha256: String,
     pub refresh_range: PlanRange,
     pub proven_gap_ranges: Vec<PlanGap>,
+    /// M3-2 PR-C2: `Some(EtfRaw)` routes the item to the ETF raw path.
+    /// Omitted for A shares so their canonical plan bytes do not move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub series: Option<PlanSeries>,
 }
 /// Yearly head the plan expects to supersede, with its content digest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +156,10 @@ pub struct PlanIneligible {
 #[derive(Debug)]
 pub struct Plan {
     pub dataset: Dataset,
+    /// Requested member scope. `None` is the pre-M3-2 A-share-only plan and
+    /// stays out of the canonical bytes; ETF/combined plans carry the scope
+    /// so two different member sets cannot share a digest.
+    pub scope: Option<PlanScope>,
     pub generation_id: Option<String>,
     pub target_day: NaiveDate,
     pub items: Vec<PlanItem>,
@@ -154,6 +172,8 @@ pub struct Plan {
 struct CanonicalPlan<'a> {
     dataset: &'a str,
     contract_version: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<&'a str>,
     generation_id: Option<&'a str>,
     target_day: NaiveDate,
     items: &'a [PlanItem],
@@ -182,6 +202,7 @@ impl Plan {
         CanonicalPlan {
             dataset: self.dataset_name(),
             contract_version: PLAN_CONTRACT_VERSION,
+            scope: self.scope.map(PlanScope::as_str),
             generation_id: self.generation_id.as_deref(),
             target_day: self.target_day,
             items: &self.items,
@@ -318,6 +339,7 @@ impl Plan {
         Ok(PlanView {
             plan_id: self.plan_id()?,
             dataset: self.dataset,
+            scope: self.scope,
             contract_version: super::wire::ContractVersion::V1,
             generation_ref: self.generation_id.clone(),
             target_day: self.target_day,
@@ -475,6 +497,7 @@ pub fn resolve_plan(
     market: &crate::sqlite_market::backend::MarketBackend,
     generation: Option<&super::generation::GenerationSource>,
     dataset: Dataset,
+    scope: Option<PlanScope>,
     end_date: Option<NaiveDate>,
     today: NaiveDate,
 ) -> Result<Plan, PlanError> {
@@ -487,7 +510,7 @@ pub fn resolve_plan(
     let generation_id = generation.and_then(|g| g.active_verified_id());
     let mut plan = market
         .read(|c| match dataset {
-            Dataset::Daily => resolve_daily_on(c, target_day, today),
+            Dataset::Daily => resolve_daily_on(c, target_day, today, scope),
             Dataset::Yearly => resolve_yearly_on(c, target_day, today),
             Dataset::Catalog
             | Dataset::Index
@@ -517,6 +540,7 @@ pub fn resolve_run(
     market: &crate::sqlite_market::backend::MarketBackend,
     generation: Option<&super::generation::GenerationSource>,
     dataset: Dataset,
+    scope: Option<PlanScope>,
     target_day: NaiveDate,
     today: NaiveDate,
 ) -> Result<RunResolution, PlanError> {
@@ -529,7 +553,7 @@ pub fn resolve_run(
     let mut out = market
         .read(|c| {
             let plan = match dataset {
-                Dataset::Daily => resolve_daily_on(c, target_day, today),
+                Dataset::Daily => resolve_daily_on(c, target_day, today, scope),
                 Dataset::Yearly => resolve_yearly_on(c, target_day, today),
                 Dataset::Catalog
                 | Dataset::Index
@@ -563,10 +587,13 @@ fn resolve_daily_on(
     c: &Connection,
     target_day: NaiveDate,
     today: NaiveDate,
+    scope: Option<PlanScope>,
 ) -> Result<Plan, crate::market_storage::Error> {
-    let universe = universe(c)?;
     let mut items = vec![];
     let mut ineligible = vec![];
+    let include_stock = scope.is_none_or(PlanScope::includes_a);
+    let include_etf = scope.is_some_and(PlanScope::includes_etf);
+    let universe = if include_stock { universe(c)? } else { vec![] };
     for symbol in &universe {
         let scope = Scope {
             symbol: symbol.clone(),
@@ -642,15 +669,108 @@ fn resolve_daily_on(
                 end_date: target_day,
             },
             proven_gap_ranges,
+            series: None,
         }));
+    }
+    if include_etf {
+        resolve_etf_daily_on(c, target_day, today, &mut items, &mut ineligible)?;
     }
     Ok(Plan {
         dataset: Dataset::Daily,
+        scope,
         generation_id: None,
         target_day,
         items,
         ineligible,
     })
+}
+
+/// ETF current members that already have a 不复权 daily series. The
+/// intersection is the task's universe: a list member with no series has no
+/// head to update, exactly like a catalog member that was never collected.
+fn etf_daily_universe(c: &Connection) -> Result<Vec<String>, crate::market_storage::Error> {
+    let current = crate::research::universe::etf_current_entities(c)
+        .map_err(|e| istorage(format!("ETF current universe: {e}")))?;
+    let spans = series::etf_raw_daily_spans(c)
+        .map_err(|e| istorage(format!("ETF raw series read: {e}")))?;
+    Ok(current
+        .into_iter()
+        .filter(|entity| spans.contains_key(entity))
+        .collect())
+}
+
+/// Add ETF daily items to a plan. ETF has one 不复权 series only (no
+/// forward/raw pair, no yearly); its base identity is resolved through the
+/// public shape resolver so the plan and the read surface cannot disagree.
+fn resolve_etf_daily_on(
+    c: &Connection,
+    target_day: NaiveDate,
+    today: NaiveDate,
+    items: &mut Vec<PlanItem>,
+    ineligible: &mut Vec<PlanIneligible>,
+) -> Result<(), crate::market_storage::Error> {
+    for symbol in etf_daily_universe(c)? {
+        let Some(shape) = series::resolve_read_shape(
+            c,
+            &symbol,
+            series::ReadSeriesKind::Daily,
+            Some(Adjustment::Raw),
+        )
+        .map_err(|e| istorage(format!("ETF shape read: {e}")))?
+        else {
+            ineligible.push(PlanIneligible {
+                entity: symbol,
+                reason: "absent".into(),
+            });
+            continue;
+        };
+        let Some(row) = series::read_visible_shaped(c, &symbol, Period::Day, shape)
+            .map_err(|e| istorage(format!("ETF series read: {e}")))?
+        else {
+            ineligible.push(PlanIneligible {
+                entity: symbol,
+                reason: "absent".into(),
+            });
+            continue;
+        };
+        let first_day = crate::compact_market::epoch_date(row.first_day)
+            .map_err(|e| istorage(format!("ETF base first_day: {e}")))?;
+        let last_day = crate::compact_market::epoch_date(row.last_day)
+            .map_err(|e| istorage(format!("ETF base last_day: {e}")))?;
+        if first_day > last_day {
+            ineligible.push(PlanIneligible {
+                entity: symbol,
+                reason: "invalid_base_dates".into(),
+            });
+            continue;
+        }
+        if last_day > today {
+            ineligible.push(PlanIneligible {
+                entity: symbol,
+                reason: "future_data".into(),
+            });
+            continue;
+        }
+        if last_day >= target_day {
+            ineligible.push(PlanIneligible {
+                entity: symbol,
+                reason: "already_current".into(),
+            });
+            continue;
+        }
+        items.push(PlanItem::Daily(DailyPlanItem {
+            entity: symbol,
+            base_version_id: row.version_id.clone(),
+            base_integrity_sha256: row.version_id,
+            refresh_range: PlanRange {
+                start_date: first_day,
+                end_date: target_day,
+            },
+            proven_gap_ranges: vec![],
+            series: Some(PlanSeries::EtfRaw),
+        }));
+    }
+    Ok(())
 }
 
 /// Current-catalog∩collected universe; an empty universe resolves to an
@@ -828,6 +948,7 @@ fn resolve_yearly_on(
     }
     Ok(Plan {
         dataset: Dataset::Yearly,
+        scope: None,
         generation_id: None,
         target_day,
         items,
@@ -897,6 +1018,9 @@ pub fn item_spec(item: PlanItem, plan_id: &str, generation: &Value) -> ItemSpec 
                     "evidence_digest": g.evidence_digest,
                 })).collect::<Vec<_>>(),
             });
+            if let Some(series) = i.series {
+                value["series"] = serde_json::to_value(series).expect("plan series serializes");
+            }
             value[SOURCE_GENERATION_KEY] = generation.clone();
             (
                 crate::task_control::legacy::scope_id(&i.entity, "day"),
@@ -1038,6 +1162,7 @@ mod tests {
     fn plan_id_matches_canonical_byte_format() {
         let plan = Plan {
             dataset: Dataset::Daily,
+            scope: None,
             generation_id: Some("gen-x".into()),
             target_day: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
             items: vec![PlanItem::Daily(DailyPlanItem {
@@ -1054,6 +1179,7 @@ mod tests {
                     end_date: NaiveDate::from_ymd_opt(2026, 10, 8).unwrap(),
                     evidence_digest: "bb".repeat(32),
                 }],
+                series: None,
             })],
             ineligible: vec![PlanIneligible {
                 entity: "sz.000001".into(),
@@ -1066,6 +1192,108 @@ mod tests {
         );
     }
 
+    fn etf_item(entity: &str) -> PlanItem {
+        PlanItem::Daily(DailyPlanItem {
+            entity: entity.into(),
+            base_version_id: "v-etf".into(),
+            base_integrity_sha256: "cc".repeat(32),
+            refresh_range: PlanRange {
+                start_date: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+            },
+            proven_gap_ranges: vec![],
+            series: Some(PlanSeries::EtfRaw),
+        })
+    }
+
+    /// M3-2 PR-C2: an absent scope and an absent series marker leave the
+    /// canonical bytes alone (the A-share `plan_id` golden above), while the
+    /// ETF/combined plans carry both so their digests cannot collide.
+    #[test]
+    fn scope_and_series_markers_are_omitted_for_a_shares_and_bound_for_etf() {
+        let a_item = PlanItem::Daily(DailyPlanItem {
+            entity: "sh.600000".into(),
+            base_version_id: "v-1".into(),
+            base_integrity_sha256: "aa".repeat(32),
+            refresh_range: PlanRange {
+                start_date: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+            },
+            proven_gap_ranges: vec![],
+            series: None,
+        });
+        let build = |scope: Option<PlanScope>, items: Vec<PlanItem>| Plan {
+            dataset: Dataset::Daily,
+            scope,
+            generation_id: Some("gen-x".into()),
+            target_day: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+            items,
+            ineligible: vec![],
+        };
+        let a_only = build(None, vec![a_item.clone()]);
+        let canonical = serde_json::to_string(&a_only.canonical()).unwrap();
+        assert!(!canonical.contains("scope"), "{canonical}");
+        assert!(!canonical.contains("series"), "{canonical}");
+
+        let etf = build(Some(PlanScope::ShSzEtfCurrent), vec![etf_item("sh.510050")]);
+        let canonical = serde_json::to_string(&etf.canonical()).unwrap();
+        assert!(
+            canonical.contains(r#""scope":"sh_sz_etf_current""#),
+            "{canonical}"
+        );
+        assert!(canonical.contains(r#""series":"etf_raw""#), "{canonical}");
+
+        let combined = build(
+            Some(PlanScope::ShSzAAndEtfCurrent),
+            vec![a_item, etf_item("sh.510050")],
+        );
+        let ids = [
+            a_only.plan_id().unwrap(),
+            etf.plan_id().unwrap(),
+            combined.plan_id().unwrap(),
+        ];
+        assert_eq!(
+            ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+            3,
+            "{ids:?}"
+        );
+        assert!(PlanScope::ShSzAAndEtfCurrent.includes_a());
+        assert!(PlanScope::ShSzAAndEtfCurrent.includes_etf());
+        assert!(!PlanScope::ShSzEtfCurrent.includes_a());
+        assert!(PlanScope::ShSzEtfCurrent.includes_etf());
+    }
+
+    /// The frozen item of an ETF plan member names the raw series path; the
+    /// A-share item's frozen bytes have no such key.
+    #[test]
+    fn frozen_item_carries_the_etf_marker_only_for_etf_members() {
+        let generation = Value::Null;
+        let etf = item_spec(etf_item("sh.510050"), "pid", &generation);
+        assert_eq!(etf.frozen_inputs["series"], json!("etf_raw"));
+        assert!(crate::market_update::tasks::is_etf_frozen(
+            &etf.frozen_inputs
+        ));
+        let a = item_spec(
+            PlanItem::Daily(DailyPlanItem {
+                entity: "sh.600000".into(),
+                base_version_id: "v-1".into(),
+                base_integrity_sha256: "aa".repeat(32),
+                refresh_range: PlanRange {
+                    start_date: NaiveDate::from_ymd_opt(2026, 10, 9).unwrap(),
+                    end_date: NaiveDate::from_ymd_opt(2026, 10, 12).unwrap(),
+                },
+                proven_gap_ranges: vec![],
+                series: None,
+            }),
+            "pid",
+            &generation,
+        );
+        assert!(a.frozen_inputs.get("series").is_none());
+        assert!(!crate::market_update::tasks::is_etf_frozen(
+            &a.frozen_inputs
+        ));
+    }
+
     fn inelig(entity: &str, reason: &str) -> PlanIneligible {
         PlanIneligible {
             entity: entity.into(),
@@ -1076,6 +1304,7 @@ mod tests {
     fn plan_with_ineligible(ineligible: Vec<PlanIneligible>) -> Plan {
         Plan {
             dataset: Dataset::Yearly,
+            scope: None,
             generation_id: None,
             target_day: d(2026, 10, 14),
             items: vec![],
