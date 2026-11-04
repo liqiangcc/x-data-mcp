@@ -172,6 +172,10 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
         "tools/list measured bytes (entry, bytes, budget): {measured:?}; \
          main-equivalent ops: {main_bytes} B (15 tools)"
     );
+    assert!(
+        measured.is_empty(),
+        "PROBE {measured:?} main-equivalent {main_bytes}"
+    );
     if let Ok(path) = std::env::var("GITHUB_STEP_SUMMARY") {
         use std::io::Write as _;
         if let Ok(mut summary) = std::fs::OpenOptions::new()
