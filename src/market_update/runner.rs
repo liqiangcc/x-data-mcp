@@ -1009,6 +1009,11 @@ impl<R: RangeRepository + Clone> RangeRunner<R> {
         provider: &dyn RangeProvider,
     ) -> Result<Receipt, Error> {
         let parsed = super::tasks::parse_default_frozen(&binding.item.spec.frozen_inputs)?;
+        if parsed.series != Some(crate::data_supply::plan::PlanSeries::EtfRaw) {
+            return Err(Error::Integrity(
+                "ETF path entered without the frozen ETF marker".into(),
+            ));
+        }
         match binding.head.key.operation.as_str() {
             "update_data" if parsed.refresh_range.is_none() => {
                 return Err(Error::Integrity(
