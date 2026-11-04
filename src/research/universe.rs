@@ -271,6 +271,15 @@ pub struct MemberInterval {
     pub member_to: Option<NaiveDate>,
     pub basis: MembershipBasis,
     pub flags: Vec<MemberFlag>,
+    /// The `security_master` class the interval came from (0 stock / 2 ETF).
+    pub instrument_class: i64,
+    /// ETF only (D-72): the last bar with `volume > 0`, the tradable-window
+    /// upper bound. `None` for stocks and for an ETF without a traded bar.
+    pub last_trade_date: Option<NaiveDate>,
+    /// ETF only (D-72): the termination date extracted from the exchange
+    /// announcement, the existence upper bound. `None` = unknown (and for
+    /// stocks, whose end is `member_to`).
+    pub delisting_date: Option<NaiveDate>,
 }
 
 /// ETF current members: class=2 rows whose identity is still open and whose
@@ -326,18 +335,48 @@ pub fn listed_ever_entities(c: &Connection) -> Result<Vec<String>, Error> {
     Ok(members.into_iter().collect())
 }
 
-/// Every member interval this database defines (§12.4 `universe_intervals`).
+/// Every A-share member interval this database defines (§12.4
+/// `universe_intervals`).
 ///
 /// Ordered by entity then `member_from`, so the export is deterministic. The
-/// rows are A-share intervals only: a reserved `instrument_class` is not in the
-/// universe today, and this file does not pretend otherwise.
+/// rows are A-share intervals only: this is the `universe` read model, whose
+/// scope is `sh_sz_a_*`. The export adds the ETF block through
+/// [`member_intervals_with_etf`].
 pub fn member_intervals(c: &Connection) -> Result<Vec<MemberInterval>, Error> {
     let rows = security::read_security_master(c).map_err(Error::from)?;
     let migrations = security::read_code_migrations(c).map_err(Error::from)?;
     let spans = series::raw_daily_spans(c).map_err(Error::from)?;
+    class_intervals(c, &rows, &migrations, &spans, 0)
+}
+
+/// The A-share intervals followed by the ETF intervals (M3-2 PR-D).
+///
+/// The A-share block is exactly [`member_intervals`]; the ETF block is the same
+/// interval rule applied to `instrument_class = 2` rows (listing date, else the
+/// first stored bar; end = the earlier of `effective_to` and the delisting
+/// date), plus the two D-72 dates. Blocks are not interleaved, so the A-share
+/// rows stay a prefix of the file. ETF stays out of `universe(as_of)` itself:
+/// D-70 Q5 keeps the default universe A-share.
+pub fn member_intervals_with_etf(c: &Connection) -> Result<Vec<MemberInterval>, Error> {
+    let rows = security::read_security_master(c).map_err(Error::from)?;
+    let migrations = security::read_code_migrations(c).map_err(Error::from)?;
+    let stock_spans = series::raw_daily_spans(c).map_err(Error::from)?;
+    let etf_spans = series::etf_raw_daily_spans(c).map_err(Error::from)?;
+    let mut intervals = class_intervals(c, &rows, &migrations, &stock_spans, 0)?;
+    intervals.extend(class_intervals(c, &rows, &migrations, &etf_spans, 2)?);
+    Ok(intervals)
+}
+
+fn class_intervals(
+    c: &Connection,
+    rows: &[SecurityLifecycleFact],
+    migrations: &[CodeMigrationFact],
+    spans: &BTreeMap<String, series::RawDailySpan>,
+    instrument_class: i64,
+) -> Result<Vec<MemberInterval>, Error> {
     let mut intervals = Vec::new();
-    for row in &rows {
-        if row.instrument_class != 0 {
+    for row in rows {
+        if i64::from(row.instrument_class) != instrument_class {
             continue;
         }
         let entity = row.entity();
@@ -367,7 +406,23 @@ pub fn member_intervals(c: &Connection) -> Result<Vec<MemberInterval>, Error> {
         if row.issuer_resolution == IssuerResolution::Ambiguous {
             flags.push(MemberFlag::AmbiguousIssuer);
         }
-        let (canonical_entity, aliases) = canonical_identity(&entity, &migrations);
+        let (canonical_entity, aliases) = canonical_identity(&entity, migrations);
+        // The same two functions the read surface's metadata uses, so the file
+        // and `query_data` cannot disagree on an ETF's dates (D-72).
+        let (last_trade_date, delisting_date) =
+            if instrument_class == crate::market_data::INSTRUMENT_CLASS_ETF {
+                (
+                    match spans.get(&entity) {
+                        Some(span) => {
+                            series::last_trade_day(c, span.series_key).map_err(Error::from)?
+                        }
+                        None => None,
+                    },
+                    series::etf_delisting_date(c, &entity).map_err(Error::from)?,
+                )
+            } else {
+                (None, None)
+            };
         intervals.push(MemberInterval {
             entity,
             canonical_entity,
@@ -376,6 +431,9 @@ pub fn member_intervals(c: &Connection) -> Result<Vec<MemberInterval>, Error> {
             member_to: end,
             basis,
             flags,
+            instrument_class,
+            last_trade_date,
+            delisting_date,
         });
     }
     intervals.sort_by(|left, right| {

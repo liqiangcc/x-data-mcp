@@ -133,6 +133,61 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
   `volume_unit=share`、`volume_quantum=100`、`default=false`；A 股 qfq 仍是默认。
 - 不新增工具，不加 migration；fresh compact schema 仍为 27。
 
+### 1.6 PR-D：研究快照导出 `research-snapshot.v4` 收录 ETF
+
+导出不是 MCP 工具（AC-M1-10），所以本节不改 `tools/list`、能力修订或 wire 形状。版本仍记为
+`x-data-mcp.research-snapshot.v4`：v4（XDM-157）在代码里已合并但**从未部署**（已部署的导出是
+v3），所以 ETF 列并入 v4，不再升 v5。读取方以 `manifest.files[].columns` 判断列集；v2/v3 目录
+的列集不变，仍按各自契约可读（`scripts/export_smoke.py` 按 schema 版本取列契约）。
+
+**哪些 ETF 进导出**
+
+- 目录选择（默认、`--catalog-version`）：所有已发布的 ETF 不复权日线序列（目录没有 ETF，
+  D-70 Q5）。`--entities` 显式列表：点名的 ETF 也可选；点名但无已发布序列时
+  `EXPORT_NOT_FOUND`；点名 ETF 却只要 `--adjustment qfq` 时 `EXPORT_INVALID`
+  （`adjustment_unavailable`），不返回空文件。
+- ETF 序列的定位复用读面的单一 shape 入口（`resolve_read_shape`）：主表缺行、class/scale 不一致、
+  存储了 ETF 前复权或年线都按 `EXPORT_INTEGRITY` fail-closed。
+- `daily_qfq`、`factors`、年线都不含 ETF（D-70 Q3/Q6）；`index_daily`、`calendar`、`capital_events`
+  等不因 ETF 改变。
+
+**列（追加在 v3 列之后，按位置读取的消费者不受影响）**
+
+| 文件 | 新增列 | 说明 |
+|---|---|---|
+| `daily_raw`、`daily_qfq` | `instrument_class`（INT8，0 股票 / 2 ETF） | `daily_qfq` 恒为 0 |
+| 同上 | `no_trade`（BOOLEAN，可空） | 股票行 NULL；ETF 行 `volume=0 ∧ amount=0` 为 true，否则 false；推导，不加存储列 |
+| `universe_intervals` | `instrument_class`（INT8） | A 股区间块在前、ETF 区间块在后 |
+| 同上 | `last_trade_date`、`delisting_date`（DATE，可空） | 只在 ETF 行出现；NULL = 未知；股票行恒 NULL（股票的终点是 `member_to`） |
+
+- ETF 价格列沿用 `DECIMAL(18,6)`，`price_scale=3`；零成交 bar 与其他 bar 一样原样保留。
+- `last_trade_date` 是最后一根 `volume>0` 的 bar（回测可交易窗口上界）；`delisting_date` 是
+  D-72 公告提取的终止上市日（证券存续上界）。公告没有「最后交易日」，两者不互相推断。
+- 两个日期与 `no_trade` 来自读面同一组函数（`series::last_trade_day`、
+  `series::etf_delisting_date`、`series::is_no_trade_bar`），导出与 `query_data` 元数据不会各算各的；
+  同一 code 的主表历史行出现多个退市日时导出 `EXPORT_*` fail-closed。
+- ETF 区间沿用 A 股区间规则：起点取上市日，缺失时取首根 bar；终点取 `effective_to` 与退市日的
+  较早者；没有上市日也没有 bar 的 ETF 不出行。
+
+**清单**
+
+- `series[]` 的 ETF 条目（`instrument_class="etf"`，`price_scale=3`）增加 `last_trade_date`、
+  `delisting_date`（未知为 `null`），属于身份：新增成交 bar 或重新提取公告都会改变 `snapshot_id`。
+  股票/指数条目的键不变。
+- `limitations[]` 增加三条：ETF 只在 `daily_raw`（无前复权/因子/年线）、ETF 成员集是已发布序列
+  （幸存者偏差、无 `.day` 成员的 ETF 无 bar 行）、`no_trade`/`last_trade_date`/`delisting_date`
+  的推导与「不编造最后交易日」。
+
+**A 股不变（AC-M3-2-2 的可执行定义）**
+
+- 同一数据库加入 ETF 前后：A 股与指数序列的 `SeriesEntry`（version_id、digest）和清单条目逐一相同；
+  `daily_qfq`、`factors`、`calendar`、`index_daily`、`security_names`、`capital_events`、
+  `risk_warnings`、`suspensions`、`price_limit_rules`、`industry_assignments`、`code_migrations`
+  字节（sha256）相同；`daily_raw` 与 `universe_intervals` 的 A 股行是文件前缀，且 v3 的各列值逐一相同
+  （见 `src/research/tests/etf.rs`）。
+- 两个日线文件与 universe 文件因新增列，整体 sha256 相对改动前必然不同；「改动前」的 v3/v4 字节
+  不可复现，因为 `snapshot_id` 本来就含 schema 字符串。
+
 ## 2. 字节预算与部署前待办
 
 - `tools/list` 实测（本 PR，沙箱 `cargo test --locked --test mcp

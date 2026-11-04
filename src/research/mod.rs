@@ -373,7 +373,7 @@ pub struct SeriesEntry {
     pub series_key: i64,
     pub entity: String,
     pub adjustment: Adjustment,
-    /// 0=stock / 1=index (2=ETF is M3).
+    /// 0=stock / 1=index / 2=ETF (M3-2).
     pub instrument_class: i64,
     pub price_scale: u32,
     pub version_id: String,
@@ -384,6 +384,24 @@ pub struct SeriesEntry {
     /// Hex of `market_series.source_binding_digest`.
     pub source_binding_digest: String,
     pub index: Option<IndexBinding>,
+    /// D-72 facts of an ETF series (`None` for every other class).
+    pub etf: Option<EtfBinding>,
+}
+
+/// The two series-level D-72 dates an ETF series carries (M3-2 PR-D).
+///
+/// They come from the same functions the read surface uses
+/// (`series::last_trade_day`, `series::etf_delisting_date`), so the manifest,
+/// `universe_intervals` and `query_data` metadata cannot disagree. `None`
+/// means unknown, never "not applicable".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EtfBinding {
+    /// Last bar with `volume > 0`: the tradable-window upper bound. The
+    /// zero-volume tail bars stay in `daily_raw` and are marked `no_trade`.
+    pub last_trade_date: Option<NaiveDate>,
+    /// Exact termination date from the admitted announcement (D-72); the
+    /// announcement has no "last trading day", so none is invented.
+    pub delisting_date: Option<NaiveDate>,
 }
 
 impl SeriesEntry {
@@ -548,6 +566,10 @@ pub const DAILY_COLUMNS: &[&str] = &[
     "amount",
     "r7_raw",
     "volume_quantum",
+    // v4 (M3-2 PR-D): appended, so a reader that addresses columns by position
+    // still finds the eleven v3 columns where it expects them.
+    "instrument_class",
+    "no_trade",
 ];
 pub const FACTOR_COLUMNS: &[&str] = &[
     "entity",
@@ -659,8 +681,11 @@ pub const PRICE_LIMIT_RULES_COLUMNS: &[&str] = &[
 /// the read model (#446 §4.3/§10.4): the canonical code of a confirmed code
 /// migration and the other codes in its chain. Candidates never add an alias,
 /// so the file cannot be used to collapse an unproven rename. `v4` (XDM-157)
-/// changes no file: it adds `derived[].verified_through` and the two whole-table
-/// dataset identities (`security_names`/`risk_warnings`) to the manifest.
+/// adds `derived[].verified_through` and the two whole-table dataset identities
+/// (`security_names`/`risk_warnings`) to the manifest. The ETF delivery (M3-2
+/// PR-D, still `v4`: no `v4` snapshot has been deployed) appends
+/// `instrument_class`/`no_trade` to both daily files and
+/// `instrument_class`/`last_trade_date`/`delisting_date` to this file.
 pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] = &[
     "entity",
     "canonical_entity",
@@ -669,6 +694,9 @@ pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] = &[
     "member_to",
     "basis",
     "flags",
+    "instrument_class",
+    "last_trade_date",
+    "delisting_date",
 ];
 
 /// The M3 industry intervals (#446 §10.4). One row per stored interval, with
@@ -917,13 +945,15 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
 
     let mut series = Vec::new();
     if request.dataset.includes_daily() {
-        let stocks = read::stock_series(c, &request, catalog.members.as_ref())?;
-        if stocks.is_empty() {
+        // Stocks first (the A-share block is a stable prefix of every daily
+        // file), then the ETF 不复权 series (M3-2 PR-D).
+        let daily = read::daily_series(c, &request, catalog.members.as_ref())?;
+        if daily.is_empty() {
             return Err(Error::Empty(
-                "the entity selection has no published stock daily series".into(),
+                "the entity selection has no published daily series".into(),
             ));
         }
-        series.extend(stocks);
+        series.extend(daily);
     }
     if request.dataset.includes_index() {
         let indexes = read::index_series(c)?;
@@ -1078,4 +1108,21 @@ pub const LIMITATIONS: &[&str] = &[
      proof: they change no membership, add no `aliases`, and must not be used to \
      collapse two histories; only certainty='confirmed' rows are canonical \
      (#446 §4.3)",
+    "ETF series (instrument_class=2) are 不复权 at price_scale=3 and appear only \
+     in daily_raw (volume in shares: hand-recorded bars are scaled x100 and carry \
+     volume_quantum=100); there is no ETF 前复权, no ETF factor event and no ETF \
+     yearly row in this snapshot, so daily_qfq, factors and any yearly \
+     derivation exclude ETFs (D-70 Q3/Q6)",
+    "ETF membership is the set of published ETF series, not a catalog: ETFs the \
+     exchange lists but whose .day member is absent have no bar rows (they still \
+     appear in security_master, and in universe_intervals when a listing date is \
+     known), and delisted ETFs are present only as far as their series were \
+     collected, so the ETF history carries survivor bias (D-70 Q2, D-72)",
+    "no_trade is derived at export time as instrument_class=2 AND volume=0 AND \
+     amount=0 (no stored column); it is NULL on stock rows, false on a traded \
+     ETF bar and true on a zero-volume bar. Such bars are kept exactly as stored. \
+     last_trade_date is the last ETF bar with volume>0 (the tradable-window upper \
+     bound) and delisting_date is the termination date extracted from the \
+     exchange announcement (the existence upper bound, D-72); the announcement \
+     names no last trading day, so none is invented, and NULL means unknown",
 ];

@@ -116,6 +116,17 @@ impl Fixture {
     /// keeps the three-day `days()` window; the calendar follows the stock
     /// window so every stock bar is inside it.
     fn with_days(stock_day_count: usize) -> Self {
+        Self::build(stock_day_count, false)
+    }
+
+    /// The default fixture plus three ETF identities (M3-2 PR-D): a live ETF
+    /// whose last bar is a zero-volume bar, a delisted ETF with a tail of
+    /// zero bars, and a listed ETF without any `.day` member.
+    fn with_etf() -> Self {
+        Self::build(3, true)
+    }
+
+    fn build(stock_day_count: usize, etf: bool) -> Self {
         let dir = tempdir();
         let path = dir.path().join("market.db");
         SqliteTasks::new(&path).initialize_compact().unwrap();
@@ -123,12 +134,12 @@ impl Fixture {
         let mut c = Connection::open(&path).unwrap();
         c.pragma_update(None, "foreign_keys", true).unwrap();
         let tx = c.transaction().unwrap();
-        Self::populate(&tx, stock_day_count);
+        Self::populate(&tx, stock_day_count, etf);
         tx.commit().unwrap();
         Self { _dir: dir, path }
     }
 
-    fn populate(c: &Connection, stock_day_count: usize) {
+    fn populate(c: &Connection, stock_day_count: usize, etf: bool) {
         let stock_days = history_days(stock_day_count);
         let calendar_days = stock_days.clone();
         let generation_evidence = evidence_store::put_evidence(
@@ -344,8 +355,123 @@ impl Fixture {
         )
         .unwrap();
 
-        Self::populate_security_master(c, binding);
+        if etf {
+            Self::populate_etf_series(c, binding, version_evidence);
+        }
+        Self::populate_security_master(c, binding, etf);
         Self::populate_industry(c);
+    }
+
+    /// ETF 不复权 series at 3dp (厘). Synthetic bars: the real-byte anchors
+    /// (`sh510050.day` sha256 `02f0e517…2e16`, 5,271 records; `sz159919.day`
+    /// sha256 `faba834e…02d9b3`, 3,504 records) are not committed (D-47, D-70
+    /// Q12). The shapes below reproduce what D-72 needs: a zero-volume,
+    /// zero-amount tail after the last traded bar.
+    fn populate_etf_series(c: &Connection, binding: Digest, version_evidence: Digest) {
+        let window = days();
+        // (entity, seed, close in 厘, (volume, amount) per day)
+        let plans: [(&str, u8, i64, [(i64, &str); 3]); 2] = [
+            (
+                "sh.510050",
+                0x41,
+                2_501,
+                [(100_000, "250100.00"), (200_000, "500200.00"), (0, "0.00")],
+            ),
+            (
+                "sz.159919",
+                0x42,
+                4_123,
+                [(300_000, "1236900.00"), (150_000, "618450.00"), (0, "0.00")],
+            ),
+        ];
+        for (entity, seed, close, volumes) in plans {
+            let bars: Vec<CompactBar> = window
+                .iter()
+                .copied()
+                .zip(volumes)
+                .enumerate()
+                .map(|(index, (day, (volume, amount)))| CompactBar {
+                    trade_day: crate::compact_market::epoch_day(day),
+                    // 3dp: 2.501 元 is stored as 2501, not 250.
+                    open_units: close + index as i64,
+                    high_units: close + index as i64 + 3,
+                    low_units: close + index as i64 - 3,
+                    close_units: close + index as i64,
+                    volume: Some(volume),
+                    amount: Some(amount.into()),
+                    r7_raw: None,
+                })
+                .collect();
+            let key = series::insert_series(
+                c,
+                &NewSeries {
+                    entity: entity.into(),
+                    period: Period::Day,
+                    adjustment: Adjustment::Raw,
+                    instrument_class: crate::market_data::INSTRUMENT_CLASS_ETF,
+                    price_scale: crate::compact_market::PRICE_SCALE_LI,
+                    content_digest: digest(seed),
+                    record_count: bars.len() as i64,
+                    first_day: bars[0].trade_day,
+                    last_day: bars[bars.len() - 1].trade_day,
+                    coverage_status: CoverageStatus::Complete,
+                    source_binding_digest: binding,
+                    evidence_digest: version_evidence,
+                    last_event_seq: 1,
+                    created_at: CREATED_AT.into(),
+                    updated_at: CREATED_AT.into(),
+                },
+            )
+            .unwrap();
+            series::insert_bars(c, key, &bars).unwrap();
+        }
+    }
+
+    /// The ETF `security_master` rows of [`Self::with_etf`] (class 2).
+    fn etf_master_rows() -> Vec<SecurityLifecycleFact> {
+        use crate::security_master::{
+            DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
+        };
+        let window = days();
+        let row =
+            |exchange: Exchange, code: &str, delisting: Option<NaiveDate>| SecurityLifecycleFact {
+                exchange,
+                code: code.into(),
+                effective_from: window[0],
+                effective_to: delisting,
+                instrument_class: 2,
+                issuer_key: Some(code.into()),
+                issuer_resolution: IssuerResolution::IssuerKey,
+                listing_date: Some(window[0]),
+                listing_date_tdx: Some(window[0]),
+                listing_source: ListingSource::ExchangeList,
+                b_listing_date: None,
+                delisting_date: delisting,
+                delisting_date_tdx: None,
+                delisting_source: if delisting.is_some() {
+                    DelistingSource::ExchangeList
+                } else {
+                    DelistingSource::Unknown
+                },
+                delisting_reason_class: if delisting.is_some() {
+                    DelistingReason::Other
+                } else {
+                    DelistingReason::Unknown
+                },
+                arrangement_start: None,
+                arrangement_end: None,
+                listing_conflict: false,
+                delisting_conflict: false,
+                known_at: Some(window[0]),
+            };
+        vec![
+            row(Exchange::Sh, "510050", None),
+            // Terminated on the last fixture day: the last traded bar is the
+            // day before, so `last_trade_date < delisting_date` (D-72).
+            row(Exchange::Sz, "159919", Some(window[2])),
+            // Listed, no `.day` member: identity without bars.
+            row(Exchange::Sh, "513330", None),
+        ]
     }
 
     /// The M3 industry intervals (#446 §10.4 `industry_assignments`).
@@ -416,14 +542,14 @@ impl Fixture {
     /// exception: it has no writer yet (#308 owns that path), so the rows are
     /// inserted directly — the export only needs rows to prove the file, and
     /// the DDL CHECKs are the contract until the writer exists.
-    fn populate_security_master(c: &Connection, binding: Digest) {
+    fn populate_security_master(c: &Connection, binding: Digest, etf: bool) {
         use crate::security_master::assembly::{Assembly, CodeMigrationFact, MigrationCertainty};
         use crate::security_master::{
             CapitalEvent, CapitalEventSet, Exchange, IssuerResolution, ListingSource,
             SuspensionCertainty, SuspensionInterval, SuspensionReason,
         };
         let window = days();
-        let rows = ["sh.600000", "sz.000001"]
+        let rows: Vec<SecurityLifecycleFact> = ["sh.600000", "sz.000001"]
             .into_iter()
             .map(|entity| {
                 let (exchange, code) = entity.split_once('.').unwrap();
@@ -462,6 +588,7 @@ impl Fixture {
                     known_at: Some(window[0]),
                 }
             })
+            .chain(etf.then(Self::etf_master_rows).into_iter().flatten())
             .collect();
         // The two real M3 code changes (§11 deviation 4): 300114 is confirmed
         // by the exchange list, 600849 is only a candidate. Neither code is in
@@ -1934,8 +2061,12 @@ mod with_export {
         };
         let target = PathBuf::from(target);
         std::fs::create_dir_all(&target).unwrap();
-        let fixture = Fixture::new();
+        // The ETF fixture, so the pyarrow/duckdb read-back also sees the v4
+        // ETF rows (`instrument_class`, `no_trade`, the D-72 dates).
+        let fixture = Fixture::with_etf();
         let outcome = export(fixture.path(), &ExportRequest::default(), &options(&target)).unwrap();
         std::fs::write(target.join("snapshot-id.txt"), &outcome.snapshot_id).unwrap();
     }
 }
+
+mod etf;

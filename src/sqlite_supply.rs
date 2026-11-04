@@ -1047,8 +1047,7 @@ pub(crate) fn query(
                     volume: b.volume.map(|v| v.to_string()),
                     amount: b.amount.map(|v| v.to_string()),
                     no_trade: (etf_series
-                        && b.volume == Some(rust_decimal::Decimal::ZERO)
-                        && b.amount == Some(rust_decimal::Decimal::ZERO))
+                        && crate::sqlite_market::series::is_no_trade_bar(b.volume, b.amount))
                     .then_some(true),
                 });
                 if result.rows.len() > MAX_ROWS {
@@ -2824,7 +2823,7 @@ fn series_metadata(
         None
     };
     let delisting_date = if etf {
-        etf_delisting_date(c, &series.entity)?
+        crate::sqlite_market::series::etf_delisting_date(c, &series.entity)?
     } else {
         None
     };
@@ -2849,43 +2848,6 @@ fn series_metadata(
         last_trade_date,
         delisting_date,
     })
-}
-
-/// ETF termination date from the main table. Absent (unknown) and present
-/// (D-72 extraction) are distinct wire states; conflicting rows fail closed.
-/// The `DISTINCT` covers every identity interval for the code on purpose: a
-/// reused code whose old interval carried a different delisting date is
-/// ambiguous and must not be resolved by silently taking the newest row.
-fn etf_delisting_date(c: &Connection, entity: &str) -> Result<Option<chrono::NaiveDate>, Error> {
-    let (exchange, code) = entity
-        .split_once('.')
-        .ok_or_else(|| Error::Integrity("non-canonical ETF entity".into()))?;
-    let mut statement = c
-        .prepare(
-            "SELECT DISTINCT delisting_date FROM security_master WHERE exchange=?1 AND code=?2",
-        )
-        .map_err(storage)?;
-    let rows = statement
-        .query_map(params![exchange, code], |row| row.get::<_, Option<i64>>(0))
-        .map_err(storage)?;
-    let mut dates = std::collections::BTreeSet::new();
-    for row in rows {
-        dates.insert(row.map_err(storage)?);
-    }
-    match dates.len() {
-        0 => Ok(None),
-        1 => dates
-            .into_iter()
-            .next()
-            .flatten()
-            .map(|day| {
-                crate::compact_market::epoch_date(day).map_err(|e| Error::Integrity(e.to_string()))
-            })
-            .transpose(),
-        _ => Err(Error::Integrity(format!(
-            "security_master delisting_date conflict for {entity}"
-        ))),
-    }
 }
 
 /// `availability` facts for schema 21: the window COUNT/MIN/MAX rides the

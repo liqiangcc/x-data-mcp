@@ -40,7 +40,11 @@ type LineageIndex = BTreeMap<String, GenerationBinding>;
 /// `coverage` block; v4 adds `derived[].verified_through` and the
 /// `security_names`/`risk_warnings` registrations (XDM-157, #446 §5.3), so an
 /// export can say through which day a complete refresh run confirmed the
-/// sources its files were recomputed from. `snapshot_id` keeps its definition
+/// sources its files were recomputed from. The ETF delivery (M3-2 PR-D, D-70
+/// Q7) stays `v4`: no `v4` snapshot has been deployed (the deployed exporter
+/// writes `v3`), so appending the ETF columns and the ETF series dates does
+/// not need a `v5`; a reader tells the column sets apart by
+/// `files[].columns`. `snapshot_id` keeps its definition
 /// (canonical identity → first 32 hex), and the schema string is part of the
 /// identity, so a v3 directory and a v4 directory with otherwise identical
 /// inputs differ (a v2/v3 directory stays readable — see
@@ -89,7 +93,7 @@ fn source_generation(source_binding_digest: &str, lineage: &LineageIndex) -> Res
 }
 
 fn series_value(entry: &SeriesEntry, lineage: &LineageIndex) -> Result<Value, Error> {
-    Ok(json!({
+    let mut value = json!({
         "entity": entry.entity,
         "period": "day",
         "adjustment": entry.adjustment.as_str(),
@@ -104,7 +108,16 @@ fn series_value(entry: &SeriesEntry, lineage: &LineageIndex) -> Result<Value, Er
         "coverage": entry.coverage_name(),
         // Index-only in effect: a stock series is never filtered and reports 0.
         "excluded_bar_count": entry.index.as_ref().map_or(0, |i| i.excluded_bar_count),
-    }))
+    });
+    // M3-2 PR-D (D-72): the two ETF dates are series facts, so they enter the
+    // identity (a re-extracted announcement or a new traded bar changes the
+    // id). Present on ETF entries only, `null` = unknown; stock and index
+    // entries keep exactly the keys they had.
+    if let Some(etf) = &entry.etf {
+        value["last_trade_date"] = json!(etf.last_trade_date.map(|day| day.to_string()));
+        value["delisting_date"] = json!(etf.delisting_date.map(|day| day.to_string()));
+    }
+    Ok(value)
 }
 
 fn derived_value(entry: &DerivedEntry, lineage: &LineageIndex) -> Result<Value, Error> {

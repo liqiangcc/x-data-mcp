@@ -541,6 +541,14 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
     数据目录写明"导出暂不含 ETF"。
 - ETF 不进 `index` 文件、不进 `universe`（目录）文件；若未来导出 ETF，另加 `etf_membership` 或复用
   `security_master`/`code_migrations` 的行（`instrument_class=2` 已在主表）。
+- **PR-D 实现记录**（契约见 [v10 §1.6](../contracts/generic-data-v10.md)）：
+  - 版本仍记 `research-snapshot.v4`：XDM-157 的 v4 在代码里已合并但从未部署（线上导出是 v3），
+    ETF 列并入 v4，不升 v5；
+  - D-72 追加：`daily_*` 再加可空 `no_trade`；`universe_intervals` 给 ETF 同时写 `last_trade_date`
+    与 `delisting_date`（A 股行为 NULL）。上面「ETF 不进 universe 文件」由此改为：ETF 区间进
+    `universe_intervals`（A 股块在前），但仍不进 `universe(as_of)` 读模型与 `index` 文件；
+  - 「A 股导出文件 sha256 不变」按文件分开落实：不该有 ETF 的 11 个文件字节相同；`daily_raw` 与
+    `universe_intervals` 因新增列整体 sha256 必然变，改为 A 股行是文件前缀且 v3 各列值逐一相同。
 
 ### 9.4 能力修订与 wire 枚举
 

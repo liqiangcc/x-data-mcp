@@ -24,12 +24,13 @@ use rust_decimal::Decimal;
 use rust_decimal::RoundingStrategy;
 
 use super::{
-    CatalogBinding, DerivedDataset, DerivedEntry, EntitySelection, ExportRequest,
-    GenerationBinding, IndexBinding, SeriesEntry,
+    AdjustmentSelection, CatalogBinding, DerivedDataset, DerivedEntry, EntitySelection, EtfBinding,
+    ExportRequest, GenerationBinding, IndexBinding, SeriesEntry,
 };
 use crate::compact_market;
 use crate::market_data::{
-    Adjustment, CoverageStatus, INSTRUMENT_CLASS_INDEX, INSTRUMENT_CLASS_STOCK, Period,
+    Adjustment, CoverageStatus, INSTRUMENT_CLASS_ETF, INSTRUMENT_CLASS_INDEX,
+    INSTRUMENT_CLASS_STOCK, Period,
 };
 use crate::research::Error;
 use crate::sqlite_market::{compact_repo, derived};
@@ -183,6 +184,7 @@ fn series_entry(raw: RawSeries) -> Result<SeriesEntry, Error> {
         },
         source_binding_digest: digest_hex(raw.10)?,
         index: None,
+        etf: None,
     })
 }
 
@@ -190,17 +192,49 @@ fn period_day() -> i64 {
     compact_repo::period_code(Period::Day)
 }
 
-/// Stock daily series of the selection, 不复权 and/or 前复权 (§7.1).
+/// Stock daily series of the selection, 不复权 and/or 前复权 (§7.1), plus the
+/// published ETF 不复权 series (M3-2 PR-D).
 ///
 /// An explicit entity list is validated against the published series: naming an
 /// entity that has no daily series is a request error, not a silently smaller
 /// export. Catalog selections need no such check — a member without a published
 /// series is simply not part of the snapshot, and `catalog.member_count` says so.
-pub(crate) fn stock_series(
+///
+/// ETFs are not catalog members (D-70 Q5), so a catalog selection takes every
+/// published ETF series, and an explicit list takes the ETFs it names. The
+/// stock entries come first, so the A-share block stays a stable prefix of
+/// each daily file.
+pub(crate) fn daily_series(
     c: &Connection,
     request: &ExportRequest,
     members: Option<&BTreeSet<String>>,
 ) -> Result<Vec<SeriesEntry>, Error> {
+    let explicit = request.entities.explicit();
+    let (mut entries, mut published) = stock_series(c, request, members)?;
+    let (etfs, etf_published) = etf_series(c, request, explicit)?;
+    entries.extend(etfs);
+    published.extend(etf_published);
+    if let Some(list) = explicit {
+        let missing: Vec<&str> = list
+            .iter()
+            .filter(|entity| !published.contains(*entity))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            return Err(Error::NotFound(format!(
+                "no published daily series for {}",
+                missing.join(",")
+            )));
+        }
+    }
+    Ok(entries)
+}
+
+fn stock_series(
+    c: &Connection,
+    request: &ExportRequest,
+    members: Option<&BTreeSet<String>>,
+) -> Result<(Vec<SeriesEntry>, BTreeSet<String>), Error> {
     let explicit = request.entities.explicit();
     let mut statement = c
         .prepare(&format!(
@@ -209,21 +243,7 @@ pub(crate) fn stock_series(
         ))
         .map_err(db)?;
     let rows = statement
-        .query_map(params![period_day(), INSTRUMENT_CLASS_STOCK], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, i64>(3)?,
-                r.get::<_, i64>(4)?,
-                r.get::<_, String>(5)?,
-                r.get::<_, i64>(6)?,
-                r.get::<_, i64>(7)?,
-                r.get::<_, i64>(8)?,
-                r.get::<_, i64>(9)?,
-                r.get::<_, Vec<u8>>(10)?,
-            ))
-        })
+        .query_map(params![period_day(), INSTRUMENT_CLASS_STOCK], series_row)
         .map_err(db)?;
     let mut entries = Vec::new();
     let mut published: BTreeSet<String> = BTreeSet::new();
@@ -242,20 +262,114 @@ pub(crate) fn stock_series(
             entries.push(entry);
         }
     }
-    if let Some(list) = explicit {
-        let missing: Vec<&str> = list
-            .iter()
-            .filter(|entity| !published.contains(*entity))
-            .map(String::as_str)
-            .collect();
-        if !missing.is_empty() {
-            return Err(Error::NotFound(format!(
-                "no published stock daily series for {}",
-                missing.join(",")
+    Ok((entries, published))
+}
+
+/// ETF 不复权 daily series (M3-2 PR-D). Returns the selected entries and the
+/// set of ETF entities that are published and selected, so an explicit list
+/// can tell "an ETF with no series" from "not an ETF at all".
+///
+/// Every stored ETF series goes through the read surface's single shape
+/// resolver ([`crate::sqlite_market::series::resolve_read_shape`]): the main
+/// table must agree on the class, the scale must be the ETF one, and an ETF
+/// without a `security_master` row fails closed instead of being exported as a
+/// stock-shaped series. A stored ETF 前复权 or year series contradicts the
+/// delivery boundary (D-70 Q3/Q6) and also fails closed.
+fn etf_series(
+    c: &Connection,
+    request: &ExportRequest,
+    explicit: Option<&[String]>,
+) -> Result<(Vec<SeriesEntry>, BTreeSet<String>), Error> {
+    use crate::sqlite_market::series::{ReadSeriesKind, resolve_read_shape};
+    let mut statement = c
+        .prepare(&format!(
+            "SELECT {SERIES_COLUMNS} FROM market_series s \
+             WHERE s.period=?1 AND s.instrument_class=?2 ORDER BY s.entity, s.adjustment"
+        ))
+        .map_err(db)?;
+    let rows = statement
+        .query_map(params![period_day(), INSTRUMENT_CLASS_ETF], series_row)
+        .map_err(db)?;
+    let mut entries = Vec::new();
+    let mut published: BTreeSet<String> = BTreeSet::new();
+    for row in rows {
+        let mut entry = series_entry(row.map_err(db)?)?;
+        let selected = explicit.is_none_or(|list| list.binary_search(&entry.entity).is_ok());
+        if !selected {
+            continue;
+        }
+        if entry.adjustment != Adjustment::Raw {
+            return Err(integrity(format!(
+                "ETF series {} has an unexpected {} row; ETF 前复权 is not delivered",
+                entry.entity,
+                entry.adjustment.as_str()
+            )));
+        }
+        let shape = resolve_read_shape(
+            c,
+            &entry.entity,
+            ReadSeriesKind::Daily,
+            Some(Adjustment::Raw),
+        )
+        .map_err(Error::from)?
+        .ok_or_else(|| {
+            integrity(format!(
+                "ETF series {} is not served by the daily dataset",
+                entry.entity
+            ))
+        })?;
+        if shape.instrument_class != entry.instrument_class
+            || shape.price_scale != entry.price_scale
+            || shape.adjustment != entry.adjustment
+        {
+            return Err(integrity(format!(
+                "ETF series {} stored shape disagrees with the resolved shape",
+                entry.entity
+            )));
+        }
+        published.insert(entry.entity.clone());
+        if request.adjustment.includes(entry.adjustment) {
+            entry.etf = Some(etf_binding(c, &entry)?);
+            entries.push(entry);
+        }
+    }
+    if request.adjustment == AdjustmentSelection::Qfq
+        && let Some(list) = explicit
+    {
+        // An ETF named for a 前复权-only export has nothing to give. Saying so
+        // beats an empty or partial file that reads as "no data".
+        if let Some(entity) = list.iter().find(|entity| published.contains(*entity)) {
+            return Err(Error::Invalid(format!(
+                "adjustment_unavailable: ETF {entity} has no 前复权 series; use --adjustment raw"
             )));
         }
     }
-    Ok(entries)
+    Ok((entries, published))
+}
+
+fn etf_binding(c: &Connection, entry: &SeriesEntry) -> Result<EtfBinding, Error> {
+    Ok(EtfBinding {
+        last_trade_date: crate::sqlite_market::series::last_trade_day(c, entry.series_key)
+            .map_err(Error::from)?,
+        delisting_date: crate::sqlite_market::series::etf_delisting_date(c, &entry.entity)
+            .map_err(Error::from)?,
+    })
+}
+
+fn series_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawSeries> {
+    Ok((
+        r.get::<_, i64>(0)?,
+        r.get::<_, String>(1)?,
+        r.get::<_, i64>(2)?,
+        r.get::<_, i64>(3)?,
+        r.get::<_, i64>(4)?,
+        r.get::<_, String>(5)?,
+        r.get::<_, i64>(6)?,
+        r.get::<_, i64>(7)?,
+        r.get::<_, i64>(8)?,
+        r.get::<_, i64>(9)?,
+        r.get::<_, Vec<u8>>(10)?,
+    ))
 }
 
 /// Every registered index benchmark series (§6.3). Index series are always
@@ -898,12 +1012,13 @@ pub fn price_limit_rule_rows(
         .collect())
 }
 
-/// The member interval skeleton (§12.4 `universe_intervals`).
+/// The member interval skeleton (§12.4 `universe_intervals`): the A-share block
+/// followed by the ETF block (M3-2 PR-D).
 pub fn universe_interval_rows(
     c: &Connection,
     request: &ExportRequest,
 ) -> Result<Vec<super::universe::MemberInterval>, Error> {
-    let rows = super::universe::member_intervals(c)?;
+    let rows = super::universe::member_intervals_with_etf(c)?;
     Ok(rows
         .into_iter()
         .filter(|row| interval_in_range(row.member_from, row.member_to, request.start, request.end))
