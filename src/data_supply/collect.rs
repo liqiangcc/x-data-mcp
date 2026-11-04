@@ -411,6 +411,8 @@ impl ListedEverCollectionContract {
             .day_member_symbols()
             .map_err(|e| invalid(format!("listed-ever member listing failed: {e}")))?;
         let candidates = Self::candidates(&rows, &has_series, scope);
+        // `candidates` is a `BTreeSet` of canonical entities, so `selected`
+        // below is already ordered by `sh.xxxxxx`/`sz.xxxxxx`.
         let mut selected = Vec::new();
         let mut skipped_no_bars = Vec::new();
         let mut absent = Vec::new();
@@ -454,11 +456,21 @@ impl ListedEverCollectionContract {
                 });
             }
         }
+        // ETF scopes collect in batches (XDM-193): the first
+        // `LISTED_EVER_BUDGET` uncollected members form this task and the
+        // rest is reported. `absent` is counted over all candidates before
+        // truncation. A-share listed-ever keeps the whole-selection budget.
+        let mut remaining_count = 0;
+        if scope != CatalogScope::ShSzAListedEver {
+            remaining_count = selected.len().saturating_sub(LISTED_EVER_BUDGET);
+            selected.truncate(LISTED_EVER_BUDGET);
+        }
         Self::budget(selected.len())?;
         Ok(ListedEverResolution {
             entities: selected,
             skipped_no_bars,
             absent,
+            remaining_count,
             scope,
             security_master_version_id: version.version_id,
             security_master_content_digest: crate::research::read::hex(&version.content_digest),
@@ -478,6 +490,8 @@ struct ListedEverResolution {
     entities: Vec<Security>,
     skipped_no_bars: Vec<String>,
     absent: Vec<AbsentMember>,
+    /// ETF scopes only: members with bars that did not fit this batch.
+    remaining_count: usize,
     scope: CatalogScope,
     security_master_version_id: String,
     security_master_content_digest: String,
@@ -535,6 +549,7 @@ impl Contract for ListedEverCollectionContract {
             let map = evidence.as_object_mut().expect("evidence is an object");
             map.insert("absent".into(), json!(absent));
             map.insert("absent_count".into(), json!(resolution.absent.len()));
+            map.insert("remaining_count".into(), json!(resolution.remaining_count));
         }
         let mut items = Vec::with_capacity(resolution.entities.len());
         let mut scopes = BTreeSet::new();

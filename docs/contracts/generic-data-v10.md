@@ -30,6 +30,7 @@ revision 的补充（不再次升 capability revision）。代码的 fresh compa
   成员只取 `instrument_class=2`（不得放宽成所有 class），预算 1..500；名单有、`.day` 无的成员
   以 `absent` + `reason=source_member_absent`（空成员为 `source_member_empty`）写入每个 item 的
   frozen evidence，不静默丢、也不伪造成失败 item。A 股 `sh_sz_a_listed_ever` 的成员/报告口径不变。
+- ETF scope 分批（XDM-193）：两个 ETF scope 的 `start_collection` 在解析出「尚无序列且 `.day` 有 bar」的成员后，按规范实体（`sh.xxxxxx`/`sz.xxxxxx`）排序，只取前 500 个作为本次任务成员；未入批的数量写入每个 item 的 frozen evidence 字段 `remaining_count`（不新增请求参数、不改 `tools/list`）。`absent` 仍按截断前的全部候选统计。重复调用即得到 500/500/…/余数，已有序列的成员不会再入批；全部采完后再调用仍返回 `nothing to collect`。同一批成员的未终态任务沿用既有 scope 冲突语义（`range_conflict`）。`sh_sz_a_listed_ever` 不变：超过 500 仍整体拒绝，evidence 不含 `remaining_count`。
 - ETF 采集不按 `security_master.effective_from/effective_to` 截取历史 bar：这两个字段是身份观测/
   退市上界，不是上市区间；上市日在 `listing_date`，可交易上界按 D-72 取「最后有成交日」。
 

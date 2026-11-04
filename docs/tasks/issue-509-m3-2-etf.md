@@ -585,6 +585,7 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
    `replay` 从快照重建身份（不重抓）。
 3. 首采：`start_collection` v2，`selection={"kind":"scope","scope":"sh_sz_etf_current"}`，预算 500/批；
    1,631 个有序列成员 → 4 批（500/500/500/131）；86 只无 `.day` 成员进 `absent`。
+   分批由 ETF scope 自身实现：每次调用取按代码排序的前 500 个未采成员，`remaining_count` 记剩余，重复调用至「nothing to collect」（语义见 [契约 v10](../contracts/generic-data-v10.md) §1.1，XDM-193）。
 4. 首采预算与门槛：SLO 第 4 行 ≤20min、首采后 DB ≤2.5GiB；按 §11 外推首采 ≈726s、DB ≈2.09GB（**推断**）。
 5. 读面自检：`market.daily` 单只 ETF（如 `sh.510300`/`sz.159919`）返回 3dp；A 股对照（`sh.600000`）不变；
    `tools/list` 与 `get_data_capabilities` 记入部署报告。
