@@ -689,7 +689,8 @@ pub(crate) fn last_trade_day(
 }
 
 /// ETF termination date from the main table (D-72). Absent (`None`) means the
-/// date is unknown; a present value is the extracted announcement date.
+/// date is unknown; a present value is the termination date (终止上市日)
+/// extracted from the announcement (D-72).
 /// Conflicting rows fail closed.
 ///
 /// The `DISTINCT` covers every identity interval for the code on purpose: a
