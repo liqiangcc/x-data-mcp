@@ -252,10 +252,13 @@ v3），所以 ETF 列并入 v4，不再升 v5。读取方以 `manifest.files[].
   research **12,021 B**（预算 12,200）、ops **30,488 B**（预算 30,800）、maint
   **13,523 B**（预算 14,500）。相对 PR-B 合并基线（research 11,823 / ops 30,290）各
   **+198 B**，来自 `adjustment` 字段；仍在 v9 §2 的已批准上限内，未申请新上限。
-- PR-C2 实测（CI 同一测试的失败输出，`tools/list over budget`）：research **12,021 B**（不变，
-  这两个工具不在 research 入口）、ops **30,918 B**、maint **13,523 B**（不变）。ops 相对 PR-C 基线
-  **+430 B**，来自 `plan_market_update`/`run_market_update` 两个 `market.daily` 分支的可选
-  `scope` 字段与 `PlanScope` 枚举定义。这超出 v9 §2 的 30,800 B 上限 118 B，按 v9 §2 的
-  「已批准上限 + 已记录面增长」规则把 ops 上限调为 **31,000 B**（余量 82 B）；这是本 PR
-  唯一的预算变更，**需 owner 在审核时确认**。research/maint 上限不动。
+- PR-C2 实测（CI 上同一测试的打印值，代码 `1c5c686`）：research **12,021 B**（不变，这两个工具
+  不在 research 入口）、ops **30,748 B**（预算 30,800，余量 52 B）、maint **13,523 B**（不变）。
+  ops 相对 PR-C 基线 30,488 **+260 B**，来自 `plan_market_update`/`run_market_update` 两个
+  `market.daily` 分支的可选 `scope` 字段：用一个紧凑内联 schema
+  `{"enum":["sh_sz_etf_current","sh_sz_a_and_etf_current"]}`（`wire.rs` 的 `plan_scope`，
+  仿 `daily_adjustment`，无 `$defs`、无 `type`、无说明文字），按 +260 B 推算在 ops 的 `tools/list` 里出现 4 次
+  （每个工具 2 处）。**ops 上限不变，仍是 v9 §2 的 30,800 B**，未申请新上限。
+  首版实现用 `PlanScope` 枚举的默认 schema（ops 30,918 B）和带 `type`/`null` 的紧凑 schema
+  （30,868 B）都超限，所以才去掉 `type` 与 `null`；`scope` 可选，缺席（而不是 `null`）表示仅 A 股。
 - 本契约只随部署事实翻转时更新 [STATUS](../STATUS.md) 与严格 Skill 的 `capability_revision`。

@@ -118,7 +118,7 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // 30,114 B (+300) and the ceiling follows the same rule: 30,500 + 300.
     // M3-2 PR-C2 adds the optional `scope` field to the ops-only
     // `plan_market_update` / `run_market_update` `market.daily` branches. It
-    // uses one compact inline schema (no `$defs` entry, no prose), so the
+    // uses one compact inline schema (no `$defs` entry, `type` or prose), so the
     // 30,800 ceiling is not raised.
     // Research and maint do not carry those tools and are unchanged.
     // The research/ops budgets carry that documented surface growth; they are
