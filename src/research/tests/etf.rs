@@ -323,8 +323,12 @@ mod export_files {
         &row.iter().find(|(name, _)| name == column).unwrap().1
     }
 
+    /// The cell as plain text: `Field`'s `Display` quotes strings, so unquote.
     fn text(row: &Row, column: &str) -> String {
-        cell(row, column).to_string()
+        match cell(row, column) {
+            Field::Str(value) => value.clone(),
+            other => other.to_string(),
+        }
     }
 
     fn date(day: NaiveDate) -> Field {
@@ -370,14 +374,9 @@ mod export_files {
         assert_eq!(flags, ["false", "false", "true"]);
         // 3dp round trip: 2.501 元 is 2_501_000 at the file's 6dp column.
         assert_eq!(entities[6], "sh.510050");
-        assert_eq!(
-            cell(&raw[6], "close"),
-            &Field::Decimal(parquet::data_type::Decimal::from_i64(2_501_000, 18, 6))
-        );
-        assert_eq!(
-            cell(&raw[6], "high"),
-            &Field::Decimal(parquet::data_type::Decimal::from_i64(2_504_000, 18, 6))
-        );
+        assert!(matches!(cell(&raw[6], "close"), Field::Decimal(_)));
+        assert_eq!(text(&raw[6], "close"), "2.501000");
+        assert_eq!(text(&raw[6], "high"), "2.504000");
 
         // The qfq file has no ETF row and every row is class 0.
         let qfq = rows_of(&outcome.directory, crate::research::DAILY_QFQ_FILE);
