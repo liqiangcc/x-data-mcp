@@ -923,6 +923,46 @@ impl crate::market_update::publication::RangeRepository for MarketBackend {
             }
         }
     }
+    fn commit_etf_raw_typed(
+        &self,
+        command: &crate::market_storage::Publication,
+        base_version_id: &str,
+        range: &crate::market_update::DateRange,
+        upserts: &[crate::market_data::Bar],
+        metadata: Option<&crate::market_update::TypedVersionMetadata>,
+        continuity_evidence: Option<&serde_json::Value>,
+        factors: &crate::market_data::AdjustmentEventSet,
+        capital: &crate::security_master::CapitalEventSet,
+    ) -> Result<Option<Receipt>, Error> {
+        match self {
+            Self::Legacy(m) => {
+                crate::market_update::publication::RangeRepository::commit_etf_raw_typed(
+                    m,
+                    command,
+                    base_version_id,
+                    range,
+                    upserts,
+                    metadata,
+                    continuity_evidence,
+                    factors,
+                    capital,
+                )
+            }
+            Self::Compact(m) => {
+                crate::market_update::publication::RangeRepository::commit_etf_raw_typed(
+                    m,
+                    command,
+                    base_version_id,
+                    range,
+                    upserts,
+                    metadata,
+                    continuity_evidence,
+                    factors,
+                    capital,
+                )
+            }
+        }
+    }
     fn commit_range_no_change_typed(
         &self,
         command: &crate::market_storage::Publication,

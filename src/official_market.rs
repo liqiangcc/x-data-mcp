@@ -1846,6 +1846,29 @@ impl TdxRangeProvider<'_> {
         )
     }
 
+    /// ETF facts probe (M3-2 PR-C2): the ETF series binds categories 1 and
+    /// 11, so its event digest differs from the stock category-1 digest.
+    fn probe_etf_facts(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        market: &str,
+        code: &str,
+    ) -> Result<(String, String, String, Continuity), SourceError> {
+        let all = self.session.security_all_events(market, code)?;
+        let (_factors, admitted, excluded) =
+            self.session.etf_factor_set(&format!("{market}.{code}"), &all)?;
+        let events_sha256 = security_events_digest(&admitted, excluded);
+        self.probe_bound_with_events(
+            Some(facts.day_member_sha256.as_str()),
+            Some(facts.security_event_sha256.as_str()),
+            facts.record_count as usize * day_file::RECORD_BYTES,
+            Some(facts.last_day),
+            market,
+            code,
+            events_sha256,
+        )
+    }
+
     /// Digest-proof continuity classification shared by `probe` (envelope
     /// bindings) and `probe_facts` (compact source bindings).
     fn probe_bound(
@@ -1857,13 +1880,35 @@ impl TdxRangeProvider<'_> {
         market: &str,
         code: &str,
     ) -> Result<(String, String, String, Continuity), SourceError> {
+        let (events, excluded) = self.session.security_events(market, code)?;
+        let events_sha256 = security_events_digest(&events, excluded);
+        self.probe_bound_with_events(
+            base_day_sha,
+            base_events_sha,
+            prefix_bytes,
+            last_base_date,
+            market,
+            code,
+            events_sha256,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn probe_bound_with_events(
+        &self,
+        base_day_sha: Option<&str>,
+        base_events_sha: Option<&str>,
+        prefix_bytes: usize,
+        last_base_date: Option<NaiveDate>,
+        market: &str,
+        code: &str,
+        events_sha256: String,
+    ) -> Result<(String, String, String, Continuity), SourceError> {
         let source = self.session.source();
         let (day_member, day_bytes) = self
             .session
             .member_bytes(&source.day, &MaterializeSession::day_names(market, code))?;
         let day_member_sha256 = crate::hash::sha256(&day_bytes);
-        let (events, excluded) = self.session.security_events(market, code)?;
-        let events_sha256 = security_events_digest(&events, excluded);
         let continuity = match (base_day_sha, base_events_sha) {
             (Some(day_sha), Some(ev_sha))
                 if ev_sha == events_sha256 && day_sha == day_member_sha256 =>
@@ -2235,6 +2280,154 @@ impl TdxRangeProvider<'_> {
             }
         }
     }
+
+    /// ETF raw typed acquisition (M3-2 PR-C2). The ETF has one 不复权
+    /// series: same member-digest continuity probe (categories 1+11), full
+    /// ETF materialization for the factor facts, and either a no-change or a
+    /// pure tail append. A non-prefix rewrite is never silently rewritten —
+    /// it fails with `etf_history_rewrite` and the first differing day.
+    fn acquire_typed_etf(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedEtfAcquisition>, SourceError> {
+        let symbol = facts.symbol.as_str();
+        let Some((market, code)) = symbol.split_once('.').filter(|(m, c)| {
+            matches!(*m, "sh" | "sz") && c.len() == 6 && c.bytes().all(|b| b.is_ascii_digit())
+        }) else {
+            return Err(SourceError::Unsupported(format!(
+                "unsupported symbol {symbol:?}; expected sh|sz + six digits"
+            )));
+        };
+        let (day_member, day_member_sha256, events_sha256, continuity) =
+            self.probe_etf_facts(facts, market, code)?;
+        let materialized = self.session.materialize_etf(symbol)?;
+        let batch = materialized.raw;
+        let gbbq_member_sha256 = self.session.decoded_gbbq()?.sha256.clone();
+        let source = self.session.source();
+        let (mode, prefix_bytes) = match &continuity {
+            Continuity::Unchanged { prefix_bytes } => ("unchanged", *prefix_bytes),
+            Continuity::Append { prefix_bytes, .. } => ("append", *prefix_bytes),
+            Continuity::Unverified => {
+                let first = first_bar_difference(base_window, &batch.bars);
+                return Err(SourceError::NotVerified(match first {
+                    Some(day) => format!(
+                        "etf_history_rewrite: first_different_day={day}; ETF 不复权 history is immutable"
+                    ),
+                    None => "etf_history_unverifiable: member bytes and bars disagree without a first differing day".into(),
+                }));
+            }
+        };
+        let evidence = crate::market_update::Evidence {
+            base_version_id: facts.version_id.clone(),
+            base_integrity_sha256: facts.integrity_sha256.clone(),
+            candidate_sha256: crate::market_update::candidate_digest(&batch)
+                .map_err(|e| SourceError::InvalidResponse(e.to_string()))?,
+            range: range.clone(),
+            same_qfq_basis_ref: format!(
+                "inspected snapshot manifest {} + gbbq member {}",
+                source.manifest_sha256(),
+                gbbq_member_sha256
+            ),
+            revision_ref: None,
+            continuity: Some(crate::market_update::ContinuityEvidence {
+                mode: mode.into(),
+                day_member_sha256: day_member_sha256.clone(),
+                day_prefix_bytes: prefix_bytes as u64,
+                gbbq_events_sha256: events_sha256.clone(),
+            }),
+        };
+        let decision = match continuity {
+            Continuity::Unverified => unreachable!("returned above"),
+            Continuity::Unchanged { .. } => {
+                if base_window != batch.bars {
+                    return Err(SourceError::NotVerified(
+                        "etf_update_unverified: unchanged member does not match the stored base window"
+                            .into(),
+                    ));
+                }
+                crate::market_update::runner::TypedDecision::Unchanged
+            }
+            Continuity::Append { .. } => {
+                let prefix_matches = base_window
+                    .iter()
+                    .zip(batch.bars.iter())
+                    .all(|(base, current)| base == current);
+                if !prefix_matches || batch.bars.len() < base_window.len() {
+                    return Err(SourceError::NotVerified(
+                        "etf_update_unverified: stored base is not the member prefix".into(),
+                    ));
+                }
+                let upserts: Vec<Bar> = batch
+                    .bars
+                    .iter()
+                    .filter(|bar| {
+                        bar.date > facts.last_day
+                            && range.start <= bar.date
+                            && bar.date <= range.end
+                    })
+                    .cloned()
+                    .collect();
+                if upserts.is_empty() {
+                    crate::market_update::runner::TypedDecision::Unchanged
+                } else {
+                    let all_tail_in_range = batch
+                        .bars
+                        .iter()
+                        .filter(|bar| bar.date > facts.last_day)
+                        .all(|bar| range.start <= bar.date && bar.date <= range.end);
+                    let result_coverage = if all_tail_in_range {
+                        batch.coverage.clone()
+                    } else {
+                        facts.coverage.clone()
+                    };
+                    let metadata = self.typed_append_metadata(
+                        facts,
+                        &batch,
+                        &result_coverage,
+                        &day_member_sha256,
+                        &events_sha256,
+                    )?;
+                    let Some(metadata) = metadata else {
+                        return Err(SourceError::NotVerified(
+                            "etf_update_unverified: cross-generation append lacks complete coverage metadata"
+                                .into(),
+                        ));
+                    };
+                    crate::market_update::runner::TypedDecision::Append {
+                        upserts,
+                        metadata: Some(Box::new(metadata)),
+                    }
+                }
+            }
+        };
+        let _ = day_member;
+        Ok(Some(crate::market_update::runner::TypedEtfAcquisition {
+            decision,
+            evidence,
+            factors: materialized.factors,
+            capital: materialized.capital,
+        }))
+    }
+}
+
+/// First day where `current` contradicts `base` (values, dates, or length).
+/// Used only for the ETF rewrite error, so the operator sees the exact day.
+fn first_bar_difference(base: &[Bar], current: &[Bar]) -> Option<NaiveDate> {
+    for (base, current) in base.iter().zip(current.iter()) {
+        if base != current {
+            return Some(current.date);
+        }
+    }
+    if base.len() == current.len() {
+        return None;
+    }
+    if base.len() > current.len() {
+        base.get(current.len()).map(|bar| bar.date)
+    } else {
+        current.get(base.len()).map(|bar| bar.date)
+    }
 }
 
 /// Measurement-harness provider (#259 S5G-7): delegates the typed
@@ -2559,6 +2752,14 @@ impl RangeProvider for TdxRangeProvider<'_> {
         range: &crate::market_update::DateRange,
     ) -> Result<Option<crate::market_update::runner::TypedAcquisition>, SourceError> {
         TdxRangeProvider::acquire_typed(self, facts, base_window, range)
+    }
+    fn acquire_typed_etf(
+        &self,
+        facts: &crate::market_update::UpdateBaseFacts,
+        base_window: &[Bar],
+        range: &crate::market_update::DateRange,
+    ) -> Result<Option<crate::market_update::runner::TypedEtfAcquisition>, SourceError> {
+        TdxRangeProvider::acquire_typed_etf(self, facts, base_window, range)
     }
     fn fork(&self) -> Option<Box<dyn RangeProvider + Send + '_>> {
         Some(Box::new(SessionRangeProvider::Update {

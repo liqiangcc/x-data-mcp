@@ -423,6 +423,34 @@ pub enum CatalogScope {
     #[serde(rename = "sh_sz_etf_listed_ever")]
     ShSzEtfListedEver,
 }
+/// Member scope a `market.daily` plan/run may request (M3-2 PR-C2).
+///
+/// Omitted means the pre-M3-2 A-share-only plan; `sh_sz_etf_current` is the
+/// ETF-only batch and `sh_sz_a_and_etf_current` is the combined batch Q8 uses
+/// for the "ETF 与 A 股同任务" measurement. The A-share-only canonical plan is
+/// byte-identical to the pre-M3-2 digest because an absent scope is omitted
+/// from the canonical payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum PlanScope {
+    #[serde(rename = "sh_sz_etf_current")]
+    ShSzEtfCurrent,
+    #[serde(rename = "sh_sz_a_and_etf_current")]
+    ShSzAAndEtfCurrent,
+}
+impl PlanScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ShSzEtfCurrent => "sh_sz_etf_current",
+            Self::ShSzAAndEtfCurrent => "sh_sz_a_and_etf_current",
+        }
+    }
+    pub fn includes_a(self) -> bool {
+        matches!(self, Self::ShSzAAndEtfCurrent)
+    }
+    pub fn includes_etf(self) -> bool {
+        matches!(self, Self::ShSzEtfCurrent | Self::ShSzAAndEtfCurrent)
+    }
+}
 /// Catalog selections only ever accept `current_sh_sz_a`. Runtime rejects the
 /// listed-ever scope; the schema must not advertise it either.
 fn current_catalog_scope(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
@@ -1310,6 +1338,9 @@ pub enum PlanMarketUpdate {
     Daily {
         contract_version: ContractVersion,
         end_date: Option<NaiveDate>,
+        /// Omitted keeps the A-share-only plan byte-for-byte unchanged.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<PlanScope>,
     },
     #[serde(rename = "market.yearly")]
     Yearly {
@@ -1327,6 +1358,12 @@ impl PlanMarketUpdate {
     pub fn end_date(&self) -> Option<NaiveDate> {
         match self {
             Self::Daily { end_date, .. } | Self::Yearly { end_date, .. } => *end_date,
+        }
+    }
+    pub fn scope(&self) -> Option<PlanScope> {
+        match self {
+            Self::Daily { scope, .. } => *scope,
+            Self::Yearly { .. } => None,
         }
     }
 }
@@ -1365,6 +1402,10 @@ pub struct PlanIneligibleEntity {
 pub struct PlanView {
     pub plan_id: String,
     pub dataset: Dataset,
+    /// Requested member scope; omitted for the A-share-only plan so its
+    /// response bytes do not change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<PlanScope>,
     pub contract_version: ContractVersion,
     pub generation_ref: Option<String>,
     pub target_day: NaiveDate,
@@ -1402,6 +1443,10 @@ pub enum RunMarketUpdate {
         request_id: String,
         target_day: NaiveDate,
         plan_id: String,
+        /// Must match the scope the plan was resolved with; omitted means
+        /// the A-share-only plan.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<PlanScope>,
     },
     #[serde(rename = "market.yearly")]
     Yearly {
@@ -1431,6 +1476,12 @@ impl RunMarketUpdate {
     pub fn plan_id(&self) -> &str {
         match self {
             Self::Daily { plan_id, .. } | Self::Yearly { plan_id, .. } => plan_id,
+        }
+    }
+    pub fn scope(&self) -> Option<PlanScope> {
+        match self {
+            Self::Daily { scope, .. } => *scope,
+            Self::Yearly { .. } => None,
         }
     }
 }

@@ -1363,6 +1363,121 @@ impl RangeRepository for SqliteCompactMarket {
             Ok(Some(receipt))
         })
     }
+    fn commit_etf_raw_typed(
+        &self,
+        command: &Publication,
+        base_version_id: &str,
+        range: &crate::market_update::DateRange,
+        upserts: &[Bar],
+        metadata: Option<&crate::market_update::TypedVersionMetadata>,
+        continuity_evidence: Option<&Value>,
+        factors: &crate::market_data::AdjustmentEventSet,
+        capital: &crate::security_master::CapitalEventSet,
+    ) -> Result<Option<Receipt>, Error> {
+        self.write(|c| {
+            let tx = c
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(storage)?;
+            let head = series::read_series_by_version_id(&tx, base_version_id)?
+                .ok_or(Error::NotFound)?;
+            if head.period != Period::Day
+                || head.adjustment != crate::market_data::Adjustment::Raw
+                || head.instrument_class != crate::market_data::INSTRUMENT_CLASS_ETF
+                || head.price_scale != crate::compact_market::PRICE_SCALE_LI
+            {
+                return Err(integrity(
+                    "ETF update base is not the 3dp raw ETF series shape",
+                ));
+            }
+            let (binding, evidence_d, coverage) = metadata_fields(&tx, &head, metadata)?;
+            let compact_upserts =
+                series_commit::to_compact_bars(upserts, Period::Day, head.price_scale)?;
+            let no_change = compact_upserts.is_empty();
+            let (range_start_day, range_end_day) = if no_change {
+                (
+                    crate::compact_market::epoch_day(range.start),
+                    crate::compact_market::epoch_day(range.end),
+                )
+            } else {
+                (
+                    compact_upserts
+                        .iter()
+                        .map(|bar| bar.trade_day)
+                        .min()
+                        .unwrap_or(head.last_day),
+                    compact_upserts
+                        .iter()
+                        .map(|bar| bar.trade_day)
+                        .max()
+                        .unwrap_or(head.last_day),
+                )
+            };
+            let window_bars = if no_change {
+                series::bars_in_range(
+                    &tx,
+                    head.series_key,
+                    range_start_day,
+                    range_end_day,
+                )?
+            } else {
+                compact_upserts.clone()
+            };
+            let evidence = series_commit::put_continuity_evidence(
+                &tx,
+                &ops_continuity_json(
+                    if no_change { "unchanged" } else { "append" },
+                    base_version_id,
+                    &head.source_binding_digest,
+                    Some(head.record_count as u64 * 32),
+                    continuity_evidence,
+                ),
+            )?;
+            let change = if no_change {
+                series_commit::SeriesChange::NoChange
+            } else {
+                series_commit::SeriesChange::Append {
+                    upserts: compact_upserts.as_slice(),
+                }
+            };
+            let scope = Scope {
+                symbol: head.entity.clone(),
+                period: Period::Day,
+            };
+            let receipt = series_commit::commit_etf_tx(
+                &tx,
+                &series_commit::Commit {
+                    result_id: &command.publication_id,
+                    task_id: &command.task_id,
+                    item_id: &command.item_id,
+                    run_id: &command.run_id,
+                    occupancy_key: &scope.occupancy_key(),
+                    expected_task_revision: command.expected_revision,
+                    entity: &head.entity,
+                    period: Period::Day,
+                    adjustment: crate::market_data::Adjustment::Raw,
+                    base_version_id: Some(base_version_id),
+                    change,
+                    range_start_day,
+                    range_end_day,
+                    algorithm_version: series_commit::UPDATE_ALGO,
+                    window_digest: Some(series_commit::window_fold(&window_bars)?),
+                    source_binding_digest: binding,
+                    evidence_digest: evidence_d,
+                    coverage_status: coverage,
+                    metadata_changed: binding.is_some() || evidence_d.is_some(),
+                    event_evidence_digest: evidence,
+                    published_at: None,
+                    staged_version_id: None,
+                    defer_task_row: false,
+                },
+                factors,
+                capital,
+            )?;
+            tx.commit()
+                .map_err(|e| Error::OutcomeUnknown(e.to_string()))?;
+            Ok(Some(receipt))
+        })
+    }
     fn commit_range_no_change_typed(
         &self,
         command: &Publication,

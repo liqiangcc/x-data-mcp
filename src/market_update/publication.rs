@@ -160,6 +160,24 @@ pub trait RangeRepository: MarketRepository {
     ) -> Result<Option<Receipt>, Error> {
         Ok(None)
     }
+    /// ETF 不复权 typed commit (M3-2 PR-C2): one series only, with the
+    /// category-1/11 factor facts refreshed in the same transaction. Empty
+    /// `upserts` is the no-change case. The implementation must reject a
+    /// non-ETF/no-forward base; the stock pair path is never reused.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_etf_raw_typed(
+        &self,
+        _command: &Publication,
+        _base_version_id: &str,
+        _range: &crate::market_update::DateRange,
+        _upserts: &[crate::market_data::Bar],
+        _metadata: Option<&crate::market_update::TypedVersionMetadata>,
+        _continuity_evidence: Option<&serde_json::Value>,
+        _factors: &crate::market_data::AdjustmentEventSet,
+        _capital: &crate::security_master::CapitalEventSet,
+    ) -> Result<Option<Receipt>, Error> {
+        Ok(None)
+    }
     /// No-change publication for the typed update path (#259 S5G): the
     /// continuity probe proved the source bytes identical to the base's
     /// pinned inputs, so the result reuses the base version and the head
