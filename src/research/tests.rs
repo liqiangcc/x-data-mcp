@@ -370,7 +370,8 @@ impl Fixture {
     fn populate_etf_series(c: &Connection, binding: Digest, version_evidence: Digest) {
         let window = days();
         // (entity, seed, close in 厘, (volume, amount) per day)
-        let plans: [(&str, u8, i64, [(i64, &str); 3]); 2] = [
+        type EtfPlan = (&'static str, u8, i64, [(i64, &'static str); 3]);
+        let plans: [EtfPlan; 2] = [
             (
                 "sh.510050",
                 0x41,
