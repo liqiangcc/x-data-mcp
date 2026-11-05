@@ -549,6 +549,20 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
       省略 `adjustment` 返回 `adjustment_required_for_etf`，显式 `qfq` 返回
       `adjustment_unavailable`，只有 `adjustment=raw` 可读 3dp 不复权价；不得把这两种错误
       当成「无数据」或静默返回 raw。
+    - **ETF cat1/cat11 因子事实行可读**（`src/data_supply/collect/etf_update_tests.rs` 的
+      `etf_cat1_and_cat11_factor_facts_are_readable_through_adjustment_events` 等，合成夹具，
+      T14 / AC-M3-2-6）：`query_data` 读 `market.adjustment_events` 只接受 `contract_version=v2`
+      与 `single`/`batch` 选择；`selection.kind=universe` 没有 ETF scope（ETF 的两个 scope 只对
+      `market.daily` 生效）。有事件的 ETF 返回 `versions[].status=present`、
+      `metadata.source=derived:adjustment_events`、`coverage_status=complete`；列为 `category`
+      （1 分红 / 11 份额折算）与 `c1..c4`，值是源 f32 的最短往返小数（`0.661`、`2`、`5`），
+      不是 A 股的 2dp。没有因子事件的 ETF（以及没有序列的代码）是 `absent`、无行。
+      **读面不输出 `effective_day` 与 `basis_status`**：行按源（gbbq 解码）顺序而非日期顺序，
+      多条同类事件只能靠 `filter` 日期区间区分；`basis_status`（cat1 `verified`、cat11 `pending`）
+      只存在于库里，读面上只能从 `category` 推断。cat11 仍不进任何复权链。
+    - **ETF 的 `market.capital_events`**：同一次提交写入，但只含股本类别 2/3/5/7/8/9/10；
+      cat1/cat11 不在其中。ETF 只有 cat1/cat11 记录时没有登记，读回 `absent` 加
+      「no registered version」限制说明，零行不等于「没有这类事实」。
     - **7 例 `SSDATE` 晚于 `.day` 首根 bar**（`sh511600/511800/511910/511920/511960/511970/511980`，
       早 10–18 天）：保留官方上市日，不裁剪首 bar，也不拿首 bar 覆盖上市日；回测按上市日截断
       时须知道这段差异。其余 ETF 的上市日与首 bar 相同或首 bar 更晚。
@@ -610,7 +624,9 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 - **截面标准化与行业中性化**：T 日股票池有了，但时点行业只从 2026-09-30 起且名称未知（§3.3 偏差 1），
   此前的行业中性化做不了。
 - **事件因子**：cat1 复权事件已是 `market.adjustment_events`，股本类事件是 `market.capital_events`
-  （都没有知晓时间，只能按生效日）；ETF 的 cat11 份额折算只有事实行、不进复权链（§3.2 #13）。
+  （都没有知晓时间，只能按生效日）；ETF 的 cat1/cat11 同样可经 `market.adjustment_events`
+  （v2、`single`/`batch`）读到，但 cat11 份额折算只有事实行、不进复权链，读面也不带
+  `effective_day`（§3.2 #13）。
 
 **做不了**
 
