@@ -14,6 +14,7 @@ mod query_cache;
 mod support_market;
 #[path = "../support/metrics.rs"]
 mod support_metrics;
+mod universe_page;
 mod v8_read_v2;
 mod v8_task_v2;
 mod v8_tool_surface;

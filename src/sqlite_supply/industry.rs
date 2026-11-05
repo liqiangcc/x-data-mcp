@@ -46,6 +46,7 @@ pub(super) fn query(
         manifest: vec![],
         rows: vec![],
         temporal: None,
+        limitations: vec![],
     };
     let Some(identity) = identity(c)? else {
         result.manifest.push(super::absent(None));

@@ -5177,6 +5177,97 @@ fn read_tools_market_snapshot_and_yearly_end_to_end() {
 }
 
 #[test]
+fn read_tools_state_and_events_end_to_end() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = ran_rig();
+    let (start, end) = window();
+    // Events: the run wrote one adjustment event set and one capital event for
+    // sh.600006. A wide range keeps the test independent of the fixture's dates.
+    for (event, dataset) in [
+        ("capital", "market.capital_events"),
+        ("adjustment", "market.adjustment_events"),
+    ] {
+        let tool = r
+            .api
+            .call(
+                "get_security_events",
+                json!({"securities":["sh.600006"],"event":event,
+                       "start_date":"1990-01-01","end_date":end}),
+            )
+            .unwrap();
+        let query = r
+            .api
+            .call(
+                "query_data",
+                json!({"dataset":dataset,"contract_version":"v2",
+                       "selection":{"kind":"single","entity":"sh.600006"},
+                       "filter":{"kind":"daily","start_date":"1990-01-01","end_date":dashed(&end)},
+                       "version":{"kind":"latest_per_entity"}}),
+            )
+            .unwrap();
+        assert_eq!(tool["dataset"], dataset);
+        assert!(tool["row_count"].as_u64().unwrap() > 0, "{event}: {tool}");
+        same_answer(&tool, &query);
+    }
+
+    // State: the run wrote `security_master` for both codes. The default
+    // `as_of` is the last trading day, written into both ends of the filter.
+    let calendar = r
+        .api
+        .call(
+            "get_trading_calendar",
+            json!({"start_date":start,"end_date":end}),
+        )
+        .unwrap();
+    let last_day = calendar["columns"]["trade_day"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    let state = r
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sh.600006","sz.000002"],"fact":"security_master"}),
+        )
+        .unwrap();
+    let query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.security_master","contract_version":"v2",
+                   "selection":{"kind":"batch","entities":["sh.600006","sz.000002"]},
+                   "filter":{"kind":"daily","start_date":last_day,"end_date":last_day,"as_of":last_day},
+                   "version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    assert_eq!(state["temporal"]["as_of"], json!(last_day));
+    assert!(state["temporal"].is_object());
+    same_answer(&state, &query);
+
+    // Names for an SH code: the answer says the history is SZ-only.
+    let names = r
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sh.600006"],"fact":"security_names","as_of":last_day}),
+        )
+        .unwrap();
+    assert_eq!(names["row_count"], 0);
+    assert!(
+        names["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("SZ only (D-61)")),
+        "{names}"
+    );
+}
+
+#[test]
 fn read_tools_are_research_only_and_listed_with_their_inputs() {
     use x_data_mcp::data_supply::registry::EntryKind;
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -5189,6 +5280,8 @@ fn read_tools_are_research_only_and_listed_with_their_inputs() {
         "get_market_snapshot",
         "get_trading_calendar",
         "get_price_limit_rules",
+        "get_security_state",
+        "get_security_events",
     ];
     for entry in [EntryKind::Ops, EntryKind::Maint] {
         for name in names {
