@@ -4,13 +4,13 @@
 当前 acquisition 已实现 immutable generation、验证后条件激活和 generation-bound
 routine update（见[每日同步说明](daily-sync.md)）；MCP 拓扑已在本机部署运行——一个
 `data_service` 进程服务三个 socket：`mcp.sock` 的 `ops` 入口提供 16 data tools
-（`generic-data-v9`，含 `plan_market_update`/`run_market_update` 与 `refresh_exchange_sources`，
+（`generic-data-v10`，含 `plan_market_update`/`run_market_update` 与 `refresh_exchange_sources`，
 文本模式 `full`，market 单版本序列：version_id=内容 hex，latest-only）、`research.sock` 的
 `research` 入口（只读研究面，工具数 5）、`maint.sock` 的 `maint` 入口（仅本机运维使用，
-不经隧道，工具数 9）；acquire socket 提供 10 acquisition tools；隧道指 `research.sock`（2026-11-02 起）。
-已部署 schema 26（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 +
-M3 PR-1 的 025 + R2 的 026），注册 25 data tools（三个入口；`ops` 16），
-能力修订 `generic-data-v9` 已部署；部署版本、generation
+不经隧道，工具数 9）；acquire socket 提供 10 acquisition tools；隧道指 `research.sock`（aws-node fallback 上 2026-11-02 起；vm2-126 生产机无 tunnel，D-74）。
+已部署 schema 27（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 +
+M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027），注册 25 data tools（三个入口；`ops` 16），
+能力修订 `generic-data-v10` 已部署；部署版本、generation
 与数据量等机器事实只在 [STATUS](STATUS.md)
 维护，本文不复述。历史记录（preview.29 时期）：2026-09-30 operator-path 曾激活
 generation `2e9183306d4292c96602185152770a5ef54fbc28d1c9c909d3297c9d9bfe70a8`，

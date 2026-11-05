@@ -16,7 +16,7 @@
 
 本文中「版本」「head」「旧版本可按原 ID 读取」「不可原地修订」等表述描述的是**版本链模型**：它是
 schema 20（v0.2.0-preview.31 及更早）的行为，**已被 schema 21 取代**（历史，不再被视为目标模型）。
-当前部署的是 schema 26 的单版本存储：每 `(实体, 周期)` 只存当前序列，变更由追加式事件日志记录。
+当前部署的是 schema 27 的单版本存储：每 `(实体, 周期)` 只存当前序列，变更由追加式事件日志记录。
 schema 21 自 preview.32 起部署（2026-10-13 全新 init，旧 v20 库归档；历史），M1 于 2026-10-27
 把生产库全新 init 到 schema 24，M3 的 025 随上一次 phase-g 部署上线；部署与运行事实以 [STATUS](STATUS.md) 为准。详见[单版本（latest-only）行情存储模型](latest-only-storage.md)。
 下文各处只在受影响的段落加注。
@@ -74,9 +74,9 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 | 能力 | 基线事实 | 目标 / 依赖 |
 |---|---|---|
-| MCP | 双 server：data socket 单进程三入口——`ops` 16 data tools（已部署，`generic-data-v9`）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道指 `research` 的 `research.sock`（2026-11-02 起，Ops-D） | 稳定契约与真实客户端验收 |
+| MCP | 双 server：data socket 单进程三入口——`ops` 16 data tools（已部署，`generic-data-v10`）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道指 `research` 的 `research.sock`（aws-node fallback，2026-11-02 起，Ops-D；vm2-126 无 tunnel，D-74） | 稳定契约与真实客户端验收 |
 | 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
-| 行情 | SQLite fresh compact schema 26（已部署）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
+| 行情 | SQLite fresh compact schema 27（已部署）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
 | 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |
 | QFQ / GBBQ | #54 契约实现并经 Final Gate 验收 | 新 generation 重审计 |
 | 年线 | 固定 daily 基线聚合 + 逐年 lineage，全市场已执行 | — |

@@ -2,7 +2,7 @@
 
 **状态**：已被 [generic-data-v9](generic-data-v9.md) 取代（2026-11-02，preview.42）；历史：2026-10-27 v8 最小切换，
 2026-10-28 preview.38 起单进程服务三个 socket。v8 的读取面/任务面/错误码仍是 v9 的基础，
-当前部署为 `generic-data-v9` / compact schema 26（见 [STATUS](../STATUS.md)）。
+当前部署为 `generic-data-v10` / compact schema 27（见 [STATUS](../STATUS.md)；aws-node fallback 为 v9/schema 26）。
 M2 的 6 个解析事实数据集（§4.6 矩阵，`market.security_master` 等）已随 preview.37
 （历史：2026-10-27 部署窗口）在**同一 `capability_revision`** 下上线：M2 不加工具、不升
 revision，新增的是 dataset 与 `research-snapshot.v2` 导出（设计

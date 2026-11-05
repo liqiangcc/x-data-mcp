@@ -65,7 +65,7 @@ M2 的 6 个解析事实数据集（`market.security_master`、`security_names`�
 结果里按 `pending_source` 记录，生产形态（ops + compact）缺 `X_DATA_MCP_SOURCE_STORE`
 时四个同源 item 以稳定码 `source_store_unconfigured` 失败（见 §3.2）。未登记版本返回
 `absent` 与 0 行（见 §3.1「M2 部署状态」）。
-数据库 compact schema：**已部署 26（preview.42 的 fresh init 上线，2026-11-02）**。schema 25（M3 PR-1，
+数据库 compact schema：**已部署 27（2026-11-05 preview.45 on vm2-126，D-74）**；aws-node fallback 仍是 26（preview.42 的 fresh init，2026-11-02，已冻结）。schema 25（M3 PR-1，
 [#446](tasks/issue-446-m3-delisted-industry.md) §9）加 5 张来源库索引表与
 `price_limit_rules.min_band_ticks` 可空列。5 张索引表已由日更的派生 item 与 `--scope` 重放写入
 （2026-11-01 只读实测：`industry_snapshots` 7 行、`industry_assignments` 5,235 行、
@@ -372,7 +372,7 @@ D-66 Q4 原文的 2026-10-31 是 UTC 日期）。两句同时进数据集证据�
 **M3 代码状态（main，2026-10-30）**：PR-1a…PR-9 已合并，**均已随 preview.39 部署**
 （2026-10-31 phase-g fresh init；2026-11-01 日更后的库内实测见 [STATUS](STATUS.md)「数据」段）。
 已部署的能力：
-来源库与重放框架（PR-1a）、M3 引入的 5 张来源库索引表（PR-1，随 schema 26 部署）、交易所来源共用入口
+来源库与重放框架（PR-1a）、M3 引入的 5 张来源库索引表（PR-1，M3 索引表迁移）、交易所来源共用入口
 （PR-2）、A-1/A-2 上市/终止上市适配器与主表合并（PR-3）、`sh_sz_a_listed_ever`
 首采 scope（PR-4，已首采 338 条序列）、日更尾巴与 `derived:delisted_series_check` 不消失检查
 （PR-5）、
@@ -380,7 +380,7 @@ D-66 Q4 原文的 2026-10-31 是 UTC 日期）。两句同时进数据集证据�
 （PR-7）、退役门禁（PR-8）、`research-snapshot.v3` 导出（PR-9）。落地记录见
 [来源库](source-store.md)、[交易所来源入口](exchange-source.md)、[日更](daily-sync.md)
 与 §5.3；设计拆分见 [M3 设计](tasks/issue-446-m3-delisted-industry.md) §14。
-生产实例已是 schema 26（2026-11-02 fresh init），`X_DATA_MCP_SOURCE_STORE` 已配置
+生产实例已是 schema 27（2026-11-05 preview.45 on vm2-126，D-74；aws-node fallback 为 schema 26），`X_DATA_MCP_SOURCE_STORE` 已配置
 （`source-store.conf`），owner 归档的行业历史也已导入并由 `--scope industry` 重放。
 PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称 7,344 行、停牌 `confirmed`
 20,420 段（preview.41 库）；历史 ST 在 preview.42 的 fresh init 重放后为 1,289 行

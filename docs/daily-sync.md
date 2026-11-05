@@ -5,7 +5,8 @@
 > 部署与运行事实以 [STATUS](STATUS.md) 为准，性能与容量目标以 [SLO](SLO.md) 为准。
 **OPERATIONAL OWNER-ONLY PREVIEW / CLASS-SPECIFIC SLOS**
 
-当前运行时包含两个 MCP server（本机 systemd 部署；部署版本、主机、generation 等机器事实
+当前运行时包含两个 MCP server（systemd 部署在生产主机；生产主机、launcher 所在机器、
+部署版本、generation 等机器事实
 见 [STATUS](STATUS.md)）：
 
 - `x-data-acquire`：远端文件探测、下载和本地安装，10 acquisition tools。
@@ -14,9 +15,10 @@
   `get_yearly_base_years`、`plan_market_update`/`run_market_update` 与
   `refresh_exchange_sources`，x 与日更 Skill 的连接不变）、`research.sock` 的 `research` 入口
   （只读研究面，工具数 5）、`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
-  capability revision `generic-data-v9`（market 单版本序列：version_id=内容 hex，latest-only），
+  capability revision `generic-data-v10`（market 单版本序列：version_id=内容 hex，latest-only），
   文本模式 `full`；strict Skill 会话遇 revision 不匹配即停止。日更 Skill 仍连 `mcp.sock`；
-  隧道自 2026-11-02 起连 `research.sock`（只读研究面）。
+  隧道自 2026-11-02 起在 aws-node fallback 上连 `research.sock`（只读研究面）；
+  2026-11-05 起日更和主数据生产机是 vm2-126（无 tunnel，D-74），aws-node 冻结为 fallback。
 
 M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 `market.security_master`、`market.risk_warnings`、`market.suspensions`、
@@ -31,8 +33,9 @@ M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 涨跌停规则原文未接入时仍按 `pending_source` 记录、`trading_rules` 写 0 行。因此日更成功后，M2 数据集的新鲜度与日线同步，
 不需要单独跑任务（详见 [STATUS](STATUS.md)「数据」段的 M2 数据集行）。
 
-已部署实例为 fresh compact schema 26（2026-11-02 fresh init；M1 的 schema 22 +
-M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026），三个入口合计
+已部署实例为 fresh compact schema 27（2026-11-05 preview.45 on vm2-126，D-74；aws-node
+fallback 为 schema 26；M1 的 schema 22 +
+M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027），三个入口合计
 去重后注册 25 项 data 工具；
 显式 init 的新库按代码的 schema 建立；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
@@ -288,13 +291,15 @@ error/evidence 里列出实体，run 收尾
 时直接跳过；若这条观测会改变**已公布**区间的起点，日更 fail-closed 指向
 `source_store replay --scope industry`，不要手工改表。
 
-### ETF 批次（M3-2 PR-C2，默认关闭，可选）
+### ETF 批次（M3-2 PR-C2；v10 起日更 Skill 默认包含）
 
 ETF 日更是 `plan_market_update`/`run_market_update` 的一个可选范围，不是新工具，也没有新的
 编排脚本：仓库里没有日更 plan/run 的脚本，编排在 Skill/操作员侧，所以这里只定义调用形态。
-**默认的 A 股批次不变**：不传 `scope` 时 plan、`plan_id`、item 与结果与改动前逐字节相同。
+**A 股批次不变**：不传 `scope` 时 plan、`plan_id`、item 与结果与 v9 逐字节相同。
 
-开关（Skill/操作员侧，默认关）打开时，在 A 股批次**之后**追加一个 ETF 批次：
+v10 起日更 Skill（`.devin/skills/x-data-daily-sync/SKILL.md` §3.3a）在 A 股日线与补漏
+**全部终态之后、年线之前**追加一个独立 ETF 批次（`scope:"sh_sz_etf_current"`，分任务形态，
+不用 `sh_sz_a_and_etf_current`）；操作员手工编排时同样在 A 股批次之后追加：
 
 ```text
 plan_market_update {dataset: market.daily, contract_version: v1, end_date: D, scope: sh_sz_etf_current}
@@ -354,6 +359,10 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
   已把交易所索引写回，item 走 fallback 选择），而是**页集身份**与诚实的 `verified_through`：
   没有刷新 run 记录时，选择器按页号跨抓取日拼接，只有 `full` 的 run 成员表能固定页集身份，
   并把 `verified_through` 推进到本次实际抓取日。
+  另外 fresh init 后 `sh_sz_a_listed_ever` 首采依赖**已发布的 `security_master`**：
+  `market.security_master` 由日更 run 的 `derived:security_master` item 维护，fresh 库里
+  还没有已发布版本时该 scope 会报 `security_master has no published version`；
+  要先跑一次 `market.daily` 的 plan-run（让派生 item 发布主表）再发 listed_ever 首采。
 - 这四个 item **零请求、零探针**（含深市上市/简称的页 1 探针）：整表身份来自刷新 run 的
   成员页，日更不得与刷新任务叠加出 2 req/s。刷新任务的单飞闸门只看刷新，看不到日更
   worker，所以这条由回归用例守（计数假传输断言日更跑完 0 次尝试）。
