@@ -228,6 +228,12 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
 （`src/data_supply/query.rs:10-11`）；cursor 是快照内位置，跨请求复用会报
 `cursor conditions changed: …`（`src/data_supply/query.rs:353-360,604-614`）。
 
+分页状态的进程级上限（VM1-23）：所有连接共用一个游标池（`src/data_supply/cursor_cache.rs`），
+合计 ≤48 MiB 序列化快照（约 70 MiB 堆）、单连接 ≤24 MiB 且 ≤32 个游标；游标只对收到它的连接有效，
+连接关闭即释放。服务进程接近自身 cgroup 的 `memory.high` 时（`src/data_supply/read_limits.rs`，
+常驻匿名内存 + 在途读取的预留 + 本次读取的估算 > `memory.high` 的 85%），读取立即返回
+`memory_budget_exceeded`（`isError`，不缓存新快照），不再让请求在内核回收里变慢。
+
 **`selection.kind=universe` 的分页（#295）：** `market.daily`/`market.index` 的 v2 `universe` 读，
 每页的 `entities`、`versions`、`columns`（`dates`）只含**本页行涉及的实体**，响应字节随本页行数
 增长，不随全市场成员数增长。具体规则：

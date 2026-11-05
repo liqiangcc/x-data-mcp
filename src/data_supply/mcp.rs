@@ -194,6 +194,13 @@ impl DataApi {
             worker_gate: None,
         })
     }
+    /// Use the process-wide cursor pool and memory budget instead of a
+    /// private pool (the service builds one [`ReadLimits`] and hands every
+    /// connection a clone).
+    pub fn with_read_limits(mut self, limits: &super::read_limits::ReadLimits) -> Self {
+        self.queries = Queries::with_limits(self.queries.repository.clone(), limits);
+        self
+    }
     /// Bind this server to one deployed entry. `data_service --entry` sets
     /// it; the stdio/dev constructors leave it unset (all tools).
     pub fn with_entry(mut self, entry: super::registry::EntryKind) -> Self {
@@ -757,6 +764,7 @@ fn mapped(e: Error) -> ApiError {
             "adjustment_required_for_etf"
         }
         Error::Invalid(s) if s.starts_with("adjustment_unavailable") => "adjustment_unavailable",
+        Error::Invalid(s) if s.starts_with("memory_budget_exceeded") => "memory_budget_exceeded",
         Error::Invalid(_) => "invalid_arguments",
         Error::Integrity(_) | Error::Base(_) => "integrity_error",
         Error::NotFound => "version_not_found",
@@ -1371,7 +1379,10 @@ impl DataApi {
                         .last_trading_day_upto(super::query::today())
                         .map_err(mapped)
                 })?;
-                self.queries.query_v2(query, &self.access).map_err(mapped)
+                let notes = super::read_tools::extra_limitations(&query);
+                let mut answer = self.queries.query_v2(query, &self.access).map_err(mapped)?;
+                super::read_tools::add_limitations(&mut answer, notes);
+                Ok(answer)
             }
             Handler::Capabilities => self.capabilities(decode(input)?),
             Handler::Facets => self.catalog_facets(decode(input)?),
@@ -1439,6 +1450,8 @@ impl ToolHandler for DataApi {
                     | "get_market_snapshot"
                     | "get_trading_calendar"
                     | "get_price_limit_rules"
+                    | "get_security_state"
+                    | "get_security_events"
                     | "list_data_versions"
                     | "get_data_availability"
                     | "get_yearly_base_years"

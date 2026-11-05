@@ -205,16 +205,34 @@ Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目
 
 下面的顺序属于 Skill，不属于 Tool/Capability 返回。
 
-### 无远端变化
+### 无远端变化（`day` 不在 `pending_roles`）
 
 ```text
 读取 capabilities/status
 → check remote facts
-→ unchanged
-→ 输出 active generation 和检查时间
+→ day 未 pending
+→ 补发布判定（只读，Skill §1.1）
+→ 已有成功收尾的日线 run：no_update，输出 active generation 和检查时间
+→ 没有：恰好一次 plan_market_update；eligible=0 则 no_update，eligible>0 则补发布
 ```
 
-不下载，不创建 generation/data task。
+不下载，不验证、不激活 generation，不创建 generation/data task（补发布除外，见下）。
+
+active generation 可能已含新行情而 head 没发布：operator 用 `update_data` 代采后，或 Skill
+激活 generation 后在 `run_market_update` 前中断。`plan_market_update` 的 `eligible` 看不出
+这一点，因为它只看 head 的 `last_day`，目标日无源 bar 的实体（停牌、无成交）每天都在
+`eligible` 里。所以判据是 active generation 激活后是否已有一次成功收尾的 A 股
+`run_market_update`，取法全部来自现有只读工具：
+
+| 事实 | 来源 |
+|---|---|
+| 当前 generation 的激活时间 | `sync_status.active.activated_at` |
+| 之后是否有成功收尾的日线 run | `list_tasks(dataset=market.daily, operation=update_data, status=[succeeded, partially_failed], created_from=<activated_at>)`，取 `contract_version=market-plan-run-task-v1` 的项（显式 `update_data` 补漏任务不是） |
+| 是 A 股 run 而不是 ETF 批次 | `get_task_progress.total > task.plan_counts.eligible`（A 股 run 追加 17 个内部派生 item，ETF-only 批次不追加） |
+
+没有这样的 run 才调用一次 `plan_market_update`（`market.daily`，v1，不传 `end_date` 和 `scope`；
+只读，不建任务）。`eligible>0` 就从 Skill §3.0 起按必做清单补发布（到 §3.1 重新 plan 后再 run），不经过 acquire/verify/activate。
+判定只覆盖日线 run 本身；run 之后的补漏、ETF、年线步骤若被中断，这里看不到，由 operator 补做。
 
 ### 有新 generation、已有 daily heads
 
