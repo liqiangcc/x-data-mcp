@@ -271,7 +271,11 @@ def export_smoke(binaries):
             "x-data-mcp.research-snapshot.v2",
             "x-data-mcp.research-snapshot.v3",
             "x-data-mcp.research-snapshot.v4",
+            "x-data-mcp.research-snapshot.v5",
         }, manifest["schema"]
+        if manifest["schema"].endswith(".v5"):
+            assert manifest["producer"]["git_sha"], manifest["producer"]
+            assert "git_sha" not in manifest["algorithms"], manifest["algorithms"]
         assert manifest["snapshot_id"] == summary["snapshot_id"] == directory.name, summary
         files = {entry["path"]: entry for entry in manifest["files"]}
         assert set(files) == {"daily_raw.parquet", "daily_qfq.parquet"}, files

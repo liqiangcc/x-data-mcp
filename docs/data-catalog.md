@@ -651,13 +651,16 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 
 **做不了**
 
-- **确认没有幸存者偏差的回测**：数据层已有退市股行情和时点主表（§3.2 #6–#8），但默认研究导出是否
-  带退市序列未验证（审计 §2.1），退市日未知与代码迁移仍有残余。
+- **确认没有幸存者偏差的回测**：数据层已有退市股行情和时点主表（§3.2 #6–#8）。默认研究导出此前只取
+  目录成员、漏掉不在目录的退市序列（审计 §2.1）；代码已修复（#545，默认选择改为目录 ∪ 主表 A 股 ∪
+  已发布序列，见 §5.3），**等部署后在真实库上确认**（`coverage.delisted_series` 应接近 338 个退市序列，
+  未实测）。在此之前不能把它当作已满足；退市日未知与代码迁移仍有残余。
 - **严格可交易性回测**：停牌（沪 2008 起）、ST（深市与沪 2004Q1 起）、涨跌停规则三类输入都有，
   但没有派生读面、没有 `normal`、深市无 `confirmed` 停牌、除权日涨跌停基准不准。
-- **逐位可复现的回测**：`export_research` 自 preview.36 起随发布包部署（现行 `research-snapshot.v4`），
+- **逐位可复现的回测**：`export_research` 自 preview.36 起随发布包部署（已部署 `research-snapshot.v4`，代码为 `v5`），
   但它是**离线命令**、不在 MCP 上（D-39）：要复现必须自己保留导出目录与 `manifest.json`；清单不记录
   二进制版本，派生（涨跌停、市值）读时重算；直读路径（§5.2）仍不绑定版本（审计 §2.4）。
+  代码已补（本节 §5.3 的 `producer`，`research-snapshot.v5`），未部署：已部署的 preview.45 仍写 `v4`、没有 `producer`。
 - **参数/口径敏感性**：不复权与前复权两条序列都在库（preview.36 起）；`query_data` 缺省读前复权，
   A 股显式 `adjustment=raw` 读不复权（v10），导出两者都有（§5.3）。
 
@@ -693,7 +696,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 - 脚本只读、无写，不是服务/MCP/契约的一部分，也没有稳定性承诺。
 - 需要可复现结论时，必须自己记录 `market_series.version_id` 与目录版本（§5.3 的清单形状）。
 
-### 5.3 研究快照导出（preview.36 起部署；现行 `research-snapshot.v4`，含 M3 与 ETF 行，随 preview.45 部署到 vm2-126）
+### 5.3 研究快照导出（preview.36 起部署；已部署 `research-snapshot.v4`，含 M3 与 ETF 行，随 preview.45 部署到 vm2-126；代码为 `v5`，未部署）
 
 - **随发布包部署**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
   它；`scripts/build_release.sh` 自 #413 固定 `--features export` 并在打包后断言该命令存在），
@@ -734,8 +737,9 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
   `scripts/export_smoke.py` 同时接受 v2/v3/v4，`v4` 另校验 `verified_through` 若是字符串则为
   `YYYY-MM-DD`。
 - **`v4` 的 ETF 行（M3-2 PR-D，随 preview.45 部署）**：当时按「v4 尚未部署」的判断把 ETF 列并入 v4、
-  没有升 v5，但 v4 已随 preview.42 部署，所以**同一个 schema 字符串现在对应两种列布局**：preview.42/43
-  的日线文件 11 列，preview.45 的 13 列（审计 §2.4）。读取方应以 `manifest.files[].columns` 为准。`daily_raw`/`daily_qfq` 在 v3 的 10 列之后追加 `instrument_class`（0 股票 / 2 ETF）与
+  没有升 v5，但 v4 已随 preview.42 部署，所以**同一个 schema 字符串对应两种列布局**：preview.42/43
+  的日线文件 11 列，preview.44/45 的 13 列（审计 §2.4）。读取方应以 `manifest.files[].columns` 为准；
+  代码已改为 `v5`（见下一条），`v5` 即这里的 13 列布局。`daily_raw`/`daily_qfq` 在 v3 的 10 列之后追加 `instrument_class`（0 股票 / 2 ETF）与
   `no_trade`（股票 NULL；ETF 为 `volume=0 ∧ amount=0` 推导值），`daily_raw` 并入所有已发布的 ETF 不复权
   序列（3dp，A 股行在前且值不变），`daily_qfq`/`factors` 不含 ETF；`universe_intervals` 追加
   `instrument_class`、`last_trade_date`、`delisting_date`，ETF 区间在 A 股区间之后。可交易窗口上界用
@@ -753,13 +757,46 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
   所以同一个库的 `snapshot_id` 与修复前不同；现行成员的序列条目与行内容不变，ETF 不变。
   整表文件（`security_master`、`security_names`、`capital_events`、`risk_warnings`、
   `suspensions`、`universe_intervals`、`industry_assignments`）本来就不按目录过滤，修复前后行集一致。
-- **旧快照可读**：schema 升版不改读取方约定——`scripts/export_smoke.py` 同时接受 v2/v3/v4，v2 目录
+- **`v5` 与 `producer`（审计 T7，Refs #383；代码已实现，未部署，已部署的 preview.45 仍写 `v4`）**：
+  - **两种 `v4` 布局的真实情况**：`research-snapshot.v4` 的字符串在 tag `v0.2.0-preview.42`/`43` 与
+    `v0.2.0-preview.44`/`45` 上写出不同的列。preview.42/43：`daily_raw`/`daily_qfq` 11 列、
+    `universe_intervals` 7 列；preview.44/45（M3-2 PR-D）：13 列、10 列（追加 `instrument_class`、
+    `no_trade`，以及 `instrument_class`、`last_trade_date`、`delisting_date`）。其余文件的列相同
+    （由 tag 的 `src/research/mod.rs` 核对）。
+  - **选了升 `v5`，没有加 `column_layout`**：`v5` 的列就是 preview.44/45 的 `v4` 列，一列不动；
+    字符串 `v5` 即「ETF 布局」。理由：(1) 旧目录没有 `column_layout`，新字段无法判定已有的 `v4` 目录，
+    判定它们仍要看 `files[].columns`；`v5` 至少让今后写出的目录不再歧义。(2) 仓库内只有两处读这个字符串，
+    `scripts/export_smoke.py`（按字符串取列契约）与 `scripts/smoke_release.py`（白名单），都是加一行；
+    没有别的消费方，`snapshot_id` 本来就含 schema 字符串，升版不会让新旧目录互相覆盖。
+    (3) 契约不需要再多一个要维护的枚举。
+  - **读取方怎么判定**：`v5` 一律是 ETF 布局；`v2`/`v3` 一律不是；`v4` 是两种之一，看
+    `files[].columns` 是否含 `instrument_class`（`scripts/export_smoke.py` 的 `etf_layout`，三个文件
+    的结论不一致时报错）。外部读取方也应当这样做，不要凭 `v4` 假定列数。`v4` 目录不会被重写，
+    历史上的 `v4` 歧义不会消失，只是不再新增。
+  - **`producer` 块**（`v5` 新增，顶层，与 `algorithms` 并列）：`git_sha` 是写出该清单的二进制的
+    `build.rs` 提交 SHA（无 git 检出时为 `"unknown"`）；`algorithms` 是该二进制携带的派生算法标签：
+    `price_limit`（`limit-v1`）、`market_cap`（`market-cap-v1`）、`security_master`、`security_names`、
+    `risk_warnings`、`suspensions`，取自代码常量。`market_cap` 不是导出文件：导出不含市值，
+    它在读时由 `capital_events` 与不复权收盘价重算，标签是快照唯一能说明「用哪个公式」的地方。
+    可交易性读模型没有版本常量，不在其中。
+  - **`snapshot_id` 不含 `producer`**（审计建议，设计没有相反规定）：§7.3 的身份是
+    `{schema, request, catalog, generations, algorithms, series, derived}`，没有二进制版本，
+    本次未改。理由：内容相同的快照不应因二进制不同而被拆开；已写入的派生数据集的算法版本
+    本来就在 `derived[].algorithm_version`（进身份）。代价：身份相同不保证读时重算的派生
+    （涨跌停、市值）相同，那一部分只能看 `producer`。
+  - **可复现的边界**：同一二进制导出同一库两次，包含 `manifest.json`（含 `producer`）在内的全部
+    文件逐字节相同（AC-M1-7，测试逐字节比较）。**不同二进制**：`snapshot_id` 相同，`producer.git_sha`
+    不同，所以 `manifest.json` 字节不同；Parquet 文件字节是否相同没有承诺（写入库版本、编码或
+    `created_by` 变化都可能改字节），以 `files[].sha256` 为准。
+  - 不做：没有给旧 `v4` 目录补 `producer`；没有改 `snapshot_id` 定义；没有把 `git_sha` 放进
+    `algorithms`（`algorithms` 在身份里）。
+- **旧快照可读**：schema 升版不改读取方约定——`scripts/export_smoke.py` 同时接受 v2/v3/v4/v5，v2 目录
   不要求 M3 文件、`universe_intervals` 按 5 列校验；`snapshot_id` 定义不变，但 schema 字符串在
-  身份里，所以同一输入的 v2/v3/v4 `snapshot_id` 不同、不会互相覆盖。
+  身份里，所以同一输入的 v2/v3/v4/v5 `snapshot_id` 不同、不会互相覆盖。
 - **实测**：preview.36 部署后全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行，见
   [STATUS](STATUS.md)）；含 M2 文件的 v2 导出耗时没有回填。v3/v4 新增文件的体积与耗时没有在部署实例上
-  测量（STATUS 注明本轮未重跑导出）；夹具层面 v3 不改变既有文件的编码。**默认导出按目录成员选 A 股序列，
-  退市序列是否进入需要实测核对**（审计 §2.1）。本机校验用
+  测量（STATUS 注明本轮未重跑导出）；夹具层面 v3 不改变既有文件的编码。**默认导出的退市序列：代码已修复
+  （上一条，#545），部署后需在真实库上实测核对 `coverage.delisted_series` 与序列数**（审计 §2.1）。本机校验用
   `/root` 下的独立 venv（`scripts/export_smoke.py`，CI 里由 `export` job 跑）。
 
 ## 6. 维护规则

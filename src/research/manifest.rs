@@ -11,6 +11,17 @@
 //! canonical form is `serde_json_canonicalizer`, the same serializer the
 //! evidence store uses.
 //!
+//! `producer` (v5) is the other half of the document: the git SHA of the
+//! binary that wrote it and the labels of the derivation algorithms that
+//! binary carries. It is **recorded, not hashed**. The `algorithms` block is
+//! part of the identity (§7.3), so a label placed there would split two
+//! snapshots with the same content; and the labels of datasets that are
+//! exported are already in `derived[].algorithm_version`, which *is* hashed.
+//! Consequence: the same binary exporting the same database twice writes a
+//! byte-identical `manifest.json` (AC-M1-7); two different binaries share the
+//! `snapshot_id` but differ in `producer.git_sha`, and can differ in file
+//! bytes, which `files[].sha256` records.
+//!
 //! A selection may span source generations (M1 fix B). The identity carries
 //! the distinct `generations` and, on every series/derived entry, the
 //! `source_generation` that row came from, so the mix is explicit instead of
@@ -40,16 +51,27 @@ type LineageIndex = BTreeMap<String, GenerationBinding>;
 /// `coverage` block; v4 adds `derived[].verified_through` and the
 /// `security_names`/`risk_warnings` registrations (XDM-157, #446 §5.3), so an
 /// export can say through which day a complete refresh run confirmed the
-/// sources its files were recomputed from. The ETF delivery (M3-2 PR-D, D-70
-/// Q7) stays `v4`: no `v4` snapshot has been deployed (the deployed exporter
-/// writes `v3`), so appending the ETF columns and the ETF series dates does
-/// not need a `v5`; a reader tells the column sets apart by
-/// `files[].columns`. `snapshot_id` keeps its definition
-/// (canonical identity → first 32 hex), and the schema string is part of the
-/// identity, so a v3 directory and a v4 directory with otherwise identical
-/// inputs differ (a v2/v3 directory stays readable — see
-/// `scripts/export_smoke.py`).
-pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v4";
+/// sources its files were recomputed from.
+///
+/// v4 has **two column layouts** in the field. The ETF delivery (M3-2 PR-D,
+/// D-70 Q7) appended columns to the two daily files and the universe file and
+/// kept the string, on the belief that no `v4` snapshot had been deployed; but
+/// preview.42/43 had already deployed one. Tags preview.42/43 write the
+/// 11-column daily files and the 7-column universe file, preview.44/45 write
+/// 13 and 10. A directory of either kind says `v4`; only
+/// `files[].columns` tells them apart.
+///
+/// v5 removes the ambiguity going forward: the string now names the ETF
+/// layout (the columns of preview.45) and adds the `producer` block. A reader
+/// treats `v5` as the ETF layout without looking at the columns, and a `v4`
+/// directory as "read `files[].columns`" (`scripts/export_smoke.py`). Why `v5`
+/// and not a `column_layout` field: the old directories have no such field,
+/// so it could not classify them, and every reader already branches on this
+/// string. `snapshot_id` keeps its definition (canonical identity → first 32
+/// hex) and the schema string is part of the identity, so a v4 and a v5
+/// directory with otherwise identical inputs differ (v2–v4 directories stay
+/// readable — see `scripts/export_smoke.py`).
+pub const SCHEMA: &str = "x-data-mcp.research-snapshot.v5";
 
 /// Prefix of every snapshot id (§7.3).
 pub const ID_PREFIX: &str = "snapshot-";
@@ -62,6 +84,38 @@ pub fn algorithms() -> Value {
         "qfq": crate::qfq::ALGORITHM_VERSION,
         "factor_normalize": crate::sqlite_market::derived::ADJUSTMENT_EVENTS_ALGORITHM,
         "calendar": crate::trading_calendar::ALGORITHM_VERSION,
+    })
+}
+
+/// The git SHA of the running binary (`build.rs`; `"unknown"` when the build
+/// had no git checkout). Recorded in `producer`, never hashed.
+pub const BUILD_SHA: &str = env!("X_DATA_MCP_BUILD_SHA");
+
+/// Labels of the derivations this binary carries (v5 `producer.algorithms`).
+/// Like [`algorithms`] they are the stored constants, not copies. They cover
+/// the datasets the export writes (`price_limit_rules`, the security-master
+/// files) and `market_cap`, which the export does not write: it is recomputed
+/// at read time from `capital_events` and the raw close, so the label is the
+/// only place a snapshot can say which formula a consumer's market-cap
+/// numbers came from. The tradability read model has no version constant and
+/// is not listed.
+pub fn derivation_algorithms() -> Value {
+    json!({
+        "price_limit": crate::trading_rules::ALGORITHM_VERSION,
+        "market_cap": super::market_cap::ALGORITHM_VERSION,
+        "security_master": crate::security_master::assembly::ALGORITHM_VERSION,
+        "security_names": crate::security_master::names::ALGORITHM_VERSION,
+        "risk_warnings": crate::security_master::risk_warnings::ALGORITHM_VERSION,
+        "suspensions": crate::security_master::suspensions::ALGORITHM_VERSION,
+    })
+}
+
+/// The `producer` block of `manifest.json` (v5): binary and derivation
+/// labels. Not part of the identity (see the module docs).
+pub fn producer() -> Value {
+    json!({
+        "git_sha": BUILD_SHA,
+        "algorithms": derivation_algorithms(),
     })
 }
 
@@ -243,7 +297,9 @@ pub fn files_value(plans: &[FilePlan], stats: Option<&[FileStat]>, compression: 
     )
 }
 
-/// The full `manifest.json` document: identity + output facts (§7.3).
+/// The full `manifest.json` document: identity + `producer` + output facts
+/// (§7.3). `producer` (binary `git_sha`, derivation labels) is recorded only:
+/// it is added here, after `snapshot_id` was computed from `identity`.
 ///
 /// `snapshot_id` must be the [`snapshot_id`] of `identity`; every caller takes
 /// it from the same plan the identity came from, and the export test re-hashes
@@ -254,6 +310,7 @@ pub fn files_value(plans: &[FilePlan], stats: Option<&[FileStat]>, compression: 
 pub fn document(identity: &Value, snapshot_id: &str, files: Value, export: Value) -> Value {
     let mut document = identity.clone();
     document["snapshot_id"] = json!(snapshot_id);
+    document["producer"] = producer();
     document["files"] = files;
     document["limitations"] = json!(super::LIMITATIONS);
     document["export"] = export;
