@@ -349,4 +349,4 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批�
 `research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：16,717 B（12 个工具），CI 预算 18,600 B（owner 批准，D-75）；
 每个工具描述不超过 240 B。`ops`、`maint` 的工具清单和字节数不变。
 
-本批未包含：`get_security_state`、`get_security_history`、`get_security_events`（后续 PR）；`screen_market` 等 XDM-14 的测量结论。
+本批未包含：`get_security_state`、`get_security_history`、`get_security_events`（后续 PR）；`screen_market` 暂不做（D-78：能写脚本的 pi 用 codemode 筛选；#295 保持开放，出现不能写脚本的客户端需求时再提）。
