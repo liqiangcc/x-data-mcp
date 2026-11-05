@@ -180,7 +180,7 @@ export XDM_TUNNEL_SERVICE=xdm-tunnel-stub.service
    原因：fresh 库没有刷新 run 记录，只有 `full` 的成员表能固定页集身份并推进 `verified_through`；之后的主表发布才带上 ETF 名录。
    实测约 73 分钟（原有 7 来源 42.5 分钟、ETF 4 来源 30.5 分钟，按 D-73 分组计量）。`full` 当天跑过则当天不用再跑 `tail`。
 4. **目录首采**：`start_collection(securities.catalog, {"scope":"current_sh_sz_a"})`。
-5. **A 股日线首采**：`start_collection(market.daily)`，按批提交直到取完（上次每任务 100 项、共 53 批，约 10 分钟）。
+5. **A 股日线首采**：`start_collection(market.daily)`，按批提交直到取完（上次每任务 100 项、共 53 批，约 3.3 分钟（199 s，不含当时因等裁定中断的约 8 分钟））。
    `sh.688827` 的那一批会是 `partially_failed`，见 §6。
 6. **发布 `security_master`**：对 `market.daily` 跑一次 `plan_market_update` / `run_market_update`（带派生 item，不是 ETF-only）。
    这一步让 `derived:security_master` 有已发布版本。
