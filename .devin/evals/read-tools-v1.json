@@ -1,0 +1,599 @@
+{
+  "id": "read-tools-v1",
+  "design": "docs/tasks/issue-525-read-tools.md section 9",
+  "issue": 525,
+  "server_name": "x-data-mcp",
+  "system_prompt": "你是 x-data-mcp 行情数据的只读查询助手。今天是 {today}（Asia/Shanghai）。只使用提供的数据工具回答，不要凭记忆给出数据值；工具查不到时如实说明，不要编造。用中文回答，只给问题要求的内容。数值保持工具返回的精度，不要四舍五入，不要换算单位。",
+  "scopes": {
+    "baseline": [
+      "get_data_capabilities",
+      "query_data",
+      "get_data_availability",
+      "list_data_versions",
+      "list_catalog_facets"
+    ],
+    "new": [
+      "get_data_capabilities",
+      "query_data",
+      "get_data_availability",
+      "list_data_versions",
+      "list_catalog_facets",
+      "find_securities",
+      "get_daily_bars",
+      "get_yearly_bars",
+      "get_index_bars",
+      "get_market_snapshot",
+      "get_security_state",
+      "get_security_history",
+      "get_security_events",
+      "get_trading_calendar",
+      "get_price_limit_rules"
+    ],
+    "new-no-query": [
+      "get_data_capabilities",
+      "get_data_availability",
+      "list_data_versions",
+      "list_catalog_facets",
+      "find_securities",
+      "get_daily_bars",
+      "get_yearly_bars",
+      "get_index_bars",
+      "get_market_snapshot",
+      "get_security_state",
+      "get_security_history",
+      "get_security_events",
+      "get_trading_calendar",
+      "get_price_limit_rules"
+    ]
+  },
+  "acceptance": {
+    "max_avg_turns": 2,
+    "min_token_reduction": 0.3
+  },
+  "tasks": [
+    {
+      "id": "q01",
+      "title": "贵州茅台的代码和行业",
+      "group": "core",
+      "prompt": "贵州茅台的股票代码和所属行业是什么？请给出代码（格式如 sh.600000）、行业代码和行业名称。",
+      "oracles": {
+        "catalog": {
+          "request": {
+            "dataset": "securities.catalog",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "catalog",
+              "scope": "current_sh_sz_a"
+            },
+            "filter": {
+              "kind": "catalog",
+              "name_query": "贵州茅台"
+            },
+            "fields": [
+              "name",
+              "industry_code",
+              "industry_name"
+            ],
+            "page_size": 50
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "catalog",
+          "where": {
+            "name": [
+              "贵州茅台"
+            ]
+          },
+          "fields": [
+            "entity",
+            "industry_code",
+            "industry_name"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "q02",
+      "title": "sh.600000 最近 5 个交易日的日线",
+      "group": "core",
+      "prompt": "查询 sh.600000 最近 5 个交易日的日线，列出每个交易日的日期、开盘价、最高价、最低价、收盘价、成交量。",
+      "oracles": {
+        "bars": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "{today-45}",
+              "end_date": "{today}"
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "bars",
+          "select": "tail:5",
+          "fields": [
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "dates_subset_of": "selected"
+        }
+      ]
+    },
+    {
+      "id": "q03",
+      "title": "sh.510300（ETF）11 月的日线",
+      "group": "core",
+      "prompt": "查询 sh.510300（ETF）2026 年 11 月的日线，列出每个交易日的日期、开盘价、最高价、最低价、收盘价、成交量。",
+      "oracles": {
+        "bars": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.510300"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2026-11-01",
+              "end_date": "2026-11-30"
+            },
+            "adjustment": "raw",
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "bars",
+          "fields": [
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "dates_subset_of": "selected"
+        }
+      ]
+    },
+    {
+      "id": "q04",
+      "title": "sh.600000 2024-2026 年的年线",
+      "group": "core",
+      "prompt": "查询 sh.600000 2024 年到 2026 年的年线，列出每一年的开盘价、最高价、最低价、收盘价、成交量。",
+      "oracles": {
+        "yearly": {
+          "request": {
+            "dataset": "market.yearly",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "yearly",
+              "start_year": 2024,
+              "end_year": 2026
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "yearly",
+          "fields": [
+            "year",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "q05",
+      "title": "沪深 300 指数 11 月的日线",
+      "group": "core",
+      "prompt": "查询沪深 300 指数 2026 年 11 月的日线，列出每个交易日的日期、开盘、最高、最低、收盘、成交量。",
+      "oracles": {
+        "bars": {
+          "request": {
+            "dataset": "market.index",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.000300"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2026-11-01",
+              "end_date": "2026-11-30"
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "bars",
+          "fields": [
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "dates_subset_of": "selected"
+        }
+      ]
+    },
+    {
+      "id": "q06",
+      "title": "2026-11-05 全市场收盘价的前 10 行",
+      "group": "core",
+      "prompt": "查询 2026-11-05 沪深 A 股全市场的收盘价，按接口返回的顺序给出前 10 行，列出证券代码和收盘价。不要自行排序或挑选。",
+      "oracles": {
+        "snapshot": {
+          "first_page_only": true,
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "universe"
+            },
+            "filter": {
+              "kind": "cross_section",
+              "start_date": "2026-11-05",
+              "end_date": "2026-11-05"
+            },
+            "fields": [
+              "close"
+            ],
+            "page_size": 10
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "snapshot",
+          "select": "head:10",
+          "fields": [
+            "entity",
+            "close"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "q07",
+      "title": "sz.002731 在 2026-07-07 是否处于风险警示",
+      "group": "core",
+      "prompt": "sz.002731 在 2026-07-07 是否处于风险警示状态（ST、*ST 等）？先简述依据，最后单独一行写“结论：是”“结论：否”或“结论：无法确定”。",
+      "oracles": {
+        "warning": {
+          "request": {
+            "dataset": "market.risk_warnings",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.002731"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2026-07-07",
+              "end_date": "2026-07-07",
+              "as_of": "2026-07-07"
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "verdict",
+          "oracle": "warning",
+          "status_field": "normalized_status",
+          "yes_status": [
+            "other_risk_warning",
+            "delisting_risk_warning",
+            "delisting_arrangement"
+          ],
+          "no_status": [
+            "normal"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "q08",
+      "title": "只用 2026-10-01 已知的信息，sz.002731 在 2026-07-07 是否处于风险警示",
+      "group": "core",
+      "prompt": "只使用 2026-10-01 当天已经能够知道的信息，回答：sz.002731 在 2026-07-07 是否处于风险警示状态（ST、*ST 等）？先简述依据，最后单独一行写“结论：是”“结论：否”或“结论：无法确定”。",
+      "oracles": {
+        "warning": {
+          "request": {
+            "dataset": "market.risk_warnings",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.002731"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2026-07-07",
+              "end_date": "2026-07-07",
+              "as_of": "2026-07-07"
+            },
+            "known_at": "2026-10-01",
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "verdict",
+          "oracle": "warning",
+          "status_field": "normalized_status",
+          "yes_status": [
+            "other_risk_warning",
+            "delisting_risk_warning",
+            "delisting_arrangement"
+          ],
+          "no_status": [
+            "normal"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "q09",
+      "title": "sz.002731 历史上的风险警示",
+      "group": "core",
+      "prompt": "sz.002731 历史上有过哪些风险警示？列出每一段的起止日期和状态。",
+      "oracles": {
+        "history": {
+          "kind": "walk_as_of",
+          "start": "2013-01-01",
+          "gap_step_days": 7,
+          "max_queries": 1500,
+          "request": {
+            "dataset": "market.risk_warnings",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.002731"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "{as_of}",
+              "end_date": "{as_of}",
+              "as_of": "{as_of}"
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "history",
+          "where": {
+            "normalized_status": [
+              "other_risk_warning",
+              "delisting_risk_warning",
+              "delisting_arrangement"
+            ]
+          },
+          "fields": [
+            "effective_from",
+            "effective_to"
+          ],
+          "date_offsets": {
+            "effective_to": [
+              0,
+              -1
+            ]
+          },
+          "dates_subset_of": "all",
+          "allow_empty": true
+        }
+      ]
+    },
+    {
+      "id": "q10",
+      "title": "sh.600000 2024 年以来的股本变动",
+      "group": "core",
+      "prompt": "sh.600000 自 2024-01-01 以来有哪些股本变动？列出每次的生效日期、变动后的流通股本和总股本。",
+      "oracles": {
+        "capital": {
+          "request": {
+            "dataset": "market.capital_events",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2024-01-01",
+              "end_date": "{today}"
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "oracle_values",
+          "oracle": "capital",
+          "fields": [
+            "effective_day",
+            "float_after",
+            "total_after"
+          ],
+          "dates_subset_of": "selected"
+        }
+      ]
+    },
+    {
+      "id": "q11",
+      "title": "2023-2025 年连续三年收阴且有 2022 年年线的沪深 A 股",
+      "group": "screen",
+      "prompt": "找出 2023、2024、2025 三年的年线都收阴（收盘价低于开盘价），并且 2022 年也有年线的沪深 A 股。给出符合条件的股票总数，并按证券代码（6 位数字）从小到大列出前 10 只的代码。",
+      "oracles": {
+        "screen": {
+          "kind": "screen",
+          "batch_size": 100,
+          "members": {
+            "dataset": "securities.catalog",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "catalog",
+              "scope": "current_sh_sz_a"
+            },
+            "filter": {
+              "kind": "catalog"
+            },
+            "fields": [
+              "name"
+            ],
+            "page_size": 1000
+          },
+          "request": {
+            "dataset": "market.yearly",
+            "contract_version": "v2",
+            "filter": {
+              "kind": "yearly",
+              "start_year": 2022,
+              "end_year": 2025
+            },
+            "page_size": 1000
+          },
+          "rule": {
+            "type": "yearly_down",
+            "present_years": [
+              2022,
+              2023,
+              2024,
+              2025
+            ],
+            "down_years": [
+              2023,
+              2024,
+              2025
+            ]
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "screen",
+          "oracle": "screen",
+          "top": 10
+        }
+      ]
+    },
+    {
+      "id": "q12",
+      "title": "2026-11-05 收盘价低于 2 元的沪深 A 股",
+      "group": "screen",
+      "prompt": "2026-11-05 收盘价低于 2 元的沪深 A 股有多少只？给出总数，并按证券代码（6 位数字）从小到大列出前 10 只的代码。",
+      "oracles": {
+        "screen": {
+          "kind": "screen",
+          "batch_size": 100,
+          "members": {
+            "dataset": "securities.catalog",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "catalog",
+              "scope": "current_sh_sz_a"
+            },
+            "filter": {
+              "kind": "catalog"
+            },
+            "fields": [
+              "name"
+            ],
+            "page_size": 1000
+          },
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "filter": {
+              "kind": "daily",
+              "start_date": "2026-11-05",
+              "end_date": "2026-11-05"
+            },
+            "fields": [
+              "close"
+            ],
+            "page_size": 1000
+          },
+          "rule": {
+            "type": "close_below",
+            "limit": "2"
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "screen",
+          "oracle": "screen",
+          "top": 10
+        }
+      ]
+    },
+    {
+      "id": "q13",
+      "title": "沪深 300 ETF 的证券代码",
+      "group": "etf_name",
+      "prompt": "沪深 300 ETF 的证券代码是什么？列出你能确认的代码，查不到就如实说明。",
+      "oracles": {},
+      "checks": [
+        {
+          "kind": "answer_text",
+          "must_contain": "(?<!\\d)510300(?!\\d)",
+          "declines": [
+            "(无法|不能|不支持|没有办法|查不到|查询不到|找不到|未能|没有找到|没能)[^。\\n]{0,30}(名称|简称|ETF|代码)",
+            "(名称|简称|ETF)[^。\\n]{0,30}(无法|不能|不支持|查不到|查询不到|找不到|不在|没有)"
+          ]
+        }
+      ]
+    }
+  ],
+  "notes": [
+    "Expected values come from query_data at run time; no market data is stored here.",
+    "Questions 7-9 read interval facts; q09 walks the timeline with filter.as_of because query_data has no history mode (gap_step_days limits how short an interval can be and still be found outside recorded ranges).",
+    "A check reads the answer line by line (or sentence by sentence): every expected row must appear with all its fields in one line. Transposed tables fail on purpose and show up in missing_rows for a human to judge.",
+    "q11-q12 (group screen) screen the whole market: the script reads the catalog members, then computes the expected set from batches of 100 entities with query_data; nothing is stored. They are listed apart in summary.groups and are not part of the section 9 average of 2 turns.",
+    "q13 (group etf_name) compares the tools on ETF names (design Q9, names are not searchable yet). It passes in two recorded ways: the answer gives 510300 (outcome found_code) or says the tools cannot look an ETF up by name (outcome declared_unsupported).",
+    "A report keeps each question's expected values under `oracle`, so `--regrade` can grade the saved answers again without a model or the service."
+  ]
+}

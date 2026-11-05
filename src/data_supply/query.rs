@@ -245,8 +245,13 @@ impl QueryPlan {
 /// The adapter's "today": the calendar day, never a data fact. The read model
 /// itself never reads the clock (issue-391 §12.2); resolving the default here
 /// keeps that property.
+///
+/// This is the Shanghai day, not the host's local day. It used to be
+/// `chrono::Local::now()`, so the default `as_of` depended on the host's
+/// timezone: vm2-126 runs Asia/Shanghai and aws-node runs UTC, and between
+/// 16:00 and 24:00 UTC the two hosts disagreed by one day.
 pub fn today() -> NaiveDate {
-    chrono::Local::now().date_naive()
+    crate::calendar::shanghai_today()
 }
 fn unsupported(field: &str, dataset: Dataset) -> String {
     format!(
@@ -511,6 +516,11 @@ pub struct QuerySnapshot {
     /// declares neither parameter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<TemporalBlock>,
+    /// Dataset-level limits the reader must be able to state truthfully
+    /// (coverage windows, event-level sources, an unregistered dataset). They
+    /// are appended to the page's fixed `limitations`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
 }
 pub trait ReadRepository {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error>;
@@ -825,7 +835,10 @@ impl<R: ReadRepository> Queries<R> {
             limitations: vec![
                 "fixed version selection is not a shared source acquisition time".into(),
                 "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates".into(),
-            ],
+            ]
+            .into_iter()
+            .chain(data.limitations.iter().cloned())
+            .collect(),
         };
         if more {
             result.next_cursor = Some(self.save(saved));

@@ -39,6 +39,7 @@ jobs:
       - name: Deployment script dry-run and readiness-probe checks (never executes; tempdir root)
         run: |
           python3 -B -m unittest discover -s scripts -p 'test_switch_binary.py'
+          python3 -B -m unittest discover -s scripts -p 'test_deploy_phase_g.py'
           python3 -B -m unittest discover -s scripts -p 'test_rollback_preview.py'
           python3 -B -m unittest discover -s scripts -p 'test_wait_service_ready.py'
           python3 -B -m unittest discover -s scripts -p 'test_data_unit_layout.py'
@@ -46,6 +47,8 @@ jobs:
         run: python3 -B -m unittest discover -s scripts -p 'test_boll_analysis.py'
       - name: v8 read-surface token budgets (fixtures only, no data)
         run: python3 -B -m unittest discover -s scripts -p 'test_v8_token_budget.py'
+      - name: Read-tool evaluation harness (fake sessions, no model, no data)
+        run: python3 -B -m unittest discover -s scripts -p 'test_eval_read_tools.py'
       - run: cargo fmt --check
       - if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
