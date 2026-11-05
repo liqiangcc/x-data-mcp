@@ -191,8 +191,16 @@ where
                                 let input =
                                     std::str::from_utf8(&frame).map_err(io::Error::other)?;
                                 if let Some(response) = handle_json(&api, input) {
+                                    let large =
+                                        response.len() >= crate::memory::TRIM_AFTER_RESPONSE_BYTES;
                                     writeln!(writer, "{response}")?;
                                     writer.flush()?;
+                                    drop(response);
+                                    // glibc keeps a finished request's pages in this
+                                    // thread's arena; give them back (VM1-23).
+                                    if large {
+                                        crate::memory::release_free_memory();
+                                    }
                                 }
                             }
                             Ok(())

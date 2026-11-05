@@ -3114,6 +3114,14 @@ fn capabilities_express_the_etf_raw_shape_and_units() {
     assert_eq!(etf["default"], json!(false));
 }
 
+#[test]
+fn memory_budget_refusal_has_its_own_code() {
+    let refused = super::mapped(crate::market_storage::Error::Invalid(
+        "memory_budget_exceeded: near the limit".into(),
+    ));
+    assert_eq!(refused.code, "memory_budget_exceeded");
+}
+
 // ---- D-75 narrow read tools (issue-525 PR-1) -------------------------------
 //
 // Every tool is a thin wrapper over `query_data` v2, so each test compares the
