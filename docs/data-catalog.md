@@ -650,7 +650,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 ### 5.1 MCP 读取路径与上限
 
 - `query_data`：批量选择 1..100 个实体（`src/data_supply/query.rs:85-86`）；`page_size` 1..1000
-  （`query.rs:71-75`）；单次快照上限 100,000 行 / 16MiB（`query.rs:10-11`）；游标分页；服务端
+  （`query.rs:71-75`）；单次快照上限 100,000 行 / 16MiB（`query.rs:10-11`；v2 `universe` 价格读按列式答案计字节，见 [generic-data-v8](contracts/generic-data-v8.md) §4.1）；游标分页；服务端
   快照缓存 32 条 / 64MiB（`query.rs:12-13`）。
 - 过滤条件：`market.daily`/`market.yearly` 只有日期/年份区间；`securities.catalog` 只有
   `code`/`name_query`/`industry_code`（`wire.rs:79-92`）。**没有**价格、成交量、市值、ST 等谓词。
