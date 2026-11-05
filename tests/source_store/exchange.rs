@@ -19,7 +19,7 @@ use x_data_mcp::exchange_source::transport::{HttpRequest, HttpResponse};
 use x_data_mcp::exchange_source::validate::parse_page;
 use x_data_mcp::exchange_source::{
     AcquireError, AcquisitionPlan, BasisStatus, Client, Enabled, Entry, ExchangeRequest,
-    PagingFormat, RetryPolicy, ReusePolicyTable, RunCache, Segment, SelectedBy, SourceId,
+    PagingFormat, Reader, RetryPolicy, ReusePolicyTable, RunCache, Segment, SelectedBy, SourceId,
     Transport, TransportError, bind, freeze_page,
 };
 use x_data_mcp::source_store::SourceStore;
@@ -132,6 +132,9 @@ fn ok(body: Vec<u8>, etag: &str) -> HttpResponse {
 struct Fixture {
     responses: Mutex<VecDeque<Result<HttpResponse, TransportError>>>,
     requests: Mutex<Vec<String>>,
+    /// POST bodies in request order (the SZSE announcement page number lives
+    /// in the body, not the URL).
+    bodies: Mutex<Vec<Option<String>>>,
 }
 
 impl Fixture {
@@ -139,11 +142,16 @@ impl Fixture {
         Arc::new(Self {
             responses: Mutex::new(responses.into()),
             requests: Mutex::new(Vec::new()),
+            bodies: Mutex::new(Vec::new()),
         })
     }
 
     fn requests(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
+    }
+
+    fn bodies(&self) -> Vec<Option<String>> {
+        self.bodies.lock().unwrap().clone()
     }
 
     fn calls(&self) -> usize {
@@ -154,6 +162,7 @@ impl Fixture {
 impl Transport for Fixture {
     fn get(&self, request: &HttpRequest) -> Result<HttpResponse, TransportError> {
         self.requests.lock().unwrap().push(request.url.clone());
+        self.bodies.lock().unwrap().push(request.body.clone());
         self.responses
             .lock()
             .unwrap()
@@ -1085,6 +1094,228 @@ fn a_multi_window_run_reuses_every_quarter_and_merges_the_evidence() {
     }
     assert_eq!(reused.evidence.policy.class.as_str(), "window");
     assert_eq!(store.records().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// SZSE ETF announcement index (`szse_etf_notice_ann`, M3-2 PR-A2 fix)
+//
+// The endpoint answers `{announceCount, data}` and never echoes `pageNum`,
+// `pageNo`, `pageSize` or `pageCount` (2026-11-03 forensics, 2026-11-05 live
+// check). The page number therefore comes from the request body, and the
+// fixtures below use that real shape with invented rows.
+// ---------------------------------------------------------------------------
+
+fn szse_announcement_plan() -> AcquisitionPlan {
+    AcquisitionPlan::new(
+        SourceId::SzseEtfNoticeAnn,
+        "https://example.invalid/annList",
+        PagingFormat::SzseAnnouncement,
+    )
+    .param("channelCode", "etfNotice_disc")
+}
+
+/// Invented announcement rows; `secCode` values are synthetic.
+fn szse_announcement_rows(from: usize, count: usize) -> Vec<serde_json::Value> {
+    (0..count)
+        .map(|offset| {
+            let index = from + offset;
+            serde_json::json!({
+                "id": index,
+                "title": "基金终止上市公告",
+                "publishTime": "2026-01-02 09:00:00",
+                "attachPath": format!("/disclosure/2026/01/{index}.pdf"),
+                "secCode": [format!("159{:03}", index % 1000)],
+            })
+        })
+        .collect()
+}
+
+/// The real top-level shape: `announceCount` + `data`, nothing else.
+fn szse_announcement_body(total: u64, rows: Vec<serde_json::Value>) -> Vec<u8> {
+    serde_json::json!({
+        "announceCount": total,
+        "data": rows,
+    })
+    .to_string()
+    .into_bytes()
+}
+
+#[test]
+fn szse_announcement_pages_take_their_number_from_the_request() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    // announceCount=120 at the 50-row cap -> 3 pages. Without the request's
+    // pageNum as the page identity every page would report page 1.
+    let fixture = Fixture::new(vec![
+        Ok(ok(
+            szse_announcement_body(120, szse_announcement_rows(0, 50)),
+            "ann-1",
+        )),
+        Ok(ok(
+            szse_announcement_body(120, szse_announcement_rows(50, 50)),
+            "ann-2",
+        )),
+        Ok(ok(
+            szse_announcement_body(120, szse_announcement_rows(100, 20)),
+            "ann-3",
+        )),
+    ]);
+    let client = client(&fixture);
+    let plan = szse_announcement_plan();
+    {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client);
+        let outcome = entry
+            .acquire_window(&plan, window, "seDateStart", "seDateEnd")
+            .unwrap();
+        assert_eq!(outcome.page_count, 3);
+        assert_eq!(outcome.row_count, 120);
+        assert_eq!(outcome.snapshots.len(), 3);
+
+        // The frozen pages read back as pages 1, 2, 3 and still add up to
+        // announceCount.
+        let read = Reader::new(&store, &backend)
+            .windows(
+                SourceId::SzseEtfNoticeAnn,
+                std::slice::from_ref(&plan),
+                &[window],
+                "seDateStart",
+                "seDateEnd",
+            )
+            .unwrap();
+        let mut pages: Vec<u32> = read.pages.iter().map(|page| page.envelope.page).collect();
+        pages.sort_unstable();
+        assert_eq!(pages, vec![1, 2, 3]);
+        assert_eq!(
+            read.pages
+                .iter()
+                .map(|page| page.envelope.rows)
+                .sum::<usize>(),
+            120
+        );
+    }
+    assert_eq!(fixture.calls(), 3);
+    let bodies = fixture.bodies();
+    for (index, body) in bodies.iter().enumerate() {
+        let body: serde_json::Value = serde_json::from_str(body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["pageNum"], index as u64 + 1);
+        assert_eq!(
+            body["seDate"],
+            serde_json::json!(["2026-01-01", "2026-03-31"])
+        );
+    }
+    // Replay rebuilds the same index from the store alone.
+    let replay = cli(&store, &db, "replay");
+    assert_eq!(replay["status"], "ok");
+    assert_eq!(replay["scopes"][0]["database"], "match");
+    assert_eq!(replay["scopes"][0]["snapshots"], 3);
+    assert_eq!(snapshot_count(&db, SourceId::SzseEtfNoticeAnn), 3);
+}
+
+#[test]
+fn szse_announcement_duplicate_pages_fail_closed() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    // announceCount=100 -> 2 pages; the endpoint ignores pageNum and serves
+    // page 1's bytes twice. Row and page totals still add up (50+50=100), so
+    // only the identical byte identity exposes it.
+    let page_one = szse_announcement_body(100, szse_announcement_rows(0, 50));
+    let fixture = Fixture::new(vec![
+        Ok(ok(page_one.clone(), "ann-1")),
+        Ok(ok(page_one, "ann-2")),
+    ]);
+    let client = client(&fixture);
+    let error = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client);
+        entry
+            .acquire_window(
+                &szse_announcement_plan(),
+                window,
+                "seDateStart",
+                "seDateEnd",
+            )
+            .unwrap_err()
+    };
+    assert_eq!(error.code(), "source_invalid");
+    assert!(
+        error.to_string().contains("same bytes"),
+        "the failure names the duplicate page: {error}"
+    );
+}
+
+#[test]
+fn szse_announcement_short_last_page_is_truncated() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    // announceCount=100 -> 2 pages of 50; page 2 answers only 40 rows, so the
+    // collected 90 rows cannot match the declared 100.
+    let fixture = Fixture::new(vec![
+        Ok(ok(
+            szse_announcement_body(100, szse_announcement_rows(0, 50)),
+            "ann-1",
+        )),
+        Ok(ok(
+            szse_announcement_body(100, szse_announcement_rows(50, 40)),
+            "ann-2",
+        )),
+    ]);
+    let client = client(&fixture);
+    let error = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client);
+        entry
+            .acquire_window(
+                &szse_announcement_plan(),
+                window,
+                "seDateStart",
+                "seDateEnd",
+            )
+            .unwrap_err()
+    };
+    assert_eq!(error.code(), "truncated");
+}
+
+#[test]
+fn szse_announcement_echoed_page_mismatch_fails_closed() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    // Page 2's response echoes `pageNum: 1`: the request asked for page 2, so
+    // the disagreement is a source defect even though the rows would parse.
+    let echoed = serde_json::json!({
+        "announceCount": 100,
+        "pageNum": 1,
+        "data": szse_announcement_rows(50, 50),
+    });
+    let fixture = Fixture::new(vec![
+        Ok(ok(
+            szse_announcement_body(100, szse_announcement_rows(0, 50)),
+            "ann-1",
+        )),
+        Ok(ok(echoed.to_string().into_bytes(), "ann-2")),
+    ]);
+    let client = client(&fixture);
+    let error = {
+        let backend = open(&db);
+        let entry = Entry::new(&store, &backend, &client);
+        entry
+            .acquire_window(
+                &szse_announcement_plan(),
+                window,
+                "seDateStart",
+                "seDateEnd",
+            )
+            .unwrap_err()
+    };
+    assert_eq!(error.code(), "source_invalid");
 }
 
 /// M3-2 PR-A: the two ETF identity lists are ordinary exchange sources. Their

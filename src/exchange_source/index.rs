@@ -196,10 +196,16 @@ pub fn rebuild(store: &SourceStore, records: &[&ManifestRecord]) -> Result<Rebui
         // `TABKEY` that selected a block is stored in the canonical
         // fingerprint the manifest keeps as `origin`, so replay reads it back
         // instead of guessing a block.
-        let declared = ExchangeRequest::from_fingerprint(&record.origin)
-            .ok()
+        let request = ExchangeRequest::from_fingerprint(&record.origin).ok();
+        let declared = request
+            .as_ref()
             .and_then(|request| validate::declared_tabkey(&request.params).map(str::to_owned));
-        let envelope = match validate::parse_page(format, declared.as_deref(), &bytes) {
+        let envelope = match validate::parse_page_with_request(
+            format,
+            declared.as_deref(),
+            &bytes,
+            request.as_ref(),
+        ) {
             Ok(envelope) => envelope,
             Err(error) => {
                 problems.push(problem(

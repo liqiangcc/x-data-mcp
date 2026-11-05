@@ -23,7 +23,7 @@
 //! succeeded windows: frozen snapshots are kept, uncovered windows produce no
 //! rows.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::NaiveDate;
@@ -604,10 +604,11 @@ impl<'a> Entry<'a> {
                             plan.basis_status,
                             &fetched_at,
                         )?;
-                        let envelope = match validate::parse_page(
+                        let envelope = match validate::parse_page_with_request(
                             plan.format,
                             validate::declared_tabkey(&plan.params),
                             &response.body,
+                            Some(&request),
                         ) {
                             Ok(envelope) => envelope,
                             Err(error) => {
@@ -706,6 +707,26 @@ impl<'a> Entry<'a> {
         let (snapshots, selected) = self.index_pages(&entries)?;
         if let Some(failure) = failure {
             return Err(failure);
+        }
+        // Two pages of one window answering identical bytes means the source
+        // ignored the page selector and re-served the same page. The row and
+        // page totals can still add up (each page's `announceCount` is the
+        // window total), so only the byte identity exposes it.
+        let mut page_bytes = BTreeSet::new();
+        for entry in &entries {
+            let snapshot_id = match &entry.state {
+                PageState::Fetched { bytes, .. } => bytes.snapshot_id.as_str(),
+                PageState::Reused { row } => row.snapshot_id.as_str(),
+            };
+            if !page_bytes.insert(snapshot_id) {
+                return Err(AcquireError::Invalid {
+                    code: "source_invalid",
+                    detail: format!(
+                        "two pages of this window froze the same bytes ({snapshot_id}); \
+                         the source ignored the page selector"
+                    ),
+                });
+            }
         }
         let envelopes: Vec<PageEnvelope> =
             entries.into_iter().map(|entry| entry.envelope).collect();
@@ -865,16 +886,32 @@ impl<'a> Entry<'a> {
                 ),
             });
         };
-        let envelope =
-            validate::parse_page(format, validate::declared_tabkey(&plan.params), &bytes).map_err(
-                |error| AcquireError::Invalid {
-                    code: error.code(),
-                    detail: format!(
-                        "indexed snapshot {} no longer parses: {error}",
-                        row.snapshot_id
-                    ),
-                },
-            )?;
+        // The request comes back from the fingerprint, not from the current
+        // plan: formats whose page number lives in the request
+        // (`SzseAnnouncement`) re-derive it here, and an echoed page that
+        // disagrees still fails closed.
+        let request = ExchangeRequest::from_fingerprint(fingerprint).map_err(|error| {
+            AcquireError::Invalid {
+                code: "source_store_corrupt",
+                detail: format!(
+                    "indexed snapshot {} has an unreadable request fingerprint: {error}",
+                    row.snapshot_id
+                ),
+            }
+        })?;
+        let envelope = validate::parse_page_with_request(
+            format,
+            validate::declared_tabkey(&request.params),
+            &bytes,
+            Some(&request),
+        )
+        .map_err(|error| AcquireError::Invalid {
+            code: error.code(),
+            detail: format!(
+                "indexed snapshot {} no longer parses: {error}",
+                row.snapshot_id
+            ),
+        })?;
         // The row's counts are a rebuild of these bytes; a disagreement means
         // the index (or the bytes) was altered behind the store's back.
         let expected_pages = row.page_count.unwrap_or(envelope.page_count);

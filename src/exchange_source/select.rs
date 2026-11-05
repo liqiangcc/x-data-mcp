@@ -46,13 +46,16 @@ type Params = BTreeMap<String, String>;
 /// key: the pages of one acquisition share every other parameter. The list is
 /// exactly what [`PagingFormat::apply_page`] writes — a parameter left here by
 /// accident would split one acquisition into two series and the adapter would
-/// fail closed on a set that is in fact complete.
-const PAGE_PARAMS: [&str; 5] = [
+/// fail closed on a set that is in fact complete. `pageNum`/`pageSize` are the
+/// `SzseAnnouncement` spelling of the same selectors.
+const PAGE_PARAMS: [&str; 7] = [
     "PAGENO",
     "pageHelp.pageSize",
     "pageHelp.pageNo",
     "pageHelp.beginPage",
     "pageHelp.endPage",
+    "pageNum",
+    "pageSize",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -697,8 +700,12 @@ impl<'a> Reader<'a> {
                 }
             })?;
         let bytes = self.store.read_verified(&row.snapshot_id)?;
-        let envelope =
-            validate::parse_page(format, validate::declared_tabkey(&request.params), &bytes)?;
+        let envelope = validate::parse_page_with_request(
+            format,
+            validate::declared_tabkey(&request.params),
+            &bytes,
+            Some(&request),
+        )?;
         let key = series_of(&row.request_fingerprint, from_param, to_param)?;
         Ok(FrozenPage {
             snapshot_id: row.snapshot_id.clone(),
