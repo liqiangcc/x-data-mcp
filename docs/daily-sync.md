@@ -346,7 +346,9 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
 - 返回 `refresh_already_running`：已有运行中的刷新（`tail` 与 `full` 互斥），读
   `details.run_id` 并轮询**那个** run 到终态，不要再起新 run。
 - 预算：`tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设
-  门禁，按表读 `source_refresh_run_sources.elapsed_ms`）、`full` <60min；1 req/s 不变。
+  门禁，按表读 `source_refresh_run_sources.elapsed_ms`）、`full` 按来源组计量（D-73：
+  原有 7 来源合计 <60min、ETF 4 来源合计 <40min、run 总量不设门禁，按来源读
+  `source_refresh_run_sources.elapsed_ms` 之和）；1 req/s 不变。
 - **全新数据库（fresh init）**：**首次日更前先跑一次 `full`**（顺序：`full` → 首次 `tail` →
   `plan`/`run`）。理由不是避免 `source_snapshot_not_found`（fresh init 的 `replay --scope all`
   已把交易所索引写回，item 走 fallback 选择），而是**页集身份**与诚实的 `verified_through`：
