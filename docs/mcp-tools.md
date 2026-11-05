@@ -102,6 +102,11 @@ query_data 的 `version_manifest.metadata.adjustment` 对 market daily/yearly �
 daily 仍不是公开 dataset；不能据此宣称 historical_accurate。
 
 只读工具不采集、不重试、不修复、不升级 schema；分页缓存允许内存变化。
+
+`query_data` 的 v2 `selection.kind=universe`（`market.daily`/`market.index`）逐页返回：每页的
+`entities`、`versions`、`columns` 只含本页行涉及的实体，单页字节与本页行数成比例；所有页合起来
+得到与整体答案相同的行和版本。单快照 16 MiB 上限对这类读计的是列式答案的字节，不是内部快照的序列化。
+细则见 [generic-data-v8](contracts/generic-data-v8.md) §4.1。`single`/`batch` 的响应不变。
 写请求的 request_id 使用持久命名空间并包含操作类型/规范化参数语义；
 不得拿 JSON-RPC id 代替业务 request_id。
 
@@ -313,8 +318,8 @@ v7 增量（历史记录，代码已实现、部署日随二进制切换生效�
 
 ## 读取工具（代码面，未部署）
 
-D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批：在 `research` 入口新增 7 个窄输入的只读工具。
-**状态：代码面（未部署）。** 已部署实例仍是上文所述的 5 个 `research` 工具；这 7 个工具随后续 preview 发布后才出现在 `tools/list`，
+D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批：在 `research` 入口新增窄输入的只读工具（PR-1 的 7 个，PR-1b 再加 `get_security_state`、`get_security_events`，共 9 个）。
+**状态：代码面（未部署）。** 已部署实例仍是上文所述的 5 个 `research` 工具；这 9 个工具随后续 preview 发布后才出现在 `tools/list`，
 `capability_revision` 也要到本系列最后一个 PR 才升级。设计与裁决见 [issue-525-read-tools](tasks/issue-525-read-tools.md)。
 `ops`、`maint` 入口不变。
 
@@ -329,8 +334,10 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批�
 | `get_yearly_bars` | `securities`（1..100）、`start_year`、`end_year` | `fields`、分页 | `market.yearly`，`single`/`batch` |
 | `get_index_bars` | `indices`（登记的 9 条指数）、`start_date`、`end_date` | `fields`、分页 | `market.index`，`single`/`batch` |
 | `get_market_snapshot` | `start_date`、`end_date` | `universe`（`a_current` 默认、`a_listed_ever`、`etf_current`、`etf_listed_ever`）、`adjustment`、`fields`、分页 | `market.daily`，`universe` + `cross_section` |
-| `get_trading_calendar` | `start_date`、`end_date` | 无 | `market.calendar`，`market` |
+| `get_trading_calendar` | `start_date`、`end_date` | `page_size`（1..1000，默认 100）、`cursor` | `market.calendar`，`market` |
 | `get_price_limit_rules` | 无 | `as_of`、分页 | `market.price_limit_rules`，`market` |
+| `get_security_state` | `securities`（1..100）、`fact`（`security_master`/`security_names`/`risk_warnings`/`suspensions`/`industry`） | `as_of`、`known_at`、分页 | `fact` 对应的数据集（`market.security_master`、`market.security_names`、`market.risk_warnings`、`market.suspensions`、`market.industry_assignments`），`single`/`batch`，`filter={kind:daily,start_date:as_of,end_date:as_of,as_of}`，顶层 `known_at` |
+| `get_security_events` | `securities`（1..100）、`event`（`capital`/`adjustment`）、`start_date`、`end_date` | 分页 | `market.capital_events` / `market.adjustment_events`，`single`/`batch`，`filter.kind=daily` |
 
 语义，均沿用现有规则，没有放松：
 
@@ -341,12 +348,16 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批�
 - `get_index_bars`：`indices` 只能是登记的 9 条（`sh.000001`、`sh.000016`、`sh.000300`、`sh.000688`、`sh.000852`、`sh.000905`、`sh.000906`、`sz.399001`、`sz.399006`）。
 - `get_market_snapshot`：最多 5 个交易日，超过由共享的读路径报 `invalid_arguments`，封装层不绕过；ETF 范围必须传 `adjustment=raw`。
 - `get_price_limit_rules`：不传 `as_of` 时取最近交易日（`last_trading_day_upto(today)`，`today` 为上海日）。该工具没有 `known_at`。
+- `get_trading_calendar`：和其他工具一样分页。范围超过一页时响应是 `page_complete=false` 并带 `next_cursor`，把它作为 `cursor` 传回即取下一页，合并后与 `query_data` 一次取全的结果相同。
+- `get_security_state`：问“`as_of` 那天是什么状态”，只返回当天生效的记录；区间结束日当天已不生效（结束日不含）。不传 `as_of` 时取最近交易日，并把这一天同时写进 `start_date`、`end_date` 和 `as_of`。`known_at` 不传表示用现在已知的全部信息，回测应传；被排除的行和 `known_at` 为空的行数在响应的 `temporal` 里。响应带 `temporal`，与 `query_data` 一致。一次调用只读一个 `fact`（一次查询、一个快照）。
+  对沪市标的查 `security_names` 时，`limitations` 追加“name history covers SZ only (D-61)…”：名称历史只覆盖深市，0 行表示没有这段历史，不表示没有名称。混合批次里有沪市标的时同样追加；`query_data` 的响应不变。
+- `get_security_events`：问“这段时间发生了什么”，返回日期范围内的事件。这两个数据集没有可用的知晓时间，所以没有 `known_at`，也没有 `as_of`。
 
 默认 `as_of` 的“今天”由 `data_supply::query::today()` 给出，现在是上海日（`calendar::shanghai_today()`）。
 此前它用 `chrono::Local::now()`，随主机时区变化：vm2-126 是上海时区、aws-node 是 UTC，UTC 16:00–24:00 之间两台机器的默认 `as_of` 会差一天。
 `query_data` 的事实类数据集不传 `as_of` 时同样受益。
 
-`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：16,717 B（12 个工具），CI 预算 18,600 B（owner 批准，D-75）；
+`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：18,437 B（14 个工具），CI 预算 18,600 B（owner 批准，D-75）；
 每个工具描述不超过 240 B。`ops`、`maint` 的工具清单和字节数不变。
 
-本批未包含：`get_security_state`、`get_security_history`、`get_security_events`（后续 PR）；`screen_market` 等 XDM-14 的测量结论。
+本批未包含：`get_security_history`（后续 PR）；`screen_market` 暂不做（D-78：能写脚本的 pi 用 codemode 筛选；#295 保持开放，出现不能写脚本的客户端需求时再提）。
