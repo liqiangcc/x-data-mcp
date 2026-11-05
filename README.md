@@ -26,6 +26,7 @@
 [通用工具设计](docs/generic-data-tools.md)定义单动作能力边界，
 [每日同步说明](docs/daily-sync.md)记录双 MCP server、generation 状态机和 Skill 编排边界，
 [数据目录](docs/data-catalog.md)说明现在能拿到哪些数据、语义与缺口（供选股/因子/回测使用）。
+[新机器部署手册](docs/new-host-runbook.md)记录克隆、目录骨架、单元、fresh init 后的数据步骤与回滚。
 SQLite 专项入口由整体设计统一引用。设计目标不表示实现、来源或部署已经验收。
 
 ## 与旧项目的关系
