@@ -66,6 +66,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDate;
 use serde_json::{Value, json};
 
+use crate::exchange_source::request::ExchangeRequest;
 use crate::exchange_source::select::{self, Freshness, FrozenPage, Reader};
 use crate::exchange_source::{
     AcquireError, AcquisitionPlan, BasisStatus, BindError, PagingFormat, RequestError, Segment,
@@ -575,11 +576,7 @@ fn bulletin_windows(today: NaiveDate) -> Result<Vec<Segment>, Error> {
 struct ShState {
     rows: usize,
     ignored: usize,
-    events: Vec<RiskWarningStatusEvent>,
-    // De-duplication is by `(bulletin id, event)`, not by bulletin id alone: a
-    // bulletin may carry more than one event document, and the same bulletin
-    // legitimately matches both title filters (XDM-151 §7).
-    seen_events: BTreeSet<ShEventKey>,
+    events: EventSet,
     // `id → documents`, merged across pages and both title filters; the max of
     // one id is what says "body + attachments".
     docs_per_bulletin: BTreeMap<String, usize>,
@@ -639,11 +636,7 @@ impl ShState {
             let seen = self.docs_per_bulletin.entry(id.clone()).or_default();
             *seen = (*seen).max(*documents);
         }
-        for event in &page.events {
-            if self.seen_events.insert(sh_event_key(event)) {
-                self.events.push(event.clone());
-            }
-        }
+        self.events.admit(&page.events);
         self.quarter_rows
             .entry(key)
             .and_modify(|count| *count += page.events.len())
@@ -764,8 +757,14 @@ fn admitted(
 ) -> Result<Admitted, Error> {
     let sz_coverage = sz_coverage(&sz.changes)?;
     let (sh_coverage, gaps) = sh.coverage(windows);
-    let sh_events = sh.events.len();
-    let set = merge_sets(&sz.changes, sz_coverage, sh.events, sh_coverage, &gaps)?;
+    let sh_events = sh.events.events.len();
+    let set = merge_sets(
+        &sz.changes,
+        sz_coverage,
+        sh.events.events,
+        sh_coverage,
+        &gaps,
+    )?;
     let mut snapshot_ids = sh.snapshot_ids;
     snapshot_ids.insert("szse_short_name", sz.snapshot_ids);
     let multi_document_bulletins = sh
@@ -1023,6 +1022,82 @@ type ShEventKey = (String, RiskWarningAction, Option<RiskStatus>);
 
 fn sh_event_key(event: &RiskWarningStatusEvent) -> ShEventKey {
     (event.source_record_id.clone(), event.action, event.status)
+}
+
+/// The admitted SH events in first-seen order. The first page that states an
+/// event keeps it, and the event carries that page's snapshot id as its
+/// `source_document_sha256`, so the order pages are fed in decides which
+/// document a row cites. The daily read path and replay both admit through this
+/// one type, and both feed pages in [`BulletinOrder`].
+#[derive(Debug, Default)]
+struct EventSet {
+    // De-duplication is by `(bulletin id, event)`, not by bulletin id alone: a
+    // bulletin may carry more than one event document, and the same bulletin
+    // legitimately matches both title filters (XDM-151 §7).
+    seen: BTreeSet<ShEventKey>,
+    events: Vec<RiskWarningStatusEvent>,
+}
+
+impl EventSet {
+    fn admit(&mut self, events: &[RiskWarningStatusEvent]) {
+        for event in events {
+            if self.seen.insert(sh_event_key(event)) {
+                self.events.push(event.clone());
+            }
+        }
+    }
+}
+
+/// Where one frozen SSE bulletin page sits in the order events are admitted.
+///
+/// The order is the daily read path's (`read_set`): title filter in the order
+/// of [`plans`], then window start, then page number. Within one filter and
+/// start only the newest end is read by the daily item (an open quarter gets a
+/// new `END_DATE`, hence a new request fingerprint, every day), so replay, which
+/// also holds the older ends, reads the newest end first and the older ends
+/// only add what the newest does not state.
+///
+/// Replay used to order pages by the raw request fingerprint text. That text
+/// sorts `END_DATE`, `START_DATE`, then `TITLE`, so the same announcement found
+/// under both title filters was credited to the other filter's page than the
+/// daily item credited, and `pageHelp.pageNo` sorted as text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct BulletinOrder {
+    /// Index of the title filter among the SSE plans.
+    filter: usize,
+    start: NaiveDate,
+    end: std::cmp::Reverse<NaiveDate>,
+    page: u32,
+}
+
+impl BulletinOrder {
+    /// The place of the page a request fingerprint names, `None` when the
+    /// fingerprint is not one of this adapter's bulletin requests.
+    pub(crate) fn from_fingerprint(fingerprint: &str) -> Option<Self> {
+        let request = ExchangeRequest::from_fingerprint(fingerprint).ok()?;
+        if request.source_id != SourceId::SseBulletin {
+            return None;
+        }
+        let title = request.params.get("TITLE")?;
+        let filter = plans()
+            .into_iter()
+            .filter(|(kind, _)| kind.sse())
+            .position(|(_, plan)| plan.params.get("TITLE") == Some(title))?;
+        let day =
+            |name: &str| NaiveDate::parse_from_str(request.params.get(name)?, "%Y-%m-%d").ok();
+        let page = request
+            .params
+            .get("pageHelp.pageNo")
+            .or_else(|| request.params.get("pageHelp.beginPage"))?
+            .parse()
+            .ok()?;
+        Some(Self {
+            filter,
+            start: day("START_DATE")?,
+            end: std::cmp::Reverse(day("END_DATE")?),
+            page,
+        })
+    }
 }
 
 /// Parse one SSE bulletin page document by document.
@@ -1384,13 +1459,15 @@ fn parse_day(text: &str, field: &str) -> Result<NaiveDate, Error> {
 /// `--scope risk_warnings` replay support: parse frozen pages from the source
 /// store and rebuild the domain set without any HTTP request.
 ///
-/// `pages` are `(source_id, snapshot_id, bytes)` in manifest order. The
-/// caller chooses which snapshots the live item would have read (XDM-154):
-/// the newest answer per request fingerprint, and — for the SZSE whole-table
-/// snapshot — only a complete page set (§5.4). SSE bulletin pages are parsed
-/// document by document and de-duplicated by `(announcement id, event)`, like
-/// the live path; that de-duplication is keyed on the announcement, not the
-/// window, so this function cannot undo a revised window by itself.
+/// `pages` are `(source_id, snapshot_id, bytes)`. The caller chooses which
+/// snapshots the live item would have read (XDM-154): the newest answer per
+/// request fingerprint, and — for the SZSE whole-table snapshot — only a
+/// complete page set (§5.4). SSE bulletin pages are parsed document by document
+/// and de-duplicated by `(announcement id, event)`, like the live path; that
+/// de-duplication is keyed on the announcement, not the window, so this function
+/// cannot undo a revised window by itself. The first page that states an event
+/// is the document the row cites, so the caller passes the bulletin pages in
+/// [`BulletinOrder`], the order the daily item reads them in.
 ///
 /// `store` dates the SZ rows: `known_at` is the day the first registration
 /// containing the row entered the store (§5.3/Q4), exactly as the daily read
@@ -1406,9 +1483,8 @@ pub fn replay(
     // acquisition, so both paths select the same block from frozen bytes.
     let declared_tabkey = szse_declared_tabkey();
     let mut sz_changes = Vec::new();
-    let mut sh_events = Vec::new();
-    // Same key as the live path: `(bulletin id, event)` (XDM-151 §7).
-    let mut seen_events: BTreeSet<ShEventKey> = BTreeSet::new();
+    // Same set as the daily path: `(bulletin id, event)`, first page wins.
+    let mut sh_events = EventSet::default();
     for (source_id, snapshot_id, bytes) in pages {
         match *source_id {
             "szse_short_name" => {
@@ -1417,12 +1493,7 @@ pub fn replay(
                 sz_changes.append(&mut changes);
             }
             "sse_bulletin" => {
-                let page = parse_sh_page(bytes, snapshot_id)?;
-                for event in page.events {
-                    if seen_events.insert(sh_event_key(&event)) {
-                        sh_events.push(event);
-                    }
-                }
+                sh_events.admit(&parse_sh_page(bytes, snapshot_id)?.events);
             }
             _ => {}
         }
@@ -1441,7 +1512,13 @@ pub fn replay(
             sh_coverage.push(window);
         }
     }
-    merge_sets(&sz_changes, sz_coverage, sh_events, sh_coverage, gaps)
+    merge_sets(
+        &sz_changes,
+        sz_coverage,
+        sh_events.events,
+        sh_coverage,
+        gaps,
+    )
 }
 
 #[cfg(test)]
