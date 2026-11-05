@@ -54,8 +54,8 @@
   1 req/s 下理论下界约 64.6min，原 <60min 无法通过；总量放宽会掩盖 A 股来源变慢，
   故分组）。
 - **G2 的测量入口（runbook）**：G2 只读 schema 26 的 `source_refresh_runs` 与
-  `source_refresh_run_sources`，不另设计时器。`full` 与未触发整表的 `tail` 读
-  `source_refresh_runs.finished_at − started_at`；触发整表时读
+  `source_refresh_run_sources`，不另设计时器。未触发整表的 `tail` 读
+  `source_refresh_runs.finished_at − started_at`；`full` 按来源组读 `source_refresh_run_sources.elapsed_ms` 之和（D-73）；触发整表时读
   `source_refresh_run_sources.elapsed_ms`（`source_id ∈ {szse_listing, szse_short_name}`
   且该来源 `complete=1` 或 `snapshots>1` 的行，每行 <600000 ms，run 总量不设门禁）。
   `requests` 是 `client.attempts()`、包含重试，不能用来判断触发。**门禁只用

@@ -2,7 +2,7 @@
 
 **状态**：代码 schema 26 / `generic-data-v9` 的运维步骤；已随 preview.42 fresh init 部署（2026-11-02），
 preview.43 只换二进制，当前生产为 schema 26 / `generic-data-v9`（见 [STATUS](STATUS.md)）。本文件只写
-**怎么查**，不改代码、不写库；门禁口径与裁决见 [SLO](SLO.md) 第 2 行、D-66、D-67，
+**怎么查**，不改代码、不写库；门禁口径与裁决见 [SLO](SLO.md) 第 2 行、D-66、D-67、D-73，
 刷新行为见 [exchange-source](exchange-source.md) 与 [v9 契约](contracts/generic-data-v9.md)。
 
 ## 1. 什么时候用
