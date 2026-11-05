@@ -11,6 +11,7 @@ use crate::market_storage::Error;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 /// Envelope facts shared by every v2 layout.
 pub struct PageMeta<'a> {
@@ -342,10 +343,23 @@ fn split_metadata(manifest: &[ManifestEntry]) -> (Map<String, Value>, Vec<Map<St
 /// One `versions` row per manifest entry: the version list appears once and
 /// `integrity_sha256` is gone (`version_id` is the digest, design §5.1 rule 2).
 fn version_rows(manifest: &[ManifestEntry], overrides: &[Map<String, Value>]) -> Vec<Value> {
-    manifest
+    version_rows_in(manifest, overrides, 0..manifest.len())
+}
+
+/// `version_rows` for the manifest entries in `span` only. `overrides` is the
+/// full-manifest result of [`split_metadata`], so a page of a `universe` read
+/// keeps the same shared `metadata` and the same per-entity rows as the whole
+/// answer would have.
+fn version_rows_in(
+    manifest: &[ManifestEntry],
+    overrides: &[Map<String, Value>],
+    span: Range<usize>,
+) -> Vec<Value> {
+    manifest[span.clone()]
         .iter()
         .enumerate()
-        .map(|(index, entry)| {
+        .map(|(offset, entry)| {
+            let index = span.start + offset;
             let mut row = Map::new();
             if let Some(entity) = &entry.entity {
                 row.insert("entity".to_owned(), json!(entity.symbol()));
@@ -540,7 +554,26 @@ pub fn panel(
     fields: &[String],
     meta: &PageMeta,
 ) -> Value {
+    panel_page(dataset, manifest, entities, rows, fields, meta, None)
+}
+
+/// [`panel`] for one page of a `selection.kind=universe` read. `span` is the
+/// range of `entities` (and of `manifest`, which is aligned with it) this page
+/// reports; `rows` are the page's rows only. The shared `metadata` is still
+/// decided over the whole manifest, so every page of one query reports the
+/// same split between `metadata` and per-entity `versions` rows. `None` keeps
+/// every entity (the `single`/`batch` shape, unchanged byte for byte).
+pub fn panel_page(
+    dataset: Dataset,
+    manifest: &[ManifestEntry],
+    entities: &[Security],
+    rows: &[Row],
+    fields: &[String],
+    meta: &PageMeta,
+    span: Option<Range<usize>>,
+) -> Value {
     let (shared, overrides) = split_metadata(manifest);
+    let entities = span.clone().map_or(entities, |span| &entities[span]);
     let position: BTreeMap<String, usize> = entities
         .iter()
         .enumerate()
@@ -584,7 +617,10 @@ pub fn panel(
     );
     out.insert(
         "versions".to_owned(),
-        Value::Array(version_rows(manifest, &overrides)),
+        Value::Array(match span {
+            Some(span) => version_rows_in(manifest, &overrides, span),
+            None => version_rows(manifest, &overrides),
+        }),
     );
     if !shared.is_empty() {
         out.insert("metadata".to_owned(), Value::Object(shared));
@@ -910,7 +946,27 @@ pub fn cross_section(
     fields: &[String],
     meta: &PageMeta,
 ) -> Value {
+    cross_section_page(
+        dataset, manifest, trade_days, entities, rows, fields, meta, None,
+    )
+}
+
+/// [`cross_section`] for one page of a `selection.kind=universe` read; `span`
+/// has the same meaning as in [`panel_page`]. Cells of the reported entities
+/// that belong to rows on another page stay `null`, as they did before.
+#[allow(clippy::too_many_arguments)]
+pub fn cross_section_page(
+    dataset: Dataset,
+    manifest: &[ManifestEntry],
+    trade_days: &[NaiveDate],
+    entities: &[Security],
+    rows: &[Row],
+    fields: &[String],
+    meta: &PageMeta,
+    span: Option<Range<usize>>,
+) -> Value {
     let (shared, overrides) = split_metadata(manifest);
+    let entities = span.clone().map_or(entities, |span| &entities[span]);
     let mut by_key: BTreeMap<(String, NaiveDate), &Row> = BTreeMap::new();
     for row in rows {
         if let Row::Market { entity, date, .. } = row {
@@ -959,7 +1015,10 @@ pub fn cross_section(
     );
     out.insert(
         "versions".to_owned(),
-        Value::Array(version_rows(manifest, &overrides)),
+        Value::Array(match span {
+            Some(span) => version_rows_in(manifest, &overrides, span),
+            None => version_rows(manifest, &overrides),
+        }),
     );
     if !shared.is_empty() {
         out.insert("metadata".to_owned(), Value::Object(shared));

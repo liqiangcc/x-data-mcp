@@ -102,6 +102,11 @@ query_data 的 `version_manifest.metadata.adjustment` 对 market daily/yearly �
 daily 仍不是公开 dataset；不能据此宣称 historical_accurate。
 
 只读工具不采集、不重试、不修复、不升级 schema；分页缓存允许内存变化。
+
+`query_data` 的 v2 `selection.kind=universe`（`market.daily`/`market.index`）逐页返回：每页的
+`entities`、`versions`、`columns` 只含本页行涉及的实体，单页字节与本页行数成比例；所有页合起来
+得到与整体答案相同的行和版本。单快照 16 MiB 上限对这类读计的是列式答案的字节，不是内部快照的序列化。
+细则见 [generic-data-v8](contracts/generic-data-v8.md) §4.1。`single`/`batch` 的响应不变。
 写请求的 request_id 使用持久命名空间并包含操作类型/规范化参数语义；
 不得拿 JSON-RPC id 代替业务 request_id。
 
@@ -355,4 +360,4 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批�
 `research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：18,437 B（14 个工具），CI 预算 18,600 B（owner 批准，D-75）；
 每个工具描述不超过 240 B。`ops`、`maint` 的工具清单和字节数不变。
 
-本批未包含：`get_security_history`（后续 PR）；`screen_market` 等 XDM-14 的测量结论。
+本批未包含：`get_security_history`（后续 PR）；`screen_market` 暂不做（D-78：能写脚本的 pi 用 codemode 筛选；#295 保持开放，出现不能写脚本的客户端需求时再提）。

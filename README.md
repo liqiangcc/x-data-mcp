@@ -170,7 +170,7 @@ cargo test --locked
 git diff --check
 ```
 
-`./scripts/verify` 尚未实现，不调用不存在的命令。
+上面的 CI 命令清单就是稳定验证入口（D-79，O8）；`./scripts/verify` 尚未实现，不调用不存在的命令。
 
 开发迭代（#272）：编辑循环用 `cargo check --all-targets`（本机约 2.7s）而非 `cargo build`（约 4.4s）；
 `cargo test --no-run` 会重链 8 个域测试 target，迭代期用 `cargo test --test <名称>` 按需编译；
