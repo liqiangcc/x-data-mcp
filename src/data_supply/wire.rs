@@ -213,7 +213,12 @@ impl TemporalSupport {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TemporalBlock {
-    pub as_of: NaiveDate,
+    /// Absent only for a history read (`get_security_history`), which has no
+    /// record-set day. `query_data` always sets it, so its answer and its
+    /// published schema are unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "required_date")]
+    pub as_of: Option<NaiveDate>,
     pub known_at: Option<NaiveDate>,
     pub unknown_known_at_rows: usize,
     pub datasets_without_known_at: Vec<String>,
@@ -345,6 +350,18 @@ impl Security {
         }
     }
 }
+/// Drop the root `$schema` and `title` of a published read input schema (only
+/// the root: `$defs` and fields keep theirs). `tools/list` is byte-budgeted and
+/// MCP treats a schema without `$schema` as JSON Schema 2020-12, which is what
+/// schemars writes, so the meaning is unchanged. Applies to published input
+/// schemas, not to validation.
+pub(crate) fn strip_root_meta(schema: &mut schemars::Schema) {
+    if let Some(map) = schema.as_object_mut() {
+        map.remove("$schema");
+        map.remove("title");
+    }
+}
+
 /// `deny_unknown_fields` already rejects extras at runtime; dropping the
 /// redundant schema keyword keeps `tools/list` inside its byte budget
 /// (v8 #387 §6.3). Applies to published input schemas, not to validation.
@@ -501,6 +518,18 @@ pub enum Filter {
         start_date: NaiveDate,
         end_date: NaiveDate,
     },
+    /// Every interval overlapping the window, with no `as_of` record set
+    /// (`get_security_history`). Built only by that tool: it is neither
+    /// deserialized nor advertised, so `query_data` neither accepts it nor
+    /// changes its schema. It stays serializable because the cursor key is the
+    /// serialized request, which keeps a history cursor apart from a
+    /// point-in-time one over the same range.
+    #[serde(skip_deserializing)]
+    #[schemars(skip)]
+    History {
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+    },
 }
 impl Filter {
     /// The M2 point-in-time value lives inside `filter` (issue-387 §4.6,
@@ -567,6 +596,11 @@ pub struct Query {
     #[schemars(schema_with = "date_or_null")]
     pub known_at: Option<NaiveDate>,
 }
+/// `as_of` keeps the schema it had when the field was a plain `NaiveDate`.
+fn required_date(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({"type": "string", "format": "date"})
+}
+
 /// The compact schema for an optional M2 day: `type`/`format` only, no
 /// `anyOf` wrapper. `tools/list` is byte-budgeted (v8 #387 §6.3).
 fn date_or_null(_: &mut schemars::SchemaGenerator) -> schemars::Schema {

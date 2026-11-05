@@ -501,7 +501,10 @@ fn the_v8_branch_projects_assigned_and_unknown_rows() {
         cell_text(&snapshot.rows[0], "name").as_deref(),
         Some("硬件设备")
     );
-    assert_eq!(snapshot.temporal.as_ref().unwrap().as_of, day(2026, 10, 16));
+    assert_eq!(
+        snapshot.temporal.as_ref().unwrap().as_of,
+        Some(day(2026, 10, 16))
+    );
 
     let snapshot = run_query(&fixture, "sz.000004", day(2026, 10, 16));
     assert_eq!(snapshot.rows.len(), 1);
@@ -547,4 +550,207 @@ fn a_v1_request_for_the_new_dataset_is_rejected() {
     let error = QueryPlan::new(query, &access).err().unwrap();
     assert!(error.to_string().contains("requires contract_version v2"));
     let _ = supply;
+}
+
+/// `query_data` over `market.industry_assignments` answers exactly as it did
+/// before `get_security_history` added a history mode to the read path. The
+/// expected text was recorded from the code before that change.
+#[test]
+fn the_point_in_time_industry_answer_is_unchanged() {
+    let fixture = Fixture::new(true);
+    let mut out = String::new();
+    for entity in ["sz.000001", "sz.000004", "sz.000005", "sh.600006"] {
+        for as_of in [
+            day(2026, 9, 29),
+            day(2026, 9, 30),
+            day(2026, 10, 16),
+            day(2026, 10, 19),
+            day(2026, 10, 31),
+        ] {
+            let snapshot = run_query(&fixture, entity, as_of);
+            out.push_str(&format!(
+                "{entity} {as_of}\n  rows: {:?}\n  temporal: {}\n",
+                snapshot.rows,
+                serde_json::to_string(&snapshot.temporal).unwrap()
+            ));
+        }
+    }
+    if let Ok(path) = std::env::var("RECORD_QUERY_DATA_GOLDEN") {
+        std::fs::write(path, &out).unwrap();
+        return;
+    }
+    assert_eq!(out, include_str!("industry_query_golden.txt"));
+}
+
+fn history_rows(
+    fixture: &Fixture,
+    entity: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+    known_at: Option<NaiveDate>,
+) -> super::IndustryHistory {
+    super::history(
+        &fixture.connection(),
+        &[entity.to_owned()],
+        start,
+        end,
+        known_at,
+    )
+    .unwrap()
+}
+
+/// `sz.000001` is X5001 from 2026-09-30 to 2026-10-12 and X5002 from then on.
+#[test]
+fn history_returns_every_interval_overlapping_the_window() {
+    let fixture = Fixture::new(true);
+    let codes = |history: &super::IndustryHistory| -> Vec<String> {
+        history
+            .intervals
+            .iter()
+            .map(|row| row.industry_code.clone())
+            .collect()
+    };
+    let all = history_rows(
+        &fixture,
+        "sz.000001",
+        day(2026, 1, 1),
+        day(2026, 12, 31),
+        None,
+    );
+    assert_eq!(codes(&all), ["X5001", "X5002"]);
+    assert_eq!(all.temporal.as_of, None);
+    // Only the second interval overlaps a window after the change.
+    let later = history_rows(
+        &fixture,
+        "sz.000001",
+        day(2026, 10, 12),
+        day(2026, 12, 31),
+        None,
+    );
+    assert_eq!(codes(&later), ["X5002"]);
+    // The first interval's end day is exclusive: a window starting on it
+    // does not include the old interval.
+    let on_end = history_rows(
+        &fixture,
+        "sz.000001",
+        day(2026, 10, 12),
+        day(2026, 10, 12),
+        None,
+    );
+    assert_eq!(codes(&on_end), ["X5002"]);
+    let before = history_rows(
+        &fixture,
+        "sz.000001",
+        day(2026, 10, 11),
+        day(2026, 10, 11),
+        None,
+    );
+    assert_eq!(codes(&before), ["X5001"]);
+    // A window before the first snapshot has no rows; no `unknown` filler.
+    let early = history_rows(
+        &fixture,
+        "sz.000001",
+        day(2026, 1, 1),
+        day(2026, 9, 29),
+        None,
+    );
+    assert!(early.intervals.is_empty());
+    assert_eq!(early.coverage_start, Some(day(2026, 9, 30)));
+    // A code that left the snapshots keeps its closed interval.
+    let gone = history_rows(
+        &fixture,
+        "sz.000004",
+        day(2026, 1, 1),
+        day(2026, 12, 31),
+        None,
+    );
+    assert!(!gone.intervals.is_empty());
+}
+
+#[test]
+fn history_applies_known_at_first_and_counts_what_it_hid() {
+    let fixture = Fixture::new(true);
+    let all = history_rows(
+        &fixture,
+        "sz.000001",
+        day(2026, 1, 1),
+        day(2026, 12, 31),
+        None,
+    );
+    let late = history_rows(
+        &fixture,
+        "sz.000001",
+        day(2026, 1, 1),
+        day(2026, 12, 31),
+        Some(day(2026, 10, 1)),
+    );
+    // The second interval was first stored with the 2026-10-12 snapshot.
+    assert_eq!(all.intervals.len(), 2);
+    assert_eq!(late.intervals.len(), 1);
+    assert_eq!(late.intervals[0].industry_code, "X5001");
+    let observed = late
+        .temporal
+        .dataset(DATASET_INDUSTRY_ASSIGNMENTS)
+        .expect("observed");
+    assert_eq!(observed.excluded_known_at_rows, 1);
+    assert_eq!(late.temporal.known_at, Some(day(2026, 10, 1)));
+}
+
+fn run_history(
+    fixture: &Fixture,
+    entity: &str,
+    known_at: Option<NaiveDate>,
+) -> crate::data_supply::query::QuerySnapshot {
+    let supply = fixture.supply();
+    let access = Access::local();
+    let query = crate::data_supply::wire::Query {
+        dataset: Dataset::IndustryAssignments,
+        contract_version: ReadContractVersion::V2,
+        selection: Selection::Single {
+            entity: Security::parse(entity).unwrap(),
+        },
+        filter: Filter::History {
+            start_date: day(2026, 1, 1),
+            end_date: day(2026, 12, 31),
+        },
+        version: VersionChoice::LatestPerEntity {},
+        adjustment: None,
+        page_size: 100,
+        cursor: None,
+        fields: None,
+        known_at,
+    };
+    let mut plan = QueryPlan::new(query, &access).unwrap();
+    plan.resolve(&supply, &access).unwrap();
+    assert_eq!(plan.temporal.unwrap().as_of, None);
+    supply.query(&plan, &access).unwrap()
+}
+
+#[test]
+fn the_history_read_serves_assigned_intervals_through_the_supply() {
+    let fixture = Fixture::new(true);
+    let snapshot = run_history(&fixture, "sz.000001", None);
+    let codes: Vec<_> = snapshot
+        .rows
+        .iter()
+        .map(|row| cell_text(row, "industry_code").unwrap())
+        .collect();
+    assert_eq!(codes, ["X5001", "X5002"]);
+    assert!(
+        snapshot
+            .rows
+            .iter()
+            .all(|row| cell_text(row, "status").as_deref() == Some("assigned"))
+    );
+    assert_eq!(snapshot.temporal.as_ref().unwrap().as_of, None);
+    // `known_at` hides the interval learned later and counts nothing as unknown.
+    let early = run_history(&fixture, "sz.000001", Some(day(2026, 10, 1)));
+    assert_eq!(early.rows.len(), 1);
+    assert_eq!(
+        early.temporal.as_ref().unwrap().known_at,
+        Some(day(2026, 10, 1))
+    );
+    // An empty table answers with no manifest rows, not an error.
+    let empty = run_history(&Fixture::new(false), "sz.000001", None);
+    assert!(empty.rows.is_empty());
 }

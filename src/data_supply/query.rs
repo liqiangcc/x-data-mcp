@@ -30,7 +30,9 @@ pub struct QueryPlan {
 /// information-set cutoff is the caller's value, never defaulted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TemporalPlan {
-    pub as_of: NaiveDate,
+    /// `None` only for `Filter::History`: no record-set day, the window alone
+    /// selects the intervals.
+    pub as_of: Option<NaiveDate>,
     pub known_at: Option<NaiveDate>,
 }
 impl QueryPlan {
@@ -92,6 +94,18 @@ impl QueryPlan {
                     | Dataset::PriceLimitRules
                     | Dataset::IndustryAssignments
             ) && valid_range(*start_date, *end_date) => {}
+            // `get_security_history` reads interval facts over a window.
+            (
+                Filter::History {
+                    start_date,
+                    end_date,
+                },
+                Dataset::SecurityNames
+                | Dataset::RiskWarnings
+                | Dataset::Suspensions
+                | Dataset::IndustryAssignments,
+            ) if valid_range(*start_date, *end_date)
+                && !matches!(args.selection, Selection::Universe { .. }) => {}
             (
                 Filter::CrossSection {
                     start_date,
@@ -171,14 +185,18 @@ impl QueryPlan {
             args.dataset
                 .is_temporal_fact()
                 .then(|| crate::data_supply::query::TemporalPlan {
-                    as_of: as_of.unwrap_or_else(|| {
-                        // Replaced in `resolve` once the calendar is available; the
-                        // value here only keeps `TemporalPlan` non-optional.
-                        match &args.filter {
-                            Filter::Daily { end_date, .. } => *end_date,
-                            _ => NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-                        }
-                    }),
+                    as_of: if matches!(args.filter, Filter::History { .. }) {
+                        None
+                    } else {
+                        Some(as_of.unwrap_or_else(|| {
+                            // Replaced in `resolve` once the calendar is available; the
+                            // value here only keeps a point-in-time `as_of` present.
+                            match &args.filter {
+                                Filter::Daily { end_date, .. } => *end_date,
+                                _ => NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+                            }
+                        }))
+                    },
                     known_at: args.known_at,
                 });
         Ok(Self {
@@ -194,9 +212,13 @@ impl QueryPlan {
     /// the key contains the concrete catalog version.
     pub fn resolve<R: ReadRepository>(&mut self, repo: &R, access: &Access) -> Result<(), Error> {
         if let Some(temporal) = &self.temporal {
-            let as_of = match self.args.filter.as_of() {
-                Some(as_of) => as_of,
-                None => repo.last_trading_day_upto(today())?,
+            let as_of = if matches!(self.args.filter, Filter::History { .. }) {
+                None
+            } else {
+                Some(match self.args.filter.as_of() {
+                    Some(as_of) => as_of,
+                    None => repo.last_trading_day_upto(today())?,
+                })
             };
             self.temporal = Some(TemporalPlan {
                 as_of,
@@ -205,7 +227,7 @@ impl QueryPlan {
         }
         let (as_of, known_at) = self
             .temporal
-            .map_or((None, None), |t| (Some(t.as_of), t.known_at));
+            .map_or((None, None), |t| (t.as_of, t.known_at));
         if let Selection::Universe {
             catalog_version,
             scope,

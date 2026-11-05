@@ -15,8 +15,9 @@ EXPECTED_LEGACY_SCHEMA = 18
 EXPECTED_COMPACT_SCHEMA = 27
 # Registry/code fact (v8 PR-2 added list_catalog_facets: 23 -> 24; refresh R2
 # adds refresh_exchange_sources: 24 -> 25; D-75 PR-1 adds seven narrow read
-# tools: 25 -> 32, research 5 -> 12; PR-1b adds two more: 34, 14).
-EXPECTED_DATA_TOOLS = 34
+# tools: 25 -> 32, research 5 -> 12; PR-1b adds two more: 34, 14; PR-2 adds
+# get_security_history: 35, 15).
+EXPECTED_DATA_TOOLS = 35
 # Documentation "current" regions describe deployment facts, so stale-claim
 # checks compare against the deployed constants, not the code constants. A
 # sentence that explicitly says it is stating the code fact (代码/未部署) is
@@ -29,7 +30,7 @@ EXPECTED_DATA_TOOLS = 34
 EXPECTED_DEPLOYED_DATA_TOOLS = 16
 EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 EXPECTED_CODE_OPS_TOOLS = 16
-EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 14, "maint": 9}
+EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 15, "maint": 9}
 EXPECTED_ACQUIRE_TOOLS = 10
 
 # --- deployed data entries (v8 phase 2, D-56) ------------------------------
@@ -44,9 +45,11 @@ ENTRY_ALLOWLIST_CONST = {
     "ops": "OPS_TOOLS",
     "maint": "MAINT_TOOLS",
 }
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v10"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v11"
 # The revision the deployed docs/contracts/Skills describe. Since preview.45
-# on vm2-126 (D-74) the deployed contract is v10, same as the code revision.
+# on vm2-126 (D-74) the deployed contract is v10. The code is ahead at v11
+# (D-75 read tools, not deployed); flip this with the Skills at the deployment
+# that ships v11.
 EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v10"
 # The strict Skills describe the DEPLOYED contract (v10 since preview.45 on
 # vm2-126, D-74). The same deployed revision keys the strict-Skill checks and

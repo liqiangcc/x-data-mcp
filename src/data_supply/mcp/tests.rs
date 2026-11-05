@@ -4225,3 +4225,702 @@ fn get_security_events_has_no_known_at_and_no_as_of() {
         assert!(tool["inputSchema"]["properties"].get(hidden).is_none());
     }
 }
+
+// ---- PR-2: get_security_history ---------------------------------------------
+//
+// Fixtures are invented. `sz.000010` has four name intervals (two ST spells)
+// and `sz.000011` one open interval:
+//   sz.000010 "ST甲"  2020-01-01 .. 2021-01-01  known 2026-11-01
+//   sz.000010 "甲"    2021-01-01 .. 2022-01-01  known 2026-11-01
+//   sz.000010 "*ST甲" 2022-01-01 .. 2023-01-01  known 2026-11-03
+//   sz.000010 "甲"    2023-01-01 ..             known 2026-11-03
+//   sz.000011 "乙"    2019-01-01 ..             known 2026-11-01
+
+fn seed_name_history(f: &Fixture) {
+    use crate::security_master::Exchange;
+    use crate::security_master::names::{NameCertainty, NameInterval, NameSet, NameSourceKind};
+    use crate::sqlite_market::security_names::SecurityNameWrite;
+
+    let row = |code: &str, from: NaiveDate, to: Option<NaiveDate>, name: &str, known: NaiveDate| {
+        NameInterval {
+            exchange: Exchange::Sz,
+            code: code.into(),
+            effective_from: from,
+            effective_to: to,
+            name: name.into(),
+            certainty: if to.is_some() {
+                NameCertainty::Interval
+            } else {
+                NameCertainty::Unbounded
+            },
+            known_at: Some(known),
+            source_kind: NameSourceKind::SzseNameHistory,
+            source_record_id: Some(format!("{code}|{from}")),
+        }
+    };
+    let early = day(2026, 11, 1);
+    let late = day(2026, 11, 3);
+    let set = NameSet {
+        rows: vec![
+            row(
+                "000010",
+                day(2020, 1, 1),
+                Some(day(2021, 1, 1)),
+                "ST甲",
+                early,
+            ),
+            row(
+                "000010",
+                day(2021, 1, 1),
+                Some(day(2022, 1, 1)),
+                "甲",
+                early,
+            ),
+            row(
+                "000010",
+                day(2022, 1, 1),
+                Some(day(2023, 1, 1)),
+                "*ST甲",
+                late,
+            ),
+            row("000010", day(2023, 1, 1), None, "甲", late),
+            row("000011", day(2019, 1, 1), None, "乙", early),
+        ],
+        coverage: Vec::new(),
+        pending_sources: Vec::new(),
+    };
+    f.backend
+        .commit_security_names(&SecurityNameWrite {
+            set: &set,
+            task_id: "task-names",
+            item_id: "derived:security_names",
+            generation_id: "gen-names",
+            generation_manifest_sha256: &"41".repeat(32),
+            member_sha256: &"42".repeat(32),
+            security_event_sha256: &"43".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-names"}),
+        })
+        .unwrap()
+        .expect("a non-empty name set registers its version");
+}
+
+/// Three ST spells for `sz.000010` with gaps between them, and one for
+/// `sz.000011`.
+fn seed_st_spells(f: &Fixture) {
+    use crate::security_master::coverage::CoverageWindow;
+    use crate::security_master::risk_warnings::RiskWarningSet;
+    use crate::security_master::{Exchange, RiskStatus, RiskWarningInterval};
+    use crate::sqlite_market::risk_warnings::RiskWarningWrite;
+
+    let spell = |code: &str, from: NaiveDate, to: Option<NaiveDate>, known: NaiveDate| {
+        RiskWarningInterval {
+            exchange: Exchange::Sz,
+            code: code.into(),
+            effective_from: from,
+            effective_to: to,
+            status: RiskStatus::OtherRiskWarning,
+            raw_status_code: "ST".into(),
+            announced_at: None,
+            known_at: Some(known),
+            source_kind: "szse_name_history".into(),
+            source_record_id: Some(format!("sz|{code}|{from}")),
+            source_document_sha256: Some("a".repeat(64)),
+        }
+    };
+    let set = RiskWarningSet {
+        rows: vec![
+            spell(
+                "000010",
+                day(2015, 3, 2),
+                Some(day(2016, 5, 3)),
+                day(2026, 11, 1),
+            ),
+            spell(
+                "000010",
+                day(2018, 4, 2),
+                Some(day(2019, 6, 3)),
+                day(2026, 11, 1),
+            ),
+            spell("000010", day(2022, 4, 1), None, day(2026, 11, 3)),
+            spell("000011", day(2019, 2, 1), None, day(2026, 11, 1)),
+        ],
+        coverage: vec![CoverageWindow {
+            source_kind: "szse_name_history".into(),
+            exchange: Exchange::Sz,
+            from: day(1994, 1, 3),
+            to: day(2026, 11, 1),
+            observed: true,
+            rows: 4,
+            reason: "fixture".into(),
+        }],
+        pending_sources: Vec::new(),
+    };
+    f.backend
+        .commit_risk_warnings(&RiskWarningWrite {
+            set: &set,
+            task_id: "task-risk",
+            item_id: "derived:risk_warnings",
+            generation_id: "gen-risk",
+            generation_manifest_sha256: &"51".repeat(32),
+            member_sha256: &"52".repeat(32),
+            security_event_sha256: &"53".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-risk"}),
+        })
+        .unwrap()
+        .expect("a non-empty set registers its version");
+}
+
+/// `sz.000010`: a confirmed halt and a derived gap; `sz.000011`: one gap.
+fn seed_suspension_history(f: &Fixture) {
+    use crate::security_master::suspensions::SuspensionSet;
+    use crate::security_master::{
+        Exchange, SuspensionCertainty, SuspensionInterval, SuspensionReason,
+    };
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let confirmed =
+        |code: &str, from: NaiveDate, to: NaiveDate, known: NaiveDate| SuspensionInterval {
+            exchange: Exchange::Sz,
+            code: code.into(),
+            start_day: from,
+            end_day: to,
+            certainty: SuspensionCertainty::Confirmed,
+            missing_days: 3,
+            reason: SuspensionReason::ExchangeAnnouncement,
+            known_at: Some(known),
+            source_kind: "exchange_announcement".into(),
+            source_record_id: Some(format!("ann|{code}|{from}")),
+        };
+    let gap = |code: &str, from: NaiveDate, to: NaiveDate| SuspensionInterval {
+        exchange: Exchange::Sz,
+        code: code.into(),
+        start_day: from,
+        end_day: to,
+        certainty: SuspensionCertainty::UnresolvedGap,
+        missing_days: 2,
+        reason: SuspensionReason::MissingBarNoEvent,
+        known_at: None,
+        source_kind: "bar_gap".into(),
+        source_record_id: None,
+    };
+    let rows = vec![
+        confirmed("000010", day(2020, 3, 2), day(2020, 3, 4), day(2020, 3, 1)),
+        gap("000010", day(2021, 8, 2), day(2021, 8, 3)),
+        gap("000011", day(2021, 9, 6), day(2021, 9, 7)),
+    ];
+    let set = SuspensionSet {
+        confirmed_rows: 1,
+        gap_rows: 2,
+        single_day_gap_rows: 0,
+        multi_day_gap_rows: 2,
+        rows,
+        ..SuspensionSet::default()
+    };
+    repo.write(|c| {
+        let binding = crate::sqlite_market::series_commit::put_generation_binding(
+            c,
+            "gen-susp",
+            &"61".repeat(32),
+            &"62".repeat(32),
+            &"63".repeat(32),
+            &json!({"generation_id": "gen-susp"}),
+        )?;
+        crate::sqlite_market::suspensions::replace_suspensions(
+            c,
+            &set,
+            binding,
+            "task-susp",
+            "derived:suspensions",
+        )
+    })
+    .unwrap()
+    .expect("a non-empty set registers its version");
+}
+
+fn history_call(f: &Fixture, input: Value) -> Value {
+    f.api.call("get_security_history", input).unwrap()
+}
+
+fn history_query(dataset: &str, entities: Value, start: &str, end: &str) -> Value {
+    json!({
+        "dataset": dataset,
+        "contract_version": "v2",
+        "selection": {"kind": "batch", "entities": entities},
+        "filter": {"kind": "daily", "start_date": start, "end_date": end, "as_of": end},
+        "version": {"kind": "latest_per_entity"}
+    })
+}
+
+#[test]
+fn get_security_history_returns_every_st_spell_that_overlaps_the_window() {
+    let f = fixture();
+    seed_st_spells(&f);
+    let one = json!(["sz.000010"]);
+
+    // The whole range returns all three spells, oldest first.
+    let all = history_call(
+        &f,
+        json!({"securities":one,"fact":"risk_warnings","start_date":"2010-01-01","end_date":"2026-12-31"}),
+    );
+    assert_eq!(all["dataset"], "market.risk_warnings");
+    assert_eq!(all["row_count"], 3, "{all}");
+    assert_eq!(
+        all["columns"]["effective_from"],
+        json!(["2015-03-02", "2018-04-02", "2022-04-01"])
+    );
+    assert_eq!(
+        all["columns"]["effective_to"],
+        json!(["2016-05-03", "2019-06-03", null])
+    );
+    // A history read has no record-set day, so the temporal block has none.
+    assert!(
+        all["temporal"].get("as_of").is_none(),
+        "{}",
+        all["temporal"]
+    );
+    assert_eq!(all["temporal"]["known_at"], Value::Null);
+
+    // Spells that end before, or start after, the window are not returned.
+    let middle = history_call(
+        &f,
+        json!({"securities":one,"fact":"risk_warnings","start_date":"2017-01-01","end_date":"2020-12-31"}),
+    );
+    assert_eq!(middle["columns"]["effective_from"], json!(["2018-04-02"]));
+    let none = history_call(
+        &f,
+        json!({"securities":one,"fact":"risk_warnings","start_date":"2016-06-01","end_date":"2018-03-31"}),
+    );
+    assert_eq!(none["row_count"], 0);
+
+    // The end of a spell is exclusive and the window start is inclusive of
+    // what is still in effect: a spell ending on the window's first day is out.
+    let touching = history_call(
+        &f,
+        json!({"securities":one,"fact":"risk_warnings","start_date":"2016-05-03","end_date":"2016-12-31"}),
+    );
+    assert_eq!(touching["row_count"], 0);
+    let inside = history_call(
+        &f,
+        json!({"securities":one,"fact":"risk_warnings","start_date":"2016-05-02","end_date":"2016-12-31"}),
+    );
+    assert_eq!(inside["columns"]["effective_from"], json!(["2015-03-02"]));
+
+    // An open spell that began before the window is still returned.
+    let open = history_call(
+        &f,
+        json!({"securities":one,"fact":"risk_warnings","start_date":"2025-01-01","end_date":"2025-01-31"}),
+    );
+    assert_eq!(open["columns"]["effective_from"], json!(["2022-04-01"]));
+
+    // Several securities come back together, each with its own spells.
+    let both = history_call(
+        &f,
+        json!({"securities":["sz.000010","sz.000011"],"fact":"risk_warnings","start_date":"2010-01-01","end_date":"2026-12-31"}),
+    );
+    assert_eq!(both["row_count"], 4);
+    assert_eq!(
+        both["entities"],
+        json!(["sz.000010", "sz.000010", "sz.000010", "sz.000011"])
+    );
+}
+
+#[test]
+fn get_security_history_known_at_hides_rows_learned_later() {
+    let f = fixture();
+    seed_st_spells(&f);
+    let call = |known_at: Option<&str>| {
+        let mut input = json!({"securities":["sz.000010"],"fact":"risk_warnings",
+                               "start_date":"2010-01-01","end_date":"2026-12-31"});
+        if let Some(day) = known_at {
+            input["known_at"] = json!(day);
+        }
+        history_call(&f, input)
+    };
+    assert_eq!(call(None)["row_count"], 3);
+    // The 2022 spell was first known on 2026-11-03.
+    let early = call(Some("2026-11-02"));
+    assert_eq!(
+        early["columns"]["effective_from"],
+        json!(["2015-03-02", "2018-04-02"])
+    );
+    assert_eq!(early["temporal"]["known_at"], "2026-11-02");
+    assert_eq!(call(Some("2026-11-03"))["row_count"], 3);
+    // Before anything was known, nothing is returned.
+    assert_eq!(call(Some("2026-10-31"))["row_count"], 0);
+}
+
+#[test]
+fn get_security_history_reads_names_and_says_that_sh_has_none() {
+    const NOTE: &str = "name history covers SZ only (D-61)";
+    let f = fixture();
+    seed_name_history(&f);
+    let page = history_call(
+        &f,
+        json!({"securities":["sz.000010"],"fact":"security_names","start_date":"2020-06-01","end_date":"2022-06-01"}),
+    );
+    assert_eq!(page["columns"]["name"], json!(["ST甲", "甲", "*ST甲"]));
+    let notes = |page: &Value| page["limitations"].to_string();
+    assert!(!notes(&page).contains(NOTE));
+
+    // The same call at one day returns what `get_security_state` returns.
+    let state = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sz.000010"],"fact":"security_names","as_of":"2021-06-01"}),
+        )
+        .unwrap();
+    assert_eq!(state["columns"]["name"], json!(["甲"]));
+    let day_window = history_call(
+        &f,
+        json!({"securities":["sz.000010"],"fact":"security_names","start_date":"2021-06-01","end_date":"2021-06-01"}),
+    );
+    assert_eq!(day_window["columns"]["name"], state["columns"]["name"]);
+
+    let sh = history_call(
+        &f,
+        json!({"securities":["sh.600006"],"fact":"security_names","start_date":"2020-01-01","end_date":"2026-12-31"}),
+    );
+    assert_eq!(sh["row_count"], 0);
+    assert!(notes(&sh).contains(NOTE), "{}", notes(&sh));
+    // Another fact for the same SH code carries no such note.
+    let other = history_call(
+        &f,
+        json!({"securities":["sh.600006"],"fact":"risk_warnings","start_date":"2020-01-01","end_date":"2026-12-31"}),
+    );
+    assert!(!notes(&other).contains(NOTE));
+}
+
+#[test]
+fn get_security_history_reads_suspension_intervals_by_overlap() {
+    let f = fixture();
+    seed_suspension_history(&f);
+    let one = json!(["sz.000010"]);
+    let all = history_call(
+        &f,
+        json!({"securities":one,"fact":"suspensions","start_date":"2020-01-01","end_date":"2022-12-31"}),
+    );
+    assert_eq!(
+        all["columns"]["start_day"],
+        json!(["2020-03-02", "2021-08-02"])
+    );
+    assert_eq!(
+        all["columns"]["certainty"],
+        json!(["confirmed", "unresolved_gap"])
+    );
+    // A window that starts inside a halt still returns it (end day inclusive).
+    let inside = history_call(
+        &f,
+        json!({"securities":one,"fact":"suspensions","start_date":"2020-03-04","end_date":"2020-03-10"}),
+    );
+    assert_eq!(inside["columns"]["start_day"], json!(["2020-03-02"]));
+    let after = history_call(
+        &f,
+        json!({"securities":one,"fact":"suspensions","start_date":"2020-03-05","end_date":"2020-03-10"}),
+    );
+    assert_eq!(after["row_count"], 0);
+    // A derived gap has no `known_at`, so a cutoff drops it and counts it.
+    let known = history_call(
+        &f,
+        json!({"securities":one,"fact":"suspensions","start_date":"2020-01-01","end_date":"2022-12-31","known_at":"2020-03-01"}),
+    );
+    assert_eq!(known["columns"]["start_day"], json!(["2020-03-02"]));
+    assert_eq!(known["temporal"]["unknown_known_at_rows"], 1);
+}
+
+#[test]
+fn get_security_history_pages_and_keeps_a_cursor_to_its_own_request() {
+    let f = fixture();
+    seed_st_spells(&f);
+    let base = json!({"securities":["sz.000010"],"fact":"risk_warnings",
+                      "start_date":"2010-01-01","end_date":"2026-12-31","page_size":2});
+    let first = history_call(&f, base.clone());
+    assert_eq!(first["row_count"], 2);
+    assert_eq!(first["page_complete"], false);
+    let mut next = base.clone();
+    next["cursor"] = first["next_cursor"].clone();
+    let second = history_call(&f, next.clone());
+    assert_eq!(second["columns"]["effective_from"], json!(["2022-04-01"]));
+    assert_eq!(second["page_complete"], true);
+
+    // The cursor does not move to another window or to a point-in-time read.
+    let mut other = next.clone();
+    other["end_date"] = json!("2026-06-30");
+    assert_eq!(
+        f.api.call("get_security_history", other).unwrap_err().code,
+        "invalid_arguments"
+    );
+    let point = f.api.call(
+        "get_security_state",
+        json!({"securities":["sz.000010"],"fact":"risk_warnings","as_of":"2026-12-31",
+               "page_size":2,"cursor":first["next_cursor"]}),
+    );
+    assert!(point.is_err());
+}
+
+#[test]
+fn get_security_history_rejects_bad_input() {
+    let f = fixture();
+    let call = |input: Value| f.api.call("get_security_history", input).unwrap_err();
+    let ok = json!({"securities":["sz.000010"],"fact":"risk_warnings",
+                    "start_date":"2020-01-01","end_date":"2020-12-31"});
+    let with = |key: &str, value: Value| {
+        let mut input = ok.clone();
+        input[key] = value;
+        input
+    };
+    // `security_master` is a lifecycle record, not a history of states.
+    assert_eq!(
+        call(with("fact", json!("security_master"))).code,
+        "invalid_arguments"
+    );
+    assert_eq!(
+        call(with("fact", json!("capital"))).code,
+        "invalid_arguments"
+    );
+    // The range is required, ordered, and there is no `as_of`.
+    assert_eq!(
+        call(json!({"securities":["sz.000010"],"fact":"risk_warnings"})).code,
+        "invalid_arguments"
+    );
+    assert_eq!(
+        call(with("start_date", json!("2021-01-01"))).code,
+        "invalid_arguments"
+    );
+    assert_eq!(
+        call(with("as_of", json!("2020-06-01"))).code,
+        "invalid_arguments"
+    );
+    assert_eq!(
+        call(with("securities", json!([]))).code,
+        "invalid_arguments"
+    );
+    // The tool schema offers `known_at` and no `as_of`.
+    let tools = f.api.tools();
+    let tool = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "get_security_history")
+        .unwrap();
+    let properties = &tool["inputSchema"]["properties"];
+    assert!(properties.get("known_at").is_some());
+    assert!(properties.get("as_of").is_none());
+    assert_eq!(
+        properties["fact"]["enum"],
+        json!(["security_names", "risk_warnings", "suspensions", "industry"])
+    );
+}
+
+/// `query_data` cannot reach the history mode: the filter kind is not part of
+/// its input, and its point-in-time answer is the same whether or not the
+/// history tool exists.
+#[test]
+fn query_data_cannot_ask_for_a_history_filter() {
+    let f = fixture();
+    seed_st_spells(&f);
+    let mut request = history_query(
+        "market.risk_warnings",
+        json!(["sz.000010"]),
+        "2010-01-01",
+        "2026-12-31",
+    );
+    request["filter"] = json!({"kind":"history","start_date":"2010-01-01","end_date":"2026-12-31"});
+    assert_eq!(
+        f.api.call("query_data", request).unwrap_err().code,
+        "invalid_arguments"
+    );
+}
+
+/// The regression: `query_data` answers exactly as before. A window that
+/// holds several spells still returns only the one in effect on `as_of`, and
+/// the `temporal` block still names that day.
+#[test]
+fn query_data_keeps_its_point_in_time_answer_over_a_long_window() {
+    let f = fixture();
+    seed_st_spells(&f);
+    seed_name_history(&f);
+    for (as_of, expected) in [
+        ("2015-06-01", json!(["2015-03-02"])),
+        ("2017-01-01", json!([])),
+        ("2018-06-01", json!(["2018-04-02"])),
+        ("2026-12-31", json!(["2022-04-01"])),
+    ] {
+        let page = f
+            .api
+            .call(
+                "query_data",
+                json!({
+                    "dataset":"market.risk_warnings","contract_version":"v2",
+                    "selection":{"kind":"single","entity":"sz.000010"},
+                    "filter":{"kind":"daily","start_date":"2010-01-01","end_date":"2026-12-31","as_of":as_of},
+                    "version":{"kind":"latest_per_entity"}
+                }),
+            )
+            .unwrap();
+        let from = page["columns"]
+            .get("effective_from")
+            .cloned()
+            .unwrap_or(json!([]));
+        assert_eq!(from, expected, "as_of {as_of}");
+        assert_eq!(page["temporal"]["as_of"], as_of);
+    }
+    // Without `as_of` the default is still the last trading day, never "all".
+    let default = f
+        .api
+        .call(
+            "query_data",
+            history_query(
+                "market.security_names",
+                json!(["sz.000010"]),
+                "2010-01-01",
+                "2026-12-31",
+            ),
+        )
+        .unwrap();
+    assert_eq!(default["columns"]["name"], json!(["甲"]));
+}
+
+// ---- query_data golden answers ----------------------------------------------
+//
+// `query_data` over the M2 interval datasets must answer exactly as it did
+// before `get_security_history` added a history mode to the read path. The
+// answers below were recorded from the code before that change
+// (`query_data_golden.json`) and are compared byte for byte, minus the fields
+// that differ per call (`snapshot_id`, `snapshot_time`, `next_cursor`, `published_at`).
+
+fn golden_requests() -> Vec<(String, Value)> {
+    let window = |dataset: &str, entity: &str, start: &str, end: &str, as_of: Option<&str>| {
+        let mut filter = json!({"kind":"daily","start_date":start,"end_date":end});
+        if let Some(as_of) = as_of {
+            filter["as_of"] = json!(as_of);
+        }
+        json!({
+            "dataset": dataset,
+            "contract_version": "v2",
+            "selection": {"kind": "batch", "entities": [entity, "sz.000011"]},
+            "filter": filter,
+            "version": {"kind": "latest_per_entity"}
+        })
+    };
+    let mut out = Vec::new();
+    for dataset in [
+        "market.security_names",
+        "market.risk_warnings",
+        "market.suspensions",
+    ] {
+        for (label, start, end, as_of) in [
+            (
+                "long-window-as_of-in-spell",
+                "2010-01-01",
+                "2026-12-31",
+                Some("2018-06-01"),
+            ),
+            (
+                "long-window-as_of-in-gap",
+                "2010-01-01",
+                "2026-12-31",
+                Some("2017-01-01"),
+            ),
+            (
+                "long-window-as_of-open",
+                "2010-01-01",
+                "2026-12-31",
+                Some("2026-12-31"),
+            ),
+            (
+                "as_of-outside-window",
+                "2020-01-01",
+                "2020-12-31",
+                Some("2018-06-01"),
+            ),
+            (
+                "as_of-on-interval-end",
+                "2010-01-01",
+                "2026-12-31",
+                Some("2016-05-03"),
+            ),
+            ("single-day", "2020-03-03", "2020-03-03", Some("2020-03-03")),
+            ("default-as_of", "2010-01-01", "2026-12-31", None),
+        ] {
+            out.push((
+                format!("{dataset} {label}"),
+                window(dataset, "sz.000010", start, end, as_of),
+            ));
+        }
+    }
+    let mut known = window(
+        "market.risk_warnings",
+        "sz.000010",
+        "2010-01-01",
+        "2026-12-31",
+        Some("2026-12-31"),
+    );
+    known["known_at"] = json!("2026-11-02");
+    out.push(("market.risk_warnings known_at".into(), known));
+    let mut known = window(
+        "market.suspensions",
+        "sz.000010",
+        "2010-01-01",
+        "2026-12-31",
+        Some("2021-08-02"),
+    );
+    known["known_at"] = json!("2020-03-01");
+    out.push(("market.suspensions known_at".into(), known));
+    out
+}
+
+/// `published_at` is the wall clock of the fixture's write, not part of the
+/// answer's shape or content.
+fn without_published_at(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            map.remove("published_at");
+            map.values_mut().for_each(without_published_at);
+        }
+        Value::Array(items) => items.iter_mut().for_each(without_published_at),
+        _ => {}
+    }
+}
+
+fn golden_answers(f: &Fixture) -> Value {
+    seed_name_history(f);
+    seed_st_spells(f);
+    seed_suspension_history(f);
+    commit_calendar_days(f, &[day(2021, 8, 2), day(2021, 8, 3)]);
+    let mut answers = serde_json::Map::new();
+    for (label, request) in golden_requests() {
+        let mut answer = match f.api.call("query_data", request) {
+            Ok(answer) => answer,
+            Err(error) => json!({"error": error.code, "message": error.message}),
+        };
+        if let Some(object) = answer.as_object_mut() {
+            for key in ["snapshot_id", "snapshot_time", "next_cursor"] {
+                object.remove(key);
+            }
+        }
+        without_published_at(&mut answer);
+        answers.insert(label, answer);
+    }
+    Value::Object(answers)
+}
+
+#[test]
+fn query_data_answers_match_the_recorded_golden_answers() {
+    let f = fixture();
+    let answers = golden_answers(&f);
+    if let Ok(path) = std::env::var("RECORD_QUERY_DATA_GOLDEN") {
+        std::fs::write(path, serde_json::to_string_pretty(&answers).unwrap() + "\n").unwrap();
+        return;
+    }
+    let golden: Value = serde_json::from_str(include_str!("query_data_golden.json")).unwrap();
+    let (answers, golden) = (answers.as_object().unwrap(), golden.as_object().unwrap());
+    assert_eq!(
+        answers.keys().collect::<Vec<_>>(),
+        golden.keys().collect::<Vec<_>>()
+    );
+    for (label, expected) in golden {
+        assert_eq!(&answers[label], expected, "{label}");
+    }
+}

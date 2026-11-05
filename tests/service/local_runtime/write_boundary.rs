@@ -355,7 +355,7 @@ fn maint_keeps_its_nine_tools_and_the_operator_only_flags() {
     }
     // The write tools stay off the tunnel-exposed research entry.
     let mut research = service.session("research.sock");
-    assert_eq!(tool_names(&mut research).len(), 14);
+    assert_eq!(tool_names(&mut research).len(), 15);
     assert_eq!(
         research.call("backfill_data", collection("r", "600000"), true)["code"],
         "unknown_tool"

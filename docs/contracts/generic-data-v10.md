@@ -5,6 +5,7 @@
 revision 的补充（不再次升 capability revision）。schema 27 由 PR-B 的
 `027_etf_factor_events.sql` 带入（026 为 R2 的 `source_refresh_runs` 等）；aws-node fallback
 仍是 `generic-data-v9` / schema 26（见 [STATUS](../STATUS.md)）。
+main 上 D-75 的读取工具已把代码面能力修订升到 [`generic-data-v11`](generic-data-v11.md)（未部署）。
 
 ## 1. 相对 v9 的增量
 

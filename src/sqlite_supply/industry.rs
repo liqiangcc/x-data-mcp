@@ -42,6 +42,11 @@ pub(super) fn query(
     let Some(temporal) = plan.temporal else {
         return Err(invalid("industry assignments requires a resolved as_of"));
     };
+    // A history read has no record-set day; it never reaches the point-in-time
+    // path below.
+    let Some(as_of) = temporal.as_of else {
+        return history(c, plan, temporal.known_at);
+    };
     let mut result = QuerySnapshot {
         manifest: vec![],
         rows: vec![],
@@ -59,7 +64,7 @@ pub(super) fn query(
         result.temporal = Some(super::m2::temporal_block(
             Dataset::IndustryAssignments,
             &TemporalReport::new(Temporal {
-                as_of: temporal.as_of,
+                as_of,
                 known_at: temporal.known_at,
             }),
         ));
@@ -68,7 +73,7 @@ pub(super) fn query(
 
     let request = IndustryRequest {
         temporal: Temporal {
-            as_of: temporal.as_of,
+            as_of,
             known_at: temporal.known_at,
         },
         entities: plan
@@ -84,18 +89,78 @@ pub(super) fn query(
             start_date,
             end_date,
             ..
-        } => start_date <= temporal.as_of && temporal.as_of <= end_date,
+        } => start_date <= as_of && as_of <= end_date,
         _ => false,
     };
     if in_window {
         for assignment in report.assignments {
-            result.rows.push(fact_row(assignment, temporal.as_of)?);
+            result.rows.push(fact_row(assignment, as_of)?);
             super::m2::check_budget(&result)?;
         }
     }
     result.temporal = Some(super::m2::temporal_block(
         Dataset::IndustryAssignments,
         &report.temporal,
+    ));
+    Ok(result)
+}
+
+/// `get_security_history` for the industry dataset: every stored interval of
+/// the selected entities overlapping the window, as `assigned` rows. See
+/// [`crate::research::industry::history`].
+fn history(
+    c: &Connection,
+    plan: &QueryPlan,
+    known_at: Option<NaiveDate>,
+) -> Result<QuerySnapshot, Error> {
+    let crate::data_supply::wire::Filter::History {
+        start_date,
+        end_date,
+    } = plan.args.filter
+    else {
+        return Err(invalid(
+            "an industry history read needs filter.kind=history",
+        ));
+    };
+    let mut result = QuerySnapshot {
+        manifest: vec![],
+        rows: vec![],
+        temporal: None,
+        limitations: vec![],
+    };
+    let Some(identity) = identity(c)? else {
+        result.manifest.push(super::absent(None));
+        return Ok(result);
+    };
+    result.manifest.push(manifest(&identity));
+    result.limitations.push(
+        "intervals start at the first interval-defining snapshot; an earlier window returns no rows, which is not the same as having no industry"
+            .into(),
+    );
+    let entities: Vec<String> = plan.entities.iter().map(Security::symbol).collect();
+    let answer = if entities.is_empty() {
+        None
+    } else {
+        Some(
+            crate::research::industry::history(c, &entities, start_date, end_date, known_at)
+                .map_err(|error| Error::Storage(error.to_string()))?,
+        )
+    };
+    let report = match &answer {
+        Some(answer) => answer.temporal.clone(),
+        None => TemporalReport::history(known_at),
+    };
+    for row in answer.into_iter().flat_map(|answer| answer.intervals) {
+        result.rows.push(Row::Fact {
+            entity: Some(entity(&row)?),
+            day: row.effective_from,
+            cells: assigned_cells(row),
+        });
+        super::m2::check_budget(&result)?;
+    }
+    result.temporal = Some(super::m2::temporal_block(
+        Dataset::IndustryAssignments,
+        &report,
     ));
     Ok(result)
 }
