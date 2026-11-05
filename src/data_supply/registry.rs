@@ -1,4 +1,8 @@
 //! Schema and routing share one descriptor; no advertised handler without a contract.
+use super::read_tools::{
+    self, ColumnarPage, DailyBarsInput, IndexBarsInput, MarketSnapshotInput, PriceLimitRulesInput,
+    ReadTool, TradingCalendarInput, YearlyBarsInput,
+};
 use super::wire::*;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -29,6 +33,8 @@ pub enum Handler {
     RunMarketUpdate,
     RefreshExchangeSources,
     Facets,
+    /// Narrow read tools (D-75): one typed input becomes one v2 `Query`.
+    Read(super::read_tools::ReadTool),
 }
 /// Which socket serves a tool (v8 design §3.1). The three deployed entries are
 /// static allowlists; `All` is the stdio/dev surface used by `mcp_data` and
@@ -47,6 +53,14 @@ pub const RESEARCH_TOOLS: &[&str] = &[
     "get_data_availability",
     "list_data_versions",
     "list_catalog_facets",
+    // D-75 (issue-525 PR-1): narrow read tools over the same v2 query.
+    "find_securities",
+    "get_daily_bars",
+    "get_yearly_bars",
+    "get_index_bars",
+    "get_market_snapshot",
+    "get_trading_calendar",
+    "get_price_limit_rules",
 ];
 /// Ops entry: the daily-sync workflow surface. v9 adds `refresh_exchange_sources`
 /// here and to the Skill's strict allowlist, so the two lists match again.
@@ -232,6 +246,7 @@ impl Entry {
                 .filter(|d| access.allows(*d, None))
                 .map(Some)
                 .collect(),
+            Handler::Read(_) => vec![None],
             Handler::Query | Handler::Versions | Handler::Availability => {
                 access.datasets.iter().copied().map(Some).collect()
             }
@@ -610,6 +625,48 @@ pub fn entries() -> Vec<Entry> {
             Handler::Facets,
             FACETS_DESCRIPTION,
             json!({"dataset":"securities.catalog"}),
+        ),
+        entry::<read_tools::FindSecuritiesInput, ColumnarPage>(
+            "find_securities",
+            Handler::Read(ReadTool::FindSecurities),
+            read_tools::FIND_SECURITIES_DESCRIPTION,
+            json!({"query":"银行"}),
+        ),
+        entry::<DailyBarsInput, ColumnarPage>(
+            "get_daily_bars",
+            Handler::Read(ReadTool::DailyBars),
+            read_tools::DAILY_BARS_DESCRIPTION,
+            json!({"securities":["sh.600006"],"start_date":"2025-01-01","end_date":"2025-12-31"}),
+        ),
+        entry::<YearlyBarsInput, ColumnarPage>(
+            "get_yearly_bars",
+            Handler::Read(ReadTool::YearlyBars),
+            read_tools::YEARLY_BARS_DESCRIPTION,
+            json!({"securities":["sh.600006"],"start_year":2024,"end_year":2025}),
+        ),
+        entry::<IndexBarsInput, ColumnarPage>(
+            "get_index_bars",
+            Handler::Read(ReadTool::IndexBars),
+            read_tools::INDEX_BARS_DESCRIPTION,
+            json!({"indices":["sh.000300"],"start_date":"2025-01-01","end_date":"2025-12-31"}),
+        ),
+        entry::<MarketSnapshotInput, ColumnarPage>(
+            "get_market_snapshot",
+            Handler::Read(ReadTool::MarketSnapshot),
+            read_tools::MARKET_SNAPSHOT_DESCRIPTION,
+            json!({"start_date":"2025-12-31","end_date":"2025-12-31","fields":["close"]}),
+        ),
+        entry::<TradingCalendarInput, ColumnarPage>(
+            "get_trading_calendar",
+            Handler::Read(ReadTool::TradingCalendar),
+            read_tools::TRADING_CALENDAR_DESCRIPTION,
+            json!({"start_date":"2025-12-01","end_date":"2025-12-31"}),
+        ),
+        entry::<PriceLimitRulesInput, ColumnarPage>(
+            "get_price_limit_rules",
+            Handler::Read(ReadTool::PriceLimitRules),
+            read_tools::PRICE_LIMIT_RULES_DESCRIPTION,
+            json!({}),
         ),
         entry::<YearPresenceQuery, YearPresenceReply>(
             "get_yearly_base_years",

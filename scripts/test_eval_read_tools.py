@@ -135,10 +135,15 @@ class Configuration(unittest.TestCase):
     def setUp(self):
         self.config = ev.load_config()
 
-    def test_ten_questions_with_prompts_and_checks(self):
-        self.assertEqual([t["id"] for t in self.config["tasks"]], [f"q{i:02d}" for i in range(1, 11)])
+    def test_thirteen_questions_with_prompts_and_checks(self):
+        self.assertEqual([t["id"] for t in self.config["tasks"]], [f"q{i:02d}" for i in range(1, 14)])
+        groups = {t["id"]: t["group"] for t in self.config["tasks"]}
+        self.assertEqual({g for i, g in groups.items() if int(i[1:]) <= 10}, {"core"})
+        self.assertEqual((groups["q11"], groups["q12"], groups["q13"]), ("screen", "screen", "etf_name"))
         for task in self.config["tasks"]:
-            self.assertTrue(task["prompt"] and task["checks"] and task["oracles"], task["id"])
+            self.assertTrue(task["prompt"] and task["checks"] and "oracles" in task, task["id"])
+            if task["id"] != "q13":
+                self.assertTrue(task["oracles"], task["id"])
 
     def test_oracles_only_use_query_data_requests_without_stored_data(self):
         text = json.dumps(self.config, ensure_ascii=False)
@@ -486,6 +491,11 @@ class OneQuestion(unittest.TestCase):
         self.assertEqual(report["duration_s"], 1.5)
         self.assertIn("查 2026-11-05", runner.commands[0][-1])
 
+    def test_report_keeps_the_expected_values_for_regrading(self):
+        report = ev.run_task(self.task, self.ctx(FakeRunner(self.stream("x"))))
+        self.assertEqual(report["oracle"]["o"][0]["close"], "10.10")
+        self.assertEqual(report["group"], "core")
+
     def test_wrong_answer_is_a_measurement_not_an_error(self):
         report = ev.run_task(self.task, self.ctx(FakeRunner(self.stream("2026-11-05 开 10.05 收 99 量 2000"))))
         self.assertEqual((report["status"], report["correct"]), ("ok", False))
@@ -537,6 +547,452 @@ class OneQuestion(unittest.TestCase):
         self.assertEqual([t["id"] for t in report["tasks"]], ["qy"])
 
 
+Q02_ROWS = [
+    {"entity": "sh.600000", "date": d, "open": o, "high": h, "low": l, "close": c, "volume": v}
+    for d, o, h, l, c, v in [
+        ("2026-10-30", "10.00", "10.30", "9.90", "10.20", "1000"),
+        ("2026-11-02", "10.20", "10.50", "10.10", "10.40", "1100"),
+        ("2026-11-03", "10.40", "10.60", "10.30", "10.50", "1200"),
+        ("2026-11-04", "10.50", "10.70", "10.40", "10.60", "1300"),
+        ("2026-11-05", "10.60", "10.80", "10.50", "10.70", "1400"),
+    ]
+]
+Q02_CHECK = {
+    "kind": "oracle_values", "oracle": "o", "select": "tail:5",
+    "fields": ["date", "open", "high", "low", "close", "volume"], "dates_subset_of": "selected",
+}
+Q02_TABLE = (
+    "| 日期 | 开 | 高 | 低 | 收 | 量 |\n|---|---|---|---|---|---|\n"
+    "| 2026-10-30 | 10.00 | 10.30 | 9.90 | 10.20 | 1000 |\n"
+    "| 2026-11-02 | 10.20 | 10.50 | 10.10 | 10.40 | 1100 |\n"
+    "| 2026-11-03 | 10.40 | 10.60 | 10.30 | 10.50 | 1200 |\n"
+    "| 2026-11-04 | 10.50 | 10.70 | 10.40 | 10.60 | 1300 |\n"
+    "| 2026-11-05 | 10.60 | 10.80 | 10.50 | 10.70 | 1400 |\n"
+)
+
+
+class StrayDates(unittest.TestCase):
+    def grade(self, answer):
+        return ev.evaluate_answer(task([Q02_CHECK]), answer, {"o": Q02_ROWS}, TODAY)[0]
+
+    def test_date_in_a_note_does_not_fail_a_correct_table(self):
+        # the q02 case: all 5 rows right, the note names a range that is not a row
+        answer = Q02_TABLE + "\n备注：2026-10-01 到 2026-11-05 是 unresolved range，数据来自 get_daily_bars。"
+        result = self.grade(answer)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["detail"]["matched_rows"], 5)
+        self.assertNotIn("unexpected_dates", result["detail"])
+        self.assertEqual(result["detail"]["dates_in_notes"], ["2026-10-01"])
+
+    def test_note_in_bullet_and_table_cell_text(self):
+        answer = Q02_TABLE + "\n- 说明：2026-09-15 之前的数据未请求\n注：2026年9月1日 起无停牌"
+        self.assertTrue(self.grade(answer)["ok"])
+
+    def test_extra_data_row_in_a_table_fails(self):
+        answer = Q02_TABLE + "| 2026-10-29 | 9.90 | 10.10 | 9.80 | 10.00 | 900 |\n"
+        result = self.grade(answer)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["unexpected_dates"], ["2026-10-29"])
+
+    def test_extra_data_row_in_prose_lines_fails(self):
+        answer = (
+            "2026-10-29 开 9.90 高 10.10 低 9.80 收 10.00 量 900\n"
+            + Q02_TABLE.replace("|", " ").replace("---", "")
+        )
+        result = self.grade(answer)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["unexpected_dates"], ["2026-10-29"])
+
+    def test_table_row_with_only_a_date_and_a_value_counts(self):
+        self.assertFalse(self.grade(Q02_TABLE + "| 2026-10-28 | 9.5 |\n")["ok"])
+
+    def test_row_with_an_expected_value_is_a_row_even_in_a_sentence(self):
+        answer = Q02_TABLE + "\n另外 2026-10-29 开盘 10.00 收盘 10.20 成交量 1000"
+        result = self.grade(answer)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["unexpected_dates"], ["2026-10-29"])
+
+    def test_interval_check_note_vs_listed_period(self):
+        rows = [{"normalized_status": "other_risk_warning", "effective_from": "2024-05-01", "effective_to": "2025-02-01"}]
+        check = {
+            "kind": "oracle_values", "oracle": "o", "fields": ["effective_from", "effective_to"],
+            "date_offsets": {"effective_to": [0, -1]}, "dates_subset_of": "all",
+        }
+        run = lambda answer: ev.evaluate_answer(task([check]), answer, {"o": rows}, TODAY)[0]  # noqa: E731
+        note = "2024-05-01 至 2025-01-31 被实施风险警示。\n说明：数据从 2013-01-01 开始查。"
+        self.assertTrue(run(note)["ok"])
+        extra = "- 2024-05-01 至 2025-01-31 被实施风险警示\n- 2021-03-01 至 2021-08-01 被实施风险警示"
+        result = run(extra)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["unexpected_dates"], ["2021-03-01", "2021-08-01"])
+
+
+def screen_task(rule, request=None):
+    return {
+        "kind": "screen", "batch_size": 2,
+        "members": {"dataset": "securities.catalog", "contract_version": "v2", "page_size": 1000},
+        "request": request or {"dataset": "market.daily", "contract_version": "v2", "page_size": 1000},
+        "rule": rule,
+    }
+
+
+class ScreenClient:
+    """query_data stand-in: catalog members, then rows of whatever batch is asked."""
+
+    def __init__(self, members, rows):
+        self.members, self.rows, self.batches = members, rows, []
+
+    def call(self, name, arguments):
+        assert name == "query_data"
+        if arguments["dataset"] == "securities.catalog":
+            return {"layout": "table", "entities": self.members, "row_count": len(self.members),
+                    "columns": {"name": ["n"] * len(self.members)}, "next_cursor": None}
+        entities = arguments["selection"]["entities"]
+        self.batches.append(entities)
+        out = [(e, r) for e in entities for r in self.rows.get(e, [])]
+        return {
+            "layout": "table", "entities": [e for e, _ in out], "row_count": len(out), "next_cursor": None,
+            "columns": {field: [r.get(field) for _, r in out] for field in ("year", "open", "close")},
+        }
+
+
+class Screens(unittest.TestCase):
+    YEARS = {
+        "sz.000002": [("2022", "5", "6"), ("2023", "5", "4"), ("2024", "4", "3"), ("2025", "3", "2")],  # match
+        "sh.600001": [("2022", "5", "6"), ("2023", "5", "4"), ("2024", "4", "3"), ("2025", "3", "2")],  # match
+        "sh.600002": [("2023", "5", "4"), ("2024", "4", "3"), ("2025", "3", "2")],  # no 2022
+        "sz.000003": [("2022", "5", "6"), ("2023", "5", "4"), ("2024", "4", "5"), ("2025", "3", "2")],  # 2024 up
+        "sz.000004": [("2022", "5", "6"), ("2023", "5", "5"), ("2024", "4", "3"), ("2025", "3", "2")],  # 2023 flat
+    }
+
+    def rows(self):
+        return {e: [{"year": y, "open": o, "close": c} for y, o, c in v] for e, v in self.YEARS.items()}
+
+    def test_yearly_screen_in_batches_sorted_by_code(self):
+        rule = {"type": "yearly_down", "present_years": [2022, 2023, 2024, 2025], "down_years": [2023, 2024, 2025]}
+        client = ScreenClient(["sz.000002", "sh.600001", "sh.600002", "sz.000003", "sz.000004"], self.rows())
+        out = ev.screen_rows(client, screen_task(rule), TODAY)
+        self.assertEqual([r["entity"] for r in out], ["sz.000002", "sh.600001"])
+        self.assertEqual([r["code"] for r in out], ["000002", "600001"])
+        self.assertEqual([len(b) for b in client.batches], [2, 2, 1])
+
+    def test_close_below(self):
+        rule = {"type": "close_below", "limit": "2"}
+        rows = {"sz.000001": [{"close": "1.99"}], "sz.000002": [{"close": "2.00"}], "sz.000003": []}
+        out = ev.screen_rows(ScreenClient(["sz.000001", "sz.000002", "sz.000003"], rows), screen_task(rule), TODAY)
+        self.assertEqual([r["entity"] for r in out], ["sz.000001"])
+
+    def test_empty_catalog_or_no_rows_is_an_oracle_error(self):
+        rule = {"type": "close_below", "limit": "2"}
+        with self.assertRaises(ev.EvalError):
+            ev.screen_rows(ScreenClient([], {}), screen_task(rule), TODAY)
+        with self.assertRaises(ev.EvalError):
+            ev.screen_rows(ScreenClient(["sz.000001"], {}), screen_task(rule), TODAY)
+
+    def test_screen_check(self):
+        rows = [{"entity": f"sz.{i:06d}", "code": f"{i:06d}", "rank": i} for i in range(1, 13)]
+        check = {"kind": "screen", "oracle": "o", "top": 10}
+        run = lambda answer: ev.evaluate_answer(task([check]), answer, {"o": rows}, TODAY)[0]  # noqa: E731
+        codes = ", ".join(f"{i:06d}" for i in range(1, 11))
+        good = run(f"共 12 只。前 10 只：{codes}")
+        self.assertTrue(good["ok"], good)
+        self.assertFalse(run(f"共 13 只。前 10 只：{codes}")["ok"])
+        wrong = run("共 12 只。前 10 只：" + codes.replace("000010", "000011"))
+        self.assertFalse(wrong["ok"])
+        self.assertEqual(wrong["detail"]["missing_codes"], ["000010"])
+        shuffled = run("共 12 只：" + ", ".join(f"{i:06d}" for i in (2, 1, *range(3, 11))))
+        self.assertFalse(shuffled["ok"])
+        self.assertTrue(shuffled["detail"]["order_mismatch"])
+        # a date in the answer is not mistaken for the total
+        self.assertFalse(run(f"2026-11-12 的结果：{codes}")["ok"])
+
+    def test_screen_check_accepts_symbol_order_and_records_it(self):
+        rows = [{"entity": "sz.000001", "code": "000001"}, {"entity": "sh.600000", "code": "600000"}]
+        rows.sort(key=lambda r: (r["code"], r["entity"]))
+        check = {"kind": "screen", "oracle": "o", "top": 10}
+        result = ev.evaluate_answer(task([check]), "共 2 只：600000, 000001", {"o": rows}, TODAY)[0]
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["order"], "symbol")
+
+    def test_screen_questions_in_the_config(self):
+        config = ev.load_config()
+        by_id = {t["id"]: t for t in config["tasks"]}
+        for qid in ("q11", "q12"):
+            spec = by_id[qid]["oracles"]["screen"]
+            self.assertEqual((spec["kind"], spec["batch_size"]), ("screen", 100))
+            self.assertEqual(spec["members"]["selection"]["scope"], "current_sh_sz_a")
+        self.assertEqual(by_id["q11"]["oracles"]["screen"]["rule"]["down_years"], [2023, 2024, 2025])
+        self.assertEqual(by_id["q11"]["oracles"]["screen"]["rule"]["present_years"], [2022, 2023, 2024, 2025])
+        self.assertEqual(by_id["q12"]["oracles"]["screen"]["rule"], {"type": "close_below", "limit": "2"})
+        self.assertEqual(by_id["q12"]["oracles"]["screen"]["request"]["filter"]["start_date"], "2026-11-05")
+
+
+class EtfName(unittest.TestCase):
+    def setUp(self):
+        self.q13 = {t["id"]: t for t in ev.load_config()["tasks"]}["q13"]
+
+    def outcome(self, answer):
+        result = ev.evaluate_answer(self.q13, answer, {}, TODAY)[0]
+        return result["ok"], result["detail"]["outcome"]
+
+    def test_code_given(self):
+        self.assertEqual(self.outcome("沪深 300 ETF 的代码是 sh.510300。"), (True, "found_code"))
+        self.assertEqual(self.outcome("可确认：510300（华泰柏瑞），另有 159919"), (True, "found_code"))
+
+    def test_honest_decline_is_recorded_apart(self):
+        self.assertEqual(self.outcome("现有工具无法按名称查询 ETF，我不能确认代码。"), (True, "declared_unsupported"))
+        self.assertEqual(self.outcome("目录里查不到沪深 300 ETF，find_securities 不覆盖 ETF。"), (True, "declared_unsupported"))
+
+    def test_wrong_or_silent_answers_fail(self):
+        self.assertEqual(self.outcome("代码是 sh.510330。"), (False, "neither"))
+        self.assertEqual(self.outcome("沪深 300 ETF 有很多只。"), (False, "neither"))
+
+    def test_no_oracle_is_needed(self):
+        self.assertEqual(self.q13["oracles"], {})
+
+
+class WrongReason(unittest.TestCase):
+    def test_one_line_per_question_and_groups_apart(self):
+        def made(task_id, group, correct, checks=(), status="ok", error=None):
+            item = {
+                "id": task_id, "group": group, "status": status, "correct": correct, "checks": list(checks),
+                "turns": 2, "tokens": {k: 1 for k in ("input", "output", "cache_read", "cache_write", "total")},
+                "tool_calls": 1, "tool_errors": 0, "tool_result_bytes": 3, "duration_s": 1.0,
+            }
+            if error:
+                item["error"] = error
+            return item
+
+        bad = {"kind": "oracle_values", "ok": False,
+               "detail": {"expected_rows": 5, "matched_rows": 3, "missing_rows": ["date=2026-11-04"]}}
+        stray = {"kind": "oracle_values", "ok": False,
+                 "detail": {"expected_rows": 1, "matched_rows": 1, "unexpected_dates": ["2026-10-29"]}}
+        tasks = [
+            made("q01", "core", True, [{"kind": "verdict", "ok": True}]),
+            made("q02", "core", False, [bad]),
+            made("q03", "core", False, [stray]),
+            made("q07", "core", None, status="timeout", error="pi did not finish within 300s"),
+            made("q11", "screen", False, [{"kind": "screen", "ok": False, "detail": {
+                "expected_total": 12, "total_stated": False, "got_top": [], "expected_top": ["1"], "order": None}}]),
+        ]
+        summary = ev.summarize(tasks)
+        reasons = summary["wrong_reason"]
+        self.assertEqual(reasons["q01"], "")
+        self.assertIn("2 of 5 expected rows missing", reasons["q02"])
+        self.assertIn("unexpected dates in data rows: 2026-10-29", reasons["q03"])
+        self.assertTrue(reasons["q07"].startswith("not graded: timeout"))
+        self.assertIn("total 12 not stated", reasons["q11"])
+        self.assertEqual(len(reasons), 5)
+        # top-level numbers are the core group; screens are listed apart
+        self.assertEqual((summary["tasks"], summary["correct"], summary["incorrect"]), (4, 1, 2))
+        self.assertEqual(summary["groups"]["screen"]["tasks"], 1)
+        self.assertEqual(list(summary["groups"]), ["core", "screen"])
+
+
+class Regrade(unittest.TestCase):
+    def report(self, answer, with_oracle=True):
+        item = {
+            "id": "qa", "title": "t", "status": "ok", "correct": False, "answer": answer,
+            "checks": [{"kind": "oracle_values", "ok": False, "detail": {"unexpected_dates": ["2026-10-01"]}}],
+            "turns": 2, "tokens": {k: 1 for k in ("input", "output", "cache_read", "cache_write", "total")},
+            "tool_calls": 1, "tool_errors": 0, "tool_result_bytes": 3, "duration_s": 1.0,
+        }
+        if with_oracle:
+            item["oracle"] = {"o": Q02_ROWS}
+        return {"eval": "e", "scope": "new", "today": "2026-11-05", "finished_at": "f", "tasks": [item]}
+
+    def config(self):
+        return {"tasks": [{"id": "qa", "prompt": "问题", "checks": [Q02_CHECK], "group": "core", "oracles": {"o": {}}}]}
+
+    def test_regrade_uses_saved_answer_and_expected_values(self):
+        answer = Q02_TABLE + "\n备注：2026-10-01 到 2026-11-05 是 unresolved range"
+        new, notes = ev.regrade_report(self.report(answer), self.config())
+        item = new["tasks"][0]
+        self.assertEqual((item["correct"], item["previous_correct"], item["regrade"]), (True, False, "regraded"))
+        self.assertEqual(new["summary"]["correct"], 1)
+        self.assertEqual(new["summary"]["wrong_reason"], {"qa": ""})
+        self.assertEqual(notes, [])
+        self.assertEqual(new["regraded_from"]["finished_at"], "f")
+
+    def test_report_without_expected_values_keeps_its_old_result(self):
+        original = self.report("x", with_oracle=False)
+        new, notes = ev.regrade_report(original, self.config())
+        item = new["tasks"][0]
+        self.assertEqual((item["correct"], item["regrade"]), (False, "skipped: the report holds no expected values"))
+        self.assertEqual(len(notes), 1)
+        self.assertNotIn("previous_correct", item)
+
+    def test_regrade_runs_without_model_or_service(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, target = Path(tmp, "old.json"), Path(tmp, "new.json")
+            source.write_text(json.dumps(self.report(Q02_TABLE)), encoding="utf-8")
+            config = Path(tmp, "eval.json")
+            base = ev.load_config()
+            config.write_text(json.dumps(dict(base, tasks=self.config()["tasks"])), encoding="utf-8")
+            import contextlib
+            import io
+
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = ev.main(["--regrade", str(source), "--output", str(target), "--eval", str(config)])
+            self.assertEqual(code, 0)
+            self.assertIn("qa False->True", out.getvalue())
+            self.assertTrue(json.loads(target.read_text(encoding="utf-8"))["tasks"][0]["correct"])
+            self.assertEqual(json.loads(source.read_text(encoding="utf-8"))["tasks"][0]["correct"], False)
+
+    def test_bad_report_file_is_exit_2(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "bad.json")
+            path.write_text("not json", encoding="utf-8")
+            self.assertEqual(ev.main(["--regrade", str(path), "--output", str(Path(tmp, "o.json"))]), 2)
+
+
+def codemode_result(call_id, inner, error=False, details=True):
+    """A ``codemode`` toolResult as pi writes it: ``details.calls`` lists the calls made inside the script."""
+    message = tool_result(call_id, "codemode", "Script failed" if error else "Script completed", error=error)
+    if details:
+        message["details"] = {"calls": inner}
+    return message
+
+
+def inner_call(name, status="ok"):
+    call = {"id": "x", "name": name, "args": "{}", "status": status}
+    if status == "error":
+        call["error"] = "boom"
+    return call
+
+
+class CodemodeMode(unittest.TestCase):
+    def setUp(self):
+        self.config = ev.load_config()
+        self.scope_tools = [ev.pi_tool_name("x-data-mcp", t) for t in self.config["scopes"]["baseline"]]
+        self.query = self.scope_tools[1]
+        self.task = {
+            "id": "qx", "title": "t", "prompt": "查 {today}",
+            "oracles": {"o": {"request": {"dataset": "market.daily", "contract_version": "v2"}}},
+            "checks": [dict(BAR_CHECK)],
+        }
+        self.client = type("C", (), {"call": lambda self, name, args: {
+            "layout": "panel", "entities": ["sh.600000"], "dates": [["2026-11-05"]],
+            "columns": {"open": [["10.05"]], "close": [["10.10"]], "volume": [["2000"]]}, "next_cursor": None,
+        }})()
+
+    def ctx(self, runner, mode="codemode"):
+        return {
+            "config": self.config, "pi": "pi", "allowed": self.scope_tools, "model": "p/m", "thinking": "off",
+            "today": TODAY, "timeout": 60, "client": self.client, "runner": runner, "workdir": "/tmp", "mode": mode,
+        }
+
+    def stream(self, declared=("codemode",), answer="2026-11-05 开 10.05 收 10.10 量 2000", extra=()):
+        messages = [
+            system(*declared),
+            assistant(calls=[("c1", "codemode", {"code": "..."})], stop="toolUse", input_=100, output=10),
+            codemode_result("c1", [inner_call(self.query), inner_call(self.query, "error"), inner_call("bash")]),
+            assistant(calls=[("c2", "codemode", {"code": "bad"})], stop="toolUse", input_=40, output=5),
+            codemode_result("c2", [], error=True),
+            assistant(calls=[("c3", "codemode", {"code": "..."})], stop="toolUse", input_=40, output=5),
+            codemode_result("c3", [inner_call(self.query)]),
+            *extra,
+            assistant(answer, input_=50, output=20, cache_read=100),
+        ]
+        return "\n".join(json_events(messages))
+
+    def test_command_has_only_the_codemode_tool_and_keeps_extensions(self):
+        command = ev.build_pi_command("pi", self.scope_tools, "sys", "p", "prov/m", "off", "codemode")
+        self.assertEqual(command[command.index("--tools") + 1], "codemode")
+        self.assertNotIn("--no-builtin-tools", command)
+        self.assertNotIn("--no-extensions", command)
+        self.assertNotIn("-e", command)
+        self.assertIn("--no-session", command)
+        self.assertEqual(command[-2:], ["--", "p"])
+
+    def test_direct_command_is_unchanged_by_default(self):
+        default = ev.build_pi_command("pi", self.scope_tools, "sys", "p", "prov/m", "off")
+        direct = ev.build_pi_command("pi", self.scope_tools, "sys", "p", "prov/m", "off", "direct")
+        self.assertEqual(default, direct)
+        for flag in ("--no-builtin-tools", "--no-extensions"):
+            self.assertIn(flag, direct)
+        with self.assertRaises(ev.EvalError):
+            ev.build_pi_command("pi", [], "s", "p", mode="nope")
+
+    def test_mcp_config_uses_default_exposure_in_codemode(self):
+        entry = ev.mcp_project_config("s", "c", "p", environ={}, mode="codemode")["mcpServers"]["s"]
+        self.assertNotIn("exposure", entry)
+        self.assertEqual((entry["command"], entry["args"]), ("c", ["p"]))
+        direct = ev.mcp_project_config("s", "c", "p", environ={})["mcpServers"]["s"]
+        self.assertEqual(direct["exposure"], "direct")
+
+    def test_script_counts(self):
+        stats = ev.collect_stats(ev.iter_records(self.stream().splitlines()), "codemode", set(self.scope_tools))
+        cm = stats["codemode"]
+        self.assertEqual(cm["calls"], 3)
+        self.assertEqual(cm["script_failures"], 1)
+        self.assertEqual(cm["tool_calls"], 4)
+        self.assertEqual(cm["tools"], {"bash": 1, self.query: 3})
+        self.assertEqual(cm["tool_errors"], 1)
+        self.assertEqual(cm["unexpected_tool_calls"], ["bash"])
+        self.assertEqual(cm["results_without_details"], 0)
+        # the model's own calls: three scripts, one of them failed
+        self.assertEqual((stats["tool_calls"], stats["tools"], stats["tool_errors"]), (3, {"codemode": 3}, 1))
+
+    def test_direct_stats_have_no_codemode_block(self):
+        stats = ev.collect_stats(ev.iter_records(json_events(CONVERSATION)))
+        self.assertNotIn("codemode", stats)
+
+    def test_result_without_details_is_flagged(self):
+        messages = [system("codemode"), assistant(calls=[("c1", "codemode", {})], stop="toolUse"),
+                    codemode_result("c1", [], details=False), assistant("x")]
+        stats = ev.collect_stats(ev.iter_records(json_events(messages)), "codemode", set())
+        self.assertEqual(stats["codemode"]["results_without_details"], 1)
+        self.assertEqual(stats["codemode"]["tool_calls"], 0)
+
+    def test_question_in_codemode(self):
+        runner = FakeRunner(self.stream())
+        report = ev.run_task(self.task, self.ctx(runner))
+        self.assertEqual((report["status"], report["correct"]), ("ok", True))
+        self.assertEqual(report["codemode"]["tool_calls"], 4)
+        self.assertNotIn("--no-builtin-tools", runner.commands[0])
+
+    def test_other_declared_tools_are_a_scope_error(self):
+        for declared in (("codemode", "bash"), ("codemode", self.query), ("bash",)):
+            report = ev.run_task(self.task, self.ctx(FakeRunner(self.stream(declared))))
+            self.assertEqual(report["status"], "scope_error", declared)
+            self.assertIsNone(report["correct"])
+        self.assertEqual(report["scope_violation"], {"missing": ["codemode"], "unexpected": ["bash"]})
+
+    def test_direct_scope_tools_declared_in_codemode_mode_are_a_scope_error(self):
+        report = ev.run_task(self.task, self.ctx(FakeRunner(self.stream(tuple(self.scope_tools)))))
+        self.assertEqual(report["status"], "scope_error")
+
+    def test_report_and_summary_record_the_mode(self):
+        config = dict(self.config, tasks=[self.task, dict(self.task, id="qy")])
+        report = ev.run_eval(config, "baseline", self.ctx(FakeRunner(self.stream())))
+        self.assertEqual(report["mode"], "codemode")
+        self.assertEqual(report["summary"]["correct"], 2)
+        self.assertEqual(
+            report["summary"]["codemode"],
+            {"calls": 6, "script_failures": 2, "tool_calls": 8, "tool_errors": 2, "results_without_details": 0},
+        )
+        self.assertEqual(report["summary"]["groups"]["core"]["codemode"]["calls"], 6)
+
+    def test_direct_report_records_mode_and_has_no_codemode_summary(self):
+        runner = FakeRunner("\n".join(json_events([system(*self.scope_tools), assistant("2026-11-05 开 10.05 收 10.10 量 2000")])))
+        config = dict(self.config, tasks=[self.task])
+        report = ev.run_eval(config, "baseline", self.ctx(runner, mode="direct"))
+        self.assertEqual(report["mode"], "direct")
+        self.assertNotIn("codemode", report["summary"])
+        no_mode = self.ctx(runner)
+        del no_mode["mode"]
+        self.assertEqual(ev.run_eval(config, "baseline", no_mode)["mode"], "direct")
+
+    def test_regrade_keeps_mode_and_script_counts(self):
+        config = dict(self.config, tasks=[self.task])
+        report = ev.run_eval(config, "baseline", self.ctx(FakeRunner(self.stream())))
+        new, _ = ev.regrade_report(report, config)
+        self.assertEqual(new["mode"], "codemode")
+        self.assertEqual(new["summary"]["codemode"]["calls"], 3)
+
+
 class CommandLine(unittest.TestCase):
     def test_dry_run_prints_commands_and_runs_nothing(self):
         import contextlib
@@ -547,9 +1003,37 @@ class CommandLine(unittest.TestCase):
             code = ev.main(["--scope", "new", "--socket", "/nonexistent", "--output", "/nonexistent/x.json", "--dry-run", "--today", "2026-11-05"])
         self.assertEqual(code, 0)
         lines = out.getvalue().splitlines()
-        self.assertEqual(len(lines), 10)
+        self.assertEqual(len(lines), 13)
         self.assertIn("mcp__x_data_mcp__get_daily_bars", lines[1])
         self.assertNotIn("bash", lines[1].replace("--no-builtin-tools", ""))
+
+    def test_dry_run_in_codemode(self):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = ev.main(["--scope", "new", "--socket", "/nonexistent", "--output", "/nonexistent/x.json", "--dry-run",
+                            "--today", "2026-11-05", "--mode", "codemode"])
+        self.assertEqual(code, 0)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 13)
+        command = json.loads(lines[0].split(" ", 1)[1])
+        self.assertEqual(command[command.index("--tools") + 1], "codemode")
+        self.assertNotIn("--no-builtin-tools", command)
+
+    def test_mode_defaults_to_direct_and_rejects_others(self):
+        base = ["--scope", "new", "--socket", "s", "--output", "o"]
+        self.assertEqual(ev.parse_args(base).mode, "direct")
+        self.assertEqual(ev.parse_args(base + ["--mode", "codemode"]).mode, "codemode")
+        with self.assertRaises(SystemExit):
+            ev.parse_args(base + ["--mode", "bash"])
+
+    def test_regrade_needs_no_scope_or_socket_and_unknown_scope_still_fails(self):
+        args = ev.parse_args(["--regrade", "a.json", "--output", "b.json"])
+        self.assertEqual((args.regrade, args.scope, args.socket), ("a.json", None, None))
+        with self.assertRaises(SystemExit):
+            ev.parse_args(["--output", "b.json"])
 
     def test_unknown_scope_and_tasks_are_rejected(self):
         self.assertEqual(ev.main(["--scope", "nope", "--socket", "s", "--output", "o"]), 2)

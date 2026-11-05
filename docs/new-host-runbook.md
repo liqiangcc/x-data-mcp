@@ -140,9 +140,17 @@ drop-in（逐字沿用来源机，第一次测量不调参）：
 | acquire | `market-db.conf` | 追加 `--market-db`，并把 `state` 加进 `ReadWritePaths` |
 | data、acquire | **`timezone.conf`** | `[Service]` 下 `Environment=TZ=UTC` |
 
-**`TZ=UTC` 必须加**：`src/data_supply/query.rs` 的 `today()` 用本地时钟，决定读面默认 `as_of` 的“今天”。新机时区若是
-Asia/Shanghai，UTC 16:00–24:00 之间它会比来源机多一天，默认窗口落到明天、查不到事实。其余代码显式用 UTC 或上海时区。
-journald 时间戳仍是主机本地时区，写日志和报告时自己用 `date -u`。把 `today()` 改成上海日是另一个代码任务，不在部署里做。
+**`TZ=UTC` 对 preview.45 及更早的二进制必须加；含 D-75 PR-1 的 release 起不再需要。**
+preview.45 及更早的 `src/data_supply/query.rs` 里 `today()` 用 `chrono::Local::now()`，决定读面默认 `as_of` 的“今天”。
+新机时区若是 Asia/Shanghai，UTC 16:00–24:00 之间它会比 UTC 来源机多一天，默认窗口落到明天、查不到事实。
+D-75 PR-1 把 `today()` 改成 `calendar::shanghai_today()`，默认 `as_of` 只取上海日，不再随主机时区变化（此时 `Local` 在 `src`、`tests`、`scripts` 里已无其他使用；
+其余代码显式用 UTC 或上海时区）。所以：
+
+- 第一次部署用的是 preview.45 或更早的包时，照常加 `timezone.conf`。
+- 切到含该改动的 release 之后，`timezone.conf` 可以保留（与来源机单元一致，无害），也可以删，不影响读面结果。删它不要和换二进制放在同一个窗口里，免得出问题时分不清原因。
+- STATUS 与 SLO 里“单元用 `TZ=UTC`”是已部署事实，随实际单元变化时再改，本文不改它们。
+
+journald 时间戳仍是主机本地时区，写日志和报告时自己用 `date -u`。
 
 **tunnel 占位单元**：脚本在窗口里 `systemctl stop/start` tunnel 单元，单元不存在会使停机步骤失败。新机切换前不装真 tunnel，
 装一个空单元，并让脚本指向它：

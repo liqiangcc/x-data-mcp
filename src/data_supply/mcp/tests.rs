@@ -3113,3 +3113,662 @@ fn capabilities_express_the_etf_raw_shape_and_units() {
     assert_eq!(etf["volume_quantum"], json!(100));
     assert_eq!(etf["default"], json!(false));
 }
+
+// ---- D-75 narrow read tools (issue-525 PR-1) -------------------------------
+//
+// Every tool is a thin wrapper over `query_data` v2, so each test compares the
+// tool's answer with the equivalent `query_data` call. Fixtures are small on
+// purpose: a few entities and at most six calendar days.
+
+/// The parts of a v2 answer that must be identical. `snapshot_id` and
+/// `snapshot_time` differ per call by design, so they are left out.
+fn same_answer(tool: &Value, query: &Value) {
+    for key in [
+        "layout",
+        "columns",
+        "entities",
+        "dates",
+        "trade_days",
+        "row_count",
+        "versions",
+        "metadata",
+        "temporal",
+    ] {
+        assert_eq!(tool.get(key), query.get(key), "{key}");
+    }
+}
+
+fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(y, m, d).unwrap()
+}
+
+fn mark_etf(f: &Fixture, code: &str) {
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        c.execute(
+            "UPDATE security_master SET instrument_class=2 WHERE exchange='sh' AND code=?1",
+            [code],
+        )
+        .map_err(|e| crate::market_storage::Error::Storage(e.to_string()))?;
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn get_daily_bars_answers_like_query_data_v2() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    let tool = f
+        .api
+        .call(
+            "get_daily_bars",
+            json!({"securities":["sh.600006"],"start_date":"2020-01-06","end_date":"2020-01-06"}),
+        )
+        .unwrap();
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.daily","contract_version":"v2",
+                "selection":{"kind":"single","entity":"sh.600006"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(tool["layout"], "panel");
+    assert_eq!(tool["columns"]["close"], json!([["10.05"]]));
+    same_answer(&tool, &query);
+
+    // `YYYYMMDD`, `fields` and an explicit qfq normalize like on query_data.
+    let projected = f
+        .api
+        .call(
+            "get_daily_bars",
+            json!({"securities":["sh.600006"],"start_date":"20200106","end_date":"20200106",
+                   "adjustment":"qfq","fields":["close"]}),
+        )
+        .unwrap();
+    assert_eq!(projected["columns"]["close"], tool["columns"]["close"]);
+    assert_eq!(projected["columns"].as_object().unwrap().len(), 1);
+
+    // Paging goes through the same cursor.
+    let page = f
+        .api
+        .call(
+            "get_daily_bars",
+            json!({"securities":["sh.600006"],"start_date":"2020-01-01","end_date":"2020-12-31","page_size":1}),
+        )
+        .unwrap();
+    assert_eq!(page["row_count"], 1);
+}
+
+#[test]
+fn get_daily_bars_points_an_index_at_get_index_bars_and_query_data_is_unchanged() {
+    let f = fixture();
+    let task_id = task(&f, "sh.000001", 1, "day", "req-index-redirect");
+    commit_index(
+        &f,
+        &task_id,
+        "item-1",
+        "sh.000001",
+        vec![bar(day_epoch(2020, 1, 6), 3000)],
+    );
+    for index in ["sh.000001", "sh.000300"] {
+        let error = f
+            .api
+            .call(
+                "get_daily_bars",
+                json!({"securities":[index],"start_date":"2020-01-06","end_date":"2020-01-06"}),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{index}");
+        assert!(
+            error.message.contains("get_index_bars"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains(index), "{}", error.message);
+    }
+    // A mixed batch is refused as a whole rather than silently dropping the index.
+    let mixed = f
+        .api
+        .call(
+            "get_daily_bars",
+            json!({"securities":["sh.600006","sh.000001"],"start_date":"2020-01-06","end_date":"2020-01-06"}),
+        )
+        .unwrap_err();
+    assert_eq!(mixed.code, "invalid_arguments");
+    // `query_data` keeps its old behaviour: absent, no error.
+    let old = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.daily","contract_version":"v2",
+                "selection":{"kind":"single","entity":"sh.000001"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(old["versions"][0]["status"], "absent");
+    assert_eq!(old["row_count"], 0);
+}
+
+#[test]
+fn get_index_bars_answers_like_query_data_and_takes_only_registered_indices() {
+    let f = fixture();
+    let task_id = task(&f, "sh.000001", 1, "day", "req-index-bars");
+    commit_index(
+        &f,
+        &task_id,
+        "item-1",
+        "sh.000001",
+        vec![bar(day_epoch(2020, 1, 6), 3000)],
+    );
+    let tool = f
+        .api
+        .call(
+            "get_index_bars",
+            json!({"indices":["sh.000001"],"start_date":"2020-01-06","end_date":"2020-01-06"}),
+        )
+        .unwrap();
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.index","contract_version":"v2",
+                "selection":{"kind":"single","entity":"sh.000001"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(tool["columns"]["close"], json!([["30"]]));
+    assert_eq!(tool["versions"][0]["status"], "present");
+    same_answer(&tool, &query);
+
+    for not_an_index in ["sh.600006", "sz.399300"] {
+        let error = f
+            .api
+            .call(
+                "get_index_bars",
+                json!({"indices":[not_an_index],"start_date":"2020-01-06","end_date":"2020-01-06"}),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{not_an_index}");
+        assert!(
+            error.message.contains("sh.000300"),
+            "the message lists the registered indices: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn get_daily_bars_keeps_the_etf_and_batch_rules() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    seed_security_master(&f, &[("sh.600006", None), ("sh.510050", None)]);
+    mark_etf(&f, "510050");
+    let args = |securities: Value, extra: Value| {
+        let mut input =
+            json!({"securities":securities,"start_date":"2020-01-06","end_date":"2020-01-06"});
+        for (key, value) in extra.as_object().into_iter().flatten() {
+            input[key] = value.clone();
+        }
+        input
+    };
+    // An ETF must name its 口径 (D-70 Q3).
+    let missing = f
+        .api
+        .call("get_daily_bars", args(json!(["sh.510050"]), json!({})))
+        .unwrap_err();
+    assert_eq!(missing.code, "adjustment_required_for_etf");
+    let same = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.daily","contract_version":"v2",
+                "selection":{"kind":"single","entity":"sh.510050"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(missing.code, same.code);
+    assert_eq!(missing.message, same.message);
+    // qfq for an ETF is unavailable, not silently raw.
+    let qfq = f
+        .api
+        .call(
+            "get_daily_bars",
+            args(json!(["sh.510050"]), json!({"adjustment":"qfq"})),
+        )
+        .unwrap_err();
+    assert_eq!(qfq.code, "adjustment_unavailable");
+    // A mixed batch without an adjustment is refused because of its ETF member.
+    let mixed = f
+        .api
+        .call(
+            "get_daily_bars",
+            args(json!(["sh.600006", "sh.510050"]), json!({})),
+        )
+        .unwrap_err();
+    assert_eq!(mixed.code, "adjustment_required_for_etf");
+
+    // 1..100 entities.
+    let too_many: Vec<String> = (0..101).map(|n| format!("sh.{:06}", 600_000 + n)).collect();
+    let error = f
+        .api
+        .call("get_daily_bars", args(json!(too_many), json!({})))
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(error.message.contains("1..100"), "{}", error.message);
+    let none = f
+        .api
+        .call("get_daily_bars", args(json!([]), json!({})))
+        .unwrap_err();
+    assert_eq!(none.code, "invalid_arguments");
+}
+
+#[test]
+fn get_yearly_bars_answers_like_query_data_and_is_absent_for_an_etf() {
+    let f = fixture();
+    let daily_task = task(&f, SYMBOL, 1, "day", "req-yearly-tool-daily");
+    let daily = publish_daily(
+        &f,
+        &daily_task,
+        "item-1",
+        SYMBOL,
+        vec![bar(day_epoch(2020, 1, 6), 100)],
+        None,
+    );
+    let yearly_task = task(&f, SYMBOL, 1, "year", "req-yearly-tool");
+    commit_yearly_plan(
+        &f,
+        &yearly_task,
+        "item-1",
+        SYMBOL,
+        None,
+        &daily.version_id,
+        None,
+    );
+    seed_security_master(&f, &[("sh.600006", None), ("sh.510050", None)]);
+    mark_etf(&f, "510050");
+
+    let tool = f
+        .api
+        .call(
+            "get_yearly_bars",
+            json!({"securities":["sh.600006","sh.510050"],"start_year":2019,"end_year":2030}),
+        )
+        .unwrap();
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.yearly","contract_version":"v2",
+                "selection":{"kind":"batch","entities":["sh.510050","sh.600006"]},
+                "filter":{"kind":"yearly","start_year":2019,"end_year":2030},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    same_answer(&tool, &query);
+    let status = |entity: &str| {
+        tool["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["entity"] == json!(entity))
+            .map(|row| row["status"].clone())
+    };
+    assert_eq!(status("sh.510050"), Some(json!("absent")));
+    assert_eq!(status("sh.600006"), Some(json!("present")));
+
+    // Daily-only fields and `adjustment` are not part of this tool.
+    let error = f
+        .api
+        .call(
+            "get_yearly_bars",
+            json!({"securities":["sh.600006"],"start_year":2020,"end_year":2020,"adjustment":"qfq"}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    let error = f
+        .api
+        .call(
+            "get_yearly_bars",
+            json!({"securities":["sh.600006"],"start_year":2020,"end_year":2020,"fields":["no_trade"]}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+}
+
+#[test]
+fn get_market_snapshot_answers_like_query_data_and_caps_the_window_at_five_days() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    let second = task(&f, "sz.000001", 1, "day", "req-snap-second");
+    publish_daily(
+        &f,
+        &second,
+        "item-1",
+        "sz.000001",
+        vec![bar(day_epoch(2020, 1, 6), 2000)],
+        None,
+    );
+    publish_catalog(
+        &f,
+        "catalog-snap",
+        &[
+            ("600006", crate::catalog::Exchange::Shanghai),
+            ("000001", crate::catalog::Exchange::Shenzhen),
+        ],
+    );
+    let days: Vec<NaiveDate> = (6..=13)
+        .map(|d| day(2020, 1, d))
+        .filter(|d| {
+            use chrono::Datelike;
+            !matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+        })
+        .collect();
+    assert_eq!(days.len(), 6);
+    commit_calendar_days(&f, &days);
+
+    let tool = f
+        .api
+        .call(
+            "get_market_snapshot",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-06","fields":["close"]}),
+        )
+        .unwrap();
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.daily","contract_version":"v2",
+                "selection":{"kind":"universe"},
+                "filter":{"kind":"cross_section","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"},
+                "fields":["close"]
+            }),
+        )
+        .unwrap();
+    assert_eq!(tool["layout"], "cross_section");
+    assert_eq!(tool["entities"], json!(["sh.600006", "sz.000001"]));
+    assert_eq!(tool["columns"]["close"], json!([["10.05", "20"]]));
+    same_answer(&tool, &query);
+
+    // Five trading days are allowed, six are refused by the shared check, and
+    // the wrapper does not change that.
+    let five = f
+        .api
+        .call(
+            "get_market_snapshot",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-10","fields":["close"]}),
+        )
+        .unwrap();
+    assert_eq!(five["trade_days"].as_array().unwrap().len(), 5);
+    let six = f
+        .api
+        .call(
+            "get_market_snapshot",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-13","fields":["close"]}),
+        )
+        .unwrap_err();
+    assert_eq!(six.code, "invalid_arguments");
+    assert!(six.message.contains("6 trading days"), "{}", six.message);
+    assert!(six.message.contains("get_daily_bars") || six.message.contains("batch"));
+
+    // ETF universes need an explicit raw 口径, like the daily tool.
+    seed_security_master(&f, &[("sh.600006", None), ("sh.510050", None)]);
+    mark_etf(&f, "510050");
+    let etf = f
+        .api
+        .call(
+            "get_market_snapshot",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-06","universe":"etf_current"}),
+        )
+        .unwrap_err();
+    assert_eq!(etf.code, "adjustment_required_for_etf");
+}
+
+#[test]
+fn get_trading_calendar_answers_like_query_data() {
+    let f = fixture();
+    commit_calendar_days(&f, &[day(2020, 1, 6), day(2020, 1, 7)]);
+    let tool = f
+        .api
+        .call(
+            "get_trading_calendar",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-07"}),
+        )
+        .unwrap();
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.calendar","contract_version":"v2",
+                "selection":{"kind":"market"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-07"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        tool["columns"]["trade_day"],
+        json!(["2020-01-06", "2020-01-07"])
+    );
+    same_answer(&tool, &query);
+    // No paging or field arguments: the tool only takes the range.
+    let error = f
+        .api
+        .call(
+            "get_trading_calendar",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-07","page_size":1}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+}
+
+fn commit_rule_book(f: &Fixture) {
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let book = crate::trading_rules::rule_book().unwrap();
+    repo.commit_trading_rules(&crate::sqlite_market::rules::TradingRulesWrite {
+        book: &book,
+        task_id: "task-rules",
+        item_id: "derived:price_limit_rules",
+        generation_id: "gen-1",
+        generation_manifest_sha256: &"0b".repeat(32),
+        member_sha256: &"0c".repeat(32),
+        security_event_sha256: &"0e".repeat(32),
+        generation_evidence: &json!({"fixture": true}),
+    })
+    .unwrap();
+}
+
+#[test]
+fn get_price_limit_rules_defaults_as_of_to_the_last_trading_day() {
+    let f = fixture();
+    // The seeded calendar ends in 2020, so "the last trading day up to today"
+    // is its last day, whatever the host clock says.
+    commit_calendar_days(&f, &[day(2020, 1, 6), day(2020, 1, 7)]);
+    commit_rule_book(&f);
+
+    let default = f.api.call("get_price_limit_rules", json!({})).unwrap();
+    assert_eq!(default["temporal"]["as_of"], "2020-01-07");
+    assert!(default["row_count"].as_u64().unwrap() > 0, "{default}");
+
+    let explicit = f
+        .api
+        .call("get_price_limit_rules", json!({"as_of":"2020-01-07"}))
+        .unwrap();
+    same_answer(&default, &explicit);
+
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.price_limit_rules","contract_version":"v2",
+                "selection":{"kind":"market"},
+                "filter":{"kind":"daily","start_date":"2020-01-07","end_date":"2020-01-07","as_of":"2020-01-07"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    same_answer(&default, &query);
+
+    // An earlier as_of reads the rules in effect then.
+    let earlier = f
+        .api
+        .call("get_price_limit_rules", json!({"as_of":"2020-01-06"}))
+        .unwrap();
+    assert_eq!(earlier["temporal"]["as_of"], "2020-01-06");
+
+    // `as_of` is a real field of this tool; `known_at` is not.
+    let error = f
+        .api
+        .call(
+            "get_price_limit_rules",
+            json!({"as_of":"2020-01-07","known_at":"2020-01-07"}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+}
+
+#[test]
+fn find_securities_answers_like_query_data_catalog() {
+    let f = fixture();
+    publish_catalog(
+        &f,
+        "catalog-find",
+        &[
+            ("600006", crate::catalog::Exchange::Shanghai),
+            ("000001", crate::catalog::Exchange::Shenzhen),
+        ],
+    );
+    let tool = f
+        .api
+        .call("find_securities", json!({"query":"600006"}))
+        .unwrap();
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"securities.catalog","contract_version":"v2",
+                "selection":{"kind":"catalog","scope":"current_sh_sz_a"},
+                "filter":{"kind":"catalog","name_query":"600006"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(tool["entities"], json!(["sh.600006"]));
+    same_answer(&tool, &query);
+
+    let by_code = f
+        .api
+        .call("find_securities", json!({"code":"000001"}))
+        .unwrap();
+    assert_eq!(by_code["entities"], json!(["sz.000001"]));
+    let all = f.api.call("find_securities", json!({})).unwrap();
+    assert_eq!(all["entities"], json!(["sh.600006", "sz.000001"]));
+    let paged = f
+        .api
+        .call("find_securities", json!({"page_size":1}))
+        .unwrap();
+    assert_eq!(paged["row_count"], 1);
+    assert!(paged["next_cursor"].is_string());
+    let next = f
+        .api
+        .call(
+            "find_securities",
+            json!({"page_size":1,"cursor":paged["next_cursor"]}),
+        )
+        .unwrap();
+    assert_eq!(next["entities"], json!(["sz.000001"]));
+}
+
+#[test]
+fn every_read_tool_rejects_unknown_fields() {
+    let f = fixture();
+    let valid = [
+        ("find_securities", json!({})),
+        (
+            "get_daily_bars",
+            json!({"securities":["sh.600006"],"start_date":"2020-01-06","end_date":"2020-01-06"}),
+        ),
+        (
+            "get_yearly_bars",
+            json!({"securities":["sh.600006"],"start_year":2020,"end_year":2020}),
+        ),
+        (
+            "get_index_bars",
+            json!({"indices":["sh.000001"],"start_date":"2020-01-06","end_date":"2020-01-06"}),
+        ),
+        (
+            "get_market_snapshot",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-06"}),
+        ),
+        (
+            "get_trading_calendar",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-06"}),
+        ),
+        ("get_price_limit_rules", json!({"as_of":"2020-01-06"})),
+    ];
+    for (name, input) in valid {
+        // Values are valid for the internal `Query`, so a rejection can only
+        // come from the tool's own closed input type.
+        let extras = [
+            ("dataset", json!("market.daily")),
+            ("contract_version", json!("v1")),
+            ("selection", json!({"kind":"universe"})),
+            (
+                "filter",
+                json!({"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"}),
+            ),
+            ("version", json!({"kind":"latest_per_entity"})),
+            ("bogus", json!("x")),
+        ];
+        for (extra, value) in extras {
+            let mut input = input.clone();
+            input[extra] = value;
+            let error = f.api.call(name, input).unwrap_err();
+            assert_eq!(error.code, "invalid_arguments", "{name} accepted {extra}");
+        }
+    }
+    // The internal query shape is not exposed: a read tool never takes `known_at`.
+    let error = f
+        .api
+        .call(
+            "get_daily_bars",
+            json!({"securities":["sh.600006"],"start_date":"2020-01-06","end_date":"2020-01-06","known_at":"2020-01-06"}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+}
+
+#[test]
+fn the_default_as_of_day_is_the_shanghai_day() {
+    // `query::today()` feeds the default `as_of`; it must not follow the host
+    // timezone (vm2-126 is Asia/Shanghai, aws-node is UTC).
+    assert_eq!(
+        crate::data_supply::query::today(),
+        crate::calendar::shanghai_today()
+    );
+}

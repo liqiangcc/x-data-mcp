@@ -244,8 +244,13 @@ impl QueryPlan {
 /// The adapter's "today": the calendar day, never a data fact. The read model
 /// itself never reads the clock (issue-391 §12.2); resolving the default here
 /// keeps that property.
+///
+/// This is the Shanghai day, not the host's local day. It used to be
+/// `chrono::Local::now()`, so the default `as_of` depended on the host's
+/// timezone: vm2-126 runs Asia/Shanghai and aws-node runs UTC, and between
+/// 16:00 and 24:00 UTC the two hosts disagreed by one day.
 pub fn today() -> NaiveDate {
-    chrono::Local::now().date_naive()
+    crate::calendar::shanghai_today()
 }
 fn unsupported(field: &str, dataset: Dataset) -> String {
     format!(

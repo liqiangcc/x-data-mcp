@@ -21,8 +21,52 @@ Run (on the host that serves the data; ``<run>`` is the service run directory):
         --socket <run>/research.sock --model <provider/model> \\
         --output /tmp/read-tools-new.json
 
-Use the same model, thinking level and ``--today`` for both runs. The report
+Add ``--mode codemode`` for the codemode run (see "Tool modes" below).
+Use the same model, thinking level, ``--today`` and mode for runs you compare. The report
 holds prices and the model's answers: keep it out of the repository.
+
+Grade a saved report again (after a change to the checks) without a model and
+without the service. The report must hold the expected values (``oracle`` per
+question, saved by runs of this version); a task without them keeps its old
+result and is marked ``regrade: skipped``:
+
+    python3 scripts/eval_read_tools.py --regrade <report.json> --output <new.json>
+
+Tool modes (``--mode``, recorded as ``mode`` at the top of the report):
+
+``direct`` (default) gives the model the scope's MCP tools as separate tools
+and nothing else (``exposure: direct``, ``--no-builtin-tools``). The model
+cannot write scripts. This is what a client that only has direct calls sees.
+
+``codemode`` is how pi is normally used: the MCP server keeps the default
+exposure (``codemode``), pi starts with ``--tools codemode`` and the model's
+only tool is ``codemode``, which runs a JavaScript script that calls the MCP
+tools. ``--no-builtin-tools`` and ``--no-extensions`` are NOT passed: with them
+the ``codemode`` tool does not exist. bash, read, edit and write are still not
+given, so after the start ``declared_tools`` must be exactly ``["codemode"]``,
+otherwise the question is ``scope_error``. The scope's tools are then only
+checked against the service (pre-flight) and against the tools the scripts
+call; they do not limit what a script can reach on the research socket.
+
+In ``codemode`` mode the tool calls happen inside scripts. The top-level
+``tool_calls``, ``tools`` and ``tool_errors`` of a question keep counting the
+model's own calls, which are all ``codemode`` calls. The question also has a
+``codemode`` object, and the summary (and each group) has the sums of it:
+
+- ``calls``: scripts the model started (equals the top-level ``tool_calls``).
+- ``script_failures``: scripts that failed (the ``codemode`` result has
+  ``isError``: syntax error, thrown error, timeout, worker limit). The
+  top-level ``tool_errors`` counts these too.
+- ``tool_calls`` and ``tools``: MCP calls made inside scripts, read from the
+  ``details.calls`` of each ``codemode`` result.
+- ``tool_errors``: calls inside scripts that ended with ``isError`` or were
+  rejected (call status ``error``), whether or not the script caught the
+  error. A script that completed can have ``tool_errors`` > 0.
+- ``unexpected_tool_calls``: tools called inside scripts that are not in the
+  scope (not summed). Scope tools are not declared to the model in this mode,
+  so the scope is checked only here and by the pre-flight against the service.
+- ``results_without_details``: ``codemode`` results without a call list. Their
+  inner calls are not counted, so non-zero means the counts are lower bounds.
 
 Scopes (``.devin/evals/read-tools-v1.json``): ``baseline`` is the five current
 research tools; ``new`` adds the ten new ones; ``new-no-query`` is ``new``
@@ -36,8 +80,10 @@ failed pre-flight (a scope tool the service does not offer).
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import json
+import math
 import os
 import re
 import select
@@ -81,6 +127,8 @@ OUT_OF_SCOPE_TOOLS = frozenset(
 ORACLE_TOOLS = frozenset({"query_data"})
 CST = dt.timezone(dt.timedelta(hours=8))  # Asia/Shanghai has no daylight saving time
 ERROR_TEXT_LIMIT = 300
+MODES = ("direct", "codemode")
+CODEMODE_TOOL = "codemode"
 
 
 class EvalError(Exception):
@@ -102,7 +150,7 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
     if len(ids) != len(set(ids)):
         raise EvalError("duplicate task ids")
     for task in config["tasks"]:
-        for oracle_name in {check["oracle"] for check in task["checks"]}:
+        for oracle_name in {check["oracle"] for check in task["checks"] if "oracle" in check}:
             if oracle_name not in task["oracles"]:
                 raise EvalError(f"{task['id']}: check names unknown oracle {oracle_name!r}")
     return config
@@ -145,14 +193,15 @@ def substitute(value, today: dt.date, extra: dict | None = None):
 PASSTHROUGH_ENV = ("X_DATA_MCP_UNSAFE_NONLOCAL_FS",)
 
 
-def mcp_project_config(server: str, mcp_connect: str, socket: str, environ=None) -> dict:
+def mcp_project_config(server: str, mcp_connect: str, socket: str, environ=None, mode: str = "direct") -> dict:
     environ = os.environ if environ is None else environ
     entry = {
         "command": mcp_connect,
         "args": [socket],
-        "exposure": "direct",
         "timeout": 120,
     }
+    if mode == "direct":
+        entry["exposure"] = "direct"  # codemode: no key, pi's default exposure is codemode
     env = {name: environ[name] for name in PASSTHROUGH_ENV if name in environ}
     if env:
         entry["env"] = env
@@ -166,26 +215,29 @@ def build_pi_command(
     prompt: str,
     model: str | None = None,
     thinking: str | None = None,
+    mode: str = "direct",
 ) -> list[str]:
-    """One fresh, tool-restricted, non-persistent pi run with JSON events on stdout.
+    """One fresh, non-persistent pi run with JSON events on stdout.
 
-    ``--tools`` lists MCP tools only and ``--no-builtin-tools`` removes bash,
-    read, edit and write. ``--no-extensions -e builtin:mcp`` keeps the MCP
-    support and drops everything else the user may have installed.
+    ``direct``: ``--tools`` lists MCP tools only and ``--no-builtin-tools``
+    removes bash, read, edit and write. ``--no-extensions -e builtin:mcp``
+    keeps the MCP support and drops everything else the user may have installed.
+
+    ``codemode``: ``--tools codemode`` is the only tool. ``--no-builtin-tools``
+    and ``--no-extensions`` are left out on purpose: with them pi has no
+    ``codemode`` tool. The run is checked through ``declared_tools``.
     """
-    command = [
-        pi,
-        "--mode", "json",
-        "-p",
-        "--no-session",
-        "--approve",
-        "--no-extensions", "-e", "builtin:mcp",
-        "--no-builtin-tools",
+    if mode not in MODES:
+        raise EvalError(f"unknown mode {mode!r}; choose from {list(MODES)}")
+    command = [pi, "--mode", "json", "-p", "--no-session", "--approve"]
+    if mode == "direct":
+        command += ["--no-extensions", "-e", "builtin:mcp", "--no-builtin-tools"]
+    command += [
         "--no-context-files",
         "--no-skills",
         "--no-prompt-templates",
         "--no-themes",
-        "--tools", ",".join(allowed),
+        "--tools", ",".join(allowed) if mode == "direct" else CODEMODE_TOOL,
         "--system-prompt", system_prompt,
     ]
     if model:
@@ -244,7 +296,40 @@ def declared_tools(messages) -> set[str]:
     return tools
 
 
-def collect_stats(records) -> dict:
+def codemode_stats(messages, calls: dict[str, str], results: dict[str, dict], scope: set[str]) -> dict:
+    """Counts of what the scripts did. ``details.calls`` of a ``codemode``
+    toolResult lists the calls made inside the script (name, status, error)."""
+    inner: dict[str, int] = {}
+    inner_errors = 0
+    without_details = 0
+    for message in messages:
+        if message.get("role") != "toolResult" or message.get("toolName") != CODEMODE_TOOL:
+            continue
+        listed = (message.get("details") or {}).get("calls")
+        if not isinstance(listed, list):
+            without_details += 1
+            continue
+        for call in listed:
+            if not isinstance(call, dict):
+                continue
+            name = call.get("name", "")
+            inner[name] = inner.get(name, 0) + 1
+            if call.get("status") == "error":
+                inner_errors += 1
+    return {
+        "calls": sum(1 for name in calls.values() if name == CODEMODE_TOOL),
+        "script_failures": sum(
+            1 for result in results.values() if result["tool"] == CODEMODE_TOOL and result["is_error"]
+        ),
+        "tool_calls": sum(inner.values()),
+        "tools": dict(sorted(inner.items())),
+        "tool_errors": inner_errors,
+        "unexpected_tool_calls": sorted(set(inner) - scope),
+        "results_without_details": without_details,
+    }
+
+
+def collect_stats(records, mode: str = "direct", scope: set[str] | None = None) -> dict:
     messages = messages_of(records)
     tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     turns = 0
@@ -293,7 +378,9 @@ def collect_stats(records) -> dict:
         if result["is_error"]
     ]
     tokens["total"] = sum(tokens.values())
+    extra = {"codemode": codemode_stats(messages, calls, results, scope or set())} if mode == "codemode" else {}
     return {
+        **extra,
         "turns": turns,
         "model_errors": model_errors,
         "tokens": tokens,
@@ -469,9 +556,65 @@ def walk_as_of(client, spec: dict, today: dt.date) -> list[dict]:
     raise EvalError(f"history walk exceeded {spec['max_queries']} queries")
 
 
+def code_of(entity: str) -> str:
+    return str(entity).split(".")[-1]
+
+
+def screen_matches(rule: dict, rows: list[dict]) -> bool:
+    """Does one entity pass the screen, judged from its own rows."""
+    if rule["type"] == "yearly_down":
+        by_year = {str(row["year"]): row for row in rows if row.get("year")}
+
+        def down(year: int) -> bool:
+            row = by_year.get(str(year))
+            if not row or row.get("open") is None or row.get("close") is None:
+                return False
+            return Decimal(str(row["close"])) < Decimal(str(row["open"]))
+
+        return all(str(year) in by_year for year in rule["present_years"]) and all(
+            down(year) for year in rule["down_years"]
+        )
+    if rule["type"] == "close_below":
+        limit = Decimal(str(rule["limit"]))
+        return any(
+            row.get("close") is not None and Decimal(str(row["close"])) < limit for row in rows
+        )
+    raise EvalError(f"unknown screen rule {rule['type']!r}")
+
+
+def screen_rows(client, spec: dict, today: dt.date) -> list[dict]:
+    """Whole-market screen: catalog members first, then the rule per batch of
+    ``batch_size`` entities. Returns the matching entities sorted by their
+    6-digit code (then exchange), nothing is stored in the repository."""
+    members: list[str] = []
+    for row in fetch_rows(client, substitute(spec["members"], today)):
+        if row.get("entity") and row["entity"] not in members:
+            members.append(row["entity"])
+    if not members:
+        raise EvalError("the catalog returned no members to screen")
+    size = int(spec.get("batch_size", 100))
+    matched: list[str] = []
+    rows_seen = 0
+    for start in range(0, len(members), size):
+        chunk = members[start:start + size]
+        request = substitute(spec["request"], today)
+        request["selection"] = {"kind": "batch", "entities": chunk}
+        by_entity: dict[str, list[dict]] = {}
+        for row in fetch_rows(client, request):
+            by_entity.setdefault(row.get("entity"), []).append(row)
+            rows_seen += 1
+        matched += [entity for entity in chunk if screen_matches(spec["rule"], by_entity.get(entity, []))]
+    if not rows_seen:
+        raise EvalError("the screen queries returned no rows at all")
+    matched.sort(key=lambda entity: (code_of(entity), entity))
+    return [{"entity": entity, "code": code_of(entity), "rank": i} for i, entity in enumerate(matched, 1)]
+
+
 def read_oracle(client, spec: dict, today: dt.date) -> list[dict]:
     if spec.get("kind") == "walk_as_of":
         return walk_as_of(client, spec, today)
+    if spec.get("kind") == "screen":
+        return screen_rows(client, spec, today)
     return fetch_rows(client, substitute(spec["request"], today), spec.get("first_page_only", False))
 
 
@@ -495,6 +638,7 @@ _CN_MONTH_DAY = re.compile(r"(?<!\d)(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]")
 _COMPACT_DATE = re.compile(r"(?<!\d)(\d{4})(\d{2})(\d{2})(?!\d)")
 _NUMBER = re.compile(r"(?<![A-Za-z0-9_.])-?\d[\d,]*(?:\.\d+)?(?:\s*(?:万亿|亿|万))?")
 _SEGMENT_SPLIT = re.compile(r"[\n。；;]")
+_LIST_ITEM = re.compile(r"\s*(?:[-*•]|\d+[.)、])\s")
 _VERDICT = re.compile(r"结论\s*[:：]\s*\**\s*(是|否|无法确定)")
 
 
@@ -606,6 +750,40 @@ def row_label(row: dict, fields: list[str]) -> str:
     return ",".join(f"{field}={row.get(field)}" for field in fields if row.get(field) is not None)
 
 
+def stray_data_dates(answer: str, known: set[dt.date], oracle_known: set[dt.date], numeric_fields: int):
+    """Dates that are not expected, split into (in data rows, in notes).
+
+    Only a data row can add a row to the answer. A segment (line or sentence)
+    is a data row when it is a table row with a value in it, or when it
+    carries values like a row does: at least half of the numeric fields (and
+    two numbers) outside the dates. A check without numeric fields (intervals)
+    treats a list item, or a segment that names an expected date, as a row.
+    Everything else is a note and its dates are only reported."""
+    rows: set[str] = set()
+    notes: set[str] = set()
+    for part in _SEGMENT_SPLIT.split(answer):
+        if not part.strip():
+            continue
+        dates, blanked = extract_dates(part)
+        bad = {
+            f"{y or '----'}-{m:02d}-{d:02d}"
+            for y, m, d in dates
+            if not any(date_matches((y, m, d), day) for day in known)
+        }
+        if not bad:
+            continue
+        values = len(_NUMBER.findall(blanked))
+        table = part.lstrip().startswith("|")
+        if numeric_fields:
+            is_row = values >= 1 if table else values >= max(2, math.ceil(numeric_fields / 2))
+        else:
+            is_row = table or _LIST_ITEM.match(part) is not None or any(
+                date_matches(found, day) for found in dates for day in oracle_known
+            )
+        (rows if is_row else notes).update(bad)
+    return sorted(rows), sorted(notes)
+
+
 def check_oracle_values(answer: str, oracle_rows: list[dict], check: dict, allowed_dates: set[dt.date]) -> dict:
     fields = check["fields"]
     offsets_by_field = {field: check.get("date_offsets", {}).get(field, [0]) for field in fields}
@@ -637,17 +815,22 @@ def check_oracle_values(answer: str, oracle_rows: list[dict], check: dict, allow
     ok = not missing
     subset = check.get("dates_subset_of")
     if subset:
-        known = set(allowed_dates)
+        oracle_known: set[dt.date] = set()
         for row in all_rows if subset == "all" else rows:
             for field in fields:
                 if field in DATE_FIELDS and row.get(field):
                     base = dt.date.fromisoformat(str(row[field]))
-                    known |= {base + dt.timedelta(days=offset) for offset in offsets_by_field[field]}
-        stray = sorted({f"{y or '----'}-{m:02d}-{d:02d}" for y, m, d in answer_dates
-                        if not any(date_matches((y, m, d), day) for day in known)})
+                    oracle_known |= {base + dt.timedelta(days=offset) for offset in offsets_by_field[field]}
+        numeric = [
+            field for field in fields
+            if field not in DATE_FIELDS and field not in TEXT_FIELDS and field not in ("entity", "year")
+        ]
+        stray, notes = stray_data_dates(answer, set(allowed_dates) | oracle_known, oracle_known, len(numeric))
         if stray:
             ok = False
             detail["unexpected_dates"] = stray
+        if notes:
+            detail["dates_in_notes"] = notes
     return {"kind": "oracle_values", "ok": ok, "detail": detail}
 
 
@@ -675,6 +858,53 @@ def check_verdict(answer: str, oracle_rows: list[dict], check: dict) -> dict:
     }
 
 
+_CODE6 = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+
+
+def check_screen(answer: str, rows: list[dict], check: dict) -> dict:
+    """Whole-market screen: the stated total and the first ``top`` codes in
+    ascending order (first mention order in the answer). "By code" is read as
+    the 6-digit code; the order of the full symbol (``sh.`` before ``sz.``) is
+    accepted too and recorded as ``order``."""
+    top = int(check.get("top", 10))
+    expected_top = [row["code"] for row in rows[:top]]
+    by_symbol = [code_of(entity) for entity in sorted(row["entity"] for row in rows)[:top]]
+    _, blanked = extract_dates(answer)
+    total_ok = Decimal(len(rows)) in extract_numbers(blanked)
+    got: list[str] = []
+    for code in _CODE6.findall(answer):
+        if code not in got:
+            got.append(code)
+    got_top = got[:len(expected_top)]
+    order = "code" if got_top == expected_top else "symbol" if got_top == by_symbol else None
+    detail: dict = {
+        "expected_total": len(rows),
+        "total_stated": total_ok,
+        "expected_top": expected_top,
+        "got_top": got_top,
+        "order": order,
+    }
+    missing = [code for code in expected_top if code not in got]
+    if missing:
+        detail["missing_codes"] = missing[:10]
+    elif order is None:
+        detail["order_mismatch"] = True
+    return {"kind": "screen", "ok": total_ok and order is not None, "detail": detail}
+
+
+def check_answer_text(answer: str, check: dict) -> dict:
+    """Two honest outcomes, recorded apart: the code is given, or the answer
+    says the tools cannot look it up. Anything else is wrong."""
+    found = re.search(check["must_contain"], answer) is not None
+    declined = any(re.search(pattern, answer) for pattern in check.get("declines", []))
+    outcome = "found_code" if found else "declared_unsupported" if declined else "neither"
+    return {
+        "kind": "answer_text",
+        "ok": outcome != "neither",
+        "detail": {"outcome": outcome, "code_given": found, "declared_unsupported": declined},
+    }
+
+
 def dates_in(text: str) -> set[dt.date]:
     out = set()
     for year, month, day in extract_dates(text)[0]:
@@ -690,11 +920,16 @@ def evaluate_answer(task: dict, answer: str, oracle_rows: dict[str, list[dict]],
     allowed = {today} | dates_in(task["prompt"])
     results = []
     for check in task["checks"]:
+        if check["kind"] == "answer_text":
+            results.append(check_answer_text(answer, check))
+            continue
         rows = oracle_rows[check["oracle"]]
         if check["kind"] == "oracle_values":
             results.append(check_oracle_values(answer, rows, check, allowed))
         elif check["kind"] == "verdict":
             results.append(check_verdict(answer, rows, check))
+        elif check["kind"] == "screen":
+            results.append(check_screen(answer, rows, check))
         else:
             raise EvalError(f"unknown check kind {check['kind']!r}")
     return results
@@ -725,7 +960,10 @@ def run_pi(command: list[str], cwd: str, timeout: float) -> tuple[int | None, st
 def run_task(task: dict, ctx: dict) -> dict:
     """Run one question. ``ctx`` carries config, scope, client, runner, today."""
     today = ctx["today"]
-    report: dict = {"id": task["id"], "title": task["title"], "status": "ok", "correct": None}
+    report: dict = {
+        "id": task["id"], "title": task["title"], "group": task.get("group", "core"),
+        "status": "ok", "correct": None,
+    }
     try:
         oracle_rows = {
             name: read_oracle(ctx["client"], spec, today) for name, spec in task["oracles"].items()
@@ -733,17 +971,19 @@ def run_task(task: dict, ctx: dict) -> dict:
     except EvalError as error:
         report.update(status="oracle_error", error=str(error))
         return report
+    report["oracle"] = oracle_rows  # expected values, so the answer can be graded again later
     system_prompt = ctx["config"]["system_prompt"].replace("{today}", today.isoformat())
+    mode = ctx.get("mode", "direct")
     command = build_pi_command(
         ctx["pi"], ctx["allowed"], system_prompt, substitute(task["prompt"], today),
-        ctx.get("model"), ctx.get("thinking"),
+        ctx.get("model"), ctx.get("thinking"), mode,
     )
     code, out, err, wall = ctx["runner"](command, ctx["workdir"], ctx["timeout"])
     report["duration_s"] = round(wall, 3)
     if ctx.get("events_dir"):
         Path(ctx["events_dir"]).mkdir(parents=True, exist_ok=True)
         Path(ctx["events_dir"], f"{task['id']}.jsonl").write_text(out, encoding="utf-8")
-    stats = collect_stats(iter_records(out.splitlines()))
+    stats = collect_stats(iter_records(out.splitlines()), mode, set(ctx["allowed"]))
     report.update(stats)
     if code is None:
         report.update(status="timeout", error=f"pi did not finish within {ctx['timeout']:g}s")
@@ -751,7 +991,7 @@ def run_task(task: dict, ctx: dict) -> dict:
         report.update(status="pi_error", error=f"pi exited {code}: {err.strip()[-ERROR_TEXT_LIMIT:]}")
     elif not stats["answer"]:
         report.update(status="no_answer", error="the last assistant message has no text")
-    expected = set(ctx["allowed"])
+    expected = {CODEMODE_TOOL} if mode == "codemode" else set(ctx["allowed"])
     declared = set(stats["declared_tools"])
     if declared and declared != expected:
         report["scope_violation"] = {
@@ -759,7 +999,7 @@ def run_task(task: dict, ctx: dict) -> dict:
             "unexpected": sorted(declared - expected),
         }
         report.update(status="scope_error", error="declared tools differ from the scope")
-    unexpected_calls = sorted(set(stats["tools"]) - expected)
+    unexpected_calls = sorted(set(stats["tools"]) - expected)  # what the model itself called
     if unexpected_calls:
         report["unexpected_tool_calls"] = unexpected_calls
     if report["status"] in ("ok", "no_answer"):
@@ -776,17 +1016,59 @@ def run_task(task: dict, ctx: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def summarize(tasks: list[dict]) -> dict:
-    ran = [task for task in tasks if "tokens" in task]
+def wrong_reason(task: dict) -> str:
+    """One line on why a question is not correct; empty when it is."""
+    if task.get("correct") is True:
+        return ""
+    if task.get("correct") is None:
+        return f"not graded: {task['status']}" + (f" ({task['error']})" if task.get("error") else "")
+    reasons = []
+    for check in task.get("checks", []):
+        if check.get("ok"):
+            continue
+        detail = check.get("detail", {})
+        kind = check.get("kind")
+        parts = []
+        if kind == "oracle_values":
+            if detail.get("missing_rows"):
+                parts.append(
+                    f"{detail['expected_rows'] - detail.get('matched_rows', 0)} of "
+                    f"{detail['expected_rows']} expected rows missing, e.g. {detail['missing_rows'][0]}"
+                )
+            if detail.get("unexpected_dates"):
+                parts.append("unexpected dates in data rows: " + ",".join(detail["unexpected_dates"]))
+        elif kind == "verdict":
+            parts.append(f"verdict {detail.get('got')!r}, expected {detail.get('expected')!r}")
+        elif kind == "screen":
+            if not detail.get("total_stated"):
+                parts.append(f"total {detail.get('expected_total')} not stated")
+            if detail.get("missing_codes"):
+                parts.append("first codes missing: " + ",".join(detail["missing_codes"][:3]))
+            elif detail.get("order") is None:
+                parts.append("first codes differ or are out of order")
+        elif kind == "answer_text":
+            parts.append("neither the code nor an honest 'cannot look up'")
+        reasons.append("; ".join(parts) or f"{kind} check failed")
+    return " | ".join(reasons) or "incorrect"
+
+
+def summarize_group(ran: list[dict], tasks: list[dict]) -> dict:
     tokens = {key: sum(task["tokens"][key] for task in ran) for key in ("input", "output", "cache_read", "cache_write", "total")}
     count = len(ran)
+    codemode = [task["codemode"] for task in ran if "codemode" in task]
+    extra = {}
+    if codemode:
+        extra["codemode"] = {
+            key: sum(item[key] for item in codemode)
+            for key in ("calls", "script_failures", "tool_calls", "tool_errors", "results_without_details")
+        }
     return {
+        **extra,
         "tasks": len(tasks),
         "ran": count,
         "correct": sum(1 for task in tasks if task.get("correct") is True),
         "incorrect": sum(1 for task in tasks if task.get("correct") is False),
         "unverified": sum(1 for task in tasks if task.get("correct") is None),
-        "infrastructure_errors": sum(1 for task in tasks if task["status"] not in ("ok", "no_answer")),
         "turns": sum(task["turns"] for task in ran),
         "avg_turns": round(sum(task["turns"] for task in ran) / count, 3) if count else 0.0,
         "tokens": tokens,
@@ -798,6 +1080,25 @@ def summarize(tasks: list[dict]) -> dict:
     }
 
 
+def summarize(tasks: list[dict]) -> dict:
+    """The top-level numbers cover the ``core`` questions (design section 9,
+    including its 2-turn average). Questions of other groups (whole-market
+    screens, the ETF-name comparison) are listed apart under ``groups``."""
+    def group_of(task):
+        return task.get("group", "core")
+
+    core = [task for task in tasks if group_of(task) == "core"]
+    summary = summarize_group([task for task in core if "tokens" in task], core)
+    summary["infrastructure_errors"] = sum(1 for task in tasks if task["status"] not in ("ok", "no_answer"))
+    summary["groups"] = {
+        name: summarize_group([t for t in tasks if group_of(t) == name and "tokens" in t],
+                              [t for t in tasks if group_of(t) == name])
+        for name in sorted({group_of(task) for task in tasks}, key=lambda n: (n != "core", n))
+    }
+    summary["wrong_reason"] = {task["id"]: wrong_reason(task) for task in tasks}
+    return summary
+
+
 def run_eval(config: dict, scope: str, ctx: dict, only: list[str] | None = None) -> dict:
     tasks = [task for task in config["tasks"] if not only or task["id"] in only]
     started = dt.datetime.now(dt.timezone.utc)
@@ -805,6 +1106,7 @@ def run_eval(config: dict, scope: str, ctx: dict, only: list[str] | None = None)
     models = sorted({model for report in reports for model in report.get("models", [])})
     return {
         "eval": config["id"],
+        "mode": ctx.get("mode", "direct"),
         "scope": scope,
         "scope_tools": ctx["allowed"],
         "model_requested": ctx.get("model"),
@@ -818,11 +1120,74 @@ def run_eval(config: dict, scope: str, ctx: dict, only: list[str] | None = None)
     }
 
 
+def regrade_report(report: dict, config: dict) -> tuple[dict, list[str]]:
+    """Grade the saved answers again with the current checks. No model, no
+    service. Returns the new report and a note per question that could not be
+    graded again (it keeps its old result)."""
+    new = copy.deepcopy(report)
+    tasks_by_id = {task["id"]: task for task in config["tasks"]}
+    today = dt.date.fromisoformat(report["today"])
+    notes: list[str] = []
+    for item in new["tasks"]:
+        task = tasks_by_id.get(item["id"])
+        if item.get("status") not in ("ok", "no_answer"):
+            item["regrade"] = "skipped: not graded in the original run"
+        elif task is None:
+            item["regrade"] = "skipped: question is not in the evaluation file"
+        elif "oracle" not in item:
+            item["regrade"] = "skipped: the report holds no expected values"
+        elif not item.get("answer"):
+            item["regrade"] = "skipped: the report holds no answer"
+        else:
+            item["group"] = task.get("group", "core")
+            item["previous_correct"] = item.get("correct")
+            try:
+                item["checks"] = evaluate_answer(task, item["answer"], item["oracle"], today)
+            except (EvalError, KeyError) as error:
+                item["regrade"] = f"skipped: {error}"
+            else:
+                item["correct"] = all(check["ok"] for check in item["checks"])
+                item["status"] = "ok"
+                item.pop("error", None)
+                item["regrade"] = "regraded"
+        if item["regrade"] != "regraded":
+            notes.append(f"{item['id']}: {item['regrade']}")
+    new["regraded_from"] = {"finished_at": report.get("finished_at"), "eval": report.get("eval")}
+    new["summary"] = summarize(new["tasks"])
+    return new, notes
+
+
+def regrade_main(args) -> int:
+    try:
+        config = load_config(Path(args.eval))
+        report = json.loads(Path(args.regrade).read_text(encoding="utf-8"))
+        new, notes = regrade_report(report, config)
+    except (EvalError, OSError, KeyError, ValueError) as error:
+        print(f"cannot regrade: {error}", file=sys.stderr)
+        return 2
+    Path(args.output).write_text(json.dumps(new, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    summary = new["summary"]
+    changed = [
+        f"{t['id']} {t['previous_correct']}->{t['correct']}"
+        for t in new["tasks"] if t.get("regrade") == "regraded" and t["previous_correct"] != t["correct"]
+    ]
+    print(
+        f"regraded {sum(1 for t in new['tasks'] if t.get('regrade') == 'regraded')}/{len(new['tasks'])} questions: "
+        f"{summary['correct']}/{summary['tasks']} core correct; changed: {', '.join(changed) or 'none'}; "
+        f"report {args.output}"
+    )
+    for note in notes:
+        print(f"  kept old result, {note}", file=sys.stderr)
+    return 0
+
+
 def parse_args(argv=None, config_names=None):
     parser = argparse.ArgumentParser(description="Evaluate the read tools with the section 9 question set.")
-    parser.add_argument("--scope", required=True, help="tool scope: baseline, new or new-no-query")
-    parser.add_argument("--socket", required=True, help="research entry socket of the data service")
+    parser.add_argument("--scope", help="tool scope: baseline, new or new-no-query")
+    parser.add_argument("--mode", choices=MODES, default="direct", help="direct: the scope's MCP tools as separate tools; codemode: only the codemode tool, tools are called from scripts")
+    parser.add_argument("--socket", help="research entry socket of the data service")
     parser.add_argument("--output", required=True, help="path of the JSON report")
+    parser.add_argument("--regrade", metavar="REPORT", help="grade the answers saved in this report again; runs no model and reads no service")
     parser.add_argument("--model", help="pi model pattern, for example provider/id")
     parser.add_argument("--thinking", help="pi thinking level")
     parser.add_argument("--eval", default=str(DEFAULT_CONFIG), help="evaluation file")
@@ -833,11 +1198,16 @@ def parse_args(argv=None, config_names=None):
     parser.add_argument("--mcp-connect", default="mcp_connect", help="mcp_connect executable")
     parser.add_argument("--events-dir", help="keep each question's pi event stream here")
     parser.add_argument("--dry-run", action="store_true", help="print the pi commands and exit; runs nothing")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not args.regrade and not (args.scope and args.socket):
+        parser.error("--scope and --socket are required unless --regrade is given")
+    return args
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    if args.regrade:
+        return regrade_main(args)
     try:
         config = load_config(Path(args.eval))
     except (EvalError, OSError, KeyError, json.JSONDecodeError) as error:
@@ -860,7 +1230,7 @@ def main(argv=None) -> int:
         for task in config["tasks"]:
             if only and task["id"] not in only:
                 continue
-            command = build_pi_command(args.pi, allowed, system_prompt, substitute(task["prompt"], today), args.model, args.thinking)
+            command = build_pi_command(args.pi, allowed, system_prompt, substitute(task["prompt"], today), args.model, args.thinking, args.mode)
             print(task["id"], json.dumps(command, ensure_ascii=False))
         return 0
 
@@ -875,12 +1245,13 @@ def main(argv=None) -> int:
         with tempfile.TemporaryDirectory(prefix="eval-read-tools-") as workdir:
             (Path(workdir) / ".pi").mkdir()
             (Path(workdir) / ".pi" / "mcp.json").write_text(
-                json.dumps(mcp_project_config(server, args.mcp_connect, args.socket)), encoding="utf-8"
+                json.dumps(mcp_project_config(server, args.mcp_connect, args.socket, mode=args.mode)), encoding="utf-8"
             )
             ctx = {
                 "config": config, "pi": args.pi, "allowed": allowed, "model": args.model,
                 "thinking": args.thinking, "today": today, "timeout": args.timeout,
                 "client": client, "runner": run_pi, "workdir": workdir, "events_dir": args.events_dir,
+                "mode": args.mode,
             }
             report = run_eval(config, args.scope, ctx, only)
     except (EvalError, OSError) as error:
@@ -892,7 +1263,7 @@ def main(argv=None) -> int:
     Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary = report["summary"]
     print(
-        f"{args.scope}: {summary['correct']}/{summary['tasks']} correct, "
+        f"{args.scope}/{args.mode}: {summary['correct']}/{summary['tasks']} core correct, "
         f"avg turns {summary['avg_turns']}, tokens {summary['tokens']['total']}, "
         f"tool errors {summary['tool_errors']}; report {args.output}"
     )
