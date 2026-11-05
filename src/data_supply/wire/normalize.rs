@@ -111,6 +111,11 @@ fn reserved(name: &str, input: &Value) -> Result<(), ApiError> {
     let Some(map) = input.as_object() else {
         return Ok(());
     };
+    // The narrow read tools (D-75) take `as_of`/`known_at` as their own
+    // top-level fields; their typed input decides what is accepted.
+    if crate::data_supply::read_tools::NAMES.contains(&name) {
+        return Ok(());
+    }
     // `as_of` is a filter field (issue-387 §4.6): a top-level spelling is a
     // wrong position, not an unsupported parameter.
     if map.get("as_of").is_some_and(|value| !value.is_null()) {
