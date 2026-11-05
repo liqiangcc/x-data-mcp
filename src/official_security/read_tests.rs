@@ -1332,3 +1332,374 @@ fn a_snapshot_is_dated_in_shanghai_not_in_utc() {
         );
     }
 }
+
+// ------------------------------------------------- ETF name chains (v2) ---
+
+const SZSE_NAME_HEADER: [&str; 3] = ["证券代码", "证券简称", "基金管理人"];
+
+/// An SZSE workbook that clears the 700-row shape floor. `named` rows come
+/// first with the given names; the rest are filler. `generated_at` varies the
+/// bytes without varying the cells.
+fn szse_named_book(named: &[(&str, &str)], generated_at: &str) -> Vec<u8> {
+    let mut rows: Vec<Vec<String>> = named
+        .iter()
+        .map(|(code, name)| vec![code.to_string(), name.to_string(), "合成基金".to_string()])
+        .collect();
+    for index in 0..etf_list::SZSE_MIN_ROWS {
+        rows.push(vec![
+            format!("16{index:04}"),
+            format!("填充ETF{index}"),
+            "合成基金".to_string(),
+        ]);
+    }
+    super::test_szse_xlsx(&SZSE_NAME_HEADER, &rows, generated_at)
+}
+
+fn sse_named_body(named: &[(&str, &str)]) -> Vec<u8> {
+    let data: Vec<serde_json::Value> = named
+        .iter()
+        .map(|(code, name)| {
+            serde_json::json!({
+                "fundCode": code,
+                "secNameFull": name,
+                "fundAbbr": "短名",
+                "listingDate": "20100101",
+                "subClass": "01",
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "pageHelp": {"pageNo": 1, "pageCount": 1, "total": data.len(), "data": data}
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn plan_of(kind: etf_list::ListKind) -> AcquisitionPlan {
+    etf_list::plans()
+        .into_iter()
+        .find(|(candidate, _)| *candidate == kind)
+        .unwrap()
+        .1
+}
+
+fn chain_of(
+    admitted: &etf_list::Admitted,
+    exchange: Exchange,
+    code: &str,
+) -> Vec<(String, String)> {
+    admitted
+        .names
+        .get(&(exchange, code.to_string()))
+        .map(|chain| {
+            chain
+                .iter()
+                .map(|step| (step.observed_from.to_string(), step.name.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn pair(day: &str, name: &str) -> (String, String) {
+    (day.to_string(), name.to_string())
+}
+
+/// Evidence §1: the SZSE workbook embeds its generation time, so identical
+/// cells still freeze as a new sha. Every refresh is a manifest line; the
+/// chain merges the repeats, and a rename and a return (A→B→A) are all there.
+#[test]
+fn szse_names_follow_every_refresh_including_a_to_b_to_a() {
+    let scenario = Scenario::new();
+    let szse = plan_of(etf_list::ListKind::Szse);
+    let sse = plan_of(etf_list::ListKind::Sse);
+    let a = "创业板ETF易方达";
+    let b = "创业板ETF";
+    let rounds: [(&str, &str, &str); 5] = [
+        // Same cells twice, different generation stamp: two shas, one name.
+        ("2026-11-05T02:00:00Z", "2026-11-05T00:10:00Z", a),
+        ("2026-11-06T02:00:00Z", "2026-11-06T00:10:00Z", a),
+        ("2026-11-07T02:00:00Z", "2026-11-07T00:10:00Z", b),
+        ("2026-11-08T02:00:00Z", "2026-11-08T00:10:00Z", b),
+        ("2026-11-09T02:00:00Z", "2026-11-09T00:10:00Z", a),
+    ];
+    for (fetched_at, generated_at, name) in rounds {
+        let body = szse_named_book(&[("159915", name), ("159916", "深证成指ETF")], generated_at);
+        freeze(&scenario, &szse, 1, None, "", "", &body, fetched_at);
+    }
+    freeze(
+        &scenario,
+        &sse,
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(&[("510300", "沪深300ETF华泰柏瑞")]),
+        "2026-11-09T02:00:00Z",
+    );
+    for source in [SourceId::SseEtfList, SourceId::SzseEtfList] {
+        record_test_refresh_run(
+            &scenario.market,
+            source,
+            "2026-11-09",
+            "2026-11-09T03:00:00Z",
+        );
+    }
+    assert_eq!(
+        scenario
+            .store
+            .records()
+            .unwrap()
+            .iter()
+            .filter(|record| record.source_id == "szse_etf_list")
+            .count(),
+        5,
+        "each SZSE refresh is a new manifest line even with unchanged cells"
+    );
+    let admitted = etf_list::read(&scenario.store, &scenario.market, day(2026, 11, 10)).unwrap();
+    assert_eq!(
+        chain_of(&admitted, Exchange::Sz, "159915"),
+        vec![
+            pair("2026-11-05", a),
+            pair("2026-11-07", b),
+            pair("2026-11-09", a),
+        ]
+    );
+    assert_eq!(
+        chain_of(&admitted, Exchange::Sz, "159916"),
+        vec![pair("2026-11-05", "深证成指ETF")],
+        "a code whose name never changed is one segment, not one per refresh"
+    );
+    assert_eq!(
+        chain_of(&admitted, Exchange::Sh, "510300"),
+        vec![pair("2026-11-09", "沪深300ETF华泰柏瑞")]
+    );
+    assert!(admitted.names_behind_current().is_empty());
+    // The selected current row carries the newest name; history rows carry none.
+    let current = admitted
+        .rows
+        .iter()
+        .find(|row| row.code == "159915")
+        .unwrap();
+    assert_eq!(current.name.as_deref(), Some(a));
+    assert!(admitted.history.iter().all(|row| row.name.is_none()));
+}
+
+/// Design §1.2 limit 2 / evidence §5: the SSE response is deterministic JSON,
+/// so the third fetch (back to A) is byte-identical to the first and the store
+/// adds no manifest line. The chain ends at B while the selected list says A,
+/// and that disagreement is reported instead of repaired with an invented day.
+#[test]
+fn sse_a_to_b_to_a_is_swallowed_by_dedupe_and_reported_not_repaired() {
+    let scenario = Scenario::new();
+    let szse = plan_of(etf_list::ListKind::Szse);
+    let sse = plan_of(etf_list::ListKind::Sse);
+    let a = "沪深300ETF华泰柏瑞";
+    let b = "沪深300ETF";
+    let body_a = sse_named_body(&[("510300", a), ("510310", "沪深300ETF易方达")]);
+    let body_b = sse_named_body(&[("510300", b), ("510310", "沪深300ETF易方达")]);
+    let szse_body = szse_named_book(&[("159915", "创业板ETF易方达")], "2026-11-05T00:10:00Z");
+    freeze(
+        &scenario,
+        &sse,
+        1,
+        None,
+        "",
+        "",
+        &body_a,
+        "2026-11-05T02:00:00Z",
+    );
+    freeze(
+        &scenario,
+        &sse,
+        1,
+        None,
+        "",
+        "",
+        &body_b,
+        "2026-11-06T02:00:00Z",
+    );
+    let lines_before = scenario.manifest_lines();
+    // Day 3: the exchange publishes A again.
+    freeze(
+        &scenario,
+        &sse,
+        1,
+        None,
+        "",
+        "",
+        &body_a,
+        "2026-11-07T02:00:00Z",
+    );
+    assert_eq!(
+        scenario.manifest_lines(),
+        lines_before,
+        "the repeat of A adds no manifest line"
+    );
+    freeze(
+        &scenario,
+        &szse,
+        1,
+        None,
+        "",
+        "",
+        &szse_body,
+        "2026-11-07T02:00:00Z",
+    );
+    // The day-3 run fetched A's bytes, so it selected A's snapshot.
+    let sha_a = crate::hash::sha256(&body_a);
+    super::record_test_refresh_run_selecting(
+        &scenario.market,
+        SourceId::SseEtfList,
+        Some(&sha_a),
+        "2026-11-07",
+        "2026-11-07T03:00:00Z",
+    );
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SzseEtfList,
+        "2026-11-07",
+        "2026-11-07T03:00:00Z",
+    );
+    let admitted = etf_list::read(&scenario.store, &scenario.market, day(2026, 11, 8)).unwrap();
+    let current = admitted
+        .rows
+        .iter()
+        .find(|row| row.code == "510300")
+        .unwrap();
+    assert_eq!(current.name.as_deref(), Some(a), "the selected list says A");
+    assert_eq!(
+        chain_of(&admitted, Exchange::Sh, "510300"),
+        vec![pair("2026-11-05", a), pair("2026-11-06", b)],
+        "the manifest has A on day 1 and B on day 2 and nothing after"
+    );
+    assert_eq!(
+        admitted.names_behind_current(),
+        vec![(Exchange::Sh, "510300".to_string())],
+        "only the code whose name actually returned is flagged"
+    );
+    assert_eq!(
+        chain_of(&admitted, Exchange::Sh, "510310"),
+        vec![pair("2026-11-05", "沪深300ETF易方达")]
+    );
+}
+
+/// The read is a pure function of the frozen bytes: the same store reads to the
+/// same chains, and an SSE rename that does round-trip through the manifest
+/// (A→B on distinct bytes) is a plain two-segment chain.
+#[test]
+fn name_chains_are_deterministic_and_an_sse_rename_is_two_segments() {
+    let scenario = Scenario::new();
+    let sse = plan_of(etf_list::ListKind::Sse);
+    let szse = plan_of(etf_list::ListKind::Szse);
+    freeze(
+        &scenario,
+        &sse,
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(&[("510300", "沪深300ETF华泰柏瑞")]),
+        "2026-11-05T02:00:00Z",
+    );
+    freeze(
+        &scenario,
+        &sse,
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(&[("510300", "沪深300ETF")]),
+        "2026-11-06T02:00:00Z",
+    );
+    freeze(
+        &scenario,
+        &szse,
+        1,
+        None,
+        "",
+        "",
+        &szse_named_book(&[], "2026-11-06T00:10:00Z"),
+        "2026-11-06T02:00:00Z",
+    );
+    for source in [SourceId::SseEtfList, SourceId::SzseEtfList] {
+        record_test_refresh_run(
+            &scenario.market,
+            source,
+            "2026-11-06",
+            "2026-11-06T03:00:00Z",
+        );
+    }
+    let first = etf_list::read(&scenario.store, &scenario.market, day(2026, 11, 7)).unwrap();
+    let second = etf_list::read(&scenario.store, &scenario.market, day(2026, 11, 7)).unwrap();
+    assert_eq!(first.names, second.names);
+    assert_eq!(
+        chain_of(&first, Exchange::Sh, "510300"),
+        vec![
+            pair("2026-11-05", "沪深300ETF华泰柏瑞"),
+            pair("2026-11-06", "沪深300ETF"),
+        ]
+    );
+    assert!(first.names_behind_current().is_empty());
+}
+
+/// A code whose name is missing in one snapshot keeps its other names, and the
+/// gap neither ends nor starts a segment.
+#[test]
+fn a_snapshot_without_a_usable_name_does_not_break_the_chain() {
+    let scenario = Scenario::new();
+    let sse = plan_of(etf_list::ListKind::Sse);
+    let szse = plan_of(etf_list::ListKind::Szse);
+    let named = |name: serde_json::Value| {
+        serde_json::json!({
+            "pageHelp": {"pageNo": 1, "pageCount": 1, "total": 1, "data": [
+                {"fundCode": "510300", "secNameFull": name, "listingDate": "20100101"}
+            ]}
+        })
+        .to_string()
+        .into_bytes()
+    };
+    for (at, name) in [
+        ("2026-11-05T02:00:00Z", serde_json::json!("甲ETF")),
+        ("2026-11-06T02:00:00Z", serde_json::json!("")),
+        ("2026-11-07T02:00:00Z", serde_json::json!("甲ETF")),
+        ("2026-11-08T02:00:00Z", serde_json::json!(null)),
+    ] {
+        freeze(&scenario, &sse, 1, None, "", "", &named(name), at);
+    }
+    freeze(
+        &scenario,
+        &szse,
+        1,
+        None,
+        "",
+        "",
+        &szse_named_book(&[], "2026-11-08T00:10:00Z"),
+        "2026-11-08T02:00:00Z",
+    );
+    for source in [SourceId::SseEtfList, SourceId::SzseEtfList] {
+        record_test_refresh_run(
+            &scenario.market,
+            source,
+            "2026-11-08",
+            "2026-11-08T03:00:00Z",
+        );
+    }
+    let admitted = etf_list::read(&scenario.store, &scenario.market, day(2026, 11, 9)).unwrap();
+    assert_eq!(
+        chain_of(&admitted, Exchange::Sh, "510300"),
+        vec![pair("2026-11-05", "甲ETF")]
+    );
+    let current = admitted
+        .rows
+        .iter()
+        .find(|row| row.code == "510300")
+        .unwrap();
+    assert_eq!(
+        current.name, None,
+        "no name is invented for the current row"
+    );
+    assert!(
+        admitted.names_behind_current().is_empty(),
+        "a missing current name is not a disagreement"
+    );
+}
