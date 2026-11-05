@@ -847,6 +847,176 @@ fn the_risk_warning_item_reads_the_table_and_the_bulletin_quarters() {
     assert_eq!(scenario.index_rows(), index);
 }
 
+/// One synthetic SSE bulletin page: `(id, code, title, day)` announcements.
+fn bulletin_page(rows: &[(&str, &str, &str, &str)]) -> Vec<u8> {
+    let data: Vec<_> = rows
+        .iter()
+        .map(|(id, code, title, day)| {
+            serde_json::json!({
+                "ORG_BULLETIN_ID": id,
+                "SECURITY_CODE": code,
+                "SECURITY_NAME": "示例",
+                "TITLE": title,
+                "BULLETIN_TYPE_DESC": "风险警示",
+                "SSEDATE": day,
+                "URL": format!("/disclosure/{id}.pdf"),
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "pageHelp": {
+            "beginPage": 1,
+            "endPage": 1,
+            "pageNo": 1,
+            "pageSize": 100,
+            "pageCount": 1,
+            "total": data.len(),
+            "data": data,
+        }
+    })
+    .to_string()
+    .into_bytes()
+}
+
+/// The same announcement answered by both title filters of one window: the
+/// event is admitted once, and the row cites the first page that states it.
+/// The daily read and `replay --scope risk_warnings` must pick the same page,
+/// so the rebuilt set has the daily item's `dataset_digest` and `--verify-only`
+/// reports `match` against the rows the daily item wrote.
+#[test]
+fn an_announcement_on_several_query_pages_cites_the_same_page_in_replay_and_the_daily_item() {
+    use crate::security_master::risk_warnings::dataset_digest;
+    use crate::source_store::replay::{ReplayRequest, Scope, replay};
+
+    let scenario = Scenario::new();
+    let today = day(2024, 7, 1);
+    let shared = (
+        "fix-shared",
+        "600001",
+        "示例一关于公司股票被实施其他风险警示的公告",
+        "2024-05-06",
+    );
+    let only_risk = (
+        "fix-risk",
+        "600002",
+        "示例二关于公司股票被实施退市风险警示的公告",
+        "2024-05-07",
+    );
+    let only_special = (
+        "fix-special",
+        "600003",
+        "示例三关于公司股票被实施其他风险警示的公告",
+        "2024-05-08",
+    );
+    // One page per title filter, with different bytes: the shared announcement
+    // sits on both, and which page it cites is the only thing that can differ.
+    let risk_page = bulletin_page(&[shared, only_risk]);
+    let special_page = bulletin_page(&[only_special, shared]);
+    assert_ne!(risk_page, special_page);
+
+    freeze_sz_short_name(&scenario, "2024-06-30T02:00:00Z");
+    let quiet = quiet_bulletin_page();
+    let windows = quarter_segments(day(2000, 1, 1), today).unwrap();
+    for (kind, plan) in risk_warnings::plans() {
+        let page = match kind {
+            risk_warnings::Kind::SzseShortName => continue,
+            risk_warnings::Kind::SseRiskWarning => &risk_page,
+            risk_warnings::Kind::SseSpecialTreatment => &special_page,
+        };
+        for window in &windows {
+            let body = if window.start() == day(2024, 4, 1) {
+                page.clone()
+            } else {
+                quiet.clone()
+            };
+            freeze(
+                &scenario,
+                &plan,
+                1,
+                Some(*window),
+                "START_DATE",
+                "END_DATE",
+                &body,
+                "2024-06-30T02:00:00Z",
+            );
+        }
+    }
+    for source in [SourceId::SzseShortName, SourceId::SseBulletin] {
+        record_test_refresh_run(
+            &scenario.market,
+            source,
+            "2024-06-30",
+            "2024-06-30T02:00:00Z",
+        );
+    }
+
+    // The daily item: the first filter's page is the first one read.
+    let admitted = risk_warnings::read_set(&scenario.store, &scenario.market, today).unwrap();
+    let cited = |code: &str| {
+        admitted
+            .set
+            .rows
+            .iter()
+            .find(|row| row.exchange == Exchange::Sh && row.code == code)
+            .and_then(|row| row.source_document_sha256.clone())
+    };
+    let risk_sha = crate::hash::sha256(&risk_page);
+    let special_sha = crate::hash::sha256(&special_page);
+    assert_eq!(cited("600001"), Some(risk_sha.clone()));
+    assert_eq!(cited("600002"), Some(risk_sha));
+    assert_eq!(cited("600003"), Some(special_sha));
+    let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
+
+    // The daily item's write, then the replay of the same store against it.
+    let evidence = serde_json::json!({"fixture": true});
+    let (manifest, member, event) = (
+        crate::hash::sha256(b"manifest"),
+        crate::hash::sha256(b"member"),
+        crate::hash::sha256(b"event"),
+    );
+    scenario
+        .market
+        .commit_risk_warnings(&crate::sqlite_market::risk_warnings::RiskWarningWrite {
+            set: &admitted.set,
+            task_id: "fixture",
+            item_id: "derived:risk_warnings",
+            generation_id: "fixture-generation",
+            generation_manifest_sha256: &manifest,
+            member_sha256: &member,
+            security_event_sha256: &event,
+            generation_evidence: &evidence,
+        })
+        .unwrap();
+    let Scenario {
+        _dir: dir,
+        store,
+        market,
+    } = scenario;
+    // The replay opens the database itself and takes its lease.
+    drop(market);
+    let database = dir.path().join("market.sqlite");
+
+    let report = replay(
+        &store,
+        &ReplayRequest::new(Some(Scope::RiskWarnings), true, Some(&database)),
+    )
+    .unwrap();
+    let scope = &report.scopes[0];
+    assert_eq!(scope.summary.as_deref(), Some(daily_digest.as_str()));
+    assert_eq!(scope.database, Some("match"), "{scope:?}");
+    assert!(scope.drift.is_empty(), "{:?}", scope.drift);
+    // And without a database the rebuilt digest is the same one.
+    let computed = replay(
+        &store,
+        &ReplayRequest::new(Some(Scope::RiskWarnings), false, None),
+    )
+    .unwrap();
+    assert_eq!(
+        computed.scopes[0].summary.as_deref(),
+        Some(daily_digest.as_str())
+    );
+}
+
 // ------------------------------------------------------------------- A-3 ---
 
 const A3_OBSERVED_AT: &str = "2008-04-14T02:00:00Z";
