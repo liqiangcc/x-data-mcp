@@ -509,7 +509,7 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 | `--dataset` | 导哪几类；`all` = daily(raw+qfq) + index + calendar + factors | `all` |
 | `--adjustment` | 日线口径；`both` 出两个文件 | `both` |
 | `--start`/`--end` | 闭区间过滤 `trade_day`（对 factors 用 `effective_day`） | 全历史 |
-| `--entities` / `--catalog-version` | 二选一；不指定则取 `catalog_head` 的当前版本全体成员 | `catalog_head` |
+| `--entities` / `--catalog-version` | 二选一；不指定则取「`catalog_head` 成员 ∪ 主表沪深 A 股 ∪ 已发布个股序列」（含退市股，M3 修正，见 data-catalog §5.3）；`--catalog-version` 只取该版目录成员 | `catalog_head` ∪ 主表 ∪ 序列 |
 | `--compression` | Parquet 压缩 | `snappy` |
 | `--row-group-rows` | 行组大小（内存与列统计的平衡） | 65536 |
 | `--dry-run` | 只算 `snapshot_id` 与清单，不写文件 | 关 |
