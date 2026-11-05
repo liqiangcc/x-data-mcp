@@ -705,6 +705,17 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
   `last_trade_date`，存续上界用 `delisting_date`，二者未知为 NULL、不互相推断。清单 `series[]` 的 ETF
   条目带同样两个日期，`limitations[]` 增加三条 ETF 说明。契约见
   [v10 §1.6](contracts/generic-data-v10.md)。
+- **默认选择包含退市股（幸存者偏差修复，Refs #446 #383）**：不传 `--entities`/`--catalog-version`
+  时，个股成员集为「目录头 ∪ 主表沪深 A 股 ∪ 已发布个股日线序列」（`src/research/read.rs` 的
+  `default_members`），所以不在当前目录的退市股进入 `daily_raw`/`daily_qfq`/`factors`，
+  `coverage.delisted_series` 按导出序列里主表有退市日的实体计数。此前的实现只取目录成员，会漏掉
+  listed-ever 首采的 338 个退市序列（vm2 preview.45 dry-run：`delisted_series=0`，series 6,984
+  条，库里 A 股实体 5,562 个）。`catalog.member_count` 仍只数目录成员，清单 schema 不变；
+  显式 `--entities` 行为不变；显式 `--catalog-version` 仍**只取那一版目录的成员**，是有意的
+  「固定目录快照」请求，天然带幸存者偏差，清单里以 `catalog_version` 标明。输入序列列表变了，
+  所以同一个库的 `snapshot_id` 与修复前不同；现行成员的序列条目与行内容不变，ETF 不变。
+  整表文件（`security_master`、`security_names`、`capital_events`、`risk_warnings`、
+  `suspensions`、`universe_intervals`、`industry_assignments`）本来就不按目录过滤，修复前后行集一致。
 - **旧快照可读**：schema 升版不改读取方约定——`scripts/export_smoke.py` 同时接受 v2/v3/v4，v2 目录
   不要求 M3 文件、`universe_intervals` 按 5 列校验；`snapshot_id` 定义不变，但 schema 字符串在
   身份里，所以同一输入的 v2/v3/v4 `snapshot_id` 不同、不会互相覆盖。
