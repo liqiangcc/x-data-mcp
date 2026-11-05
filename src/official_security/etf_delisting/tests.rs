@@ -344,10 +344,45 @@ fn szse_announcement_shape_reads_sec_code_arrays_and_publish_time() {
 
 #[test]
 fn szse_page_size_is_capped_at_fifty_and_announce_count_is_the_total() {
-    use crate::exchange_source::validate::parse_page;
+    use crate::exchange_source::validate::parse_page_with_request;
+    // The real response shape (2026-11-03 forensics, 2026-11-05 live check):
+    // the top level is only `announceCount` + `data`; the endpoint never
+    // echoes `pageNum`/`pageNo`/`pageSize`/`pageCount`, so the page number
+    // comes from the request.
     let body = serde_json::json!({
         "announceCount": 101,
-        "pageNum": 2,
+        "data": (0..50).map(|index| serde_json::json!({
+            "id": index,
+            "title": "终止上市公告",
+            "publishTime": "2026-01-02 09:00:00",
+            "secCode": [format!("159{:03}", index)],
+            "attachPath": format!("/{index}.pdf"),
+        })).collect::<Vec<_>>(),
+    });
+    let request =
+        crate::exchange_source::ExchangeRequest::new(SourceId::SzseEtfNoticeAnn, SZSE_URL)
+            .paged(PagingFormat::SzseAnnouncement, 2);
+    let envelope = parse_page_with_request(
+        PagingFormat::SzseAnnouncement,
+        None,
+        body.to_string().as_bytes(),
+        Some(&request),
+    )
+    .unwrap();
+    assert_eq!(envelope.page, 2);
+    assert_eq!(envelope.page_count, 3);
+    assert_eq!(envelope.rows, 50);
+    assert_eq!(envelope.total, Some(101));
+}
+
+#[test]
+fn szse_echoed_page_must_match_the_request() {
+    use crate::exchange_source::validate::parse_page_with_request;
+    // If the endpoint ever echoes a page field it must agree with the
+    // request; a disagreement is a source defect, not a page to trust.
+    let body = serde_json::json!({
+        "announceCount": 100,
+        "pageNum": 1,
         "data": (0..50).map(|index| serde_json::json!({
             "title": "终止上市公告",
             "publishTime": "2026-01-02 09:00:00",
@@ -355,16 +390,59 @@ fn szse_page_size_is_capped_at_fifty_and_announce_count_is_the_total() {
             "attachPath": format!("/{index}.pdf"),
         })).collect::<Vec<_>>(),
     });
-    let envelope = parse_page(
+    let request =
+        crate::exchange_source::ExchangeRequest::new(SourceId::SzseEtfNoticeAnn, SZSE_URL)
+            .paged(PagingFormat::SzseAnnouncement, 2);
+    let error = parse_page_with_request(
         PagingFormat::SzseAnnouncement,
         None,
         body.to_string().as_bytes(),
+        Some(&request),
     )
-    .unwrap();
-    assert_eq!(envelope.page, 2);
-    assert_eq!(envelope.page_count, 3);
-    assert_eq!(envelope.rows, 50);
-    assert_eq!(envelope.total, Some(101));
+    .unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+}
+
+#[test]
+fn szse_plan_posts_iso_se_date_bounds() {
+    // Live-verified 2026-11-05: `seDate` must be `YYYY-MM-DD`; the compact
+    // `YYYYMMDD` shape answers HTTP 200 with `{}`, which fails closed.
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    let (_, plan) = plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == AnnouncementKind::Szse)
+        .unwrap();
+    let request = plan.request(2, Some(window), "seDateStart", "seDateEnd");
+    assert_eq!(request.method.as_deref(), Some("POST"));
+    let body: serde_json::Value = serde_json::from_str(request.body.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        body["seDate"],
+        serde_json::json!(["2026-01-01", "2026-03-31"])
+    );
+    assert_eq!(body["channelCode"], serde_json::json!(["etfNotice_disc"]));
+    assert_eq!(body["pageSize"], 50);
+    assert_eq!(body["pageNum"], 2);
+}
+
+#[test]
+fn sse_plan_keeps_compact_window_dates() {
+    // `COMMON_PL_JJXX_JJGG_L` is verified live with `START_DATE=20260101`;
+    // only the SZSE announcement channel needs the dashed shape.
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    let (_, plan) = plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == AnnouncementKind::Sse)
+        .unwrap();
+    let request = plan.request(1, Some(window), "START_DATE", "END_DATE");
+    assert_eq!(request.params["START_DATE"], "20260101");
+    assert_eq!(request.params["END_DATE"], "20260331");
+}
+
+#[test]
+fn szse_empty_object_response_is_a_format_failure_not_zero_rows() {
+    use crate::exchange_source::validate::parse_page;
+    let error = parse_page(PagingFormat::SzseAnnouncement, None, b"{}").unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
 }
 
 #[test]

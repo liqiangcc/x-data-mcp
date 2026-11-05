@@ -23,7 +23,7 @@ use serde_json::Value;
 
 use std::collections::BTreeMap;
 
-use super::request::{PagingFormat, Segment};
+use super::request::{ExchangeRequest, PagingFormat, Segment};
 use chrono::NaiveDate;
 
 /// How many rows one page carried and which page of how many it is.
@@ -165,6 +165,23 @@ pub fn parse_page(
     declared_tabkey: Option<&str>,
     body: &[u8],
 ) -> Result<PageEnvelope, ValidateError> {
+    parse_page_with_request(format, declared_tabkey, body, None)
+}
+
+/// [`parse_page`] with the canonical request available.
+///
+/// Only [`PagingFormat::SzseAnnouncement`] needs it: that endpoint answers
+/// `{announceCount, data}` and never echoes `pageNum`/`pageNo`/`pageSize`/
+/// `pageCount` (2026-11-03 forensics and 2026-11-05 live check), so the page
+/// number comes from the request, not the response. A response that *does*
+/// echo a page number must agree with the request or the page fails closed;
+/// every other format keeps reading its echoed page exactly as before.
+pub fn parse_page_with_request(
+    format: PagingFormat,
+    declared_tabkey: Option<&str>,
+    body: &[u8],
+    request: Option<&ExchangeRequest>,
+) -> Result<PageEnvelope, ValidateError> {
     if format == PagingFormat::SzseXlsx {
         let sheet = super::xlsx::read_first_sheet(body).map_err(|error| ValidateError::Format {
             detail: error.to_string(),
@@ -185,7 +202,9 @@ pub fn parse_page(
         PagingFormat::SsePageHelpUnpaged => parse_sse_unpaged(&value),
         PagingFormat::SseSoaPageNo => parse_sse_soa(&value),
         PagingFormat::SzseMetadata => parse_szse(&value, declared_tabkey),
-        PagingFormat::SzseAnnouncement => parse_szse_announcement(&value),
+        PagingFormat::SzseAnnouncement => {
+            parse_szse_announcement(&value, request.and_then(szse_request_page))
+        }
         PagingFormat::SzseMetadataV2 => parse_szse_v2(&value),
         PagingFormat::SzseMetadataV1 => parse_szse_first_block(&value),
         PagingFormat::SzseXlsx => unreachable!("XLSX is read before the JSON envelope"),
@@ -262,11 +281,34 @@ fn parse_sse_unpaged(value: &Value) -> Result<PageEnvelope, ValidateError> {
     })
 }
 
+/// The page a `SzseAnnouncement` request declared.
+///
+/// The page number lives in the request: `PagingFormat::apply_page` writes
+/// `pageNum` into `params` and `post_json` mirrors it into the body, so either
+/// spelling answers the same question.
+fn szse_request_page(request: &ExchangeRequest) -> Option<u32> {
+    if let Some(page) = request
+        .params
+        .get("pageNum")
+        .and_then(|value| value.trim().parse::<u32>().ok())
+    {
+        return Some(page);
+    }
+    let body = request.body.as_deref()?;
+    let value: Value = serde_json::from_str(body).ok()?;
+    value.get("pageNum").and_then(number).map(clamp_u32)
+}
+
 /// SZSE `announcement/annList`: a top-level or nested `data` row array plus
 /// `announceCount`. `pageSize` is the measured 50-row cap, so the declared
-/// page count is derived from `announceCount`; a response that echoes its own
-/// `pageCount`/`pageNum` wins.
-fn parse_szse_announcement(value: &Value) -> Result<PageEnvelope, ValidateError> {
+/// page count is derived from `announceCount`. The endpoint does not echo the
+/// page fields, so `request_page` — the `pageNum` the request sent — is the
+/// page identity; an echoed `pageNum`/`pageNo` that disagrees with it is a
+/// source defect and fails closed.
+fn parse_szse_announcement(
+    value: &Value,
+    request_page: Option<u32>,
+) -> Result<PageEnvelope, ValidateError> {
     let data = value.get("data").ok_or_else(|| ValidateError::Format {
         detail: "missing data object/array".to_string(),
     })?;
@@ -291,12 +333,23 @@ fn parse_szse_announcement(value: &Value) -> Result<PageEnvelope, ValidateError>
         .get("announceCount")
         .and_then(number)
         .or_else(|| value.get("announceCount").and_then(number));
-    let page = value
+    let echoed_page = value
         .get("pageNum")
         .and_then(number)
         .or_else(|| metadata.get("pageNum").and_then(number))
-        .or_else(|| value.get("pageNo").and_then(number))
-        .unwrap_or(1);
+        .or_else(|| value.get("pageNo").and_then(number));
+    let page = match (request_page, echoed_page) {
+        (Some(requested), Some(echoed)) if echoed != u64::from(requested) => {
+            return Err(ValidateError::Format {
+                detail: format!(
+                    "response echoes page {echoed} but the request asked for page {requested}"
+                ),
+            });
+        }
+        (Some(requested), _) => requested,
+        (None, Some(echoed)) => clamp_u32(echoed),
+        (None, None) => 1,
+    };
     let page_size = value
         .get("pageSize")
         .and_then(number)
@@ -313,7 +366,7 @@ fn parse_szse_announcement(value: &Value) -> Result<PageEnvelope, ValidateError>
                 .unwrap_or_else(|| u32::from(!rows.is_empty()))
         });
     Ok(PageEnvelope {
-        page: clamp_u32(page),
+        page,
         page_count,
         rows: rows.len(),
         total,

@@ -201,7 +201,10 @@ pub fn plans() -> Vec<(AnnouncementKind, AcquisitionPlan)> {
         PagingFormat::SzseAnnouncement,
     )
     .param("channelCode", SZSE_CHANNEL)
-    .compact_dates()
+    // `seDate` takes `YYYY-MM-DD`: the endpoint answers HTTP 200 with an
+    // empty `{}` body for the compact `YYYYMMDD` shape, which the envelope
+    // parser refuses (`missing data object/array`). Verified live
+    // 2026-11-05; the 2026-11-03 forensics used the dashed shape.
     .zero_rows_not_observed();
     vec![(AnnouncementKind::Sse, sse), (AnnouncementKind::Szse, szse)]
 }
