@@ -46,6 +46,8 @@ jobs:
         run: python3 -B -m unittest discover -s scripts -p 'test_boll_analysis.py'
       - name: v8 read-surface token budgets (fixtures only, no data)
         run: python3 -B -m unittest discover -s scripts -p 'test_v8_token_budget.py'
+      - name: Read-tool evaluation harness (fake sessions, no model, no data)
+        run: python3 -B -m unittest discover -s scripts -p 'test_eval_read_tools.py'
       - run: cargo fmt --check
       - if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
