@@ -2582,6 +2582,155 @@ fn seed_names_refresh_run(f: &Fixture, verified_through: &str) {
         .unwrap();
 }
 
+fn seed_risk_warnings(f: &Fixture) {
+    use crate::security_master::coverage::CoverageWindow;
+    use crate::security_master::risk_warnings::RiskWarningSet;
+    use crate::security_master::{Exchange, RiskStatus, RiskWarningInterval};
+    use crate::sqlite_market::risk_warnings::RiskWarningWrite;
+
+    let day = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+    let set = RiskWarningSet {
+        rows: vec![RiskWarningInterval {
+            exchange: Exchange::Sz,
+            code: "002731".into(),
+            effective_from: day(2026, 1, 5),
+            effective_to: None,
+            status: RiskStatus::OtherRiskWarning,
+            raw_status_code: "ST".into(),
+            announced_at: None,
+            known_at: Some(day(2026, 11, 1)),
+            source_kind: "szse_name_history".into(),
+            source_record_id: Some("sz|002731|2026-01-05".into()),
+            source_document_sha256: Some("a".repeat(64)),
+        }],
+        coverage: vec![
+            CoverageWindow {
+                source_kind: "szse_name_history".into(),
+                exchange: Exchange::Sz,
+                from: day(1994, 1, 3),
+                to: day(2026, 11, 1),
+                observed: true,
+                rows: 1,
+                reason: "fixture".into(),
+            },
+            CoverageWindow {
+                source_kind: "exchange_announcement".into(),
+                exchange: Exchange::Sh,
+                from: day(2000, 1, 1),
+                to: day(2003, 12, 31),
+                observed: false,
+                rows: 0,
+                reason: "pageCount=0".into(),
+            },
+        ],
+        pending_sources: Vec::new(),
+    };
+    f.backend
+        .commit_risk_warnings(&RiskWarningWrite {
+            set: &set,
+            task_id: "task-risk",
+            item_id: "derived:risk_warnings",
+            generation_id: "gen-risk",
+            generation_manifest_sha256: &"51".repeat(32),
+            member_sha256: &"52".repeat(32),
+            security_event_sha256: &"53".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-risk"}),
+        })
+        .unwrap()
+        .expect("a non-empty set registers its version");
+}
+
+fn query_risk_warnings(f: &Fixture) -> Value {
+    f.api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.risk_warnings",
+                "contract_version": "v2",
+                "selection": {"kind": "single", "entity": "sz.002731"},
+                "filter": {"kind": "daily", "start_date": "2026-01-01",
+                           "end_date": "2026-12-31", "as_of": "2026-07-07"},
+                "version": {"kind": "latest_per_entity"}
+            }),
+        )
+        .unwrap()
+}
+
+/// A registered `market.risk_warnings` version never says the source is
+/// pending (the D-58 source is admitted and written), keeps its
+/// `coverage_status`, and states the real SH/BJ limits in `limitations`.
+#[test]
+fn registered_risk_warnings_carry_no_pending_text_and_state_real_limits() {
+    let f = fixture();
+    seed_risk_warnings(&f);
+
+    let page = query_risk_warnings(&f);
+    assert_eq!(page["row_count"], 1, "{page}");
+    assert_eq!(page["versions"][0]["status"], "present");
+    let metadata = &page["metadata"];
+    assert_eq!(metadata["coverage_status"], "complete");
+    let reason = metadata["coverage_reason"].as_str().unwrap();
+    assert!(!reason.contains("pending"), "{reason}");
+    assert!(!reason.contains("#308"), "{reason}");
+    assert!(reason.contains("1 SZ"), "{reason}");
+    assert!(reason.contains("1 not_observed"), "{reason}");
+    let limitations = page["limitations"].to_string();
+    assert!(!limitations.contains("pending"), "{limitations}");
+    assert!(limitations.contains("announcement events"), "{limitations}");
+    assert!(limitations.contains("BJ is not available"), "{limitations}");
+    assert!(
+        limitations.contains("sh: 1 window(s) between 2000-01-01 and 2003-12-31"),
+        "{limitations}"
+    );
+    assert!(limitations.contains("never `normal`"), "{limitations}");
+}
+
+/// An unregistered dataset stays `absent` and explains the empty answer in
+/// `limitations`; no metadata (so no `coverage_reason`) is invented.
+#[test]
+fn unregistered_risk_warnings_stay_absent_with_a_reason() {
+    let f = fixture();
+    let page = query_risk_warnings(&f);
+    assert_eq!(page["row_count"], 0, "{page}");
+    assert_eq!(page["versions"][0]["status"], "absent");
+    assert!(
+        page["metadata"].is_null() || page.get("metadata").is_none(),
+        "{page}"
+    );
+    let limitations = page["limitations"].to_string();
+    assert!(
+        limitations.contains("market.risk_warnings has no registered version"),
+        "{limitations}"
+    );
+}
+
+/// An unknown `operation` names the tools this entry serves, so the caller
+/// can retry with `operation=query_data`.
+#[test]
+fn unknown_capability_operation_lists_the_available_tools() {
+    let f = fixture();
+    let err = f
+        .api
+        .call("get_data_capabilities", json!({"operation": "query"}))
+        .unwrap_err();
+    assert_eq!(err.code, "unsupported_operation");
+    assert!(
+        err.message.contains("operation not registered"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("query_data"), "{}", err.message);
+    assert!(
+        err.message.contains("get_data_capabilities"),
+        "{}",
+        err.message
+    );
+    // The suggested spelling really works.
+    f.api
+        .call("get_data_capabilities", json!({"operation": "query_data"}))
+        .unwrap();
+}
+
 fn query_security_names(f: &Fixture, known_at: Option<&str>) -> Value {
     let mut request = json!({
         "dataset": "market.security_names",
