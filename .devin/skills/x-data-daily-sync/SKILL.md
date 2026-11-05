@@ -34,7 +34,7 @@ allowed-tools:
 
 本 Skill 只编排结构化事实。禁止：shell/exec/SSH/curl/SQLite/读写本地文件、`run_worker_once`、自行签发任何验证结论、解析自由文本判断状态。所有调用只使用上方 allowlist 内的 MCP 工具；工具在本会话不可用（名称不符或 server 未注册）→ 立即停止并报告 `SKILL_CONTRACT_MISMATCH`。
 
-参数一律按 `tools/list` 中该工具的 `inputSchema` 传：schema 声明 `contract_version` 时必须为 `"v1"`（唯一例外是 §4 的 M2 数据集回读：这些数据集只在 v2 面可读，显式传 `"v2"`）；schema 未声明的字段一律不传（输入对象 `deny_unknown_fields`，多余字段即拒绝）。`update_data`/`start_collection`/`acquire_generation`/`verify_generation`/`activate_generation` 各自使用独立且唯一的 `request_id`；`plan_market_update` 只读、不建任务，`run_market_update` 每次受理需要一个独立且唯一的 `request_id`。
+参数一律按 `tools/list` 中该工具的 `inputSchema` 传：schema 声明 `contract_version` 时必须为 `"v1"`（例外只有两处，显式传 `"v2"`：§4 的 M2 数据集回读，这些数据集只在 v2 面可读；§3.3a 的 ETF 新成员补采，`scope` 选择只在 `start_collection` v2 面存在）；schema 未声明的字段一律不传（输入对象 `deny_unknown_fields`，多余字段即拒绝）。`update_data`/`start_collection`/`acquire_generation`/`verify_generation`/`activate_generation` 各自使用独立且唯一的 `request_id`；`plan_market_update` 只读、不建任务，`run_market_update` 每次受理需要一个独立且唯一的 `request_id`。
 
 每个 MCP server 首次使用前按客户端要求调用一次 `mcp_list_tools`。该结果只用于确认 server
 可发现；registry 很大导致输出截断时，**不得读取 overflow 文件、不得使用 shell/exec，
@@ -142,6 +142,21 @@ A 股日线的完整有序步骤仍是 `docs/contracts/generic-data-v7.md` §7.1
 补漏后插入 §3.3a 的 ETF 批次，三者都没有改变 A 股 plan/run 的请求字节）。
 **两步补漏（§3.3、§3.6）不可省略**。
 
+**必做步骤清单。** 进入 §3（步骤 1 已确认 `day` pending、§2 的 generation 已 active）后，下列步骤
+按顺序全部走完，除 §6 全局停止条件外，任何中间结果都不是提前结束的理由：
+
+```text
+§3.0 → §3.1 → §3.2 → §3.3 → §3.3a → §3.4 → §3.5 → §3.6 → §4
+```
+
+- 条件性步骤（§3.3 没有 `REVISION_UNVERIFIED`、§3.3a ETF `eligible` 为 0 且无新成员、§3.6 没有需重推实体）
+  也要执行判断，并在报告里写“已检查，无需动作”及依据；这算已执行。v8 运行时没有 `refresh_exchange_sources`
+  时 §3.0 按该节规定跳过，报告里写明原因，同样算已执行。
+- 任务终态 `partially_failed` **不是**全局停止条件（§3.2、§3.3）。按 `failed_by_reason` 路由，继续后面的步骤。
+- 结论规则：有任何必做步骤没有执行（命中 §6 停止、预算耗尽、工具不可用或漏做），结论只能写 `stopped` 或
+  `inconclusive`，并逐条列出没做的步骤及原因；**不得写 `completed`**。只有清单里每一步都已执行时才可写
+  `completed`；已执行但失败的部分（如 §3.3a 的 ETF 失败）在报告里单列，不用来代替上述判断。
+
 `market.daily` / `market.yearly` 的 `query_data`、`list_data_versions` 与
 `get_data_availability` **只接受** `selection:{"kind":"single"}` 或
 `selection:{"kind":"batch","entities":[…]}`；不接受 `catalog` 或 `default` selection。
@@ -156,7 +171,7 @@ v9 起同源的四个派生 item（`derived:security_master`、`derived:security
 刷新距今不超过 `H=14` 天。顺序属于 Skill：**先刷新来源，再 plan/run 日更**；一次完整日更的
 顺序是 **`tail` → `plan`/`run_market_update` →（每周）`full`**。
 
-- 每次日更前：`refresh_exchange_sources({"mode":"tail"})`（开窗 + 上一自然季度；整表类重读
+- 每次日更前（**必做，不可跳过**，plan 之前先完成）：`refresh_exchange_sources({"mode":"tail"})`（开窗 + 上一自然季度；整表类重读
   整表，深市上市/简称先探页 1）。`tail` **同步返回** `RefreshReport`（无 task ref，不必轮询），
   按其中的 `status`、`requests`、`failed_windows`、`unobserved_windows`、`revisions` 复核；
   `dry_run:true` 只列计划、不发请求。
@@ -218,6 +233,8 @@ A 股批次**不传** `scope`：plan/run 的请求字节与 v9 逐字节相同�
 （item_count>100）按 `unfinished` keyset 分页（`page_size`≤100），只看
 `status`/计数/`next_cursor`，**不期待逐 item 结果数组**。终态为
 `succeeded`/`partially_failed`/`failed`；全市场日更 `partially_failed` 是正常收尾。
+**`partially_failed` 不是全局停止条件**：先读 `failed_by_reason` 并按 §3.3 路由（例如 6 个
+`REVISION_UNVERIFIED` 要走前向窗口补漏），再继续 §3.3a、§3.4–§3.6、§4。只有 `failed`（任务级失败）才按 §6 处理。
 
 本任务除 plan 的实体 item 外，worker 还会追加 **17** 个**服务器内部派生 item**
 （ETF-only 计划不追加，见 §3.3a；省略 `scope` 或 `sh_sz_a_and_etf_current` 的含 A 股计划
@@ -280,7 +297,8 @@ A 股批次**不传** `scope`：plan/run 的请求字节与 v9 逐字节相同�
 
 ### 3.3 日线失败路由（按 `failed_by_reason` 补漏，不可省略）
 
-读顶层 `plan.failed_by_reason`（`reason_code → 计数`）；逐项 `reason_code` 的动作：
+`partially_failed` 到达这里是正常路径，不是收尾点。读顶层 `plan.failed_by_reason`（`reason_code → 计数`）；
+逐项 `reason_code` 的动作：
 
 - `REVISION_UNVERIFIED`：上游对已发布历史重算（除权/复权），plan/run 的整段历史刷新
   窗口下按设计 fail-closed。对每个此类实体用 `update_data` 显式**前向窗口**
@@ -320,10 +338,9 @@ plan_market_update {dataset:"market.daily", contract_version:"v1", scope:"sh_sz_
   会重算出不同的计划并返回 `plan_stale`。本 Skill 固定用**分任务**形态，不用
   `sh_sz_a_and_etf_current`。ETF plan 默认同样**不传** `end_date`；
   `target_day_source == "today_fallback"` → 停止 ETF 这部分并报告。
-- **成员**：`sh_sz_etf_current` ∩ 已有 ETF 不复权序列；没有序列的 ETF 不进 plan。ETF 首采是
-  一次性操作，走 `start_collection` v2 的 ETF scope（`sh_sz_etf_current`/
-  `sh_sz_etf_listed_ever`），不属于日更，本 Skill 不在日更里发。`eligible` 为 0（还没有
-  ETF 序列）→ 不发 run，报告后继续 §3.4。
+- **成员**：`sh_sz_etf_current` ∩ 已有 ETF 不复权序列；没有序列的 ETF 不进 plan。没有序列的新
+  上市 ETF 由本节末尾的“新成员补采”建立序列（首采区别见该段）。`eligible` 为 0（还没有
+  ETF 序列）→ 不发 ETF run，直接做新成员补采，再继续 §3.4。
 - **不追加派生 item**：ETF-only 计划**不**追加 17 个服务器内部派生 item（指数基准、交易日历、
   5 个全市场数据集、行业快照、退市序列检查）。这些是 A 股/全局事实，不计入 ETF 批次。
 - **失败隔离**：ETF item 失败**不影响** A 股（各自在自己的事务里记录结果），也不回滚 A 股已
@@ -337,9 +354,44 @@ plan_market_update {dataset:"market.daily", contract_version:"v1", scope:"sh_sz_
 - **计时**：ETF 任务耗时单独汇报（`created_at` → 终态 `last_progress_at`），**不计入** D-63
   的 A 股日更 write-loop 口径（D-63 只看不带 `scope` 的 A 股 `run_market_update`）。
 
+**新成员补采（§3.3a 的最后一步，ETF 日线 run 终态之后、§3.4 之前）。** 日更 plan 只含已有 ETF 序列的成员，
+新上市 ETF（例如 2026-11-05 上市的 `sz.158081`）没有序列，永远进不了 plan，所以每次日更在 ETF 批次终态后
+补采一次：
+
+```text
+start_collection {request_id:<当日唯一，如 daily-etf-collect-<YYYYMMDD>-<n>>,
+                  dataset:"market.daily", contract_version:"v2",
+                  selection:{"kind":"scope","scope":"sh_sz_etf_current"}}
+```
+
+- 形状依据 `docs/contracts/generic-data-v10.md` §1.1 与 `generic-data-v8.md` §5.1：v2 的 `selection`
+  是 `{"kind":"scope","scope":…}`，不是 v1 的 `explicit`/`default`，也不是 `securities.catalog` 用的
+  `{"scope":"current_sh_sz_a"}`；不传实体列表，成员由服务端解析。必须在 ETF 日线 run（及其在途任务）
+  终态之后发，否则 `range_conflict`/`plan_in_progress`。
+- 服务端只收“`sh_sz_etf_current` 里**尚无序列**且 active generation 的 `.day` 有 bar”的成员，按实体排序最多取
+  500 个；已有序列的成员不会入批，所以幂等，每天发不会重复采集。
+- 没有符合条件的成员时，调用被拒，`invalid_arguments`，信息含
+  `resolved listed-ever selection is empty; nothing to collect`（`not_committed`，无副作用）。这是**正常结果**，
+  不是失败，不换 `request_id` 重试，报告“无新 ETF 成员”后继续 §3.4。其他 `invalid_arguments`（如缺少已激活 generation 或
+  `security_master`）才是受理失败。
+- 有新成员（受理成功）→ 用 §3.2 的规则轮询到终态，预算同 §3.7（10 分钟）。报告里写：`request_id`/`task_id`、
+  入批实体清单、每个 item 的结果（`published`/`no_change`/失败原因）、`absent` 数量。
+- `absent`（名单有、`.day` 无 bar）是已知情况：沪市 526/551/589 段约 86 只官方 `hsjday` 没有成员，
+  evidence 里记为 `source_member_absent`/`source_member_empty`，**不算失败**，不重试。数量明显偏离 86 时只在报告里
+  标出差异，不当作停止条件。
+- 单次最多 500；若受理的 item 数正好是 500，说明可能还有剩余，用新的 `request_id` 再发一次，最多共 3 次。少于 500 即不再发
+  （失败的 item 仍没有序列，下次日更会再被选中，所以不得循环到 `nothing to collect`）。
+- 单个 item `needs_verification`/窗口内无 bar 属预期 fail-closed（同 §3.7），不重试、不绕过。
+- 任务级失败、受理被拒（`nothing to collect` 除外）、大面积同类 item 失败 → **只停止 ETF 这部分**：报告并照常进入 §3.4，
+  不回滚 A 股，不用 `update_data` 补 ETF。
+- **和一次性全量首采的区别**：一次性全量首采是操作员在部署/升级后显式发起，用
+  `sh_sz_etf_listed_ever`（含退市 ETF）或首次建库时的 `sh_sz_etf_current`，一次采完全部历史缺口，不属于日更。
+  这里的每日补采只用 `sh_sz_etf_current`，只补前一次日更之后新出现的在市成员（通常个位数），不碰退市 ETF，
+  是日更的必做步骤。本 Skill 仍不得发 `sh_sz_etf_listed_ever` 或 `sh_sz_a_listed_ever`（§3.9）。
+
 ### 3.4 年线 plan
 
-日线任务（含 §3.3 的补漏任务与 §3.3a 的 ETF 批次）**全部终态**后，调
+日线任务（含 §3.3 的补漏任务与 §3.3a 的 ETF 批次及新成员补采）**全部终态**后，调
 `plan_market_update`（`{"dataset":"market.yearly","contract_version":"v1"}`；同 §3.1 默认
 **不传** `end_date`）。若 `market.daily` 存在非终态更新任务 → `daily_update_inflight`，
 等待或报告，不提交。复核 `target_day`/`target_day_source`（`today_fallback` → 停止并报告）、
@@ -472,7 +524,7 @@ request_id。**推荐每个子批用新的唯一 request_id**，事后才能按 
 退市股没有 published daily head，日更 `plan`/`run` 永远不会把它们列为 eligible：
 `default_selection` 只取当前目录成员。M3 PR-4 提供了一条**显式**的一次性入口，
 只能在操作员明确要求时执行（典型时机：部署/升级后执行一次），**不属于任何日更
-plan，日更 AI 不得自行发起**。
+plan，日更 AI 不得自行发起**（不含 §3.3a 的每日 ETF 新成员补采：它只用 `sh_sz_etf_current`，是日更必做步骤）。
 
 前置条件：当前 generation 已 verified+active；`market.security_master` 已有 published
 version（否则解析直接 `invalid_arguments`，不要改用 v1 explicit 猜测名单）。
@@ -528,7 +580,7 @@ start_collection{dataset:"market.daily", contract_version:"v2",
   见 `src/data_supply/plan.rs:171-176`、`src/data_supply/wire.rs:72-77`。
   未准入的数据集回读为 `row_count=0`、`versions=[]`
   （`market.risk_warnings` 的 #308、`market.price_limit_rules` 的 A-7）：只报告，不算失败。
-- 汇报：active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。ETF 批次单独汇报其 `plan_id`/`task_id`、item 结果（`no_change`/`metadata`/追加尾部）与耗时（`created_at` → 终态 `last_progress_at`）；该耗时**不计入** D-63 的 A 股 write-loop。收尾时复核 plan：`eligible` 只剩 `last_record` < `target_day` 的停牌实体即视为完成，不再为它们发 run（§3.1）。
+- 汇报：必做步骤清单的逐步执行情况（每步已执行/已检查无需动作/未执行及原因）与结论规则（见 §3 开头：有未执行步骤只能写 `stopped`/`inconclusive`）、active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。ETF 批次单独汇报其 `plan_id`/`task_id`、新成员补采的结果（`nothing to collect` 或 `request_id`/`task_id`/实体/结果）、item 结果（`no_change`/`metadata`/追加尾部）与耗时（`created_at` → 终态 `last_progress_at`）；该耗时**不计入** D-63 的 A 股 write-loop。收尾时复核 plan：`eligible` 只剩 `last_record` < `target_day` 的停牌实体即视为完成，不再为它们发 run（§3.1）。
 
 可选：派生 `market.yearly` — 走 §3.4/§3.5/§3.6（plan/run + 显式重推），
 `selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
@@ -546,8 +598,9 @@ start_collection{dataset:"market.daily", contract_version:"v2",
 `unknown` 观测、`day` 未明确 pending、缺少同次 day-pending 证据的 inflight acquisition、
 `not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝
 （`update_data` 显式批次先按 §3.8 归因，per-item 类别走分裂重试，其余才停）、
-大面积同类 per-item 失败、轮询预算耗尽、工具不可用。per-item
-`needs_verification` 不属全局停止（见 §3.3/§3.7：`REVISION_UNVERIFIED` 走显式补漏，
+大面积同类 per-item 失败、轮询预算耗尽、工具不可用。任务终态 `partially_failed` 与 per-item
+`needs_verification` 不属全局停止（见 §3.2/§3.3/§3.7：`REVISION_UNVERIFIED` 走显式补漏，
 其余聚合上报为 fail-closed 集合）。**ETF 批次（§3.3a）是例外**：ETF 任务级失败只停止 ETF
 这部分（报告后继续 §3.4 年线），不回滚 A 股、不重试、不用 `update_data` 补 ETF。停止时旧
-heads 与旧 active generation 保持不变；报告已完成的步骤、最后结构化状态和恢复用 refs。
+heads 与旧 active generation 保持不变；报告已完成的步骤、**未执行的必做步骤（§3 开头清单）**、最后结构化状态和恢复用 refs，
+结论写 `stopped` 或 `inconclusive`，不写 `completed`。
