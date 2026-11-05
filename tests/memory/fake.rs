@@ -58,6 +58,7 @@ impl ReadRepository for Fake {
             manifest: vec![],
             rows: vec![],
             temporal: None,
+            limitations: vec![],
         };
         for entity in &plan.entities {
             let reference = version_ref(entity);

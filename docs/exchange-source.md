@@ -388,11 +388,20 @@ D-70 Q1 准入的两份 ETF 名录也走同一入口，不另起抓取链路：
   `single_page_only` 保证分页被忽略时 fail-closed。
 - `szse_etf_list`：`ShowReport?SHOWTYPE=xlsx&CATALOGID=1945`，单页 xlsx（770 行），
   需要 `Referer` + 浏览器 UA；信封解析器 `exchange-szse-xlsx-v1` 从工作簿读数据行数。
-- 业务字段 parser 版本 `etf-list-v1` 只进 `derived:security_master` 的 item 证据
-  `etf_source`；清单的 `parser_version` 仍是信封版本，`--scope exchange` 重放只重建
+- 业务字段 parser 版本 `etf-list-v2` 只进 `derived:security_master` 的 item 证据
+  `etf_source`（v1→v2 只多读名称，见下，身份行不变）；清单的 `parser_version` 仍是信封版本，`--scope exchange` 重放只重建
   行数/页数索引。`ebs` 只是报价锚，不是身份来源（D-70 Q1）。
 - 空名单、重复代码、SSE `pageHelp.total` 与行数不符、SSE 缺 `listingDate`、SZSE 行数
   低于形状下界都 fail-closed；名单移除不写退市日（§3.3）。
+- `etf-list-v2` 读名称（只解析，不写库，不进任何读面；`docs/tasks/etf-name-search.md` PR-1）：
+  SSE 取 `secNameFull`、SZSE 取「证券简称」，`fundAbbr` 不进 `name`。只做 trim 和内部空白
+  合并，不做全半角和大小写折叠（那是搜索侧的归一化）。名称为空、null 或缺列是 `None`，
+  不用 `fundAbbr`、代码或旧快照补，也不使该行或整份名单失败。
+- 名称链 `Admitted::names`：每个代码一串 `(首次观测日, 名称)`，只由清单字节得出。SZSE 的
+  xlsx 内嵌生成时间，同内容也换 sha，所以每次刷新都是一份快照；SSE 是确定性 JSON，
+  内容回到旧值（A→B→A）时 `(sha256, source, origin)` 去重不追加清单行，链停在 B，而
+  选中的当前名单仍是 A。这一差异由 `Admitted::names_behind_current` 列出，解析层不补段：
+  可用的日期只有刷新 run 的 `verified_through`，它每次都变，补出来的链会随时钟变化。
 - 身份是**单调**的：读取时取所有已冻结名单快照的并集，首次出现定 `effective_from`；
   较新快照移出的代码保留 class=2 行并以第一次缺失观测作 `effective_to`，
   `sh_sz_etf_current` 不再包含它、`sh_sz_etf_listed_ever` 仍包含。

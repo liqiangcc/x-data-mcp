@@ -282,7 +282,7 @@ fn real_service_entry_selects_the_tool_surface_and_refuses_unknown_entries() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(tools.len(), 5, "{names:?}");
+    assert_eq!(tools.len(), 14, "{names:?}");
     assert!(names.contains("query_data"));
     assert!(names.contains("list_catalog_facets"));
     assert!(!names.contains("update_data"));

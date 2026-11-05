@@ -371,9 +371,22 @@ impl DataApi {
             .as_ref()
             .is_some_and(|op| !entries().iter().any(|e| e.name == op))
         {
+            // Name what this entry can actually be asked about: `operation`
+            // takes a tool name (e.g. `query_data`), and a caller that sent a
+            // verb like `query` otherwise has nothing to retry with.
+            let served = entries()
+                .iter()
+                .filter(|e| e.served_in(self.entry))
+                .filter(|e| self.access == Access::local() || !e.requires_local())
+                .map(|e| e.name)
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(ApiError::new(
                 "unsupported_operation",
-                "operation not registered",
+                format!(
+                    "operation not registered: operation must be a tool name; \
+                     tools available on this entry: {served}"
+                ),
             ));
         }
         let detailed = args.operation.is_some();
@@ -1358,6 +1371,19 @@ impl DataApi {
                     .map_err(mapped)?;
                 crate::stage_trace::timed("rpc.year_presence.encode", || encode(reply))
             }
+            Handler::Read(tool) => {
+                let query = tool.to_query(input, || {
+                    use super::query::ReadRepository as _;
+                    self.queries
+                        .repository
+                        .last_trading_day_upto(super::query::today())
+                        .map_err(mapped)
+                })?;
+                let notes = super::read_tools::extra_limitations(&query);
+                let mut answer = self.queries.query_v2(query, &self.access).map_err(mapped)?;
+                super::read_tools::add_limitations(&mut answer, notes);
+                Ok(answer)
+            }
             Handler::Capabilities => self.capabilities(decode(input)?),
             Handler::Facets => self.catalog_facets(decode(input)?),
         }
@@ -1417,6 +1443,15 @@ impl ToolHandler for DataApi {
             || matches!(
                 name,
                 "query_data"
+                    | "find_securities"
+                    | "get_daily_bars"
+                    | "get_yearly_bars"
+                    | "get_index_bars"
+                    | "get_market_snapshot"
+                    | "get_trading_calendar"
+                    | "get_price_limit_rules"
+                    | "get_security_state"
+                    | "get_security_events"
                     | "list_data_versions"
                     | "get_data_availability"
                     | "get_yearly_base_years"

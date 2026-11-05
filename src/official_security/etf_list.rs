@@ -8,7 +8,7 @@
 //! ```text
 //! plans() ──► exchange_source::Entry (M3 §6) ──► frozen bytes (source store)
 //!                                                        │
-//!                                      parse (etf-list-v1)
+//!                                      parse (etf-list-v2)
 //!                                                        ▼
 //!              identity_rows() ──► security_master class=2 rows (writer)
 //! ```
@@ -17,13 +17,50 @@
 //!
 //! - SSE `FUND_LIST` (`commonSoaQuery.do`): `source_id=sse_etf_list`. Carries
 //!   `fundCode`, `listingDate`, `subClass` and `INDEX_CODE`; the listing day is
-//!   `listing_source=exchange_list`.
+//!   `listing_source=exchange_list`. `etf-list-v2` also reads `secNameFull`
+//!   as the row's `name`.
 //! - SZSE `1945` (`ShowReport?SHOWTYPE=xlsx`): `source_id=szse_etf_list`.
 //!   Carries code/name/fitted index/size/manager but **no listing day**; the
 //!   SZSE listing day comes from TDX `base.dbf SSDATE`
-//!   (`listing_source=tdx_ssdate`, D-47).
+//!   (`listing_source=tdx_ssdate`, D-47). `etf-list-v2` reads 证券简称 as the
+//!   row's `name`.
 //! - SSE `ebs` is a quote snapshot, not an identity source (D-70 Q1). It is
 //!   never registered here.
+//!
+//! ## Names (`etf-list-v2`, etf-name-search §1/§5/§6)
+//!
+//! Parsing only. Nothing here writes a name, and no identity row, dataset or
+//! read surface depends on one.
+//!
+//! - `name` is SSE `secNameFull` and SZSE 证券简称: the same shape (theme +
+//!   `ETF` + fund company), so one search field can hold both. SSE `fundAbbr`
+//!   is a different, truncated on-exchange short name and never becomes
+//!   `name`.
+//! - The text is kept as published apart from whitespace: it is trimmed and
+//!   every inner whitespace run (ASCII, no-break or ideographic) becomes one
+//!   space. Full-width letters and digits are **not** folded: that is the
+//!   search-side normalisation (NFKC, casefold), not a property of the
+//!   published name.
+//! - An empty, null or missing name is `None`. It is never filled from
+//!   `fundAbbr`, the code or an earlier snapshot, and it does not fail the
+//!   parse: identity does not depend on it.
+//! - [`Admitted::names`] is the per-code chain of [`NameObservation`]s
+//!   `(first observed day, name)`, built from the frozen manifest alone. The
+//!   day is the first snapshot day that showed the name, not the day the
+//!   exchange renamed the fund. Two facts about how the store freezes bytes
+//!   decide what the chain can see:
+//!   - an SZSE workbook embeds its generation time, so identical content
+//!     still freezes as a new sha and every refresh is a snapshot;
+//!   - an SSE response is deterministic JSON and the store dedupes by
+//!     `(sha256, source, origin)`, so a return to earlier content (A→B→A)
+//!     adds no manifest line and the chain ends at B.
+//!
+//!   The second case is **not repaired here**. The selected current list
+//!   (`rows`) still says A, and [`Admitted::names_behind_current`] names the
+//!   codes where it disagrees with the chain tail. No day is invented for the
+//!   missing A segment: the only dated evidence is a refresh run's
+//!   `verified_through`, which moves on every run, so using it would make the
+//!   chain change with the clock.
 //!
 //! ## Identity rules (§3.3)
 //!
@@ -66,7 +103,11 @@ use crate::source_store::{Policy, SourceStore, StoreError, StoreKind};
 /// `exchange-szse-xlsx-v1`), which is what replay re-derives row/page counts
 /// with; this consumer version is registered on the item's evidence and is what
 /// a re-derivation of the identity rows pins.
-pub const PARSER_VERSION: &str = "etf-list-v1";
+///
+/// `v2` adds the row `name` and the name chain. It changes no identity row:
+/// the only place the string is written is the item evidence of
+/// `derived:security_master`.
+pub const PARSER_VERSION: &str = "etf-list-v2";
 
 /// SSE `commonSoaQuery.do` endpoint (D-70 Q1).
 pub const SSE_URL: &str = "https://query.sse.com.cn/commonSoaQuery.do";
@@ -150,6 +191,16 @@ pub struct EtfListRow {
     pub sub_class: Option<String>,
     /// SSE `INDEX_CODE`; kept as evidence only.
     pub index_code: Option<String>,
+    /// SSE `secNameFull` / SZSE 证券简称, whitespace-normalised (see the module
+    /// doc). `None` when the source gives no usable text; never invented.
+    pub name: Option<String>,
+}
+
+/// A name a code carried, with the first snapshot day that showed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameObservation {
+    pub observed_from: NaiveDate,
+    pub name: String,
 }
 
 /// Why the adapter could not produce identity rows.
@@ -190,7 +241,9 @@ pub struct Admitted {
     pub rows: Vec<EtfListRow>,
     /// Union of every frozen list snapshot. A code that disappeared from a
     /// newer snapshot stays here (monotonic identity, PR-A2); `effective_to`
-    /// says from when the list no longer proved it.
+    /// says from when the list no longer proved it. Each row is the first
+    /// snapshot's, so its `name` is cleared: a name from that day says nothing
+    /// about now. Names are in [`Admitted::names`].
     pub history: Vec<EtfListRow>,
     /// `(exchange, code) → acquisition date of the first frozen snapshot that
     /// contained the code`.
@@ -198,6 +251,10 @@ pub struct Admitted {
     /// `(exchange, code) → first observation after which the newest list no
     /// longer contained the code`. Only historical members carry an entry.
     pub effective_to: BTreeMap<(Exchange, String), NaiveDate>,
+    /// `(exchange, code) → names in observation order`, adjacent repeats merged.
+    /// A code that never showed a usable name has no entry. Evidence input for
+    /// a later writer; no row or dataset uses it yet.
+    pub names: BTreeMap<(Exchange, String), Vec<NameObservation>>,
     /// One binding per `source_id`, sorted.
     pub bindings: Vec<SnapshotBinding>,
     /// `label → snapshot ids`, in acquisition order.
@@ -209,6 +266,25 @@ pub struct Admitted {
 impl Admitted {
     pub fn as_of(&self) -> Option<NaiveDate> {
         self.freshness.as_of.as_deref().and_then(parse_day)
+    }
+
+    /// Codes whose name in the selected current list differs from the last
+    /// segment of their chain. This is exactly the content the manifest scan
+    /// cannot place in time (SSE A→B→A, see the module doc); a writer must
+    /// treat these as unresolved, not as the chain's tail.
+    pub fn names_behind_current(&self) -> Vec<(Exchange, String)> {
+        self.rows
+            .iter()
+            .filter_map(|row| {
+                let key = (row.exchange, row.code.clone());
+                let tail = self
+                    .names
+                    .get(&key)
+                    .and_then(|chain| chain.last())
+                    .map(|last| last.name.as_str());
+                (row.name.is_some() && row.name.as_deref() != tail).then_some(key)
+            })
+            .collect()
     }
 
     pub fn sse_rows(&self) -> usize {
@@ -251,7 +327,7 @@ impl Admitted {
 /// is still `pending_source`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunSource {
-    Admitted(Admitted),
+    Admitted(Box<Admitted>),
     Pending(PendingSource),
 }
 
@@ -282,7 +358,7 @@ pub fn run_source(
         }));
     };
     match read(&store, market, today) {
-        Ok(admitted) => Ok(RunSource::Admitted(admitted)),
+        Ok(admitted) => Ok(RunSource::Admitted(Box::new(admitted))),
         // A store that has never frozen an ETF list is the pre-M3-2 state, not
         // a broken source: the branch stays `pending_source` and the A-share
         // main table keeps its previous behaviour. Once a list is frozen, an
@@ -355,6 +431,7 @@ pub fn read(
         first_seen.insert((*exchange, code.clone()), entry.first_seen);
         history.push(entry.row.clone());
     }
+    let names = scanned.names;
     // Defensive: the selected current rows are always part of the union even
     // if an older manifest line used a parser version this binary skips.
     for row in &rows {
@@ -374,6 +451,12 @@ pub fn read(
                     }),
             );
         }
+    }
+    // A history row is an identity fact from the first snapshot that showed the
+    // code; its name would be that snapshot's, which says nothing about now.
+    // The names live in `names`.
+    for row in &mut history {
+        row.name = None;
     }
     history.sort_by(|left, right| {
         (left.exchange, left.code.as_str()).cmp(&(right.exchange, right.code.as_str()))
@@ -399,6 +482,7 @@ pub fn read(
         history,
         first_seen,
         effective_to,
+        names,
         bindings,
         snapshot_ids,
         freshness,
@@ -471,6 +555,12 @@ fn parse_sse(bytes: &[u8]) -> Result<Vec<EtfListRow>, EtfError> {
             listing_date: Some(listing_date),
             sub_class: text(row.get("subClass")),
             index_code: text(row.get("INDEX_CODE")),
+            // `secNameFull`, not `fundAbbr`: the latter is a truncated
+            // on-exchange short name of a different kind (module doc).
+            name: row
+                .get("secNameFull")
+                .and_then(Value::as_str)
+                .and_then(clean_name),
         });
     }
     if rows.is_empty() {
@@ -498,6 +588,9 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<EtfListRow>, EtfError> {
                 format!("SZSE ETF list: header has no 证券代码 column: {header:?}"),
             )
         })?;
+    // A workbook without the name column still gives identity; every name is
+    // then `None` rather than a failure or a guess.
+    let name_column = header.iter().position(|cell| cell.trim() == "证券简称");
     let mut rows = Vec::with_capacity(sheet.data_rows());
     let mut seen = BTreeSet::new();
     for (index, row) in sheet.rows.iter().enumerate().skip(1) {
@@ -524,6 +617,9 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<EtfListRow>, EtfError> {
             listing_date: None,
             sub_class: None,
             index_code: None,
+            name: name_column
+                .and_then(|column| row.get(column))
+                .and_then(|cell| clean_name(cell)),
         });
     }
     if rows.is_empty() {
@@ -577,7 +673,12 @@ struct HistoryEntry {
 #[derive(Debug, Default)]
 struct HistoryScan {
     rows: BTreeMap<(Exchange, String), HistoryEntry>,
+    /// Name chains from the manifest alone; see [`name_chain`].
+    names: BTreeMap<(Exchange, String), Vec<NameObservation>>,
 }
+
+/// One name seen in one frozen snapshot, with what orders it in time.
+type NameSample = (NaiveDate, String, String, String);
 
 type ObservationMap = BTreeMap<&'static str, BTreeMap<NaiveDate, BTreeSet<(Exchange, String)>>>;
 
@@ -593,6 +694,7 @@ fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
     let mut scan = HistoryScan::default();
     let mut observations: ObservationMap = BTreeMap::new();
     let mut parsed: BTreeSet<String> = BTreeSet::new();
+    let mut samples: BTreeMap<(Exchange, String), Vec<NameSample>> = BTreeMap::new();
     for record in store.records()? {
         if record.store_kind != StoreKind::HttpFetch {
             continue;
@@ -627,6 +729,14 @@ fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
             .insert(day, members);
         for row in rows {
             let key = (row.exchange, row.code.clone());
+            if let Some(name) = &row.name {
+                samples.entry(key.clone()).or_default().push((
+                    day,
+                    record.acquired_at.clone(),
+                    record.sha256.clone(),
+                    name.clone(),
+                ));
+            }
             scan.rows
                 .entry(key)
                 .and_modify(|entry| {
@@ -644,6 +754,10 @@ fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
                 });
         }
     }
+    scan.names = samples
+        .into_iter()
+        .map(|(key, samples)| (key, name_chain(samples)))
+        .collect();
     for entries in scan.rows.values_mut() {
         let source = match entries.row.exchange {
             Exchange::Sh => ListKind::Sse.label(),
@@ -663,6 +777,36 @@ fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
         }
     }
     Ok(scan)
+}
+
+/// The name chain of one code from its snapshots.
+///
+/// Snapshots are ordered by `(day, acquired_at, sha256)`. Of several snapshots
+/// on one day the last one decides that day's name, because a writer keyed by
+/// `(code, first observed day)` can hold only one. A name equal to the
+/// previous segment's extends it instead of starting a new one, so the chain
+/// has no adjacent repeats. A snapshot with no usable name is never in
+/// `samples`: it neither ends nor starts a segment.
+fn name_chain(mut samples: Vec<NameSample>) -> Vec<NameObservation> {
+    samples.sort();
+    let mut by_day: Vec<(NaiveDate, String)> = Vec::new();
+    for (day, _, _, name) in samples {
+        match by_day.last_mut() {
+            Some((last_day, last_name)) if *last_day == day => *last_name = name,
+            _ => by_day.push((day, name)),
+        }
+    }
+    let mut chain: Vec<NameObservation> = Vec::new();
+    for (observed_from, name) in by_day {
+        if chain.last().is_some_and(|last| last.name == name) {
+            continue;
+        }
+        chain.push(NameObservation {
+            observed_from,
+            name,
+        });
+    }
+    chain
 }
 
 /// The source adapter's contribution to the main table: one source-agnostic
@@ -773,6 +917,20 @@ fn text(value: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+/// A published name, whitespace-normalised: invisible characters dropped, the
+/// rest trimmed with every inner whitespace run (ASCII, no-break, ideographic)
+/// as one space. Case and character width are left as published. `None` when
+/// nothing is left; an empty name is not a name.
+fn clean_name(raw: &str) -> Option<String> {
+    let visible: String = raw
+        .chars()
+        .filter(|ch| !ch.is_control() || ch.is_whitespace())
+        .filter(|ch| !matches!(ch, '\u{200b}'..='\u{200d}' | '\u{2060}' | '\u{feff}'))
+        .collect();
+    let joined = visible.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!joined.is_empty()).then_some(joined)
 }
 
 fn number(value: &Value) -> Option<u64> {

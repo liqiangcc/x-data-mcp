@@ -7,7 +7,7 @@ use super::{
 };
 use crate::market_storage::Error;
 use chrono::{NaiveDate, Utc};
-use std::{cell::RefCell, collections::BTreeSet, sync::Arc};
+use std::{cell::RefCell, collections::BTreeSet, ops::Range, sync::Arc};
 pub const MAX_ROWS: usize = 100_000;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Clone)]
@@ -243,8 +243,13 @@ impl QueryPlan {
 /// The adapter's "today": the calendar day, never a data fact. The read model
 /// itself never reads the clock (issue-391 §12.2); resolving the default here
 /// keeps that property.
+///
+/// This is the Shanghai day, not the host's local day. It used to be
+/// `chrono::Local::now()`, so the default `as_of` depended on the host's
+/// timezone: vm2-126 runs Asia/Shanghai and aws-node runs UTC, and between
+/// 16:00 and 24:00 UTC the two hosts disagreed by one day.
 pub fn today() -> NaiveDate {
-    chrono::Local::now().date_naive()
+    crate::calendar::shanghai_today()
 }
 fn unsupported(field: &str, dataset: Dataset) -> String {
     format!(
@@ -399,6 +404,108 @@ pub fn entities(dataset: Dataset, s: &Selection, access: &Access) -> Result<Vec<
     }
     Ok(e)
 }
+/// Whether `plan` is a v2 `universe` read of a price dataset, the only shape
+/// whose pages are cut down to their own entities.
+fn is_universe_price_read(plan: &QueryPlan) -> bool {
+    plan.args.contract_version == ReadContractVersion::V2
+        && matches!(plan.args.selection, Selection::Universe { .. })
+        && matches!(plan.args.dataset, Dataset::Daily | Dataset::Index)
+}
+
+/// Index of `rows[at]`'s entity in the sorted `plan.entities`.
+fn row_entity(plan: &QueryPlan, rows: &[Row], at: usize) -> Option<usize> {
+    match rows.get(at)? {
+        Row::Market { entity, .. } => plan.entities.binary_search(entity).ok(),
+        _ => None,
+    }
+}
+
+/// The entities of `plan.entities` that the page `rows[start..end]` reports.
+///
+/// Rows and manifest entries both follow the sorted entity order, one manifest
+/// entry per entity (present or absent). The page reports the entities of its
+/// rows, from the entity of its first row up to where the next page starts, so
+/// an entity without any row (an absent version, or no bar in the window) is
+/// reported by the page before the next entity that has rows. The first page
+/// starts at 0 and the last ends at the entity count, so every manifest entry
+/// is reported by some page. An entity whose rows straddle two pages is
+/// reported by both, which keeps `entities`, `versions` and `columns` aligned
+/// inside each page.
+fn universe_span(
+    plan: &QueryPlan,
+    data: &QuerySnapshot,
+    start: usize,
+    end: usize,
+) -> Option<Range<usize>> {
+    if !is_universe_price_read(plan) || data.manifest.len() != plan.entities.len() {
+        return None;
+    }
+    let count = plan.entities.len();
+    if data.rows.is_empty() {
+        return Some(0..count);
+    }
+    let lo = if start == 0 {
+        0
+    } else {
+        row_entity(plan, &data.rows, start)?
+    };
+    let hi = if end >= data.rows.len() {
+        count
+    } else {
+        let last = row_entity(plan, &data.rows, end - 1)?;
+        let next = row_entity(plan, &data.rows, end)?;
+        if next == last { last + 1 } else { next }
+    };
+    Some(lo..hi)
+}
+
+/// Serialized size of the whole snapshot in the v2 columnar answer it will be
+/// given page by page (every entity, every row, the requested fields), for a
+/// v2 `universe` price read; `None` for every other query.
+fn universe_output_bytes(plan: &QueryPlan, data: &QuerySnapshot) -> Option<usize> {
+    if !is_universe_price_read(plan) {
+        return None;
+    }
+    let (allowed, default) = super::columnar::query_fields(plan.args.dataset);
+    let fields = super::columnar::select(
+        plan.args.fields.as_deref(),
+        allowed,
+        default,
+        plan.args.dataset.name(),
+    )
+    .ok()?;
+    let meta = super::columnar::PageMeta {
+        snapshot_id: "",
+        snapshot_time: Utc::now(),
+        next_cursor: None,
+        page_complete: true,
+        limitations: &[],
+        temporal: None,
+    };
+    let whole = if matches!(plan.args.filter, Filter::CrossSection { .. }) {
+        super::columnar::cross_section_page(
+            plan.args.dataset,
+            &data.manifest,
+            &plan.trade_days,
+            &plan.entities,
+            &data.rows,
+            &fields,
+            &meta,
+            None,
+        )
+    } else {
+        super::columnar::panel_page(
+            plan.args.dataset,
+            &data.manifest,
+            &plan.entities,
+            &data.rows,
+            &fields,
+            &meta,
+            None,
+        )
+    };
+    Some(serde_json::to_vec(&whole).ok()?.len())
+}
 #[derive(Clone, serde::Serialize)]
 pub struct QuerySnapshot {
     pub manifest: Vec<ManifestEntry>,
@@ -407,6 +514,11 @@ pub struct QuerySnapshot {
     /// declares neither parameter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<TemporalBlock>,
+    /// Dataset-level limits the reader must be able to state truthfully
+    /// (coverage windows, event-level sources, an unregistered dataset). They
+    /// are appended to the page's fixed `limitations`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
 }
 pub trait ReadRepository {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error>;
@@ -546,7 +658,7 @@ impl<R: ReadRepository> Queries<R> {
             default,
             args.dataset.name(),
         )?;
-        let (page, plan) = self.query_page(args, access)?;
+        let (page, plan, span) = self.query_page(args, access)?;
         let meta = super::columnar::PageMeta {
             snapshot_id: &page.snapshot_id,
             snapshot_time: page.query_time,
@@ -579,7 +691,7 @@ impl<R: ReadRepository> Queries<R> {
             Dataset::Daily | Dataset::Index
                 if matches!(&plan.args.filter, Filter::CrossSection { .. }) =>
             {
-                super::columnar::cross_section(
+                super::columnar::cross_section_page(
                     plan.args.dataset,
                     &page.version_manifest,
                     &plan.trade_days,
@@ -587,15 +699,17 @@ impl<R: ReadRepository> Queries<R> {
                     &page.records,
                     &fields,
                     &meta,
+                    span,
                 )
             }
-            dataset => super::columnar::panel(
+            dataset => super::columnar::panel_page(
                 dataset,
                 &page.version_manifest,
                 &plan.entities,
                 &page.records,
                 &fields,
                 &meta,
+                span,
             ),
         };
         if let Some(catalog_version) = &plan.catalog_version
@@ -605,7 +719,14 @@ impl<R: ReadRepository> Queries<R> {
         }
         Ok(page)
     }
-    fn query_page(&self, args: Query, access: &Access) -> Result<(DataPage, QueryPlan), Error> {
+    /// One page of a query: the v1 page, the resolved plan and, for a v2
+    /// `universe` price read, the range of `plan.entities` this page reports
+    /// (see [`universe_span`]). `None` means "every entity of the plan".
+    fn query_page(
+        &self,
+        args: Query,
+        access: &Access,
+    ) -> Result<(DataPage, QueryPlan, Option<Range<usize>>), Error> {
         let mut plan = QueryPlan::new(args, access)?;
         plan.resolve(&self.repository, access)?;
         let cursor = plan.args.cursor.clone();
@@ -622,7 +743,18 @@ impl<R: ReadRepository> Queries<R> {
             let bytes = crate::stage_trace::timed("query.budget", || {
                 serde_json::to_vec(&data).unwrap().len()
             });
-            if data.rows.len() > MAX_ROWS || bytes > MAX_BYTES {
+            // The byte limit bounds what the caller receives. A v2 `universe`
+            // price read is answered in columnar form, which does not repeat
+            // the per-row `version_ref` that the snapshot's own serialization
+            // above carries, so the gate measures that answer instead.
+            if data.rows.len() > MAX_ROWS {
+                return Err(invalid("snapshot budget exceeded"));
+            }
+            let gate = crate::stage_trace::timed("query.budget.output", || {
+                universe_output_bytes(&plan, &data)
+            })
+            .unwrap_or(bytes);
+            if gate > MAX_BYTES {
                 return Err(invalid("snapshot budget exceeded"));
             }
             Saved {
@@ -646,9 +778,11 @@ impl<R: ReadRepository> Queries<R> {
             .filter_map(|m| m.version_ref.clone())
             .collect::<Vec<_>>();
         crate::stage_trace::timed("query.verify", || self.repository.verify(&refs))?;
+        let start = saved.offset;
         let end = (saved.offset + plan.args.page_size).min(data.rows.len());
         let records = data.rows[saved.offset..end].to_vec();
         let manifest = data.manifest.clone();
+        let span = universe_span(&plan, data, start, end);
         let more = end < data.rows.len();
         saved.offset = end;
         let mut result = DataPage {
@@ -665,12 +799,15 @@ impl<R: ReadRepository> Queries<R> {
             limitations: vec![
                 "fixed version selection is not a shared source acquisition time".into(),
                 "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates".into(),
-            ],
+            ]
+            .into_iter()
+            .chain(data.limitations.iter().cloned())
+            .collect(),
         };
         if more {
             result.next_cursor = Some(self.save(saved));
         }
-        Ok((result, plan))
+        Ok((result, plan, span))
     }
     pub fn versions(&self, args: VersionsQuery, access: &Access) -> Result<VersionPage, Error> {
         let _inflight = Inflight(&self.inflight);

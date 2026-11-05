@@ -142,7 +142,7 @@ M3 PR-9 的 `universe.scope` 字段/`market.industry_assignments` 枚举值带�
   `active_generation_ref`、`input_schema`、`output_schema`、`example`、`schema_digest`；
   `input_schema`/`output_schema` 与 registry 逐字节相等（`tests/mcp/v8_tool_surface.rs:176-195`）。
   一个工具按 dataset 展开成多行。
-- `operation` 不是注册工具名 → `unsupported_operation`（`src/data_supply/mcp.rs:333-341`）。
+- `operation` 不是注册工具名（如 `query`）→ `unsupported_operation`，消息列出本入口可用的工具名（含 `query_data`）（`src/data_supply/mcp.rs`）。
 - **语义变化（相对 v7）**：无过滤的 capabilities 不再返回 schema 详情；schema 必须按
   `operation`（可再加 `dataset`）取。这是 v8 的主要发现成本控制手段。
 - `items[].entry` 是 `research`/`ops`/`maint`（stdio/dev 面为 `all`）。
@@ -186,7 +186,7 @@ dataset 矩阵（实现已核）：
 | `market.security_master` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 行身份 `(exchange, code, effective_from)`；未登记版本 → `absent` |
 | `market.security_names` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 简称历史；未登记版本 → `absent` |
 | `market.capital_events` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity`/`explicit_version_map` | `table` | `true` / `false` / `none` | 股本事件；行无知晓时间；未登记版本 → `absent` |
-| `market.risk_warnings` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 历史 ST/\*ST；#308 未准入不出行 |
+| `market.risk_warnings` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | 历史 ST/\*ST（D-58 分档：深市区间、沪市事件级，北交所无）；未登记版本 → `absent` |
 | `market.suspensions` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | `unresolved_gap` 区间；未登记版本 → `absent` |
 | `market.price_limit_rules` | `market`（无实体） | `daily`（区间） | `latest_per_entity` | `table` | `true` / `false` / `none` | 按生效日期管理的规则；未登记版本 → `absent` |
 | `market.industry_assignments` | `single`/`batch`/`universe` | `daily`（生效区间） | `latest_per_entity` | `table` | `true` / `true` / `partial` | M3 PR-7；`status=assigned` 或 `unknown`（带 `reason`）；无快照/未登记版本 → `absent` |
@@ -205,10 +205,13 @@ M2 的 `temporal` 声明由 `Dataset::temporal()` 唯一给出（`src/data_suppl
 NULL 行被排除并在 `temporal.unknown_known_at_rows` 计数，`none` 的数据集在
 `temporal.datasets_without_known_at[]` 具名（`src/sqlite_supply/m2.rs:88-160`）。
 
-M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（含 `security_names` 尚无写入器、
-`risk_warnings`/`suspensions` 来源未准入）→ `manifest.status=absent`、0 行**，不服务无版本数据
-（`src/sqlite_supply/m2.rs:73-82,498-506`）。历史 ST/\*ST 以 #308 Final Gate 为前提；#308 未准入时
-`market.risk_warnings` **不出行**，不用当前名称推断历史。`market.universe` 不是新 dataset：它是
+M2 数据集的版本身份来自 `derived_dataset_versions`。**未登记（写入器还没写过该数据集，或来源未配置/未准入）→ `manifest.status=absent`、0 行**，不服务无版本数据
+（`src/sqlite_supply/m2.rs:73-82,498-506`）。历史 ST/\*ST 按 D-58 分档准入（#308 已准入，写入器已实现）：
+`market.risk_warnings` 未登记版本时 `absent`、不出行，不用当前名称推断历史；已登记时
+`metadata.coverage_reason` 由登记版本自带的 evidence 生成（行数、已观测/`not_observed` 窗口数），
+不再写固定的「pending」文字。**`metadata` 只在版本已登记时出现；未登记数据集的原因与各数据集的真实限制
+（沪市事件级、北交所无、`not_observed` 窗口、停牌 `unresolved_gap` 语义、规则书起点）写在页面
+`limitations` 里**（`src/sqlite_supply/m2.rs`，`QuerySnapshot.limitations`）。`market.universe` 不是新 dataset：它是
 `selection.kind=universe` + `filter.as_of`（或 pinned `catalog_version`，二者互斥）。
 `selection.kind=universe`：服务端解析目录版本（缺省 `latest`），把**具体版本 id** 回显到
 `catalog_version`；`market.index` 的成员来自 `src/index_registry.rs:131` 的 9 条登记。
@@ -230,6 +233,27 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
 连接关闭即释放。服务进程接近自身 cgroup 的 `memory.high` 时（`src/data_supply/read_limits.rs`，
 常驻匿名内存 + 在途读取的预留 + 本次读取的估算 > `memory.high` 的 85%），读取立即返回
 `memory_budget_exceeded`（`isError`，不缓存新快照），不再让请求在内核回收里变慢。
+
+**`selection.kind=universe` 的分页（#295）：** `market.daily`/`market.index` 的 v2 `universe` 读，
+每页的 `entities`、`versions`、`columns`（`dates`）只含**本页行涉及的实体**，响应字节随本页行数
+增长，不随全市场成员数增长。具体规则：
+
+- 页覆盖的实体区间从本页第一行所属实体起，到下一页第一行所属实体前止；没有任何行的实体
+  （`absent` 版本，或窗口内无 bar）并入它前面最近一页，第一页从成员列表开头起，最后一页到末尾。
+  所以全部页的 `versions` 合起来恰好覆盖 manifest 的每个条目，`absent` 条目不会丢。
+- 一个实体的行跨两页时，两页都报告该实体；同一行只出现在一页。
+- `metadata`（共享元数据）仍按**整个** manifest 判定，同一查询各页的 `metadata` 与逐实体 `versions` 行
+  的划分一致；各页 `versions` 里同一实体的行相同。
+- `cross_section` 的 `columns[field][day][entity]` 与本页 `entities` 对齐；本页实体在其它页的
+  行不再补 `null` 占位（只剩本页实体窗口内真正没有 bar 的 `null`）。
+- 版本校验（`verify`）照旧对**整个**快照的每个版本执行，只是不再输出其余页的版本。
+- `single`/`batch`（以及 `securities.catalog` 和表布局数据集）的响应不变；
+  `get_data_availability` 的 `universe` 仍是一行聚合。
+- 字节上限的口径：单快照 ≤16 MiB 计的是 **v2 `universe` 价格读最终给出的列式答案**
+  （全部实体、全部行、所选 `fields`），不再是内部快照的序列化（后者每行重复一份 `version_ref`，
+  不是调用方收到的东西）。其它查询（`single`/`batch`、v1、表布局）口径不变。行数上限
+  100,000 不变。因此 `a_current` 规模（约 5,2xx 只）、全字段的 `cross_section` 在 3、5 个交易日窗口
+  内可一次请求通过；`cross_section` 窗口上限仍是 5 个交易日，16 MiB 与 100,000 行上限没有调整。
 
 ### 4.2 响应信封
 
@@ -257,9 +281,10 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
 ### 4.3 三种布局
 
 - `panel`：`dates[entity_index][row_index]`，`columns[field][entity_index][row_index]`
-  （`src/data_supply/columnar.rs:390-469`）。
+  （`src/data_supply/columnar.rs` 的 `panel`/`panel_page`）。
 - `cross_section`：`trade_days` 一次、`entities` 一次，
-  `columns[field][day_index][entity_index]`（`src/data_supply/columnar.rs:704-769`）。
+  `columns[field][day_index][entity_index]`（`cross_section`/`cross_section_page`）。
+  `universe` 的每页只含本页实体（§4.1「`selection.kind=universe` 的分页」）。
 - `table`：`columns[field][row_index]`。目录、版本清单、因子事件、日历、availability 用它
   （`src/data_supply/columnar.rs:472-560,561-575,638-702`）。
 
@@ -487,7 +512,7 @@ systemd drop-in 掩盖代码缺省。
 
 - v8 自身不实现时点语义与 M2 的业务规则；M2 的 6 个解析事实数据集在**同一 revision**
   内接线（PR #425，preview.37 部署），`as_of`/`known_at` 只在它们声明的面上生效。
-  未接入的来源（交易所名单、历史 ST #308、停复牌公告、涨跌停规则原文）不伪造：
+  未接入或未登记的来源（以各数据集是否登记版本为准）不伪造：
   写 0 行/不登记版本 → `absent`，或按 `pending_source` 记录。
 - 不做服务端筛选/排序/聚合（谓词、`order_by`、`limit`、top-N）——方向等 XDM-14 实测（D-19）。
 - 不新增 MCP 文件传输：`export_data` 只设计不做（D-39），导出仍是 M1 的 `export_research` bin。

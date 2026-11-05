@@ -14,8 +14,9 @@ EXPECTED_LEGACY_SCHEMA = 18
 # the preview.39 phase-g deployment; since preview.39 deployed == code == 25.
 EXPECTED_COMPACT_SCHEMA = 27
 # Registry/code fact (v8 PR-2 added list_catalog_facets: 23 -> 24; refresh R2
-# adds refresh_exchange_sources: 24 -> 25).
-EXPECTED_DATA_TOOLS = 25
+# adds refresh_exchange_sources: 24 -> 25; D-75 PR-1 adds seven narrow read
+# tools: 25 -> 32, research 5 -> 12; PR-1b adds two more: 34, 14).
+EXPECTED_DATA_TOOLS = 34
 # Documentation "current" regions describe deployment facts, so stale-claim
 # checks compare against the deployed constants, not the code constants. A
 # sentence that explicitly says it is stating the code fact (代码/未部署) is
@@ -28,7 +29,7 @@ EXPECTED_DATA_TOOLS = 25
 EXPECTED_DEPLOYED_DATA_TOOLS = 16
 EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 EXPECTED_CODE_OPS_TOOLS = 16
-EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
+EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 14, "maint": 9}
 EXPECTED_ACQUIRE_TOOLS = 10
 
 # --- deployed data entries (v8 phase 2, D-56) ------------------------------
@@ -892,12 +893,16 @@ def main() -> int:
     # wire-shape change without a tool-count change (M3-2's ETF scopes bump
     # v9→v10 but add no tool). When the counts differ they must stay separate
     # so the gap is visible; when they are equal the revision constants carry
-    # the gap instead.
+    # the gap instead. Code may only be ahead of the deployed entry counts (D-75
+    # PR-1 adds seven research tools before they are deployed).
     code_only = EXPECTED_DEPLOYED_CAPABILITY_REVISION != EXPECTED_DATA_CAPABILITY_REVISION
     check(
         "deployed and code entry counts are consistent with the revision gap",
         (EXPECTED_DEPLOYED_ENTRY_TOOLS == EXPECTED_CODE_ENTRY_TOOLS)
-        or (EXPECTED_DEPLOYED_DATA_TOOLS != EXPECTED_CODE_OPS_TOOLS),
+        or all(
+            EXPECTED_CODE_ENTRY_TOOLS[entry] >= count
+            for entry, count in EXPECTED_DEPLOYED_ENTRY_TOOLS.items()
+        ),
         f"deployed {EXPECTED_DEPLOYED_ENTRY_TOOLS}, code {EXPECTED_CODE_ENTRY_TOOLS}, "
         f"deployed ops {EXPECTED_DEPLOYED_DATA_TOOLS}, code ops {EXPECTED_CODE_OPS_TOOLS}",
     )

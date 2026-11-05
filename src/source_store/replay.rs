@@ -80,6 +80,7 @@ use serde::Serialize;
 
 use super::{ManifestRecord, SourceStore, StoreError, known_parser_version};
 use crate::hash::sha256;
+use crate::official_security::risk_warnings::BulletinOrder;
 use crate::security_master::Exchange;
 use crate::security_master::names::{self, NameInterval};
 use crate::security_master::risk_warnings::{self, CoverageWindow};
@@ -1151,12 +1152,29 @@ fn rebuild_risk_warnings(
     verify_only: bool,
     database: Option<&Path>,
 ) -> Result<ExchangeOutcome, String> {
-    let bulletins = latest_per_fingerprint(
+    let mut bulletins = latest_per_fingerprint(
         records
             .iter()
             .copied()
             .filter(|record| record.source_id == "sse_bulletin"),
     );
+    // The first page that states an announcement is the document its row cites
+    // (`source_document_sha256`), so the daily item's page order decides which
+    // snapshot a row carries. `latest_per_fingerprint` returns the fingerprint
+    // text order, which is a different order; the adapter owns the right one.
+    // A fingerprint it does not recognise (a hand-registered page) sorts after
+    // the recognised ones, by origin and sha, so the order stays deterministic.
+    bulletins.sort_by(|left, right| {
+        let key = |record: &ManifestRecord| {
+            (
+                BulletinOrder::from_fingerprint(&record.origin)
+                    .map_or((true, None), |o| (false, Some(o))),
+                record.origin.clone(),
+                record.sha256.clone(),
+            )
+        };
+        key(left).cmp(&key(right))
+    });
     let backend = match database {
         Some(path) => Some(open_database(path)?),
         None => None,
@@ -1389,31 +1407,112 @@ fn parse_window_day(
         .map_err(|_| format!("{dataset_kind} coverage {field}={text:?} is not a day"))
 }
 
+/// The first 20 differences between the rebuilt and the stored interval rows.
+///
+/// Rows are matched on the table's primary key `(exchange, code,
+/// effective_from)`. A row on one side only is reported as such; a row on both
+/// sides is compared field by field, so a digest mismatch whose rows agree on
+/// every key (a different `source_document_sha256`, say) still names the row
+/// and the field. Entries come out in key order.
 fn row_drift(
-    left: &[crate::security_master::RiskWarningInterval],
-    right: &[crate::security_master::RiskWarningInterval],
+    rebuilt: &[crate::security_master::RiskWarningInterval],
+    stored: &[crate::security_master::RiskWarningInterval],
 ) -> Vec<String> {
-    let keys = |rows: &[crate::security_master::RiskWarningInterval]| {
+    type Row = crate::security_master::RiskWarningInterval;
+    fn index(rows: &[Row]) -> BTreeMap<(Exchange, String, NaiveDate), &Row> {
         rows.iter()
-            .map(|row| {
-                format!(
-                    "{}.{}@{}..{}:{}",
-                    row.exchange.as_str(),
-                    row.code,
-                    row.effective_from,
-                    row.effective_to
-                        .map_or_else(|| "open".to_string(), |day| day.to_string()),
-                    row.status.as_str()
-                )
-            })
-            .collect::<BTreeSet<_>>()
+            .map(|row| ((row.exchange, row.code.clone(), row.effective_from), row))
+            .collect()
+    }
+    let rebuilt = index(rebuilt);
+    let stored = index(stored);
+    let keys: BTreeSet<_> = rebuilt.keys().chain(stored.keys()).collect();
+    let mut drift = Vec::new();
+    for key in keys {
+        let (exchange, code, from) = key;
+        let name = format!("{}.{code}@{from}", exchange.as_str());
+        match (rebuilt.get(key), stored.get(key)) {
+            (Some(row), None) => {
+                drift.push(format!("{name} only in rebuilt: {}", row_summary(row)))
+            }
+            (None, Some(row)) => drift.push(format!("{name} only in stored: {}", row_summary(row))),
+            (Some(rebuilt), Some(stored)) => {
+                let fields = field_drift(rebuilt, stored);
+                if !fields.is_empty() {
+                    drift.push(format!("{name} differs: {}", fields.join("; ")));
+                }
+            }
+            (None, None) => {}
+        }
+        if drift.len() >= 20 {
+            break;
+        }
+    }
+    drift
+}
+
+fn row_summary(row: &crate::security_master::RiskWarningInterval) -> String {
+    format!(
+        "..{}:{}",
+        row.effective_to
+            .map_or_else(|| "open".to_string(), |day| day.to_string()),
+        row.status.as_str()
+    )
+}
+
+/// `field rebuilt=<x> stored=<y>` for every non-key field that differs.
+fn field_drift(
+    rebuilt: &crate::security_master::RiskWarningInterval,
+    stored: &crate::security_master::RiskWarningInterval,
+) -> Vec<String> {
+    fn show<T: ToString>(value: &Option<T>) -> String {
+        value
+            .as_ref()
+            .map_or_else(|| "null".to_string(), ToString::to_string)
+    }
+    let mut fields = Vec::new();
+    let mut compare = |field: &str, left: String, right: String| {
+        if left != right {
+            fields.push(format!("{field} rebuilt={left} stored={right}"));
+        }
     };
-    let left = keys(left);
-    let right = keys(right);
-    left.symmetric_difference(&right)
-        .take(20)
-        .cloned()
-        .collect()
+    compare(
+        "effective_to",
+        show(&rebuilt.effective_to),
+        show(&stored.effective_to),
+    );
+    compare(
+        "raw_status_code",
+        rebuilt.raw_status_code.clone(),
+        stored.raw_status_code.clone(),
+    );
+    compare(
+        "status",
+        rebuilt.status.as_str().to_string(),
+        stored.status.as_str().to_string(),
+    );
+    compare(
+        "announced_at",
+        show(&rebuilt.announced_at),
+        show(&stored.announced_at),
+    );
+    compare("known_at", show(&rebuilt.known_at), show(&stored.known_at));
+    compare(
+        "source_kind",
+        rebuilt.source_kind.clone(),
+        stored.source_kind.clone(),
+    );
+    compare(
+        "source_record_id",
+        show(&rebuilt.source_record_id),
+        show(&stored.source_record_id),
+    );
+    compare(
+        "source_document_sha256",
+        show(&rebuilt.source_document_sha256),
+        show(&stored.source_document_sha256),
+    );
+    fields
 }
 
 /// The `security_names` scope's outcome, or the reason no table set was
@@ -2317,6 +2416,53 @@ mod tests {
             rows: 0,
             reason: "NOT_AVAILABLE".into(),
         }
+    }
+
+    fn interval(code: &str, sha: &str) -> crate::security_master::RiskWarningInterval {
+        crate::security_master::RiskWarningInterval {
+            exchange: Exchange::Sh,
+            code: code.into(),
+            effective_from: day(2024, 5, 6),
+            effective_to: None,
+            raw_status_code: "implement:other_risk_warning".into(),
+            status: crate::security_master::RiskStatus::OtherRiskWarning,
+            announced_at: Some("2024-05-06".into()),
+            known_at: Some(day(2024, 5, 6)),
+            source_kind: "exchange_announcement".into(),
+            source_record_id: Some("fix-1".into()),
+            source_document_sha256: Some(sha.into()),
+        }
+    }
+
+    /// A digest mismatch whose rows share every primary key used to report an
+    /// empty `drift`; it must now name the row and the field.
+    #[test]
+    fn row_drift_names_a_field_difference_on_the_same_key() {
+        let rebuilt = vec![interval("600001", "aaaa"), interval("600002", "cccc")];
+        let stored = vec![interval("600001", "bbbb"), interval("600002", "cccc")];
+        let drift = row_drift(&rebuilt, &stored);
+        assert_eq!(
+            drift,
+            ["sh.600001@2024-05-06 differs: source_document_sha256 rebuilt=aaaa stored=bbbb"]
+        );
+        assert!(row_drift(&rebuilt, &rebuilt).is_empty());
+        let only = row_drift(&rebuilt, &stored[..1]);
+        assert_eq!(only.len(), 2, "{only:?}");
+        assert!(
+            only[1].starts_with("sh.600002@2024-05-06 only in rebuilt"),
+            "{only:?}"
+        );
+    }
+
+    #[test]
+    fn row_drift_is_capped_at_twenty() {
+        let rebuilt: Vec<_> = (0..30)
+            .map(|n| interval(&format!("6000{n:02}"), "a"))
+            .collect();
+        let stored: Vec<_> = (0..30)
+            .map(|n| interval(&format!("6000{n:02}"), "b"))
+            .collect();
+        assert_eq!(row_drift(&rebuilt, &stored).len(), 20);
     }
 
     /// A re-stamped window (`to = today` instead of the table's last change
