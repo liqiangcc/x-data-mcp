@@ -177,8 +177,9 @@ run 记录；四个同源日更 item 只读它冻结的快照。代码行为如�
 - **预算与 G2**：`tail` 同步，典型 28 个计划请求；探针触发整表时上限 549 个。G2 因此按表
   计量（D-67）：未触发整表的 `tail` <300 s；触发后每张被触发的表（`szse_listing`、
   `szse_short_name`）各自 <600 s、run 总量不设门禁，读
-  `source_refresh_run_sources.elapsed_ms`；`full` <60 min，读 run 的
-  `finished_at − started_at`。如何查询这些记录见
+  `source_refresh_run_sources.elapsed_ms`；`full` 按来源组计量（D-73）：原有 7 来源合计
+  <60 min、ETF 4 来源合计 <40 min、run 总量不设门禁，读各来源
+  `source_refresh_run_sources.elapsed_ms` 之和（只看 `status=succeeded` 的 run）。如何查询这些记录见
   [来源刷新 runbook](source-refresh-runbook.md)。
 - **重放（R4）**：`source_store replay --scope exchange` 仍从清单重建索引；
   `security_names`/`risk_warnings` 优先用 refresh run 的成员页，legacy 库没有 run 表时退回

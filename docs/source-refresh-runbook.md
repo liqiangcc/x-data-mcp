@@ -2,13 +2,13 @@
 
 **状态**：代码 schema 26 / `generic-data-v9` 的运维步骤；已随 preview.42 fresh init 部署（2026-11-02），
 preview.43 只换二进制，当前生产为 schema 26 / `generic-data-v9`（见 [STATUS](STATUS.md)）。本文件只写
-**怎么查**，不改代码、不写库；门禁口径与裁决见 [SLO](SLO.md) 第 2 行、D-66、D-67，
+**怎么查**，不改代码、不写库；门禁口径与裁决见 [SLO](SLO.md) 第 2 行、D-66、D-67、D-73，
 刷新行为见 [exchange-source](exchange-source.md) 与 [v9 契约](contracts/generic-data-v9.md)。
 
 ## 1. 什么时候用
 
 - 部署 v9 后测 G2：`tail` <300 s（仅未触发整表）、触发整表时每张表各自 <600 s、`full`
-  <60 min。
+  按来源组计量（D-73：原有 7 来源合计 <60 min、ETF 4 来源合计 <40 min、run 总量不设门禁）。
 - 日更的四个同源 item 报 `source_refresh_overdue` / `source_snapshot_not_found` /
   `snapshot_incomplete` 时，先确认最近一次成功 `full` 的日期，再按
   [daily-sync](daily-sync.md)「来源刷新」分诊。
@@ -38,8 +38,10 @@ refresh_exchange_sources {"status_of":"<run_id>"}
 
 返回 run 行（mode/status/scope/起止时间/requests/reused/changed/failed_windows/
 unobserved_windows/`verified_through`/失败列表），不启动新 run；未知 id 是
-`refresh_run_not_found`。`full` 的 <60 min 门禁就用这里的
-`finished_at − started_at`（不要用 MCP 调用耗时：`full` 是异步的，调用只返回 `running`）。
+`refresh_run_not_found`。`full` 的门禁（D-73）按来源组读
+`source_refresh_run_sources.elapsed_ms` 之和：原有 7 来源合计 <60 min、ETF 4 来源合计
+<40 min，run 总量不设门禁（不要用 MCP 调用耗时：`full` 是异步的，调用只返回 `running`；
+也不再用 run 的 `finished_at − started_at` 计量 `full`）。
 `tail` 是同步调用，MCP 调用墙钟可作旁证，官方读数仍取 run 行。
 
 `status_of` 不返回 per-source 行，所以“每张被触发的表各自 <600 s”必须查库（下一节）。
@@ -56,7 +58,7 @@ import sqlite3
 db = "file:<部署根>/state/preview.sqlite?mode=ro"
 con = sqlite3.connect(db, uri=True)
 
-# 最近 10 次 run：full 的 <60min、未触发整表的 tail 的 <300s 看 seconds。
+# 最近 10 次 run：未触发整表的 tail 的 <300s 看 seconds；full 的门禁看下面的按组查询。
 for row in con.execute("""
     SELECT run_id, mode, status, started_at, finished_at,
            CAST(round((julianday(finished_at) - julianday(started_at)) * 86400) AS INTEGER)
@@ -78,6 +80,18 @@ for row in con.execute("""
     ORDER BY source_id
 """, (run_id,)):
     print(row)
+
+# full 按来源组计量（D-73）：a_share <60min，etf <40min，run_id 取最近一次 succeeded 的 full。
+for row in con.execute("""
+    SELECT CASE WHEN source_id IN ('sse_etf_list','szse_etf_list','sse_fund_delist_ann','szse_etf_notice_ann')
+                THEN 'etf' ELSE 'a_share' END AS grp,
+           ROUND(SUM(elapsed_ms) / 60000.0, 1) AS minutes,
+           SUM(requests) AS requests, COUNT(*) AS sources, MIN(complete) AS all_complete
+    FROM source_refresh_run_sources
+    WHERE run_id = ?
+    GROUP BY grp
+""", (run_id,)):
+    print(row)
 ```
 
 判定表（也是 [SLO](SLO.md) 第 2 行的 G2 口径）：
@@ -86,7 +100,7 @@ for row in con.execute("""
 |---|---|---|
 | `tail`（succeeded），没有触发整表 | 两张探针表都没有 `complete=1` 的行，也没有 `snapshots>1` 的行 | `source_refresh_runs` 的 `finished_at − started_at` <300 s |
 | `tail`（succeeded），探针触发了整表 | `source_refresh_run_sources` 中 `source_id ∈ {szse_listing, szse_short_name}` 且 `complete=1` 或 `snapshots>1` 的行 | 每行 `elapsed_ms < 600000`；run 总时长**不设门禁** |
-| `full`（succeeded） | `source_refresh_runs` 的 `finished_at − started_at` | <60 min |
+| `full`（succeeded） | `source_refresh_run_sources` 按来源组求 `elapsed_ms` 之和（D-73） | 原有 7 来源（`sse_listing`、`sse_delisting`、`sse_bulletin`、`sse_suspension`、`szse_listing`、`szse_delisting`、`szse_short_name`）合计 <60 min；ETF 4 来源（`sse_etf_list`、`szse_etf_list`、`sse_fund_delist_ann`、`szse_etf_notice_ann`）合计 <40 min；run 总时长**不设门禁** |
 
 - **怎么判断“触发”**：只看 `source_refresh_run_sources` 的 `complete` 与 `snapshots`。安静探针
   是 `complete=0`、`snapshots=0`（探针页不写成员）；触发并成功的整表是 `complete=1`（页集通常也
