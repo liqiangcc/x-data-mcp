@@ -122,9 +122,10 @@ pi 查 2 只标的的最新两天行情用了 5 轮。提示里要求它先弄�
 
 ### 4.9 `get_trading_calendar`
 ```json
-{"start_date":"2026-11-02","end_date":"2026-11-05"}
+{"start_date":"2026-11-02","end_date":"2026-11-05","page_size?":100,"cursor?":""}
 ```
 映射：`market.calendar` + `selection.kind=market`。
+分页：范围超过一页（默认 100 个交易日）时，响应是 `page_complete=false` 并带 `next_cursor`，所以和其他工具一样收 `page_size`（1..1000）和 `cursor`。最初的设计漏了这两个参数，PR-1 因此拿不到第一页之后的日期（Claude 审 #536 时发现，PR-1b 修复）。
 
 ### 4.10 `get_price_limit_rules`
 ```json

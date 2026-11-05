@@ -3572,15 +3572,68 @@ fn get_trading_calendar_answers_like_query_data() {
         json!(["2020-01-06", "2020-01-07"])
     );
     same_answer(&tool, &query);
-    // No paging or field arguments: the tool only takes the range.
+    // The tool pages like the others, but takes no `fields`.
     let error = f
         .api
         .call(
             "get_trading_calendar",
-            json!({"start_date":"2020-01-06","end_date":"2020-01-07","page_size":1}),
+            json!({"start_date":"2020-01-06","end_date":"2020-01-07","fields":["trade_day"]}),
         )
         .unwrap_err();
     assert_eq!(error.code, "invalid_arguments");
+}
+
+#[test]
+fn get_trading_calendar_pages_through_a_long_range_like_query_data() {
+    let f = fixture();
+    let days: Vec<NaiveDate> = (6..=10).map(|d| day(2020, 1, d)).collect();
+    commit_calendar_days(&f, &days);
+    let query = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.calendar","contract_version":"v2",
+                "selection":{"kind":"market"},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-10"},
+                "version":{"kind":"latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(query["row_count"], 5);
+
+    let mut seen: Vec<Value> = Vec::new();
+    let mut pages = 0;
+    let mut cursor: Option<Value> = None;
+    loop {
+        let mut input = json!({"start_date":"2020-01-06","end_date":"2020-01-10","page_size":2});
+        if let Some(cursor) = &cursor {
+            input["cursor"] = cursor.clone();
+        }
+        let page = f.api.call("get_trading_calendar", input).unwrap();
+        pages += 1;
+        assert!(page["row_count"].as_u64().unwrap() <= 2, "{page}");
+        seen.extend(page["columns"]["trade_day"].as_array().unwrap().clone());
+        if page["page_complete"] == json!(true) {
+            assert!(page["next_cursor"].is_null(), "{page}");
+            break;
+        }
+        cursor = Some(page["next_cursor"].clone());
+        assert!(cursor.as_ref().unwrap().is_string(), "{page}");
+    }
+    assert_eq!(pages, 3);
+    assert_eq!(Value::Array(seen), query["columns"]["trade_day"]);
+
+    // The default page still returns the whole short range.
+    let whole = f
+        .api
+        .call(
+            "get_trading_calendar",
+            json!({"start_date":"2020-01-06","end_date":"2020-01-10"}),
+        )
+        .unwrap();
+    assert_eq!(whole["page_complete"], true);
+    same_answer(&whole, &query);
 }
 
 fn commit_rule_book(f: &Fixture) {
@@ -3730,6 +3783,14 @@ fn every_read_tool_rejects_unknown_fields() {
             json!({"start_date":"2020-01-06","end_date":"2020-01-06"}),
         ),
         ("get_price_limit_rules", json!({"as_of":"2020-01-06"})),
+        (
+            "get_security_state",
+            json!({"securities":["sz.000001"],"fact":"security_names","as_of":"2020-01-06"}),
+        ),
+        (
+            "get_security_events",
+            json!({"securities":["sh.600006"],"event":"capital","start_date":"2020-01-06","end_date":"2020-01-06"}),
+        ),
     ];
     for (name, input) in valid {
         // Values are valid for the internal `Query`, so a rejection can only
@@ -3752,7 +3813,8 @@ fn every_read_tool_rejects_unknown_fields() {
             assert_eq!(error.code, "invalid_arguments", "{name} accepted {extra}");
         }
     }
-    // The internal query shape is not exposed: a read tool never takes `known_at`.
+    // The internal query shape is not exposed: only the tools that declare
+    // `known_at` take it.
     let error = f
         .api
         .call(
@@ -3771,4 +3833,395 @@ fn the_default_as_of_day_is_the_shanghai_day() {
         crate::data_supply::query::today(),
         crate::calendar::shanghai_today()
     );
+}
+
+// ---- PR-1b: get_security_state and get_security_events ----------------------
+//
+// Fixtures are invented: `seed_security_names` holds three SZ name intervals,
+//   sz.000001 "ST旧名"  2026-01-05 .. 2027-06-01 (end excluded), known 2026-11-01
+//   sz.000002 "新名"    2026-04-01 ..             open,           known 2026-11-02
+//   sz.000003 "无日期"  2026-01-01 ..             open,           known unknown
+
+fn state_query(entities: Value, as_of: &str, known_at: Option<&str>) -> Value {
+    let mut request = json!({
+        "dataset": "market.security_names",
+        "contract_version": "v2",
+        "selection": {"kind": "batch", "entities": entities},
+        "filter": {"kind": "daily", "start_date": as_of, "end_date": as_of, "as_of": as_of},
+        "version": {"kind": "latest_per_entity"}
+    });
+    if let Some(day) = known_at {
+        request["known_at"] = json!(day);
+    }
+    request
+}
+
+#[test]
+fn get_security_state_answers_like_query_data_for_every_fact() {
+    let f = fixture();
+    seed_security_names(&f);
+    seed_names_refresh_run(&f, "2026-11-02");
+    let both = json!(["sz.000001", "sz.000002"]);
+
+    let tool = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":both,"fact":"security_names","as_of":"2026-12-31"}),
+        )
+        .unwrap();
+    let query = f
+        .api
+        .call("query_data", state_query(both.clone(), "2026-12-31", None))
+        .unwrap();
+    assert_eq!(tool["columns"]["name"], json!(["ST旧名", "新名"]));
+    assert!(tool["temporal"].is_object(), "{tool}");
+    assert_eq!(tool["temporal"]["as_of"], "2026-12-31");
+    same_answer(&tool, &query);
+
+    // `known_at` is a top-level field and reaches the query unchanged.
+    let tool = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":both,"fact":"security_names","as_of":"2026-12-31",
+                   "known_at":"2026-11-01"}),
+        )
+        .unwrap();
+    let query = f
+        .api
+        .call(
+            "query_data",
+            state_query(both, "2026-12-31", Some("2026-11-01")),
+        )
+        .unwrap();
+    same_answer(&tool, &query);
+    assert_eq!(tool["temporal"]["known_at"], "2026-11-01");
+
+    // Each `fact` value maps to its own dataset and takes the same arguments.
+    for (fact, dataset) in [
+        ("security_master", "market.security_master"),
+        ("security_names", "market.security_names"),
+        ("risk_warnings", "market.risk_warnings"),
+        ("suspensions", "market.suspensions"),
+        ("industry", "market.industry_assignments"),
+    ] {
+        let tool = f
+            .api
+            .call(
+                "get_security_state",
+                json!({"securities":["sz.000001"],"fact":fact,"as_of":"2026-06-01"}),
+            )
+            .unwrap();
+        assert_eq!(tool["dataset"], dataset, "{fact}");
+        let query = f
+            .api
+            .call(
+                "query_data",
+                json!({
+                    "dataset":dataset,"contract_version":"v2",
+                    "selection":{"kind":"single","entity":"sz.000001"},
+                    "filter":{"kind":"daily","start_date":"2026-06-01","end_date":"2026-06-01","as_of":"2026-06-01"},
+                    "version":{"kind":"latest_per_entity"}
+                }),
+            )
+            .unwrap();
+        same_answer(&tool, &query);
+    }
+}
+
+#[test]
+fn get_security_state_known_at_hides_rows_learned_later() {
+    let f = fixture();
+    seed_security_names(&f);
+    let all = json!(["sz.000001", "sz.000002", "sz.000003"]);
+    let call = |known_at: Option<&str>| {
+        let mut input = json!({"securities":all,"fact":"security_names","as_of":"2026-12-31"});
+        if let Some(day) = known_at {
+            input["known_at"] = json!(day);
+        }
+        f.api.call("get_security_state", input).unwrap()
+    };
+    let now = call(None);
+    assert_eq!(now["columns"]["name"], json!(["ST旧名", "新名", "无日期"]));
+    // Known by 2026-11-01: the 11-02 row and the row without a known date drop out.
+    let first = call(Some("2026-11-01"));
+    assert_eq!(first["columns"]["name"], json!(["ST旧名"]));
+    assert_eq!(first["temporal"]["unknown_known_at_rows"], 1);
+    let second = call(Some("2026-11-02"));
+    assert_eq!(second["columns"]["name"], json!(["ST旧名", "新名"]));
+    // Before anything was known, nothing is returned.
+    let before = call(Some("2026-10-31"));
+    assert_eq!(before["row_count"], 0);
+}
+
+#[test]
+fn get_security_state_does_not_match_on_the_interval_end_day() {
+    let f = fixture();
+    seed_security_names(&f);
+    let call = |as_of: &str| {
+        f.api
+            .call(
+                "get_security_state",
+                json!({"securities":["sz.000001"],"fact":"security_names","as_of":as_of}),
+            )
+            .unwrap()
+    };
+    // sz.000001's name interval ends on 2027-06-01, and the end day is excluded.
+    assert_eq!(call("2027-05-31")["row_count"], 1);
+    assert_eq!(call("2027-06-01")["row_count"], 0);
+    // The first day is included; the day before is not.
+    assert_eq!(call("2026-01-05")["row_count"], 1);
+    assert_eq!(call("2026-01-04")["row_count"], 0);
+}
+
+#[test]
+fn get_security_state_defaults_as_of_to_the_last_trading_day_in_both_ends() {
+    let f = fixture();
+    seed_security_names(&f);
+    // The seeded calendar ends in the past, so "the last trading day up to
+    // today" is its last day whatever the host clock says.
+    commit_calendar_days(&f, &[day(2026, 1, 5), day(2026, 1, 6)]);
+    let default = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sz.000001"],"fact":"security_names"}),
+        )
+        .unwrap();
+    assert_eq!(default["temporal"]["as_of"], "2026-01-06");
+    assert_eq!(default["columns"]["name"], json!(["ST旧名"]));
+    let query = f
+        .api
+        .call(
+            "query_data",
+            state_query(json!(["sz.000001"]), "2026-01-06", None),
+        )
+        .unwrap();
+    same_answer(&default, &query);
+    // The same call with the day spelled out is the same answer.
+    let explicit = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sz.000001"],"fact":"security_names","as_of":"2026-01-06"}),
+        )
+        .unwrap();
+    same_answer(&default, &explicit);
+}
+
+#[test]
+fn get_security_state_says_that_name_history_covers_sz_only() {
+    const NOTE: &str = "name history covers SZ only (D-61)";
+    let f = fixture();
+    seed_security_names(&f);
+    let notes = |page: &Value| -> Vec<String> {
+        page["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let has_note = |page: &Value| notes(page).iter().any(|n| n.contains(NOTE));
+
+    // An SH code answers 0 rows; the note says that is not "no name".
+    let sh = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sh.600006"],"fact":"security_names","as_of":"2026-12-31"}),
+        )
+        .unwrap();
+    assert_eq!(sh["row_count"], 0);
+    assert!(has_note(&sh), "{:?}", notes(&sh));
+    // The existing limitations stay; the note is added once.
+    assert!(notes(&sh).len() >= 2);
+    assert_eq!(notes(&sh).iter().filter(|n| n.contains(NOTE)).count(), 1);
+
+    // A mixed batch carries it too, and the SZ rows are still returned.
+    let mixed = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sh.600006","sz.000001"],"fact":"security_names","as_of":"2026-12-31"}),
+        )
+        .unwrap();
+    assert_eq!(mixed["columns"]["name"], json!(["ST旧名"]));
+    assert!(has_note(&mixed));
+
+    // SZ only, or another fact for an SH code: no note.
+    let sz = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sz.000001"],"fact":"security_names","as_of":"2026-12-31"}),
+        )
+        .unwrap();
+    assert!(!has_note(&sz));
+    let other = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sh.600006"],"fact":"risk_warnings","as_of":"2026-12-31"}),
+        )
+        .unwrap();
+    assert!(!has_note(&other));
+    // `query_data` is unchanged.
+    let query = f
+        .api
+        .call(
+            "query_data",
+            state_query(json!(["sh.600006"]), "2026-12-31", None),
+        )
+        .unwrap();
+    assert!(!has_note(&query));
+}
+
+#[test]
+fn get_security_state_rejects_bad_input() {
+    let f = fixture();
+    let call = |input: Value| f.api.call("get_security_state", input).unwrap_err();
+    assert_eq!(
+        call(json!({"securities":["sz.000001"],"fact":"capital","as_of":"2026-06-01"})).code,
+        "invalid_arguments"
+    );
+    assert_eq!(
+        call(json!({"securities":["sz.000001"],"as_of":"2026-06-01"})).code,
+        "invalid_arguments"
+    );
+    assert_eq!(
+        call(json!({"securities":[],"fact":"security_names"})).code,
+        "invalid_arguments"
+    );
+    // A date range is not part of this tool (it asks about one day).
+    assert_eq!(
+        call(json!({"securities":["sz.000001"],"fact":"security_names","start_date":"2026-01-01","end_date":"2026-02-01"})).code,
+        "invalid_arguments"
+    );
+}
+
+fn seed_capital_events(f: &Fixture, symbol: &str) {
+    use crate::security_master::{CapitalEvent, CapitalEventSet};
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    let binding = repo
+        .read(|c| series::read_series_adjusted(c, symbol, Period::Day, Adjustment::Forward))
+        .unwrap()
+        .unwrap()
+        .source_binding_digest;
+    // 10,000 万股 -> 12,000 万股 total, float unchanged.
+    let bits = [1000f32, 10_000f32, 1000f32, 12_000f32].map(f32::to_bits);
+    let set = CapitalEventSet {
+        events: vec![
+            CapitalEvent::from_raw(0, day(2020, 1, 6), 3, bits).unwrap(),
+            CapitalEvent::from_raw(1, day(2020, 1, 8), 3, bits).unwrap(),
+        ],
+        ..CapitalEventSet::empty(symbol)
+    };
+    repo.write(|c| {
+        crate::sqlite_market::security::replace_capital_events(
+            c,
+            &set,
+            binding,
+            "task-capital",
+            "item-1",
+        )
+    })
+    .unwrap();
+}
+
+fn events_query(dataset: &str, start: &str, end: &str) -> Value {
+    json!({
+        "dataset":dataset,"contract_version":"v2",
+        "selection":{"kind":"single","entity":SYMBOL},
+        "filter":{"kind":"daily","start_date":start,"end_date":end},
+        "version":{"kind":"latest_per_entity"}
+    })
+}
+
+#[test]
+fn get_security_events_answers_like_query_data_for_both_kinds() {
+    let f = fixture();
+    seed_daily_pair(&f);
+    seed_adjustment_events(&f, SYMBOL);
+    seed_capital_events(&f, SYMBOL);
+
+    let capital = f
+        .api
+        .call(
+            "get_security_events",
+            json!({"securities":[SYMBOL],"event":"capital","start_date":"2020-01-01","end_date":"2020-12-31"}),
+        )
+        .unwrap();
+    assert_eq!(capital["dataset"], "market.capital_events");
+    assert_eq!(capital["row_count"], 2, "{capital}");
+    same_answer(
+        &capital,
+        &f.api
+            .call(
+                "query_data",
+                events_query("market.capital_events", "2020-01-01", "2020-12-31"),
+            )
+            .unwrap(),
+    );
+
+    let adjustment = f
+        .api
+        .call(
+            "get_security_events",
+            json!({"securities":[SYMBOL],"event":"adjustment","start_date":"2020-01-06","end_date":"2020-01-06"}),
+        )
+        .unwrap();
+    assert_eq!(adjustment["dataset"], "market.adjustment_events");
+    assert_eq!(adjustment["columns"]["category"], json!([1]));
+    same_answer(
+        &adjustment,
+        &f.api
+            .call(
+                "query_data",
+                events_query("market.adjustment_events", "2020-01-06", "2020-01-06"),
+            )
+            .unwrap(),
+    );
+
+    // The date range narrows the capital events.
+    let narrow = f
+        .api
+        .call(
+            "get_security_events",
+            json!({"securities":[SYMBOL],"event":"capital","start_date":"2020-01-07","end_date":"2020-01-31"}),
+        )
+        .unwrap();
+    assert_eq!(narrow["row_count"], 1);
+}
+
+#[test]
+fn get_security_events_has_no_known_at_and_no_as_of() {
+    let f = fixture();
+    let base = json!({"securities":[SYMBOL],"event":"capital","start_date":"2020-01-01","end_date":"2020-12-31"});
+    for extra in ["known_at", "as_of"] {
+        let mut input = base.clone();
+        input[extra] = json!("2020-06-01");
+        let error = f.api.call("get_security_events", input).unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{extra}");
+    }
+    let mut input = base.clone();
+    input["event"] = json!("split");
+    assert_eq!(
+        f.api.call("get_security_events", input).unwrap_err().code,
+        "invalid_arguments"
+    );
+    // The schema does not offer either field.
+    let tools = f.api.tools();
+    let tool = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "get_security_events")
+        .unwrap();
+    for hidden in ["known_at", "as_of"] {
+        assert!(tool["inputSchema"]["properties"].get(hidden).is_none());
+    }
 }
