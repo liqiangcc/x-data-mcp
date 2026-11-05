@@ -56,6 +56,46 @@ pub(crate) fn compact_market_fixture() -> (
     (dir, market)
 }
 
+/// A synthetic SZSE ETF workbook: `header` row then `rows`, all inline
+/// strings. `generated_at` goes into `docProps/core.xml` only, the way the
+/// real workbook embeds its generation time: two workbooks with equal cells
+/// and different `generated_at` are different bytes with the same content.
+#[cfg(test)]
+pub(crate) fn test_szse_xlsx(header: &[&str], rows: &[Vec<String>], generated_at: &str) -> Vec<u8> {
+    use std::io::Write;
+    fn cell(column: usize, row: usize, text: &str) -> String {
+        let letter = (b'A' + column as u8) as char;
+        format!("<c r=\"{letter}{row}\" t=\"inlineStr\"><is><t>{text}</t></is></c>")
+    }
+    let mut sheet = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet \
+         xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>",
+    );
+    for (index, line) in std::iter::once(header.iter().map(|c| c.to_string()).collect::<Vec<_>>())
+        .chain(rows.iter().cloned())
+        .enumerate()
+    {
+        sheet.push_str(&format!("<row r=\"{}\">", index + 1));
+        for (column, text) in line.iter().enumerate() {
+            sheet.push_str(&cell(column, index + 1, text));
+        }
+        sheet.push_str("</row>");
+    }
+    sheet.push_str("</sheetData></worksheet>");
+    let core = format!(
+        "<cp:coreProperties><dcterms:created>{generated_at}</dcterms:created></cp:coreProperties>"
+    );
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::SimpleFileOptions::default();
+    writer.start_file("docProps/core.xml", options).unwrap();
+    writer.write_all(core.as_bytes()).unwrap();
+    writer
+        .start_file("xl/worksheets/sheet1.xml", options)
+        .unwrap();
+    writer.write_all(sheet.as_bytes()).unwrap();
+    writer.finish().unwrap().into_inner()
+}
+
 /// Record a complete refresh run over the pages a test has frozen (R3,
 /// issue-446 §5.4): the run record is what a whole-table page set belongs to
 /// and what `verified_through` comes from.
@@ -63,6 +103,21 @@ pub(crate) fn compact_market_fixture() -> (
 pub(crate) fn record_test_refresh_run(
     market: &crate::sqlite_market::backend::MarketBackend,
     source: crate::exchange_source::SourceId,
+    verified_through: &str,
+    finished_at: &str,
+) -> String {
+    record_test_refresh_run_selecting(market, source, None, verified_through, finished_at)
+}
+
+/// [`record_test_refresh_run`] with the run's member pinned to `snapshot_id`.
+/// A real run selects the snapshot its fetch returned, which is not the
+/// newest index row when the exchange went back to earlier content (the store
+/// dedupes the repeat, so no newer row exists).
+#[cfg(test)]
+pub(crate) fn record_test_refresh_run_selecting(
+    market: &crate::sqlite_market::backend::MarketBackend,
+    source: crate::exchange_source::SourceId,
+    snapshot_id: Option<&str>,
     verified_through: &str,
     finished_at: &str,
 ) -> String {
@@ -86,6 +141,9 @@ pub(crate) fn record_test_refresh_run(
     let mut newest: Newest = Newest::new();
     for row in market.read_exchange_snapshots().unwrap() {
         if row.source_id != source.as_str() {
+            continue;
+        }
+        if snapshot_id.is_some_and(|pinned| row.snapshot_id != pinned) {
             continue;
         }
         let newer = newest.get(&row.request_fingerprint).is_none_or(|seen| {
