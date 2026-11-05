@@ -129,6 +129,7 @@ impl ReadRepository for Fake {
             manifest: vec![],
             rows: vec![],
             temporal: None,
+            limitations: vec![],
         };
         for entity in &plan.entities {
             let i = entity.code.parse::<usize>().unwrap() - 600_000;
