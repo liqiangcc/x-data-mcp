@@ -153,7 +153,7 @@ pi 查 2 只标的的最新两天行情用了 5 轮。提示里要求它先弄�
 | ETF 名称不可查 | "沪深 300 ETF 的代码是什么"查不到，只能已知代码 | 名单来源里有简称，但没有进读模型。另开数据任务，不放进本次 |
 | 沪市名称历史 | D-61：沪市和北交所 `NOT_AVAILABLE`，只有深市有 | 用 `limitations` 写明，不改数据范围 |
 | `as_of` 默认值用 `Local::now()` | vm2 时区是上海，host 是 UTC，默认值可能差一天 | 已有待办：`query.rs:248` 改成 `shanghai_today`，放进 PR-1 |
-| `versions[]` 重复长文本 | 混查 2 行响应 4.5 KB，其中多为 `adjustment.reason` | 不在本次，基线测完再定 |
+| `versions[]` 重复长文本 | 混查 2 行响应 4.5 KB，其中多为 `adjustment.reason` | 已做（VM1-20）：v2 的 `adjustment` 等对象键部分共享，长文本进响应顶层 `texts` 去重表，见 [v8 契约](../contracts/generic-data-v8.md) §4.4 |
 | 指数走 `query_data` 仍静默 `absent` | 老接口行为不变 | 只在新工具里报错 |
 
 ## 7. 实现方式

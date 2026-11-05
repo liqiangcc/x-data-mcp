@@ -397,11 +397,15 @@ fn universe_pages_add_up_to_the_whole_answer() {
             let reported = page["entities"].as_array().unwrap();
             let rows = page["versions"].as_array().unwrap();
             assert_eq!(reported.len(), rows.len());
+            // `texts` indices and the cut of a long text belong to one
+            // response, so rows are compared after the texts are joined back.
+            let texts = page["texts"].as_array().cloned().unwrap_or_default();
             for (entity, row) in reported.iter().zip(rows) {
                 assert_eq!(row["entity"], *entity);
+                let row = super::versions_slim::expand(row, &texts);
                 if let Some(old) = versions.insert(entity.as_str().unwrap().to_owned(), row.clone())
                 {
-                    assert_eq!(old, *row, "a repeated entity carries the same version row");
+                    assert_eq!(old, row, "a repeated entity carries the same version row");
                 }
             }
         }

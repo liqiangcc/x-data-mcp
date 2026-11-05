@@ -329,6 +329,22 @@ fn split_metadata(manifest: &[ManifestEntry]) -> (Map<String, Value>, Vec<Map<St
         }
         if values.windows(2).all(|pair| pair[0] == pair[1]) {
             shared.insert((*key).to_owned(), values[0].clone());
+        } else if let Some(common) = common_fields(key, &values) {
+            // An object that differs in some fields only: the fields every
+            // entry agrees on are written once, each row keeps the rest.
+            for (position, index) in present.iter().enumerate() {
+                let rest: Map<String, Value> = values[position]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter(|(field, _)| !common.contains_key(*field))
+                    .map(|(field, value)| (field.clone(), value.clone()))
+                    .collect();
+                if !rest.is_empty() {
+                    overrides[*index].insert((*key).to_owned(), Value::Object(rest));
+                }
+            }
+            shared.insert((*key).to_owned(), Value::Object(common));
         } else {
             for (position, index) in present.iter().enumerate() {
                 if !values[position].is_null() {
@@ -338,6 +354,31 @@ fn split_metadata(manifest: &[ManifestEntry]) -> (Map<String, Value>, Vec<Map<St
         }
     }
     (shared, overrides)
+}
+
+/// Metadata keys whose value is an object that can differ in a few fields only
+/// (`adjustment.reason` states a per-entity event count while `field`,
+/// `status` and `value` are the same for everyone). A reader lays a row's
+/// object over the shared object of the same key, field by field.
+const OBJECT_KEYS: &[&str] = &["adjustment", "lineage", "index"];
+
+/// The fields every entry's object agrees on, for an object key whose every
+/// value is an object; `None` when there is nothing to share.
+fn common_fields(key: &str, values: &[Value]) -> Option<Map<String, Value>> {
+    if !OBJECT_KEYS.contains(&key) || !values.iter().all(Value::is_object) {
+        return None;
+    }
+    let common: Map<String, Value> = values[0]
+        .as_object()?
+        .iter()
+        .filter(|(field, value)| {
+            values[1..]
+                .iter()
+                .all(|other| other.get(field.as_str()) == Some(*value))
+        })
+        .map(|(field, value)| (field.clone(), value.clone()))
+        .collect();
+    (!common.is_empty()).then_some(common)
 }
 
 /// One `versions` row per manifest entry: the version list appears once and
@@ -395,6 +436,297 @@ fn version_rows_in(
             Value::Object(row)
         })
         .collect()
+}
+
+/// Texts shorter than this stay where they are.
+const TEXT_MIN_BYTES: usize = 48;
+/// Bytes a moved text costs in its row (`_parts`, brackets, a table index).
+const TEXT_REF_BYTES: usize = 16;
+/// Texts are grouped by the last (first) characters before a common suffix
+/// (prefix) is cut out of the group.
+const TEXT_KEY_CHARS: usize = 24;
+
+enum Part {
+    Lit(String),
+    Ref(usize),
+}
+
+#[derive(Clone, Copy)]
+enum Place {
+    CoverageReason,
+    Adjustment,
+    Unit(usize),
+}
+
+struct Slot {
+    /// 0 is the shared `metadata`, `n` is `versions[n - 1]`.
+    holder: usize,
+    place: Place,
+    /// Texts of one class are cut against each other.
+    class: String,
+    text: String,
+    parts: Vec<Part>,
+}
+
+fn place_map(
+    holder: &mut Map<String, Value>,
+    place: Place,
+) -> Option<(&mut Map<String, Value>, &'static str)> {
+    match place {
+        Place::CoverageReason => Some((holder, "coverage_reason")),
+        Place::Adjustment => holder
+            .get_mut("adjustment")?
+            .as_object_mut()
+            .map(|object| (object, "reason")),
+        Place::Unit(index) => holder
+            .get_mut("units")?
+            .as_array_mut()?
+            .get_mut(index)?
+            .as_object_mut()
+            .map(|object| (object, "reason")),
+    }
+}
+
+fn holder_mut<'a>(
+    shared: &'a mut Map<String, Value>,
+    rows: &'a mut [Value],
+    holder: usize,
+) -> Option<&'a mut Map<String, Value>> {
+    match holder {
+        0 => Some(shared),
+        row => rows.get_mut(row - 1)?.as_object_mut(),
+    }
+}
+
+fn common_suffix_len(items: &[&str]) -> usize {
+    let first = items[0];
+    let mut len = first.len();
+    for other in &items[1..] {
+        len = len.min(
+            first
+                .bytes()
+                .rev()
+                .zip(other.bytes().rev())
+                .take_while(|(a, b)| a == b)
+                .count(),
+        );
+    }
+    while len > 0 && !first.is_char_boundary(first.len() - len) {
+        len -= 1;
+    }
+    len
+}
+
+fn common_prefix_len(items: &[&str]) -> usize {
+    let first = items[0];
+    let mut len = first.len();
+    for other in &items[1..] {
+        len = len.min(
+            first
+                .bytes()
+                .zip(other.bytes())
+                .take_while(|(a, b)| a == b)
+                .count(),
+        );
+    }
+    while len > 0 && !first.is_char_boundary(len) {
+        len -= 1;
+    }
+    len
+}
+
+/// Move the long evidence texts (`coverage_reason`, `adjustment.reason`,
+/// `units[].reason`) of the shared `metadata` and the `versions` rows into a
+/// per-response table and return it. A text that several entries repeat is
+/// stored once; texts of one kind that differ in a few characters (an event
+/// count, a version id) are stored as a common prefix and suffix around the
+/// literal middle. A moved text `reason` becomes `reason_parts` (and
+/// `coverage_reason` becomes `coverage_reason_parts`): an array whose
+/// numbers index the table and whose strings are literal; concatenating the
+/// parts gives the original text. Nothing is dropped and the choice depends on
+/// the content only, so equal input gives equal bytes.
+fn compact_texts(shared: &mut Map<String, Value>, rows: &mut [Value]) -> Vec<String> {
+    let mut slots: Vec<Slot> = Vec::new();
+    for holder in 0..=rows.len() {
+        let Some(map) = holder_mut(shared, rows, holder) else {
+            continue;
+        };
+        let mut places = vec![(Place::CoverageReason, "coverage".to_owned())];
+        if map.contains_key("adjustment") {
+            places.push((Place::Adjustment, "adjustment".to_owned()));
+        }
+        for (index, unit) in map
+            .get("units")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let field = unit.get("field").and_then(Value::as_str).unwrap_or("");
+            places.push((Place::Unit(index), format!("unit:{field}")));
+        }
+        for (place, class) in places {
+            let Some((target, key)) = place_map(map, place) else {
+                continue;
+            };
+            let Some(text) = target.get(key).and_then(Value::as_str) else {
+                continue;
+            };
+            if text.len() < TEXT_MIN_BYTES {
+                continue;
+            }
+            slots.push(Slot {
+                holder,
+                place,
+                class,
+                text: text.to_owned(),
+                parts: vec![Part::Lit(text.to_owned())],
+            });
+        }
+    }
+
+    let mut table: Vec<String> = Vec::new();
+
+    // 1. A text several slots repeat is stored once.
+    let mut same: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (index, slot) in slots.iter().enumerate() {
+        same.entry(slot.text.as_str()).or_default().push(index);
+    }
+    let repeated: Vec<(String, Vec<usize>)> = same
+        .into_iter()
+        .filter(|(_, members)| members.len() >= 2)
+        .map(|(text, members)| (text.to_owned(), members))
+        .collect();
+    for (text, members) in repeated {
+        table.push(text);
+        for index in members {
+            slots[index].parts = vec![Part::Ref(table.len() - 1)];
+        }
+    }
+
+    // 2. Texts of one kind that end alike share that ending, then the same
+    //    for what they start with.
+    for tail in [true, false] {
+        let mut groups: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for (index, slot) in slots.iter().enumerate() {
+            let edge = if tail {
+                slot.parts.last()
+            } else {
+                slot.parts.first()
+            };
+            let Some(Part::Lit(text)) = edge else {
+                continue;
+            };
+            if text.chars().count() < TEXT_KEY_CHARS {
+                continue;
+            }
+            let key: String = if tail {
+                let mut chars: Vec<char> = text.chars().rev().take(TEXT_KEY_CHARS).collect();
+                chars.reverse();
+                chars.into_iter().collect()
+            } else {
+                text.chars().take(TEXT_KEY_CHARS).collect()
+            };
+            groups
+                .entry((slot.class.clone(), key))
+                .or_default()
+                .push(index);
+        }
+        for members in groups.into_values().filter(|members| members.len() >= 2) {
+            let literals: Vec<&str> = members
+                .iter()
+                .map(|index| {
+                    let edge = if tail {
+                        slots[*index].parts.last()
+                    } else {
+                        slots[*index].parts.first()
+                    };
+                    match edge {
+                        Some(Part::Lit(text)) => text.as_str(),
+                        _ => "",
+                    }
+                })
+                .collect();
+            let len = if tail {
+                common_suffix_len(&literals)
+            } else {
+                common_prefix_len(&literals)
+            };
+            if len < TEXT_MIN_BYTES
+                || members.len() * (len - TEXT_REF_BYTES.min(len)) <= len + TEXT_REF_BYTES
+            {
+                continue;
+            }
+            let common = if tail {
+                literals[0][literals[0].len() - len..].to_owned()
+            } else {
+                literals[0][..len].to_owned()
+            };
+            table.push(common);
+            let reference = table.len() - 1;
+            for index in members {
+                let parts = &mut slots[index].parts;
+                if tail {
+                    let Some(Part::Lit(text)) = parts.pop() else {
+                        continue;
+                    };
+                    let rest = text[..text.len() - len].to_owned();
+                    if !rest.is_empty() {
+                        parts.push(Part::Lit(rest));
+                    }
+                    parts.push(Part::Ref(reference));
+                } else {
+                    let Part::Lit(text) = parts.remove(0) else {
+                        continue;
+                    };
+                    let rest = text[len..].to_owned();
+                    if !rest.is_empty() {
+                        parts.insert(0, Part::Lit(rest));
+                    }
+                    parts.insert(0, Part::Ref(reference));
+                }
+            }
+        }
+    }
+
+    for slot in slots {
+        if matches!(slot.parts.as_slice(), [Part::Lit(_)]) {
+            continue;
+        }
+        let Some(map) = holder_mut(shared, rows, slot.holder) else {
+            continue;
+        };
+        let Some((target, key)) = place_map(map, slot.place) else {
+            continue;
+        };
+        let parts: Vec<Value> = slot
+            .parts
+            .into_iter()
+            .map(|part| match part {
+                Part::Lit(text) => json!(text),
+                Part::Ref(index) => json!(index),
+            })
+            .collect();
+        target.remove(key);
+        target.insert(format!("{key}_parts"), Value::Array(parts));
+    }
+    table
+}
+
+/// `versions`, the shared `metadata` and the `texts` table of one answer.
+fn put_versions(
+    out: &mut Map<String, Value>,
+    mut shared: Map<String, Value>,
+    mut versions: Vec<Value>,
+) {
+    let texts = compact_texts(&mut shared, &mut versions);
+    out.insert("versions".to_owned(), Value::Array(versions));
+    if !shared.is_empty() {
+        out.insert("metadata".to_owned(), Value::Object(shared));
+    }
+    if !texts.is_empty() {
+        out.insert("texts".to_owned(), json!(texts));
+    }
 }
 
 fn envelope(layout: &str, dataset: Dataset, meta: &PageMeta) -> Map<String, Value> {
@@ -615,16 +947,14 @@ pub fn panel_page(
         "dates".to_owned(),
         Value::Array(dates.into_iter().map(Value::Array).collect()),
     );
-    out.insert(
-        "versions".to_owned(),
-        Value::Array(match span {
+    put_versions(
+        &mut out,
+        shared,
+        match span {
             Some(span) => version_rows_in(manifest, &overrides, span),
             None => version_rows(manifest, &overrides),
-        }),
+        },
     );
-    if !shared.is_empty() {
-        out.insert("metadata".to_owned(), Value::Object(shared));
-    }
     // `columns` is two-dimensional; build it from the per-entity vectors.
     let mut columns = Map::new();
     for field in fields {
@@ -676,13 +1006,7 @@ pub fn catalog_table(
     }
     let mut out = envelope("table", Dataset::Catalog, meta);
     out.insert("entities".to_owned(), Value::Array(entities));
-    out.insert(
-        "versions".to_owned(),
-        Value::Array(version_rows(manifest, &overrides)),
-    );
-    if !shared.is_empty() {
-        out.insert("metadata".to_owned(), Value::Object(shared));
-    }
+    put_versions(&mut out, shared, version_rows(manifest, &overrides));
     out.insert("columns".to_owned(), Value::Object(columns(fields, &cells)));
     out.insert("row_count".to_owned(), json!(rows.len()));
     Value::Object(out)
@@ -725,13 +1049,7 @@ pub fn row_table(
     if entity_bound {
         out.insert("entities".to_owned(), Value::Array(entities));
     }
-    out.insert(
-        "versions".to_owned(),
-        Value::Array(version_rows(manifest, &overrides)),
-    );
-    if !shared.is_empty() {
-        out.insert("metadata".to_owned(), Value::Object(shared));
-    }
+    put_versions(&mut out, shared, version_rows(manifest, &overrides));
     out.insert("columns".to_owned(), Value::Object(columns(fields, &cells)));
     out.insert("row_count".to_owned(), json!(rows.len()));
     Value::Object(out)
@@ -780,13 +1098,7 @@ pub fn fact_table(
     if entity_bound {
         out.insert("entities".to_owned(), Value::Array(entities));
     }
-    out.insert(
-        "versions".to_owned(),
-        Value::Array(version_rows(manifest, &overrides)),
-    );
-    if !shared.is_empty() {
-        out.insert("metadata".to_owned(), Value::Object(shared));
-    }
+    put_versions(&mut out, shared, version_rows(manifest, &overrides));
     out.insert("columns".to_owned(), Value::Object(columns(fields, &cells)));
     out.insert("row_count".to_owned(), json!(rows.len()));
     Value::Object(out)
@@ -1013,16 +1325,14 @@ pub fn cross_section_page(
                 .collect(),
         ),
     );
-    out.insert(
-        "versions".to_owned(),
-        Value::Array(match span {
+    put_versions(
+        &mut out,
+        shared,
+        match span {
             Some(span) => version_rows_in(manifest, &overrides, span),
             None => version_rows(manifest, &overrides),
-        }),
+        },
     );
-    if !shared.is_empty() {
-        out.insert("metadata".to_owned(), Value::Object(shared));
-    }
     out.insert("columns".to_owned(), Value::Object(columns));
     out.insert("row_count".to_owned(), json!(rows.len()));
     Value::Object(out)

@@ -237,7 +237,8 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
   所以全部页的 `versions` 合起来恰好覆盖 manifest 的每个条目，`absent` 条目不会丢。
 - 一个实体的行跨两页时，两页都报告该实体；同一行只出现在一页。
 - `metadata`（共享元数据）仍按**整个** manifest 判定，同一查询各页的 `metadata` 与逐实体 `versions` 行
-  的划分一致；各页 `versions` 里同一实体的行相同。
+  的划分一致；各页 `versions` 里同一实体的行解码后相同（`texts` 的下标和长文本的切法只对单个响应有效，
+  各页可以不同，比较前先按 §4.4 把 `*_parts` 拼回原文）。
 - `cross_section` 的 `columns[field][day][entity]` 与本页 `entities` 对齐；本页实体在其它页的
   行不再补 `null` 占位（只剩本页实体窗口内真正没有 bar 的 `null`）。
 - 版本校验（`verify`）照旧对**整个**快照的每个版本执行，只是不再输出其余页的版本。
@@ -268,6 +269,7 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
 | `columns` | 见 §4.3 |
 | `versions` | 版本清单，每个 manifest 条目一行（§4.4） |
 | `metadata` | 共享元数据（§4.4） |
+| `texts` | 仅当 `versions`/`metadata` 里有被移出的长文本时出现：去重表，见 §4.4「长文本」 |
 | `catalog_version` | `universe` 解析出的目录版本（仅查询类工具；`scope=sh_sz_a_listed_ever` 时为 `null`，见 §5.2） |
 | `tasks`、`limitations`（顶层） | 仅 `get_data_availability`：相关任务对象共享一次 |
 | `temporal` | M2 数据集：`as_of`、`known_at`（可 `null`）、`unknown_known_at_rows`、`datasets_without_known_at[]`（`src/sqlite_supply/m2.rs:88-103`） |
@@ -306,10 +308,29 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
   （`present`/`absent`）、`version_id`（present 时）、`published_at`、`stale`/`as_of_day`/`reason`
   （存在时）（`src/data_supply/columnar.rs:207-236`）。`integrity_sha256` 不再输出——它与
   `version_id` 相同。
-- `metadata` 只写**所有实体相同**的值，键为 `source`、`coverage_status`、`coverage_reason`、
-  `units`、`adjustment`、`lineage`、`index`（`src/data_supply/columnar.rs:129-205`）。逐实体不同的
-  值下沉到该实体的 `versions` 行；全为 null 的键不出现。生产里 `coverage_status` 会因
-  fail-closed 实体而逐实体不同，所以它经常出现在 `versions` 行而不是共享 `metadata`。
+- `metadata` 写**所有实体相同**的值，键为 `source`、`coverage_status`、`coverage_reason`、
+  `units`、`adjustment`、`lineage`、`index`、`verified_through`、`price_scale`、`last_trade_date`、
+  `delisting_date`（`src/data_supply/columnar.rs` 的 `METADATA_KEYS`）。逐实体不同的值下沉到该实体的
+  `versions` 行；全为 null 的键不出现。生产里 `coverage_status` 会因 fail-closed 实体而逐实体不同，
+  所以它经常出现在 `versions` 行而不是共享 `metadata`。
+- **对象键的部分共享（#525）：** `adjustment`、`lineage`、`index` 是对象。各实体的对象只在个别字段
+  不同时（典型：`adjustment.reason` 带逐实体的事件数，`field`/`status`/`value` 全员相同），
+  相同的字段写在共享 `metadata.<key>`，每行只在 `versions[].<key>` 里写不同的字段。读法：把行里的
+  对象逐字段盖在共享对象上，行优先。全员相同时与之前一样整个对象在 `metadata`，行里没有该键。
+  A 股和 ETF 混查时 `adjustment.value` 不同（`qfq`/`raw`），`value` 便落在各行里，`field`、`status`
+  仍在共享对象里。
+- **长文本（#525）：** `coverage_reason`、`adjustment.reason`、`units[].reason` 里不短于 48 字节的文本，
+  在 `metadata` 与 `versions` 行里不直接写出，而是移到响应顶层的 `texts` 数组；被移出的键改名为
+  `<键>_parts`（`coverage_reason_parts`、`reason_parts`），值是数组：数字是 `texts` 的下标，字符串是
+  字面片段，按顺序拼接即原文。一条文本被几个实体重复时存一次；同一类文本只在少数字符上不同
+  （事件数、base 版本 id）时，存公共前缀和公共后缀，各行只写中间的字面片段。没有被移出的文本
+  保持原键原值。解码：见到 `X_parts` 就把各片段拼成 `X`，其余字段不动。只有 v2 有此形状，v1
+  `version_manifest` 不变。
+- 不变的位置与语义：`metadata.adjustment.value` 仍是字面 `"qfq"`/`"raw"`，全员相同时在
+  `metadata.adjustment.value`；`published_at` 仍在 `versions` 行；`coverage_status` 仍是原键，
+  共享时在 `metadata`，不同时在行里；`stale`、`as_of_day`、`reason` 在行里。
+  `coverage_reason` 在文本被移出时以 `coverage_reason_parts` 出现，其语义和位置（共享 `metadata`
+  或行）与原键相同。
 - `metadata.adjustment` 是既有的 `Evidence` 对象
   `{field:"price_adjustment", status, value, reason}`（`src/data_supply/wire.rs:379-386`，
   `src/sqlite_supply.rs:1142-1149`），`value` 为 `"raw"`/`"qfq"`。它**不含** `price_scale` 或
