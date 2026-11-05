@@ -102,6 +102,11 @@ query_data 的 `version_manifest.metadata.adjustment` 对 market daily/yearly �
 daily 仍不是公开 dataset；不能据此宣称 historical_accurate。
 
 只读工具不采集、不重试、不修复、不升级 schema；分页缓存允许内存变化。
+
+`query_data` 的 v2 `selection.kind=universe`（`market.daily`/`market.index`）逐页返回：每页的
+`entities`、`versions`、`columns` 只含本页行涉及的实体，单页字节与本页行数成比例；所有页合起来
+得到与整体答案相同的行和版本。单快照 16 MiB 上限对这类读计的是列式答案的字节，不是内部快照的序列化。
+细则见 [generic-data-v8](contracts/generic-data-v8.md) §4.1。`single`/`batch` 的响应不变。
 写请求的 request_id 使用持久命名空间并包含操作类型/规范化参数语义；
 不得拿 JSON-RPC id 代替业务 request_id。
 

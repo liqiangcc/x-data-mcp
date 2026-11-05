@@ -225,6 +225,27 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
 （`src/data_supply/query.rs:10-11`）；cursor 是快照内位置，跨请求复用会报
 `cursor conditions changed: …`（`src/data_supply/query.rs:353-360,604-614`）。
 
+**`selection.kind=universe` 的分页（#295）：** `market.daily`/`market.index` 的 v2 `universe` 读，
+每页的 `entities`、`versions`、`columns`（`dates`）只含**本页行涉及的实体**，响应字节随本页行数
+增长，不随全市场成员数增长。具体规则：
+
+- 页覆盖的实体区间从本页第一行所属实体起，到下一页第一行所属实体前止；没有任何行的实体
+  （`absent` 版本，或窗口内无 bar）并入它前面最近一页，第一页从成员列表开头起，最后一页到末尾。
+  所以全部页的 `versions` 合起来恰好覆盖 manifest 的每个条目，`absent` 条目不会丢。
+- 一个实体的行跨两页时，两页都报告该实体；同一行只出现在一页。
+- `metadata`（共享元数据）仍按**整个** manifest 判定，同一查询各页的 `metadata` 与逐实体 `versions` 行
+  的划分一致；各页 `versions` 里同一实体的行相同。
+- `cross_section` 的 `columns[field][day][entity]` 与本页 `entities` 对齐；本页实体在其它页的
+  行不再补 `null` 占位（只剩本页实体窗口内真正没有 bar 的 `null`）。
+- 版本校验（`verify`）照旧对**整个**快照的每个版本执行，只是不再输出其余页的版本。
+- `single`/`batch`（以及 `securities.catalog` 和表布局数据集）的响应不变；
+  `get_data_availability` 的 `universe` 仍是一行聚合。
+- 字节上限的口径：单快照 ≤16 MiB 计的是 **v2 `universe` 价格读最终给出的列式答案**
+  （全部实体、全部行、所选 `fields`），不再是内部快照的序列化（后者每行重复一份 `version_ref`，
+  不是调用方收到的东西）。其它查询（`single`/`batch`、v1、表布局）口径不变。行数上限
+  100,000 不变。因此 `a_current` 规模（约 5,2xx 只）、全字段的 `cross_section` 在 3、5 个交易日窗口
+  内可一次请求通过；`cross_section` 窗口上限仍是 5 个交易日，16 MiB 与 100,000 行上限没有调整。
+
 ### 4.2 响应信封
 
 所有 v2 布局共享同一信封（`src/data_supply/columnar.rs:249-278`）：
@@ -251,9 +272,10 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
 ### 4.3 三种布局
 
 - `panel`：`dates[entity_index][row_index]`，`columns[field][entity_index][row_index]`
-  （`src/data_supply/columnar.rs:390-469`）。
+  （`src/data_supply/columnar.rs` 的 `panel`/`panel_page`）。
 - `cross_section`：`trade_days` 一次、`entities` 一次，
-  `columns[field][day_index][entity_index]`（`src/data_supply/columnar.rs:704-769`）。
+  `columns[field][day_index][entity_index]`（`cross_section`/`cross_section_page`）。
+  `universe` 的每页只含本页实体（§4.1「`selection.kind=universe` 的分页」）。
 - `table`：`columns[field][row_index]`。目录、版本清单、因子事件、日历、availability 用它
   （`src/data_supply/columnar.rs:472-560,561-575,638-702`）。
 
