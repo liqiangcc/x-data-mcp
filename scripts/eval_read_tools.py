@@ -21,7 +21,8 @@ Run (on the host that serves the data; ``<run>`` is the service run directory):
         --socket <run>/research.sock --model <provider/model> \\
         --output /tmp/read-tools-new.json
 
-Use the same model, thinking level and ``--today`` for both runs. The report
+Add ``--mode codemode`` for the codemode run (see "Tool modes" below).
+Use the same model, thinking level, ``--today`` and mode for runs you compare. The report
 holds prices and the model's answers: keep it out of the repository.
 
 Grade a saved report again (after a change to the checks) without a model and
@@ -30,6 +31,42 @@ question, saved by runs of this version); a task without them keeps its old
 result and is marked ``regrade: skipped``:
 
     python3 scripts/eval_read_tools.py --regrade <report.json> --output <new.json>
+
+Tool modes (``--mode``, recorded as ``mode`` at the top of the report):
+
+``direct`` (default) gives the model the scope's MCP tools as separate tools
+and nothing else (``exposure: direct``, ``--no-builtin-tools``). The model
+cannot write scripts. This is what a client that only has direct calls sees.
+
+``codemode`` is how pi is normally used: the MCP server keeps the default
+exposure (``codemode``), pi starts with ``--tools codemode`` and the model's
+only tool is ``codemode``, which runs a JavaScript script that calls the MCP
+tools. ``--no-builtin-tools`` and ``--no-extensions`` are NOT passed: with them
+the ``codemode`` tool does not exist. bash, read, edit and write are still not
+given, so after the start ``declared_tools`` must be exactly ``["codemode"]``,
+otherwise the question is ``scope_error``. The scope's tools are then only
+checked against the service (pre-flight) and against the tools the scripts
+call; they do not limit what a script can reach on the research socket.
+
+In ``codemode`` mode the tool calls happen inside scripts. The top-level
+``tool_calls``, ``tools`` and ``tool_errors`` of a question keep counting the
+model's own calls, which are all ``codemode`` calls. The question also has a
+``codemode`` object, and the summary (and each group) has the sums of it:
+
+- ``calls``: scripts the model started (equals the top-level ``tool_calls``).
+- ``script_failures``: scripts that failed (the ``codemode`` result has
+  ``isError``: syntax error, thrown error, timeout, worker limit). The
+  top-level ``tool_errors`` counts these too.
+- ``tool_calls`` and ``tools``: MCP calls made inside scripts, read from the
+  ``details.calls`` of each ``codemode`` result.
+- ``tool_errors``: calls inside scripts that ended with ``isError`` or were
+  rejected (call status ``error``), whether or not the script caught the
+  error. A script that completed can have ``tool_errors`` > 0.
+- ``unexpected_tool_calls``: tools called inside scripts that are not in the
+  scope (not summed). Scope tools are not declared to the model in this mode,
+  so the scope is checked only here and by the pre-flight against the service.
+- ``results_without_details``: ``codemode`` results without a call list. Their
+  inner calls are not counted, so non-zero means the counts are lower bounds.
 
 Scopes (``.devin/evals/read-tools-v1.json``): ``baseline`` is the five current
 research tools; ``new`` adds the ten new ones; ``new-no-query`` is ``new``
@@ -90,6 +127,8 @@ OUT_OF_SCOPE_TOOLS = frozenset(
 ORACLE_TOOLS = frozenset({"query_data"})
 CST = dt.timezone(dt.timedelta(hours=8))  # Asia/Shanghai has no daylight saving time
 ERROR_TEXT_LIMIT = 300
+MODES = ("direct", "codemode")
+CODEMODE_TOOL = "codemode"
 
 
 class EvalError(Exception):
@@ -154,14 +193,15 @@ def substitute(value, today: dt.date, extra: dict | None = None):
 PASSTHROUGH_ENV = ("X_DATA_MCP_UNSAFE_NONLOCAL_FS",)
 
 
-def mcp_project_config(server: str, mcp_connect: str, socket: str, environ=None) -> dict:
+def mcp_project_config(server: str, mcp_connect: str, socket: str, environ=None, mode: str = "direct") -> dict:
     environ = os.environ if environ is None else environ
     entry = {
         "command": mcp_connect,
         "args": [socket],
-        "exposure": "direct",
         "timeout": 120,
     }
+    if mode == "direct":
+        entry["exposure"] = "direct"  # codemode: no key, pi's default exposure is codemode
     env = {name: environ[name] for name in PASSTHROUGH_ENV if name in environ}
     if env:
         entry["env"] = env
@@ -175,26 +215,29 @@ def build_pi_command(
     prompt: str,
     model: str | None = None,
     thinking: str | None = None,
+    mode: str = "direct",
 ) -> list[str]:
-    """One fresh, tool-restricted, non-persistent pi run with JSON events on stdout.
+    """One fresh, non-persistent pi run with JSON events on stdout.
 
-    ``--tools`` lists MCP tools only and ``--no-builtin-tools`` removes bash,
-    read, edit and write. ``--no-extensions -e builtin:mcp`` keeps the MCP
-    support and drops everything else the user may have installed.
+    ``direct``: ``--tools`` lists MCP tools only and ``--no-builtin-tools``
+    removes bash, read, edit and write. ``--no-extensions -e builtin:mcp``
+    keeps the MCP support and drops everything else the user may have installed.
+
+    ``codemode``: ``--tools codemode`` is the only tool. ``--no-builtin-tools``
+    and ``--no-extensions`` are left out on purpose: with them pi has no
+    ``codemode`` tool. The run is checked through ``declared_tools``.
     """
-    command = [
-        pi,
-        "--mode", "json",
-        "-p",
-        "--no-session",
-        "--approve",
-        "--no-extensions", "-e", "builtin:mcp",
-        "--no-builtin-tools",
+    if mode not in MODES:
+        raise EvalError(f"unknown mode {mode!r}; choose from {list(MODES)}")
+    command = [pi, "--mode", "json", "-p", "--no-session", "--approve"]
+    if mode == "direct":
+        command += ["--no-extensions", "-e", "builtin:mcp", "--no-builtin-tools"]
+    command += [
         "--no-context-files",
         "--no-skills",
         "--no-prompt-templates",
         "--no-themes",
-        "--tools", ",".join(allowed),
+        "--tools", ",".join(allowed) if mode == "direct" else CODEMODE_TOOL,
         "--system-prompt", system_prompt,
     ]
     if model:
@@ -253,7 +296,40 @@ def declared_tools(messages) -> set[str]:
     return tools
 
 
-def collect_stats(records) -> dict:
+def codemode_stats(messages, calls: dict[str, str], results: dict[str, dict], scope: set[str]) -> dict:
+    """Counts of what the scripts did. ``details.calls`` of a ``codemode``
+    toolResult lists the calls made inside the script (name, status, error)."""
+    inner: dict[str, int] = {}
+    inner_errors = 0
+    without_details = 0
+    for message in messages:
+        if message.get("role") != "toolResult" or message.get("toolName") != CODEMODE_TOOL:
+            continue
+        listed = (message.get("details") or {}).get("calls")
+        if not isinstance(listed, list):
+            without_details += 1
+            continue
+        for call in listed:
+            if not isinstance(call, dict):
+                continue
+            name = call.get("name", "")
+            inner[name] = inner.get(name, 0) + 1
+            if call.get("status") == "error":
+                inner_errors += 1
+    return {
+        "calls": sum(1 for name in calls.values() if name == CODEMODE_TOOL),
+        "script_failures": sum(
+            1 for result in results.values() if result["tool"] == CODEMODE_TOOL and result["is_error"]
+        ),
+        "tool_calls": sum(inner.values()),
+        "tools": dict(sorted(inner.items())),
+        "tool_errors": inner_errors,
+        "unexpected_tool_calls": sorted(set(inner) - scope),
+        "results_without_details": without_details,
+    }
+
+
+def collect_stats(records, mode: str = "direct", scope: set[str] | None = None) -> dict:
     messages = messages_of(records)
     tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     turns = 0
@@ -302,7 +378,9 @@ def collect_stats(records) -> dict:
         if result["is_error"]
     ]
     tokens["total"] = sum(tokens.values())
+    extra = {"codemode": codemode_stats(messages, calls, results, scope or set())} if mode == "codemode" else {}
     return {
+        **extra,
         "turns": turns,
         "model_errors": model_errors,
         "tokens": tokens,
@@ -895,16 +973,17 @@ def run_task(task: dict, ctx: dict) -> dict:
         return report
     report["oracle"] = oracle_rows  # expected values, so the answer can be graded again later
     system_prompt = ctx["config"]["system_prompt"].replace("{today}", today.isoformat())
+    mode = ctx.get("mode", "direct")
     command = build_pi_command(
         ctx["pi"], ctx["allowed"], system_prompt, substitute(task["prompt"], today),
-        ctx.get("model"), ctx.get("thinking"),
+        ctx.get("model"), ctx.get("thinking"), mode,
     )
     code, out, err, wall = ctx["runner"](command, ctx["workdir"], ctx["timeout"])
     report["duration_s"] = round(wall, 3)
     if ctx.get("events_dir"):
         Path(ctx["events_dir"]).mkdir(parents=True, exist_ok=True)
         Path(ctx["events_dir"], f"{task['id']}.jsonl").write_text(out, encoding="utf-8")
-    stats = collect_stats(iter_records(out.splitlines()))
+    stats = collect_stats(iter_records(out.splitlines()), mode, set(ctx["allowed"]))
     report.update(stats)
     if code is None:
         report.update(status="timeout", error=f"pi did not finish within {ctx['timeout']:g}s")
@@ -912,7 +991,7 @@ def run_task(task: dict, ctx: dict) -> dict:
         report.update(status="pi_error", error=f"pi exited {code}: {err.strip()[-ERROR_TEXT_LIMIT:]}")
     elif not stats["answer"]:
         report.update(status="no_answer", error="the last assistant message has no text")
-    expected = set(ctx["allowed"])
+    expected = {CODEMODE_TOOL} if mode == "codemode" else set(ctx["allowed"])
     declared = set(stats["declared_tools"])
     if declared and declared != expected:
         report["scope_violation"] = {
@@ -920,7 +999,7 @@ def run_task(task: dict, ctx: dict) -> dict:
             "unexpected": sorted(declared - expected),
         }
         report.update(status="scope_error", error="declared tools differ from the scope")
-    unexpected_calls = sorted(set(stats["tools"]) - expected)
+    unexpected_calls = sorted(set(stats["tools"]) - expected)  # what the model itself called
     if unexpected_calls:
         report["unexpected_tool_calls"] = unexpected_calls
     if report["status"] in ("ok", "no_answer"):
@@ -976,7 +1055,15 @@ def wrong_reason(task: dict) -> str:
 def summarize_group(ran: list[dict], tasks: list[dict]) -> dict:
     tokens = {key: sum(task["tokens"][key] for task in ran) for key in ("input", "output", "cache_read", "cache_write", "total")}
     count = len(ran)
+    codemode = [task["codemode"] for task in ran if "codemode" in task]
+    extra = {}
+    if codemode:
+        extra["codemode"] = {
+            key: sum(item[key] for item in codemode)
+            for key in ("calls", "script_failures", "tool_calls", "tool_errors", "results_without_details")
+        }
     return {
+        **extra,
         "tasks": len(tasks),
         "ran": count,
         "correct": sum(1 for task in tasks if task.get("correct") is True),
@@ -1019,6 +1106,7 @@ def run_eval(config: dict, scope: str, ctx: dict, only: list[str] | None = None)
     models = sorted({model for report in reports for model in report.get("models", [])})
     return {
         "eval": config["id"],
+        "mode": ctx.get("mode", "direct"),
         "scope": scope,
         "scope_tools": ctx["allowed"],
         "model_requested": ctx.get("model"),
@@ -1096,6 +1184,7 @@ def regrade_main(args) -> int:
 def parse_args(argv=None, config_names=None):
     parser = argparse.ArgumentParser(description="Evaluate the read tools with the section 9 question set.")
     parser.add_argument("--scope", help="tool scope: baseline, new or new-no-query")
+    parser.add_argument("--mode", choices=MODES, default="direct", help="direct: the scope's MCP tools as separate tools; codemode: only the codemode tool, tools are called from scripts")
     parser.add_argument("--socket", help="research entry socket of the data service")
     parser.add_argument("--output", required=True, help="path of the JSON report")
     parser.add_argument("--regrade", metavar="REPORT", help="grade the answers saved in this report again; runs no model and reads no service")
@@ -1141,7 +1230,7 @@ def main(argv=None) -> int:
         for task in config["tasks"]:
             if only and task["id"] not in only:
                 continue
-            command = build_pi_command(args.pi, allowed, system_prompt, substitute(task["prompt"], today), args.model, args.thinking)
+            command = build_pi_command(args.pi, allowed, system_prompt, substitute(task["prompt"], today), args.model, args.thinking, args.mode)
             print(task["id"], json.dumps(command, ensure_ascii=False))
         return 0
 
@@ -1156,12 +1245,13 @@ def main(argv=None) -> int:
         with tempfile.TemporaryDirectory(prefix="eval-read-tools-") as workdir:
             (Path(workdir) / ".pi").mkdir()
             (Path(workdir) / ".pi" / "mcp.json").write_text(
-                json.dumps(mcp_project_config(server, args.mcp_connect, args.socket)), encoding="utf-8"
+                json.dumps(mcp_project_config(server, args.mcp_connect, args.socket, mode=args.mode)), encoding="utf-8"
             )
             ctx = {
                 "config": config, "pi": args.pi, "allowed": allowed, "model": args.model,
                 "thinking": args.thinking, "today": today, "timeout": args.timeout,
                 "client": client, "runner": run_pi, "workdir": workdir, "events_dir": args.events_dir,
+                "mode": args.mode,
             }
             report = run_eval(config, args.scope, ctx, only)
     except (EvalError, OSError) as error:
@@ -1173,7 +1263,7 @@ def main(argv=None) -> int:
     Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary = report["summary"]
     print(
-        f"{args.scope}: {summary['correct']}/{summary['tasks']} core correct, "
+        f"{args.scope}/{args.mode}: {summary['correct']}/{summary['tasks']} core correct, "
         f"avg turns {summary['avg_turns']}, tokens {summary['tokens']['total']}, "
         f"tool errors {summary['tool_errors']}; report {args.output}"
     )

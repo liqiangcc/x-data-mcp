@@ -63,6 +63,13 @@ fn entry_allowlists_cover_every_registered_tool_and_research_is_read_only() {
             "get_data_availability",
             "list_data_versions",
             "list_catalog_facets",
+            "find_securities",
+            "get_daily_bars",
+            "get_yearly_bars",
+            "get_index_bars",
+            "get_market_snapshot",
+            "get_trading_calendar",
+            "get_price_limit_rules",
         ]
     );
     // Bidirectional closure: every research tool is registered, and no
@@ -121,10 +128,15 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // uses one compact inline schema (no `$defs` entry, `type` or prose), so the
     // 30,800 ceiling is not raised.
     // Research and maint do not carry those tools and are unchanged.
+    // D-75 (issue-525 PR-1) adds seven narrow read tools to `research` only:
+    // find_securities, get_daily_bars, get_yearly_bars, get_index_bars,
+    // get_market_snapshot, get_trading_calendar, get_price_limit_rules. The
+    // owner approved raising the research budget 12,200 -> 18,600 B for them
+    // (issue-525 §11, ruling 2). Ops and maint are unchanged.
     // The research/ops budgets carry that documented surface growth; they are
     // not relaxed for any other reason.
     let budgets = [
-        (EntryKind::Research, 5usize, 12_200usize),
+        (EntryKind::Research, 12usize, 18_600usize),
         (EntryKind::Ops, 16usize, 30_800usize),
         (
             EntryKind::Maint,
@@ -306,7 +318,9 @@ fn capabilities_follow_the_entry_and_match_the_tools_list() {
     let (research, _dir) = api(EntryKind::Research);
     let compact = research.call("get_data_capabilities", json!({})).unwrap();
     assert!(
-        serde_json::to_vec(&compact).unwrap().len() <= 1500,
+        // D-75: 1,500 B for 5 tools; the seven narrow read tools add about
+        // 700 B (measured 2,199 B for 12 tools).
+        serde_json::to_vec(&compact).unwrap().len() <= 2_300,
         "research compact catalog is {} B",
         serde_json::to_vec(&compact).unwrap().len()
     );

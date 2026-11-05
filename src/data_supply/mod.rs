@@ -53,6 +53,8 @@ pub mod query;
 
 pub mod columnar;
 
+pub mod read_tools;
+
 pub mod observe;
 
 pub mod task_v2;

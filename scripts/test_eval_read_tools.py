@@ -847,6 +847,152 @@ class Regrade(unittest.TestCase):
             self.assertEqual(ev.main(["--regrade", str(path), "--output", str(Path(tmp, "o.json"))]), 2)
 
 
+def codemode_result(call_id, inner, error=False, details=True):
+    """A ``codemode`` toolResult as pi writes it: ``details.calls`` lists the calls made inside the script."""
+    message = tool_result(call_id, "codemode", "Script failed" if error else "Script completed", error=error)
+    if details:
+        message["details"] = {"calls": inner}
+    return message
+
+
+def inner_call(name, status="ok"):
+    call = {"id": "x", "name": name, "args": "{}", "status": status}
+    if status == "error":
+        call["error"] = "boom"
+    return call
+
+
+class CodemodeMode(unittest.TestCase):
+    def setUp(self):
+        self.config = ev.load_config()
+        self.scope_tools = [ev.pi_tool_name("x-data-mcp", t) for t in self.config["scopes"]["baseline"]]
+        self.query = self.scope_tools[1]
+        self.task = {
+            "id": "qx", "title": "t", "prompt": "查 {today}",
+            "oracles": {"o": {"request": {"dataset": "market.daily", "contract_version": "v2"}}},
+            "checks": [dict(BAR_CHECK)],
+        }
+        self.client = type("C", (), {"call": lambda self, name, args: {
+            "layout": "panel", "entities": ["sh.600000"], "dates": [["2026-11-05"]],
+            "columns": {"open": [["10.05"]], "close": [["10.10"]], "volume": [["2000"]]}, "next_cursor": None,
+        }})()
+
+    def ctx(self, runner, mode="codemode"):
+        return {
+            "config": self.config, "pi": "pi", "allowed": self.scope_tools, "model": "p/m", "thinking": "off",
+            "today": TODAY, "timeout": 60, "client": self.client, "runner": runner, "workdir": "/tmp", "mode": mode,
+        }
+
+    def stream(self, declared=("codemode",), answer="2026-11-05 开 10.05 收 10.10 量 2000", extra=()):
+        messages = [
+            system(*declared),
+            assistant(calls=[("c1", "codemode", {"code": "..."})], stop="toolUse", input_=100, output=10),
+            codemode_result("c1", [inner_call(self.query), inner_call(self.query, "error"), inner_call("bash")]),
+            assistant(calls=[("c2", "codemode", {"code": "bad"})], stop="toolUse", input_=40, output=5),
+            codemode_result("c2", [], error=True),
+            assistant(calls=[("c3", "codemode", {"code": "..."})], stop="toolUse", input_=40, output=5),
+            codemode_result("c3", [inner_call(self.query)]),
+            *extra,
+            assistant(answer, input_=50, output=20, cache_read=100),
+        ]
+        return "\n".join(json_events(messages))
+
+    def test_command_has_only_the_codemode_tool_and_keeps_extensions(self):
+        command = ev.build_pi_command("pi", self.scope_tools, "sys", "p", "prov/m", "off", "codemode")
+        self.assertEqual(command[command.index("--tools") + 1], "codemode")
+        self.assertNotIn("--no-builtin-tools", command)
+        self.assertNotIn("--no-extensions", command)
+        self.assertNotIn("-e", command)
+        self.assertIn("--no-session", command)
+        self.assertEqual(command[-2:], ["--", "p"])
+
+    def test_direct_command_is_unchanged_by_default(self):
+        default = ev.build_pi_command("pi", self.scope_tools, "sys", "p", "prov/m", "off")
+        direct = ev.build_pi_command("pi", self.scope_tools, "sys", "p", "prov/m", "off", "direct")
+        self.assertEqual(default, direct)
+        for flag in ("--no-builtin-tools", "--no-extensions"):
+            self.assertIn(flag, direct)
+        with self.assertRaises(ev.EvalError):
+            ev.build_pi_command("pi", [], "s", "p", mode="nope")
+
+    def test_mcp_config_uses_default_exposure_in_codemode(self):
+        entry = ev.mcp_project_config("s", "c", "p", environ={}, mode="codemode")["mcpServers"]["s"]
+        self.assertNotIn("exposure", entry)
+        self.assertEqual((entry["command"], entry["args"]), ("c", ["p"]))
+        direct = ev.mcp_project_config("s", "c", "p", environ={})["mcpServers"]["s"]
+        self.assertEqual(direct["exposure"], "direct")
+
+    def test_script_counts(self):
+        stats = ev.collect_stats(ev.iter_records(self.stream().splitlines()), "codemode", set(self.scope_tools))
+        cm = stats["codemode"]
+        self.assertEqual(cm["calls"], 3)
+        self.assertEqual(cm["script_failures"], 1)
+        self.assertEqual(cm["tool_calls"], 4)
+        self.assertEqual(cm["tools"], {"bash": 1, self.query: 3})
+        self.assertEqual(cm["tool_errors"], 1)
+        self.assertEqual(cm["unexpected_tool_calls"], ["bash"])
+        self.assertEqual(cm["results_without_details"], 0)
+        # the model's own calls: three scripts, one of them failed
+        self.assertEqual((stats["tool_calls"], stats["tools"], stats["tool_errors"]), (3, {"codemode": 3}, 1))
+
+    def test_direct_stats_have_no_codemode_block(self):
+        stats = ev.collect_stats(ev.iter_records(json_events(CONVERSATION)))
+        self.assertNotIn("codemode", stats)
+
+    def test_result_without_details_is_flagged(self):
+        messages = [system("codemode"), assistant(calls=[("c1", "codemode", {})], stop="toolUse"),
+                    codemode_result("c1", [], details=False), assistant("x")]
+        stats = ev.collect_stats(ev.iter_records(json_events(messages)), "codemode", set())
+        self.assertEqual(stats["codemode"]["results_without_details"], 1)
+        self.assertEqual(stats["codemode"]["tool_calls"], 0)
+
+    def test_question_in_codemode(self):
+        runner = FakeRunner(self.stream())
+        report = ev.run_task(self.task, self.ctx(runner))
+        self.assertEqual((report["status"], report["correct"]), ("ok", True))
+        self.assertEqual(report["codemode"]["tool_calls"], 4)
+        self.assertNotIn("--no-builtin-tools", runner.commands[0])
+
+    def test_other_declared_tools_are_a_scope_error(self):
+        for declared in (("codemode", "bash"), ("codemode", self.query), ("bash",)):
+            report = ev.run_task(self.task, self.ctx(FakeRunner(self.stream(declared))))
+            self.assertEqual(report["status"], "scope_error", declared)
+            self.assertIsNone(report["correct"])
+        self.assertEqual(report["scope_violation"], {"missing": ["codemode"], "unexpected": ["bash"]})
+
+    def test_direct_scope_tools_declared_in_codemode_mode_are_a_scope_error(self):
+        report = ev.run_task(self.task, self.ctx(FakeRunner(self.stream(tuple(self.scope_tools)))))
+        self.assertEqual(report["status"], "scope_error")
+
+    def test_report_and_summary_record_the_mode(self):
+        config = dict(self.config, tasks=[self.task, dict(self.task, id="qy")])
+        report = ev.run_eval(config, "baseline", self.ctx(FakeRunner(self.stream())))
+        self.assertEqual(report["mode"], "codemode")
+        self.assertEqual(report["summary"]["correct"], 2)
+        self.assertEqual(
+            report["summary"]["codemode"],
+            {"calls": 6, "script_failures": 2, "tool_calls": 8, "tool_errors": 2, "results_without_details": 0},
+        )
+        self.assertEqual(report["summary"]["groups"]["core"]["codemode"]["calls"], 6)
+
+    def test_direct_report_records_mode_and_has_no_codemode_summary(self):
+        runner = FakeRunner("\n".join(json_events([system(*self.scope_tools), assistant("2026-11-05 开 10.05 收 10.10 量 2000")])))
+        config = dict(self.config, tasks=[self.task])
+        report = ev.run_eval(config, "baseline", self.ctx(runner, mode="direct"))
+        self.assertEqual(report["mode"], "direct")
+        self.assertNotIn("codemode", report["summary"])
+        no_mode = self.ctx(runner)
+        del no_mode["mode"]
+        self.assertEqual(ev.run_eval(config, "baseline", no_mode)["mode"], "direct")
+
+    def test_regrade_keeps_mode_and_script_counts(self):
+        config = dict(self.config, tasks=[self.task])
+        report = ev.run_eval(config, "baseline", self.ctx(FakeRunner(self.stream())))
+        new, _ = ev.regrade_report(report, config)
+        self.assertEqual(new["mode"], "codemode")
+        self.assertEqual(new["summary"]["codemode"]["calls"], 3)
+
+
 class CommandLine(unittest.TestCase):
     def test_dry_run_prints_commands_and_runs_nothing(self):
         import contextlib
@@ -860,6 +1006,28 @@ class CommandLine(unittest.TestCase):
         self.assertEqual(len(lines), 13)
         self.assertIn("mcp__x_data_mcp__get_daily_bars", lines[1])
         self.assertNotIn("bash", lines[1].replace("--no-builtin-tools", ""))
+
+    def test_dry_run_in_codemode(self):
+        import contextlib
+        import io
+
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = ev.main(["--scope", "new", "--socket", "/nonexistent", "--output", "/nonexistent/x.json", "--dry-run",
+                            "--today", "2026-11-05", "--mode", "codemode"])
+        self.assertEqual(code, 0)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 13)
+        command = json.loads(lines[0].split(" ", 1)[1])
+        self.assertEqual(command[command.index("--tools") + 1], "codemode")
+        self.assertNotIn("--no-builtin-tools", command)
+
+    def test_mode_defaults_to_direct_and_rejects_others(self):
+        base = ["--scope", "new", "--socket", "s", "--output", "o"]
+        self.assertEqual(ev.parse_args(base).mode, "direct")
+        self.assertEqual(ev.parse_args(base + ["--mode", "codemode"]).mode, "codemode")
+        with self.assertRaises(SystemExit):
+            ev.parse_args(base + ["--mode", "bash"])
 
     def test_regrade_needs_no_scope_or_socket_and_unknown_scope_still_fails(self):
         args = ev.parse_args(["--regrade", "a.json", "--output", "b.json"])
