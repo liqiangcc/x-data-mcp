@@ -413,6 +413,11 @@ pub struct QuerySnapshot {
     /// declares neither parameter.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temporal: Option<TemporalBlock>,
+    /// Dataset-level limits the reader must be able to state truthfully
+    /// (coverage windows, event-level sources, an unregistered dataset). They
+    /// are appended to the page's fixed `limitations`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
 }
 pub trait ReadRepository {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error>;
@@ -705,7 +710,10 @@ impl<R: ReadRepository> Queries<R> {
             limitations: vec![
                 "fixed version selection is not a shared source acquisition time".into(),
                 "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates".into(),
-            ],
+            ]
+            .into_iter()
+            .chain(data.limitations.iter().cloned())
+            .collect(),
         };
         if more {
             result.next_cursor = Some(self.save(saved));

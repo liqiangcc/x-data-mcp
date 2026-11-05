@@ -771,6 +771,7 @@ pub(crate) fn query(
         manifest: vec![],
         rows: vec![],
         temporal: None,
+        limitations: vec![],
     };
     if plan.args.dataset == Dataset::Calendar {
         calendar_query(c, plan, &mut result)?;
@@ -808,7 +809,7 @@ pub(crate) fn query(
                 source: v.source.clone(),
                 published_at: v.published_at,
                 coverage_status: "complete".into(),
-                coverage_reason: "validated fixture catalog snapshot".into(),
+                coverage_reason: "snapshot passed publication validation: the record count matched the source's declared expected count".into(),
                 units: vec![],
                 adjustment: None,
                 lineage: None,

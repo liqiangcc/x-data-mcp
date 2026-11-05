@@ -364,9 +364,22 @@ impl DataApi {
             .as_ref()
             .is_some_and(|op| !entries().iter().any(|e| e.name == op))
         {
+            // Name what this entry can actually be asked about: `operation`
+            // takes a tool name (e.g. `query_data`), and a caller that sent a
+            // verb like `query` otherwise has nothing to retry with.
+            let served = entries()
+                .iter()
+                .filter(|e| e.served_in(self.entry))
+                .filter(|e| self.access == Access::local() || !e.requires_local())
+                .map(|e| e.name)
+                .collect::<Vec<_>>()
+                .join(", ");
             return Err(ApiError::new(
                 "unsupported_operation",
-                "operation not registered",
+                format!(
+                    "operation not registered: operation must be a tool name; \
+                     tools available on this entry: {served}"
+                ),
             ));
         }
         let detailed = args.operation.is_some();
