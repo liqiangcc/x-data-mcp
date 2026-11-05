@@ -12,8 +12,8 @@ fallback（preview.43，schema 26，`generic-data-v9`，数据冻结、不再跑
 aws-node。vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
 
 最后核实：2026-11-05（vm2-126 preview.45/schema 27/`generic-data-v10` 上线为日更与主数据
-生产机；aws-node preview.43/schema 26/`generic-data-v9` 冻结为 fallback，数据停在
-2026-11-04；D-74）。
+生产机，并于同日 08:40:27Z 完成**第一次生产跨代日更**，最新集中行情日 2026-11-05；
+aws-node preview.43/schema 26/`generic-data-v9` 冻结为 fallback，数据停在 2026-11-04；D-74）。
 本轮实测来源：
 
 - Claude 2026-11-05 只读核实的部署事实（查询与日志在仓库外；owner 同日只做了 D-74 裁定，
@@ -21,6 +21,10 @@ aws-node。vm2 是试用机（约 2027-01-04 到期，到期前要定去向）�
   `market_series`/`series_bars`/库体积、ETF 缺口、generations 克隆来源、部署窗口/构建/
   WAL/capability/回滚点读数，以及 aws-node 的冻结时点读数，均照该核实记录；
   仍未列出的项（catalog id、官方输入、内存分项）下文标注「本轮未列出」。
+- Claude 2026-11-05 只读核实的**第一次生产日更**（vm2-126，跨代）：active generation 切到
+  `c642468f…`（2026-11-05T08:40:27Z）、各任务结果与 write-loop、热 generation、
+  `market_series`/`series_bars`/库体积/`/opt` 体积，见「数据」段的 vm2 表与
+  「2026-11-05 vm2 第一次生产日更」小节；任务记录与查询在仓库外，owner 未复核这些数字。
 - 2026-11-05 vm2 单次实测（preview.45、同代数据、非生产日更样本）：首采/年线/日更形态/
   ETF 批次的 write-loop 与资源读数，全文见 [SLO](SLO.md) 备注。
 - 历史来源（aws-node preview.43 时期，2026-11-02 实测）：
@@ -57,7 +61,7 @@ preview.40 及更早的实测值保留为「历史」对照；本轮未重新测
 | 角色 | 生产：日更与主数据 | fallback 与 tunnel/客户端入口；数据冻结、不再跑日更 |
 | 版本 | `v0.2.0-preview.45`，git_sha `f6de633dffcd04467fd790463291f301223adc72` | 历史（冻结）：`v0.2.0-preview.43`，git_sha `c0ae29500b56a754a5f2d3304b8584f551b94a89` |
 | schema / capability | schema 27 / `generic-data-v10` | 历史（冻结）：schema 26 / `generic-data-v9` |
-| active generation | `4c17de16421c82da2c545e0d0b8176fcd64466ba09e0fc0fb441e1381fc14905`（11-04）；最新行情日 2026-11-04（11-05 日更跑完后另开 PR 更新） | `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；数据停在 2026-11-04 |
+| active generation | `c642468f85e29dce79fe4460bda6a8d1175ef60be3c0afd2520cb1c75e7544d6`（2026-11-05T08:40:27Z 激活，上一代 `4c17de16…`）；最新行情日 2026-11-05 | `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；数据停在 2026-11-04 |
 | tunnel | 无（客户端连不到 vm2） | tunnel/data/acquire 三单元仍 active；客户端仍连这里，看不到 ETF 与 11-05 之后的数据 |
 | 到期 | 试用机，约 2027-01-04 到期，到期前要定去向 | — |
 
@@ -69,9 +73,9 @@ preview.40 及更早的实测值保留为「历史」对照；本轮未重新测
 | 系统/资源 | Ubuntu 24.04.4，kernel 6.8.0-101-generic；2 vCPU AMD EPYC 9754，约 7.6 GiB；时区 Asia/Shanghai，systemd 单元用 `TZ=UTC` | Claude 2026-11-05 只读核实 |
 | 部署版本 | `v0.2.0-preview.45`，二进制 `git_sha f6de633dffcd04467fd790463291f301223adc72` | 同上 |
 | 部署时间 | **2026-11-05T04:18:42→04:18:48Z**，`deploy_phase_g.sh`（报告 `w1-deploy-b` → `reports/preview45-phaseg-deployment.json`）；首次尝试 `FAILED_AT_install_release`（`releases/` 目录缺失，改动发生前失败，`rollback: not_needed`） | 同上 |
-| 数据库 schema | 已部署：schema 27（026 = R2 的 `source_refresh_runs`/成员表与快照索引主键 `(snapshot_id, request_fingerprint)`，027 = M3-2 PR-B 把 `adjustment_events.category` 扩到 1/11 并加逐行 `basis_status`）；库 `state/preview.sqlite` **2,124,046,336 B**，WAL 当前 0（已 checkpoint），S2–S12 峰值 16 MiB | 同上、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION` |
+| 数据库 schema | 已部署：schema 27（026 = R2 的 `source_refresh_runs`/成员表与快照索引主键 `(snapshot_id, request_fingerprint)`，027 = M3-2 PR-B 把 `adjustment_events.category` 扩到 1/11 并加逐行 `basis_status`）；库 `state/preview.sqlite` 部署时 **2,124,046,336 B**（第一次生产日更后 2,216,542,208 B，见「数据」段），WAL 当时为 0（已 checkpoint），S2–S12 峰值 16 MiB | 同上、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION` |
 | 构建 | `rustc 1.99.1`，`x86_64-unknown-linux-gnu`，features `export`，`production NOT_PRODUCTION_READY`（`current/manifest.json`） | 同上 |
-| 部署目录 | `/opt/x-data-mcp-preview` **3.8 GB** | 同上 |
+| 部署目录 | `/opt/x-data-mcp-preview` 部署时 **3.8 GB**（第一次生产日更后 `/opt` 为 4.5 GB，见「数据」段） | 同上 |
 | 回滚点 | vm2 只有 `f6de633` 一个 release；客户端本来就连 aws-node，vm2 出问题时 aws-node 的 preview.43 继续服务（数据停在 11-04） | 同上 + D-74 |
 | 迁移 | 来源库、generations、`acquire.sqlite`、行业快照目录从 aws-node 克隆；行情库在 vm2 上 fresh init（schema 27），再由 replay 和首采重建；aws-node 的库原地保留 | Claude 2026-11-05 只读核实 |
 | capability | S9 读回 `capability_revision=generic-data-v10` | 同上 |
@@ -282,18 +286,36 @@ this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮
 
 ### vm2-126（当前生产：日更和主数据）
 
-Claude 2026-11-05 只读核实（查询与日志在仓库外；11-05 日更跑完后另开 PR 更新）：
+Claude 2026-11-05 只读核实（查询与日志在仓库外；本表为第一次生产日更跑完后的读数）：
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| active generation | `4c17de16421c82da2c545e0d0b8176fcd64466ba09e0fc0fb441e1381fc14905`（11-04）；最新集中行情日 **2026-11-04** | Claude 2026-11-05 只读核实 |
-| 热 generation | **3/6**：1 active（`4c17de16…`）+ 2 superseded（`5ac3ef2b…`、`f41c8935…`）；`evidence_only` 17，`pins/` 19 个目录 | 同上 + `generations/acquire.sqlite`（按 `state` 计数）、`generations/pins/`、`src/acquire/service.rs:40,44` |
-| `market_series` | A 股 **16,348** 条（5,562 实体）、指数 **9** 条、ETF **1,759** 条 | 同上 |
-| `series_bars` | **37,818,945** 行 | 同上 |
-| 数据库 | `state/preview.sqlite` **2,124,046,336 B**（schema 27，WAL 当前 0 已 checkpoint，S2–S12 峰值 16 MiB） | 同上 |
-| 部署目录 | `/opt/x-data-mcp-preview` **3.8 GB** | 同上 |
-| ETF 缺口 | `security_master` **1,846** 行，**128** 个退市日（沪 82、深 46）；**87** 只无日线：沪市 526/551/589 段 86 只（`hsjday` 无成员）+ `sz.158081`（2026-11-05 上市，11-04 这一代还没有） | 同上 |
+| active generation | `c642468f85e29dce79fe4460bda6a8d1175ef60be3c0afd2520cb1c75e7544d6`（2026-11-05T08:40:27Z 激活，上一代 `4c17de16…`，激活请求 `daily-20261105-xdm-accept-bg95dq-activate`）；最新集中行情日 **2026-11-05** | Claude 2026-11-05 只读核实 |
+| 热 generation | **4/6**：1 active（`c642468f…`）+ 3 superseded（`5ac3ef2b…`、`f41c8935…`、`4c17de16…`）；`evidence_only` 17。`5ac3ef2b…` 没被自动退役：`derived_facts_missing`，原因是 vm2 的库是 fresh init，缺这个旧代的派生事实。已知、在观察：按保留规则（`RETAINED_SUPERSEDED=2`）最多稳定在 5/6，不会撞上 6 的上限 | 同上 + `generations/acquire.sqlite`（按 `state` 计数）、`src/acquire/service.rs:40,44` |
+| `market_series` | A 股 **16,348** 条（5,562 实体）、指数 **9** 条、ETF **1,760** 条 | 同上 |
+| `series_bars` | **37,831,020** 行 | 同上 |
+| 数据库 | `state/preview.sqlite` **2,216,542,208 B**（schema 27；WAL 本轮未单独列出） | 同上 |
+| 部署目录 | `/opt` **4.5 GB**（11-05 部署后为 3.8 GB，日更后增长） | 同上 |
+| ETF 缺口 | `security_master` **1,846** 行，**128** 个退市日（沪 82、深 46，部署后读数）；**86** 只无日线：沪市 526/551/589 段（`hsjday` 无成员）；`sz.158081`（2026-11-05 上市）已首采，1 根 bar。A 股 `sh.688827` 仍缺成员 | 同上 |
+| 第一次生产日更 | 见下节「2026-11-05 vm2 第一次生产日更」 | 同上 |
 | catalog / 年线 / 日线明细 / 官方输入 / 内存分项 | 本轮未列出 | — |
+
+### 2026-11-05 vm2 第一次生产日更（跨代）
+
+来源均为 Claude 2026-11-05 只读核实（任务记录在仓库外）。这是 vm2-126 上第一次有新 generation 激活的
+生产日更：`4c17de16…` → `c642468f…`（08:40:27Z 激活）。当天没有跑 `tail`（05:00–06:13Z 已跑过 `full`）。
+
+| 项 | 任务 | 结果 |
+|---|---|---|
+| G1：A 股 `run_market_update`（不带 `scope`） | `task-dea5f97c…` | 5,241 项，5,235 成功，6 个 `REVISION_UNVERIFIED`；write-loop **175.3 s** |
+| 补漏 | `task-2306dc95…` | 6/6 成功，5.1 s |
+| ETF 批次 | `task-9dad45b1…` | 1,631/1,631 成功，36.1 s |
+| 年线 | `task-85edf8f8…` | 5,205/5,205 成功，write-loop **127.9 s** |
+| 年线补推 | `task-3b9f0a6f…` | 25/25 成功，1.0 s |
+| `sz.158081` 首采 | `task-37a06a8e…` | 成功，1 根 bar |
+
+运行观察：执行这次日更的模型（SWE 2 Flash）提前结束并漏了步骤，经提示后走完。这是一次运行观察，
+不是对该模型的结论。
 
 ### aws-node（fallback；数据冻结于 2026-11-04，不再跑日更）
 
@@ -304,9 +326,9 @@ Claude 2026-11-05 只读核实（查询与日志在仓库外；11-05 日更跑�
 不是冻结时点值；冻结时点读数见下。重建在生产机上执行但**非独占**（多个开发 agent
 同时在跑），下述耗时不作门禁证据。标注「历史」的行是更早的对照值。
 
-**aws-node 冻结时点（2026-11-05 只读实测）**：schema 26；`current` → `releases/c0ae295…`；
-active generation `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；热 generation
-**3/6**（superseded `5ac3ef2b…`、`f41c8935…`，与 vm2 相同）；`evidence_only` 17；
+**aws-node 冻结时点（2026-11-05 只读实测；历史，冻结后不再变化）**：schema 26；`current` → `releases/c0ae295…`；
+active generation `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；历史热 generation
+**3/6**（superseded `5ac3ef2b…`、`f41c8935…`，11-04 时与 vm2 相同）；`evidence_only` 17；
 `market_series` 16,354 条；最新行情日 **2026-11-04**；库 2,193,297,408 B，WAL 16 MiB。
 
 | 项 | 事实 | 来源 |
@@ -407,7 +429,7 @@ evidence_only 的代），超限后 `acquire_generation` 被拒 `generation_capa
 退役历史：2026-10-13 由操作员退役 4 个已无字节的旧代，2026-10-19 退役 `87322997`，
 2026-10-24T16:57:16Z 退役 `2d5851a4`（释放约 546MB），2026-10-28T11:56Z 一次退役 `8b8614c3`、
 `54553656`、`f289c612`，2026-11-01T10:26Z 退役 `9d9e38d7`、`c184e9c4`（释放 ≈1.065 GiB）。
-**本轮实测 2/6**（aws-node 2026-11-02 实测：1 active + 1 superseded，见「数据」表 aws-node 行；aws-node 与 vm2-126 的冻结时点均为 **3/6**，见「数据」表各自的「热 generation」行）：下一次 acquire 可直接受理。
+**本轮实测 2/6**（aws-node 2026-11-02 实测：1 active + 1 superseded，见「数据」表 aws-node 行；历史：aws-node 冻结时点为 3/6；vm2-126 第一次生产日更后为 4/6，见「数据」表各自的「热 generation」行）：下一次 acquire 可直接受理。
 保留策略（`RETAINED_SUPERSEDED=2`，`src/acquire/service.rs:44`）已随 preview.35
 **于 2026-10-24T17:25Z 部署**，但只在 activate 提交成功后触发（`retire_expired_superseded`，`:1118-1140`），不能解除 acquire 之前的容量拒绝。
 Skill 在有更新日的路径仍未完整验证
@@ -421,15 +443,15 @@ Skill 在有更新日的路径仍未完整验证
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 最新集中行情日 | **2026-11-04**（active generation `4c17de16…`，11-04）；11-05 日更跑完后另开 PR 更新 | Claude 2026-11-05 只读核实 |
-| 数据规模 | `market_series` A 股 16,348 条（5,562 实体）+ 指数 9 + ETF 1,759；`series_bars` 37,818,945 行 | 同上 |
-| 官方输入 / 任务计数 / 落后交易日明细 | 本轮未单独列出（随 11-05 日更后的事实 PR 更新） | — |
+| 最新集中行情日 | **2026-11-05**（active generation `c642468f…`，2026-11-05T08:40:27Z 激活；第一次生产日更） | Claude 2026-11-05 只读核实 |
+| 数据规模 | `market_series` A 股 16,348 条（5,562 实体）+ 指数 9 + ETF 1,760；`series_bars` 37,831,020 行 | 同上 |
+| 官方输入 / 任务计数 / 落后交易日明细 | 本轮未单独列出 | — |
 
 ### aws-node（fallback；冻结时点 2026-11-05 实测 + 2026-11-01/02 历史实测）
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 冻结时点（2026-11-05） | schema 26；active `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；热 generation **3/6**（superseded `5ac3ef2b…`、`f41c8935…`）；`market_series` 16,354 条；最新行情日 **2026-11-04**；库 2,193,297,408 B，WAL 16 MiB | Claude 2026-11-05 只读核实 |
+| 冻结时点（2026-11-05，历史） | schema 26；active `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；历史热 generation **3/6**（superseded `5ac3ef2b…`、`f41c8935…`）；`market_series` 16,354 条；最新行情日 **2026-11-04**；库 2,193,297,408 B，WAL 16 MiB | Claude 2026-11-05 只读核实 |
 
 以下为 aws-node 2026-11-01/02 实测（**不是冻结时点值**）：
 
@@ -455,8 +477,8 @@ Skill 在有更新日的路径仍未完整验证
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| `/opt/x-data-mcp-preview` 全树 | **3.8 GB** | Claude 2026-11-05 只读核实 |
-| 数据库 | `state/preview.sqlite` **2,124,046,336 B**（schema 27，WAL 当前 0 已 checkpoint，S2–S12 峰值 16 MiB） | 同上 |
+| `/opt` | **4.5 GB**（11-05 部署后 3.8 GB；第一次生产日更后） | Claude 2026-11-05 只读核实 |
+| 数据库 | `state/preview.sqlite` **2,216,542,208 B**（schema 27；11-05 部署后为 2,124,046,336 B）；WAL 本轮未单独列出 | 同上 |
 | generations / releases / reports / 内存分项 | 本轮未单独列出 | — |
 
 ### aws-node（fallback；2026-11-01/02 实测，非冻结时点）
@@ -473,7 +495,7 @@ Skill 在有更新日的路径仍未完整验证
 
 ## 进行中
 
-- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**2026-11-05 起日更和主数据生产机换成 vm2-126（D-74，preview.45/schema 27/`generic-data-v10`，无 tunnel），aws-node 的 preview.43 冻结为 fallback**；D-63 的连续 3 次生产跨代日更计数**从 0 重新开始**（aws-node 上 11-02 那 1 次不带过来），从 vm2 第一次生产跨代日更算起，D-69 计数规则不变、也只算生产日更。**生产自 preview.38 起是单进程三 socket（`mcp.sock`/`research.sock`/`maint.sock`，见「服务」表），preview.40 与 preview.41 沿用同一形状**；第 1 代日更（XDM-139）是 preview.40 下的首个全量实测，但不作门禁证据（非独占，见「数据」段）。详见 [SLO](SLO.md) 备注与
+- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**2026-11-05 起日更和主数据生产机换成 vm2-126（D-74，preview.45/schema 27/`generic-data-v10`，无 tunnel），aws-node 的 preview.43 冻结为 fallback**；D-63 的连续 3 次生产跨代日更计数**从 0 重新开始**（aws-node 上 11-02 那 1 次不带过来），从 vm2 第一次生产跨代日更算起，D-69 计数规则不变、也只算生产日更。**2026-11-05 vm2 第一次生产跨代日更已完成：G1 write-loop 175.3 s（D-63 计数 1/3），年线 write-loop 127.9 s（D-69 计数 1/3），细节见「数据」段与 [SLO](SLO.md)。****生产自 preview.38 起是单进程三 socket（`mcp.sock`/`research.sock`/`maint.sock`，见「服务」表），preview.40 与 preview.41 沿用同一形状**；第 1 代日更（XDM-139）是 preview.40 下的首个全量实测，但不作门禁证据（非独占，见「数据」段）。详见 [SLO](SLO.md) 备注与
   [DECISIONS](decisions.md) D-52/D-57/D-63/D-69/D-74。
 - **GOAL-008 性能**：PR #323 已于 2026-10-11 squash 合并（`8a446b1`），发布 v0.2.0-preview.31，2026-10-12 部署。
   - 全市场验收（XP-015，perf `3b11231`，aws 私有栈，浅链，53 批，trace-OFF，每负载单次）：年线首次 310.6s、日线跨代 Append 104.2s（合成截断夹具）、年线重聚合 328.3s、日线同代 NoChange 78.0s，write-loop 均 <600s，读回全部 PASS（见 [SLO](SLO.md)）。第三类「保留的真实 mixed Append/Full/fail-closed」**未运行**（retained gen-1 字节永久不可得）；`AGENTS.md` 记载的离线 harness 结果仅作旁证，不作替代。
@@ -498,7 +520,7 @@ Skill 在有更新日的路径仍未完整验证
 | `/opt/x-data-mcp-preview/mcp.json` 的 `x-data-mcp-demo` 指向一个不存在的 sqlite | 配置过时 | `ls` |
 | `src/acquire/fetch.rs` 在未设置 `X_DATA_MCP_TDX_FETCH` 时，回退到编译期的 `CARGO_MANIFEST_DIR` | 历史：preview.35 及更早不带该变量启动的实例无法下载。main 已修（#375）：未设置时只认包内 `<exe dir>/../scripts/tdx_fetch.py`，找不到即启动失败并报出变量名与路径；preview.36 构建自 `fcb86ab`（含 #375），本轮未实测该回退路径 | 源码、#375 |
 | 生产服务、私有性能栈和多个 agent 会话共用 1 个物理核和 1.9GiB 内存；`/tmp` 是内存盘 | 2026-10-10 约 04:34Z 过载重启；测量结果有噪声 | 运维观察 |
-| 热 generation 上限 6：超限后 `acquire_generation` 被拒（`generation_capacity`）。历史（aws-node 2026-11-02 实测）：本轮实测 **2/6**（1 active `f2fd6fcb` + 1 superseded `0f1623b0`；aws-node 与 vm2-126 的冻结时点均为 **3/6**，见「数据」表），下一次 acquire 可直接受理。稳态**预期**为 3/6（active + 2 个保留的 superseded），还剩 3 个余量。历史：2026-10-24 16:56Z 为 6/6 → 退役 `2d5851a4` 降到 5/6 → 17:01:34Z 新代 `c184e9c4` 激活回到 6/6 → 17:52Z 再退役 `a119629b` 到 5/6 → 2026-11-01 退役两代遗留代到 2/6。容量是**计数**，但退役一个有字节的代同时释放空间（约 570MB/代；本轮 2 代共释放 ≈1.065 GiB）。自动保留策略（`RETAINED_SUPERSEDED=2`）**已随 preview.35 部署**（2026-10-24T17:25Z），在 activate 提交成功后生效 | 跨代日更会消耗热代名额 | 2026-11-01 实测（`generations/acquire.sqlite`、`du -sb`、`df /`）、`src/acquire/service.rs:40,44` |
+| 热 generation 上限 6：超限后 `acquire_generation` 被拒（`generation_capacity`）。历史（aws-node 2026-11-02 实测）：本轮实测 **2/6**（1 active `f2fd6fcb` + 1 superseded `0f1623b0`；历史：aws-node 冻结时点为 3/6；vm2-126 第一次生产日更后为 4/6，见「数据」表），下一次 acquire 可直接受理。稳态**预期**为 3/6（active + 2 个保留的 superseded），还剩 3 个余量。历史：2026-10-24 16:56Z 为 6/6 → 退役 `2d5851a4` 降到 5/6 → 17:01:34Z 新代 `c184e9c4` 激活回到 6/6 → 17:52Z 再退役 `a119629b` 到 5/6 → 2026-11-01 退役两代遗留代到 2/6。容量是**计数**，但退役一个有字节的代同时释放空间（约 570MB/代；本轮 2 代共释放 ≈1.065 GiB）。自动保留策略（`RETAINED_SUPERSEDED=2`）**已随 preview.35 部署**（2026-10-24T17:25Z），在 activate 提交成功后生效 | 跨代日更会消耗热代名额 | 2026-11-01 实测（`generations/acquire.sqlite`、`du -sb`、`df /`）、`src/acquire/service.rs:40,44` |
 | **旧代回收被证据 gate 卡住**（**已处理**，2026-11-01T10:25–10:26Z，XDM-159）：`9d9e38d7`、`c184e9c4` 两个遗留代曾经 `source_bindings=0`、`generation_facts=0`，退役报 `source_store_evidence_missing`；按方案 A（D-65：补登记 generation 成员 → `replay --scope generation_facts` 重建 18 行 → 每代 3 类行情派生事实逐条记豁免，共 6 条 → `retire_generation`）现均为 `evidence_only`，未用 `--owner-approve-evidence`。门禁规则未改；`0f1623b0` 仍可用现有来源库通过 gate，按 `RETAINED_SUPERSEDED=2` 在后续激活时自动回收 | 已解除：热代 4/6 → 2/6，余量从 1 个恢复到 3 个。退役不可逆（代字节已删） | XDM-146 报告、XDM-159 报告、`generation_facts`/`retire_exemptions` 只读查询 |
 | `market.risk_warnings` 历史缺口（**已解除**）：第 1 代日更的 `derived:risk_warnings` 曾失败（`source_invalid: page_count is 0`，空季度 `pageCount=0`）；修复 #485（XDM-148）与解析口径 #489（XDM-152）随 preview.41 部署后，11-02 fresh init 的 `replay --scope risk_warnings` 写入 **1,289 行**（`known_at=2026-11-01`），preview.42 首次 `full` 又暴露 `SameDayActionConflict`（`sh.600734`）；D-68 分类修复（#503）**已随 preview.43 上线**（只换二进制），11-03 日更首次发布沪市区间 | 已解除：读面自 11-02 fresh init 起不再 absent；新规则区间在 11-03 日更写入 | XDM-159/XDM-165/XDM-170 报告、`task_items.outcome_json`、D-68、`current/manifest.json` |
 | Skill 日更依赖 AI 会话逐页枚举目录实体（页大小受限、随目录规模线性增长；5,228 实体实测 27 分钟未提交一条更新） | 有更新那天的同步在 Skill 口径下不可用；已改由程序化驱动完成——批量更新工具 `plan_market_update`/`run_market_update` 自 `generic-data-v7`（preview.33）起可用，preview.36 与 preview.37 日更即走该路径（preview.37 本轮 84s） | 2026-10-13 首次增量实测 |
