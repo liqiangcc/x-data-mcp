@@ -168,6 +168,65 @@ fn round_trip_keeps_provenance_and_registers_counts() {
     assert_eq!(stored_registration.version_id, registration.version_id);
 }
 
+/// The read side (`sqlite_supply::m2::risk_warning_description`) takes its
+/// counts and windows from the registered evidence. Every key it reads must be
+/// in what the real writer stored, with the type it expects.
+#[test]
+fn registered_evidence_has_the_keys_the_reader_uses() {
+    let f = Fixture::new();
+    let rows = vec![
+        row(
+            Exchange::Sz,
+            "000004",
+            day(1999, 4, 27),
+            None,
+            RiskStatus::OtherRiskWarning,
+        ),
+        row(
+            Exchange::Sh,
+            "600001",
+            day(2024, 5, 6),
+            None,
+            RiskStatus::OtherRiskWarning,
+        ),
+    ];
+    let registration = replace_risk_warnings(
+        &f.c,
+        &set(rows),
+        f.binding,
+        "task-1",
+        "derived:risk_warnings",
+    )
+    .unwrap()
+    .expect("non-empty set registers");
+    let (_, canonical) =
+        evidence_store::read_evidence(&f.c, &registration.evidence_digest).unwrap();
+    let evidence: serde_json::Value = serde_json::from_str(&canonical).unwrap();
+    for key in [
+        "sz_rows",
+        "sh_rows",
+        "observed_windows",
+        "not_observed_windows",
+    ] {
+        assert!(evidence[key].as_u64().is_some(), "{key}: {evidence}");
+    }
+    assert_eq!(evidence["sz_rows"], 1);
+    assert_eq!(evidence["sh_rows"], 1);
+    assert_eq!(evidence["observed_windows"], 1);
+    assert_eq!(evidence["not_observed_windows"], 1);
+    let windows = evidence["coverage"].as_array().expect("coverage array");
+    assert_eq!(windows.len(), 2);
+    for window in windows {
+        assert!(window["observed"].as_bool().is_some(), "{window}");
+        for key in ["exchange", "from", "to"] {
+            assert!(window[key].as_str().is_some(), "{key}: {window}");
+        }
+    }
+    assert_eq!(windows[1]["exchange"], "sh");
+    assert_eq!(windows[1]["from"], "2000-01-01");
+    assert_eq!(windows[1]["to"], "2000-03-31");
+}
+
 #[test]
 fn empty_set_removes_rows_and_registration() {
     let f = Fixture::new();

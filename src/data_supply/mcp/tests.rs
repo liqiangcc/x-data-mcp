@@ -2672,8 +2672,13 @@ fn registered_risk_warnings_carry_no_pending_text_and_state_real_limits() {
     let reason = metadata["coverage_reason"].as_str().unwrap();
     assert!(!reason.contains("pending"), "{reason}");
     assert!(!reason.contains("#308"), "{reason}");
-    assert!(reason.contains("1 SZ"), "{reason}");
-    assert!(reason.contains("1 not_observed"), "{reason}");
+    assert!(
+        reason.starts_with(
+            "1 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); \
+             1 acquisition window(s) observed, 1 not_observed; "
+        ),
+        "{reason}"
+    );
     let limitations = page["limitations"].to_string();
     assert!(!limitations.contains("pending"), "{limitations}");
     assert!(limitations.contains("announcement events"), "{limitations}");
