@@ -2964,3 +2964,11 @@ fn capabilities_express_the_etf_raw_shape_and_units() {
     assert_eq!(etf["volume_quantum"], json!(100));
     assert_eq!(etf["default"], json!(false));
 }
+
+#[test]
+fn memory_budget_refusal_has_its_own_code() {
+    let refused = super::mapped(crate::market_storage::Error::Invalid(
+        "memory_budget_exceeded: near the limit".into(),
+    ));
+    assert_eq!(refused.code, "memory_budget_exceeded");
+}

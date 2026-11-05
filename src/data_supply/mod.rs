@@ -51,6 +51,9 @@ impl Access {
 pub mod presence;
 pub mod query;
 
+pub mod cursor_cache;
+pub mod read_limits;
+
 pub mod columnar;
 
 pub mod observe;
