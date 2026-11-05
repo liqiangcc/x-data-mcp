@@ -1,17 +1,15 @@
 //! Query selection and pagination decisions, independent of SQLite and MCP.
-use super::{Access, wire::*};
+use super::{
+    Access,
+    cursor_cache::{Content, CursorCache, CursorLimits, CursorPool, Saved},
+    read_limits::{Permit, ReadBudget, ReadLimits},
+    wire::*,
+};
 use crate::market_storage::Error;
 use chrono::{NaiveDate, Utc};
-use std::{
-    cell::RefCell,
-    collections::{BTreeSet, HashMap, VecDeque},
-    ops::Range,
-    rc::Rc,
-};
+use std::{cell::RefCell, collections::BTreeSet, ops::Range, sync::Arc};
 pub const MAX_ROWS: usize = 100_000;
 pub const MAX_BYTES: usize = 16 * 1024 * 1024;
-const CACHE_ENTRIES: usize = 32;
-const CACHE_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone)]
 pub struct QueryPlan {
     pub args: Query,
@@ -547,96 +545,39 @@ pub trait ReadRepository {
     /// `as_of` default (issue-391 §12.2: "today", the last trading day).
     fn last_trading_day_upto(&self, day: NaiveDate) -> Result<NaiveDate, Error>;
 }
-#[derive(Clone)]
-struct Saved {
-    token: String,
-    key: String,
-    access: Access,
-    time: chrono::DateTime<Utc>,
-    id: String,
-    offset: usize,
-    content: Content,
-    /// Serialized size recorded at the snapshot-budget check, so resumed
-    /// entries never re-serialize. Entries sharing `id` point at the same
-    /// Rc'd snapshot and are accounted once in `CursorCache::bytes`.
-    bytes: usize,
-}
-#[derive(Clone)]
-enum Content {
-    Data(Rc<QuerySnapshot>),
-    Versions(Rc<Vec<VersionInfo>>),
-}
-/// LRU cursor cache. Entries are cheap handles (Rc + metadata); capacity is
-/// bounded by entry count AND by the summed bytes of distinct snapshots.
-struct CursorCache {
-    entries: VecDeque<Saved>,
-    /// Live entry count per snapshot id (page cursors of one query share
-    /// `id` — and the snapshot — via resume/save).
-    refs: HashMap<String, u32>,
-    bytes: usize,
-    entry_cap: usize,
-    byte_cap: usize,
-}
-impl Default for CursorCache {
-    fn default() -> Self {
-        Self {
-            entries: VecDeque::new(),
-            refs: HashMap::new(),
-            bytes: 0,
-            entry_cap: CACHE_ENTRIES,
-            byte_cap: CACHE_BYTES,
-        }
-    }
-}
-impl CursorCache {
-    fn release(&mut self, s: &Saved) {
-        if let Some(n) = self.refs.get_mut(&s.id) {
-            *n -= 1;
-            if *n == 0 {
-                self.refs.remove(&s.id);
-                self.bytes -= s.bytes;
-            }
-        }
-    }
-    fn push(&mut self, s: Saved) {
-        let new_bytes = if self.refs.contains_key(&s.id) {
-            0
-        } else {
-            s.bytes
-        };
-        while self.entries.len() >= self.entry_cap || self.bytes + new_bytes > self.byte_cap {
-            match self.entries.pop_front() {
-                Some(old) => self.release(&old),
-                None => break,
-            }
-        }
-        *self.refs.entry(s.id.clone()).or_insert(0) += 1;
-        self.bytes += new_bytes;
-        self.entries.push_back(s);
-    }
-    /// LRU: resuming a cursor marks it most-recently-used.
-    fn resume(&mut self, token: &str) -> Option<Saved> {
-        let pos = self.entries.iter().position(|s| s.token == token)?;
-        let s = self.entries.remove(pos)?;
-        self.entries.push_back(s.clone());
-        Some(s)
-    }
-    /// (entries, distinct-snapshot bytes, distinct snapshots)
-    fn stats(&self) -> (usize, usize, usize) {
-        (self.entries.len(), self.bytes, self.refs.len())
-    }
-}
 pub struct Queries<R> {
     pub repository: R,
-    cache: RefCell<CursorCache>,
+    cache: CursorCache,
+    budget: Arc<ReadBudget>,
+    /// Heap reserved for the call in progress on this connection thread.
+    inflight: RefCell<Option<Permit>>,
     instance: String,
     sequence: RefCell<u64>,
 }
+/// Releases the call's memory reservation when the response is built.
+struct Inflight<'a>(&'a RefCell<Option<Permit>>);
+impl Drop for Inflight<'_> {
+    fn drop(&mut self) {
+        self.0.borrow_mut().take();
+    }
+}
 impl<R: ReadRepository> Queries<R> {
+    /// Stand-alone limits: a private cursor pool with the production caps and
+    /// no memory budget. The service uses [`Queries::with_limits`] so every
+    /// connection shares one pool.
     pub fn new(repository: R) -> Self {
+        Self::with_limits(
+            repository,
+            &ReadLimits::new(CursorLimits::PRODUCTION, ReadBudget::unlimited()),
+        )
+    }
+    /// One connection's `Queries` over the process-wide pool and budget.
+    pub fn with_limits(repository: R, limits: &ReadLimits) -> Self {
         Self {
             repository,
-            cache: RefCell::new(CursorCache::default()),
+            cache: CursorCache::new(limits.pool.clone()),
+            budget: limits.budget.clone(),
+            inflight: RefCell::new(None),
             instance: format!(
                 "{}-{}",
                 std::process::id(),
@@ -645,37 +586,56 @@ impl<R: ReadRepository> Queries<R> {
             sequence: RefCell::new(0),
         }
     }
+    /// Swap the build headroom (if any) for the working set of one page.
+    /// The old permit goes first so the call is never counted twice.
+    fn reserve_pages(&self, snapshot_bytes: usize) -> Result<(), Error> {
+        self.inflight.borrow_mut().take();
+        let permit = self.budget.reserve(snapshot_bytes)?;
+        *self.inflight.borrow_mut() = Some(permit);
+        Ok(())
+    }
     fn id(&self) -> String {
         let mut n = self.sequence.borrow_mut();
         *n += 1;
-        format!("{}-{n}", self.instance)
+        // The owner makes ids unique across connections sharing a pool.
+        format!("{}-{}-{n}", self.instance, self.cache.owner())
     }
     /// Test seam: shrink the cache caps so eviction behavior is exercisable
-    /// without multi-MB fixtures. Production uses `new`.
+    /// without multi-MB fixtures. Production uses `new`/`with_limits`.
     #[doc(hidden)]
     pub fn with_cache_limits(repository: R, entry_cap: usize, byte_cap: usize) -> Self {
-        let q = Self::new(repository);
-        let mut c = q.cache.borrow_mut();
-        c.entry_cap = entry_cap;
-        c.byte_cap = byte_cap;
-        drop(c);
-        q
+        Self::with_limits(
+            repository,
+            &ReadLimits::new(
+                CursorLimits {
+                    total_bytes: byte_cap,
+                    owner_bytes: byte_cap,
+                    owner_entries: entry_cap,
+                },
+                ReadBudget::unlimited(),
+            ),
+        )
     }
-    /// Test seam: (entries, distinct-snapshot bytes, distinct snapshots).
+    /// Test seam: (entries, distinct-snapshot bytes, distinct snapshots) of
+    /// this connection.
     #[doc(hidden)]
     pub fn cache_stats(&self) -> (usize, usize, usize) {
-        self.cache.borrow().stats()
+        self.cache.stats()
+    }
+    /// Test seam: this connection's id in the shared pool.
+    #[doc(hidden)]
+    pub fn pool(&self) -> &CursorPool {
+        self.cache.pool()
     }
     fn save(&self, mut s: Saved) -> String {
         let token = self.id();
         s.token = token.clone();
-        self.cache.borrow_mut().push(s);
+        self.cache.push(s);
         token
     }
     fn resume(&self, token: &str, key: &str, access: &Access) -> Result<Saved, Error> {
         let s = self
             .cache
-            .borrow_mut()
             .resume(token)
             .ok_or_else(|| invalid("invalid/expired cursor"))?;
         if s.key != key || &s.access != access {
@@ -684,11 +644,13 @@ impl<R: ReadRepository> Queries<R> {
         Ok(s)
     }
     pub fn query(&self, args: Query, access: &Access) -> Result<DataPage, Error> {
+        let _inflight = Inflight(&self.inflight);
         Ok(self.query_page(args, access)?.0)
     }
     /// v2 columnar read (v8 PR-3, #387 §5): the same snapshot, page slice and
     /// version verification as v1; only the projection differs.
     pub fn query_v2(&self, args: Query, access: &Access) -> Result<serde_json::Value, Error> {
+        let _inflight = Inflight(&self.inflight);
         let (allowed, default) = super::columnar::query_fields(args.dataset);
         let fields = super::columnar::select(
             args.fields.as_deref(),
@@ -774,6 +736,7 @@ impl<R: ReadRepository> Queries<R> {
         let mut saved = if let Some(cursor) = cursor {
             self.resume(&cursor, &key, access)?
         } else {
+            *self.inflight.borrow_mut() = Some(self.budget.reserve_build()?);
             let data = crate::stage_trace::timed("query.repository", || {
                 self.repository.query(&plan, access)
             })?;
@@ -801,13 +764,14 @@ impl<R: ReadRepository> Queries<R> {
                 time: Utc::now(),
                 id: self.id(),
                 offset: 0,
-                content: Content::Data(Rc::new(data)),
+                content: Content::Data(Arc::new(data)),
                 bytes,
             }
         };
         let Content::Data(data) = &saved.content else {
             return Err(invalid("cursor category mismatch"));
         };
+        self.reserve_pages(saved.bytes)?;
         let refs = data
             .manifest
             .iter()
@@ -846,6 +810,7 @@ impl<R: ReadRepository> Queries<R> {
         Ok((result, plan, span))
     }
     pub fn versions(&self, args: VersionsQuery, access: &Access) -> Result<VersionPage, Error> {
+        let _inflight = Inflight(&self.inflight);
         Ok(self.versions_page(args, access)?.0)
     }
     /// v2 version table (v8 PR-3, #387 §5.1): one row per version, the list
@@ -855,6 +820,7 @@ impl<R: ReadRepository> Queries<R> {
         args: VersionsQuery,
         access: &Access,
     ) -> Result<serde_json::Value, Error> {
+        let _inflight = Inflight(&self.inflight);
         let (page, args) = self.versions_page(args, access)?;
         let meta = super::columnar::PageMeta {
             snapshot_id: &page.snapshot_id,
@@ -925,6 +891,7 @@ impl<R: ReadRepository> Queries<R> {
         let mut saved = if let Some(cursor) = cursor {
             self.resume(&cursor, &key, access)?
         } else {
+            *self.inflight.borrow_mut() = Some(self.budget.reserve_build()?);
             let data = self.repository.versions(&args, access)?;
             let bytes = serde_json::to_vec(&data).unwrap().len();
             if data.len() > MAX_ROWS || bytes > MAX_BYTES {
@@ -937,13 +904,14 @@ impl<R: ReadRepository> Queries<R> {
                 time: Utc::now(),
                 id: self.id(),
                 offset: 0,
-                content: Content::Versions(Rc::new(data)),
+                content: Content::Versions(Arc::new(data)),
                 bytes,
             }
         };
         let Content::Versions(data) = &saved.content else {
             return Err(invalid("cursor category mismatch"));
         };
+        self.reserve_pages(saved.bytes)?;
         self.repository.verify(
             &data
                 .iter()

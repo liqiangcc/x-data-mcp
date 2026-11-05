@@ -10,6 +10,7 @@ pub mod gbbq;
 pub mod index_registry;
 pub mod market_data;
 pub mod mcp;
+pub mod memory;
 pub mod official_files;
 pub mod official_market;
 pub mod official_security;

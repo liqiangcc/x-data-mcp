@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -12,6 +13,15 @@ EXPECTED_PROMPT_SHA256 = (
     "fa9e2360780e5cd1274862da450da4067c267c8c0a3d9e8ae668cf4d23ec73c9"
 )
 EXPECTED_DENY = {"read", "edit", "grep", "glob", "exec"}
+WRITE_TOOLS = (
+    "acquire_generation",
+    "verify_generation",
+    "activate_generation",
+    "start_collection",
+    "update_data",
+    "run_market_update",
+    "refresh_exchange_sources",
+)
 
 
 def skill_tools(text: str) -> list[str]:
@@ -26,6 +36,46 @@ def skill_tools(text: str) -> list[str]:
         if in_allowlist and line.startswith("  - mcp__"):
             tools.append(line.removeprefix("  - "))
     return tools
+
+
+def no_update_section(text: str) -> str:
+    start = text.find("### 1.1 ")
+    end = text.find("\n## 2. ", start)
+    return text[start:end] if start >= 0 and end > start else ""
+
+
+def check_no_update_branch(skill_text: str, check) -> None:
+    """The `day`-not-pending branch (SKILL §1.1) allows a fixed read-only set.
+
+    It may call `plan_market_update` at most once, with neither `end_date` nor
+    `scope` (the plan request must stay byte-identical to §3.1), and must not
+    reach any write tool. Run 4 (#311) is why the call set is closed.
+    """
+    section = no_update_section(skill_text)
+    check("Skill has the no_update branch section (§1.1)", bool(section))
+    plan_calls = re.findall(r"plan_market_update\(\{[^}]*\}\)", section)
+    check(
+        "§1.1 has exactly one plan_market_update call shape",
+        len(plan_calls) == 1,
+        f"found {plan_calls}",
+    )
+    for call in plan_calls:
+        check(
+            "§1.1 plan call is market.daily v1 without end_date/scope",
+            '"dataset":"market.daily"' in call
+            and '"contract_version":"v1"' in call
+            and "end_date" not in call
+            and "scope" not in call,
+            call,
+        )
+    for tool in WRITE_TOOLS:
+        check(
+            f"§1.1 has no call-shaped use of write tool {tool}",
+            not re.search(rf"{tool}\(\{{", section),
+            tool,
+        )
+    for tool in ("list_tasks", "get_task_progress", "sync_status"):
+        check(f"§1.1 uses {tool}", tool in section)
 
 
 def main() -> int:
@@ -93,6 +143,9 @@ def main() -> int:
         "不得用当前日期、市场是否已经收盘、GBBQ 时间、旧数据最新日期、上次 probe 的",
         "按 ≤100 实体分批调用 `get_data_availability`",
         "selection:{\"kind\":\"batch\",\"entities\":[…]}",
+        "### 1.1 `day` 不 pending 时的补发布判定",
+        "market-plan-run-task-v1",
+        "`total > task.plan_counts.eligible`",
     ]:
         check(f"Skill contains {required!r}", required in skill_text)
     for lineno, line in enumerate(skill_text.splitlines(), start=1):
@@ -104,6 +157,8 @@ def main() -> int:
             ),
             line.strip(),
         )
+
+    check_no_update_branch(skill_text, check)
 
     if failures:
         for failure in failures:
