@@ -1,6 +1,6 @@
 ---
 name: x-data-daily-sync
-description: 每日官方行情同步 — 仅通过 x-data-acquire / x-data-mcp 两个 MCP server 完成 generation 闭环 + plan/run 日更（含日线/年线两步补漏）；无 shell/SSH/SQLite/文件旁路
+description: 每日官方行情同步 — 仅通过 x-data-acquire / x-data-mcp 两个 MCP server 完成 generation 闭环 + plan/run 日更（A 股日线/年线两步补漏 + ETF 日线独立批次）；无 shell/SSH/SQLite/文件旁路
 triggers:
   - user
 allowed-tools:
@@ -47,7 +47,9 @@ allowed-tools:
 单次 `start_collection`/`update_data` 超过 100 个证券或 item 会整体拒绝，服务端不会自动分页。
 v7 起全市场日更由 `plan_market_update`/`run_market_update` 在服务器侧解析与执行，编排方
 不再自行把全市场切成 ≤100 item 调用；v9 起四个同源派生 item 的输入改由 §3.0 的
-`refresh_exchange_sources` 提供（日更前 `tail`、每周 `full`）；只有**补漏**（§3.3/§3.6）与首采（§3.7）仍按
+`refresh_exchange_sources` 提供（日更前 `tail`、每周 `full`）；v10 起 `market.daily` 的
+plan/run 增加可选 `scope`，本 Skill 用它把 ETF 作为 A 股之后的独立批次（§3.3a），A 股批次
+不传 `scope`（请求字节与 v9 相同）；只有**补漏**（§3.3/§3.6）与首采（§3.7）仍按
 ≤100 item 的显式契约提交，每个 chunk 使用独立唯一 `request_id`、**串行提交**（服务端单 worker）。
 plan/run 大任务的进度按 `get_task_progress` 的 `unfinished` keyset 分页读取（调用参数规则见 §3.2）。
 
@@ -70,8 +72,8 @@ plan/run 大任务的进度按 `get_task_progress` 的 `unfinished` keyset 分�
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
   `contract_version`）：
-  - `capability_revision` 必须等于 `generic-data-v9`
-    （v6 起 market 数据为单版本序列：`version_id` 为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取被取代时报 `stale_version`，写路径 stale base 为 item 级 `needs_verification`（`STALE_BASE:` 前缀），均须重取当前 head 重试，不得静默适配；v5 的 `related_tasks` 口径沿用，只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；v6 的 `generic-data-v6` 断言遇到 v7 即按下一条停止，不得静默适配。v7 新增 `plan_market_update`/`run_market_update`，日更编排见 §3。）
+  - `capability_revision` 必须等于 `generic-data-v10`
+    （v6 起 market 数据为单版本序列：`version_id` 为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取被取代时报 `stale_version`，写路径 stale base 为 item 级 `needs_verification`（`STALE_BASE:` 前缀），均须重取当前 head 重试，不得静默适配；v5 的 `related_tasks` 口径沿用，只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；v6 的 `generic-data-v6` 断言遇到 v7 即按下一条停止，不得静默适配。v7 新增 `plan_market_update`/`run_market_update`，日更编排见 §3。v8 只改入口/读面/任务面形状，v9 新增 `refresh_exchange_sources`（见 §3.0），两者的 A 股日更顺序与请求字节不变。v10 的增量只在本 Skill 的两处出现：`market.daily` 读面可选 `adjustment`（ETF 必须显式 `raw`，见 §4；A 股省略时与 v9 相同）、`market.daily` 的 plan/run 可选 `scope`（ETF 独立批次见 §3.3a；A 股批次不传 `scope`）。`securities.catalog` 仍只接受 `current_sh_sz_a`。）
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。无过滤
 `get_data_capabilities({})` 只用于 revision 握手：v8 起它返回紧凑目录，`schema_digest`、
@@ -133,9 +135,11 @@ pending 就必须停止。
 6. 再次 `sync_status` 确认 active 已切换到目标 generation，否则停止。
 7. `retired_generations` 比预期少，可能是 M3 退役门禁（`source_store_evidence_missing`/`derived_facts_missing`）跳过了某个旧代；这是正常保留结果，不是激活失败，不重试激活。`acquire_generation` 返回 `generation_capacity` 时同样只报告 6/6 现状并交给 owner/operator；退役受门禁约束，可能被拒。Skill 不得调用 `retire_generation`，不得删除 generation 目录，也不得写退役豁免：门禁拒绝原样转述缺失清单，交 owner 用 `source_store replay`/`source_store exempt` 处理。来源库出现之前采集的遗留代（字节在库里但 `origin` 不是 `generation:<sha>`）由 owner 在停服窗口里用 `source_store register-generation-member --generation <sha> --generation-dir <代目录> --store <来源库>` 补登记（只追加、幂等），Skill 不执行（见 `docs/tasks/issue-446-m3-delisted-industry.md` §8.3）。
 
-## 3. 数据更新（v7：日线 plan/run → 日线补漏 → 年线 plan → 年线 run → 年线补漏 → readback）
+## 3. 数据更新（v10：日线 plan/run → 日线补漏 → ETF 日线批次 → 年线 plan → 年线 run → 年线补漏 → readback）
 
-完整有序步骤见 `docs/contracts/generic-data-v8.md` §7.1；本节是 Skill 侧的可执行版本。
+A 股日线的完整有序步骤仍是 `docs/contracts/generic-data-v7.md` §7.1；本节是 Skill 侧的
+可执行版本（v8 只改入口/读面/任务面形状，v9 在 plan 前插入 §3.0 的来源刷新，v10 在日线
+补漏后插入 §3.3a 的 ETF 批次，三者都没有改变 A 股 plan/run 的请求字节）。
 **两步补漏（§3.3、§3.6）不可省略**。
 
 `market.daily` / `market.yearly` 的 `query_data`、`list_data_versions` 与
@@ -196,6 +200,9 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 把它们算进 `eligible`——这是观察到的判定事实，不是「源无 bar 即成功」的新契约。识别方法：
 `get_data_availability` 的 `last_record` < `target_day`。
 
+A 股批次**不传** `scope`：plan/run 的请求字节与 v9 逐字节相同，`plan_id` 的规范载荷也不含
+该键（`scope` 仅在存在时进入规范载荷）；只有 §3.3a 的 ETF 批次才传 `scope`。
+
 ### 3.2 日线 run + 轮询到终态
 
 `run_market_update`（`{"dataset":"market.daily","contract_version":"v1",
@@ -213,7 +220,8 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 `succeeded`/`partially_failed`/`failed`；全市场日更 `partially_failed` 是正常收尾。
 
 本任务除 plan 的实体 item 外，worker 还会追加 **17** 个**服务器内部派生 item**
-（`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历 + 5 个
+（ETF-only 计划不追加，见 §3.3a；省略 `scope` 或 `sh_sz_a_and_etf_current` 的含 A 股计划
+保持原样）：`derived:index:<entity>` × 9 指数基准 + `derived:calendar` 交易日历 + 5 个
 全市场数据集：`derived:security_master`、`derived:security_names`、
 `derived:risk_warnings`、`derived:suspensions`、`derived:trading_rules` + M3 的
 `derived:industry_snapshot`（历史行业快照与区间）、`derived:delisted_series_check`
@@ -292,13 +300,51 @@ run 要处理的实体；`absent` 实体无 daily head（走 §3.7 首采，不�
 该显式批次若被**整批拒绝**（`invalid_arguments`/`needs_verification`），按 §3.8 二分归因，
 不要当成全局停止。
 
+### 3.3a ETF 日线批次（v10，独立任务，排在 A 股日线与补漏之后、年线之前）
+
+依据 `docs/contracts/generic-data-v10.md` §1.7。A 股 `plan_market_update`/`run_market_update`
+（§3.1/§3.2，**不带** `scope`）与 §3.3 的补漏任务**全部终态**后，再单独发一次 ETF 批次：
+
+```text
+plan_market_update {dataset:"market.daily", contract_version:"v1", scope:"sh_sz_etf_current"}
+→ run_market_update {dataset:"market.daily", contract_version:"v1", request_id:<本次唯一>,
+                    target_day:<ETF plan 的 target_day>, plan_id:<ETF plan 的 plan_id>,
+                    scope:"sh_sz_etf_current"}
+→ get_task_progress（同 §3.2 的轮询规则）
+```
+
+- **顺序与互斥**：同一时刻只能有一个未终态的 `market.daily` 更新任务（否则
+  `plan_in_progress`），所以必须先等 A 股 run 与补漏任务终态。ETF 批次也必须在 §3.4 年线
+  plan 之前终态（年线 plan 要求 `market.daily` 无非终态任务）。
+- **`scope` 必须成对**：`run_market_update` 带与 plan 相同的 `scope`；漏传或换成另一个值
+  会重算出不同的计划并返回 `plan_stale`。本 Skill 固定用**分任务**形态，不用
+  `sh_sz_a_and_etf_current`。ETF plan 默认同样**不传** `end_date`；
+  `target_day_source == "today_fallback"` → 停止 ETF 这部分并报告。
+- **成员**：`sh_sz_etf_current` ∩ 已有 ETF 不复权序列；没有序列的 ETF 不进 plan。ETF 首采是
+  一次性操作，走 `start_collection` v2 的 ETF scope（`sh_sz_etf_current`/
+  `sh_sz_etf_listed_ever`），不属于日更，本 Skill 不在日更里发。`eligible` 为 0（还没有
+  ETF 序列）→ 不发 run，报告后继续 §3.4。
+- **不追加派生 item**：ETF-only 计划**不**追加 17 个服务器内部派生 item（指数基准、交易日历、
+  5 个全市场数据集、行业快照、退市序列检查）。这些是 A 股/全局事实，不计入 ETF 批次。
+- **失败隔离**：ETF item 失败**不影响** A 股（各自在自己的事务里记录结果），也不回滚 A 股已
+  提交的版本。非前缀改写以 `etf_history_rewrite:` 失败并带 `first_different_day`，尾部 bar
+  超出 plan 的 `end_date` 以 `etf_update_unverified:` 失败；两者都按 item 错误原样报告，
+  **不** `retry_task`、**不**用 `update_data` 补 ETF、不整段重写。
+- **没有年线**：`market.yearly` 的 plan/run 没有 `scope` 字段，成员集不含 ETF（D-70 Q6），
+  本 Skill 不为 ETF 发任何年线任务；`market.yearly` 读 ETF 只返回 `absent`。
+- **失败处理**：ETF 批次出现任务级失败/受理拒绝/大面积同类 item 失败 → 报告并**停止 ETF
+  这部分**，不继续提交 ETF 剩余批次；A 股结果保持原样，随后照常进入 §3.4 年线。
+- **计时**：ETF 任务耗时单独汇报（`created_at` → 终态 `last_progress_at`），**不计入** D-63
+  的 A 股日更 write-loop 口径（D-63 只看不带 `scope` 的 A 股 `run_market_update`）。
+
 ### 3.4 年线 plan
 
-日线任务（含 §3.3 的补漏任务）**全部终态**后，调
+日线任务（含 §3.3 的补漏任务与 §3.3a 的 ETF 批次）**全部终态**后，调
 `plan_market_update`（`{"dataset":"market.yearly","contract_version":"v1"}`；同 §3.1 默认
 **不传** `end_date`）。若 `market.daily` 存在非终态更新任务 → `daily_update_inflight`，
 等待或报告，不提交。复核 `target_day`/`target_day_source`（`today_fallback` → 停止并报告）、
-`counts`/`ineligible_reasons`。
+`counts`/`ineligible_reasons`。`market.yearly` 的 plan/run **没有** `scope` 字段（传了会被
+拒绝），其成员集不含 ETF（v10 §1.7，D-70 Q6）：ETF 没有年线，本 Skill 不尝试为 ETF 推年线。
 
 ### 3.5 年线 run + 轮询
 
@@ -314,7 +360,8 @@ plan/run 或 §3.6 显式分支。轮询与 fail-closed 判定同 §3.2/§3.3。
 ### 3.6 年线不可处理路由（按 `ineligible_reasons` 补漏，不可省略）
 
 年线 run（§3.5）终态后处理 `ineligible_reasons`（全量原因表见
-`docs/contracts/generic-data-v8.md` §7.3）：
+`docs/contracts/generic-data-v7.md` §7.3；v8–v10 未改动该表。ETF 不进年线 plan，所以这里
+不会出现 ETF 实体）：
 
 - `value_semantics_changed` / `daily_replaced_since_derivation`：旧年线已失效
   （日线 replace 或 {source,unit_currency,adjustment_evidence} 变化），**必须显式重推**。
@@ -452,6 +499,16 @@ start_collection{dataset:"market.daily", contract_version:"v2",
 - 复用 §3.0/§3.1 的 catalog `version_id` 与实体枚举；对 market.daily 继续按 ≤100 实体分批调用 `get_data_availability`
   （`selection:{"kind":"batch","entities":[…]}`），确认 coverage/freshness/gap 事实。
 - `query_data` 抽样若干实体最新交易日数据（`selection:{"kind":"single"|"batch"}`，`filter:{"kind":"daily",...}`，`version:{"kind":"latest_per_entity"}`）。
+- **ETF 回读（v10 §1.5；`no_trade`/`last_trade_date` 的推导与 §1.6 导出列一致）**：
+  `market.daily` 读 ETF **必须显式** `adjustment:"raw"`；省略报 `adjustment_required_for_etf`，
+  `adjustment:"qfq"` 报 `adjustment_unavailable`（ETF 首期只有不复权序列）。`raw` 返回 3dp（厘）
+  / 份的不复权 bar。`query_data`/`get_data_availability`/`list_data_versions` 都接受该顶层字段；
+  其他 dataset 携带它会被 `invalid_arguments` 拒绝，A 股请求省略时与 v9 字节相同。
+  读回时注意 `no_trade`：ETF 行在 `volume=0 ∧ amount=0` 时为 `true`（推导字段，A 股行不出现），
+  它**不等于退市**，零成交 bar 原样保留；`version_manifest[].metadata` 的 `last_trade_date`
+  是最后一根 `volume>0` 的 bar，`delisting_date` 缺席表示 unknown，两者不互相推断。
+  `market.yearly` 读 ETF 返回 `absent`（无年线）：单只 ETF 或 batch 里的 ETF 成员都不影响同批
+  A 股成员，也不报错；真出现 ETF 年线存储行时按 `integrity_error` fail-closed 报告。
 - M2 数据集随日更 run 更新，不单独跑任务。`get_task_progress` v1/v2 只列 `unfinished`，
   成功项没有 per-item evidence（v2 的 `publication_versions`/`range_results` 在 plan/run
   任务上也是空的），`get_task` v2 也只给失败样本；所以 run 终态后对各目标 dataset 用
@@ -471,7 +528,7 @@ start_collection{dataset:"market.daily", contract_version:"v2",
   见 `src/data_supply/plan.rs:171-176`、`src/data_supply/wire.rs:72-77`。
   未准入的数据集回读为 `row_count=0`、`versions=[]`
   （`market.risk_warnings` 的 #308、`market.price_limit_rules` 的 A-7）：只报告，不算失败。
-- 汇报：active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。收尾时复核 plan：`eligible` 只剩 `last_record` < `target_day` 的停牌实体即视为完成，不再为它们发 run（§3.1）。
+- 汇报：active generation、plan/run 的 `plan_id` 与 `counts`、`failed_by_reason`、published/no_change 计数、最新数据日期、全部 request/task refs。ETF 批次单独汇报其 `plan_id`/`task_id`、item 结果（`no_change`/`metadata`/追加尾部）与耗时（`created_at` → 终态 `last_progress_at`）；该耗时**不计入** D-63 的 A 股 write-loop。收尾时复核 plan：`eligible` 只剩 `last_record` < `target_day` 的停牌实体即视为完成，不再为它们发 run（§3.1）。
 
 可选：派生 `market.yearly` — 走 §3.4/§3.5/§3.6（plan/run + 显式重推），
 `selected year absent from fixed data` 属预期 fail-closed（源内无该年 bar），聚合上报即可。
@@ -491,5 +548,6 @@ start_collection{dataset:"market.daily", contract_version:"v2",
 （`update_data` 显式批次先按 §3.8 归因，per-item 类别走分裂重试，其余才停）、
 大面积同类 per-item 失败、轮询预算耗尽、工具不可用。per-item
 `needs_verification` 不属全局停止（见 §3.3/§3.7：`REVISION_UNVERIFIED` 走显式补漏，
-其余聚合上报为 fail-closed 集合）。停止时旧
+其余聚合上报为 fail-closed 集合）。**ETF 批次（§3.3a）是例外**：ETF 任务级失败只停止 ETF
+这部分（报告后继续 §3.4 年线），不回滚 A 股、不重试、不用 `update_data` 补 ETF。停止时旧
 heads 与旧 active generation 保持不变；报告已完成的步骤、最后结构化状态和恢复用 refs。

@@ -125,11 +125,12 @@ class RealDocs(unittest.TestCase):
 
 
 REGION_SCHEMA = 24
-REGION_REVISION = "generic-data-v9"
+REGION_REVISION = "generic-data-v10"
 # Current regions and STATUS state DEPLOYED facts; the registry may be ahead
-# while a code-only contract exists. Since preview.42 (2026-11-02) the v9
-# surface is deployed: the ops entry serves 16 tools, the registry registers 25
-# across three entries, and deployed == code for the entry counts.
+# while a code-only contract exists. Since preview.45 on vm2-126 (2026-11-05,
+# D-74) the v10 surface is deployed: the ops entry serves 16 tools, the
+# registry registers 25 across three entries, and deployed == code for the
+# entry counts.
 REGION_DATA_TOOLS = 16
 REGION_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 REGION_CODE_DATA_TOOLS = 25
@@ -194,7 +195,7 @@ class StaleCurrentRegions(unittest.TestCase):
         text = (
             "`capability_revision`：`generic-data-v6` → `generic-data-v7`。\n"
             "`related_tasks` 有界；capability 升到 `generic-data-v5`，Skill 同步更新。\n"
-            "当前部署已是 `generic-data-v9`（自 preview.42 起）。\n"
+            "当前部署已是 `generic-data-v10`（自 preview.45 起）。\n"
         )
         self.assertEqual(region_claims(text), [])
 

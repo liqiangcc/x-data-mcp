@@ -23,7 +23,7 @@
 
 实际开发暴露的规范歧义、冲突或不必要成本，按 `docs/conventions.md` 的反馈流程记录；不静默绕过，也不为了满足形式增加无价值抽象。
 
-> **环境事实已过时：** 2026-10-09 起开发、测量和生产都在 aws-node 上，ecs-node 只作冷备。当前主机、版本、generation 和服务以 [docs/STATUS.md](docs/STATUS.md) 为准，性能门禁以 [docs/SLO.md](docs/SLO.md) 为准。以下环境段与「生产运行事实」仅作历史记录，未经 STATUS 核对不得当作当前事实。
+> **环境事实以 STATUS 为准：** 2026-11-05 起（D-74）日更和主数据的生产机是 vm2-126（preview.45，schema 27，`generic-data-v10`，无 tunnel），aws-node 保留 tunnel 与 fallback（preview.43 冻结、不再跑日更），ecs-node 只作冷备。当前主机、版本、generation 和服务以 [docs/STATUS.md](docs/STATUS.md) 为准，性能门禁以 [docs/SLO.md](docs/SLO.md) 为准。以下环境段与「生产运行事实」仅作历史记录，未经 STATUS 核对不得当作当前事实。
 
 **历史（2026-10-09 前的开发环境，非当前事实；当前主机与版本见 [docs/STATUS.md](docs/STATUS.md)）：** 开发与验收环境为本机 `ecs-node`（KVM 虚拟机，hostname 即 ecs-node；Ubuntu 24.04.4，kernel 6.8.0-106-generic，2 vCPU Intel Xeon Platinum 8336C，约 2GiB RAM + 4GiB swap，rustc/cargo 1.97.1 rustup stable，`/root/x-data-mcp` 为主检出）：根文件系统为 ext4（/dev/vda2）非 overlayfs，runtime-guard 本地通过；`/dev/shm` 为 tmpfs。官方输入位于本机 `/opt/x-data-mcp-preview/official-inputs/`（见其中 snapshot-manifest.json），官方文件只下载一次入库复用，重复下载需说明理由；gen-1 retained 字节永久不可得，跨代一致性走已提交派生证据。
 

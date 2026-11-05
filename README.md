@@ -43,14 +43,15 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 `mcp.sock` 的 `ops` 入口（编排入口，16 data tools，含只读 `get_yearly_base_years`、
 `plan_market_update`/`run_market_update` 与 `refresh_exchange_sources`，x 与日更 Skill 的连接不变）、
 `research.sock` 的 `research` 入口（只读研究面，工具数 5）、`maint.sock` 的 `maint`
-入口（本机运维，工具数 9，不经隧道）；capability revision `generic-data-v9`，
+入口（本机运维，工具数 9，不经隧道）；capability revision `generic-data-v10`，
 文本模式 `X_DATA_MCP_TEXT_MODE=full`，market 单版本序列：version_id=内容 hex，
 latest-only。另有
-`x-data-mcp-acquire`（10 acquisition tools）。隧道指 `research.sock`（2026-11-02 起，Ops-D 已执行）。
-部署版本、socket 路径、generation 与数据量见
+`x-data-mcp-acquire`（10 acquisition tools）。隧道指 `research.sock`（aws-node fallback
+上 2026-11-02 起，Ops-D 已执行；vm2-126 生产机无 tunnel，D-74）。部署版本、socket 路径、
+generation 与数据量见
 [docs/STATUS.md](docs/STATUS.md)。
-已部署 schema 26（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 +
-M3 PR-1 的 025 + R2 的 026），能力修订 `generic-data-v9`（已部署）。注册
+已部署 schema 27（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 +
+M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027），能力修订 `generic-data-v10`（已部署）。注册
 去重后 25 项 data 工具（`research` 5 / `ops` 16 / `maint` 9，入口之和大于去重总数）；
 显式 `task_sqlite init` 的新库按代码的 schema 建立；工具数量不是稳定契约，客户端仍须以运行
 实例 `tools/list` 与 `get_data_capabilities` 为准。

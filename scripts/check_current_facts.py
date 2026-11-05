@@ -44,15 +44,15 @@ ENTRY_ALLOWLIST_CONST = {
     "maint": "MAINT_TOOLS",
 }
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v10"
-# The revision the deployed docs/contracts/Skills describe. R2's tool is code
-# only until the next deployment; flip this with the Skills at that switch.
-EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v9"
-# The strict Skills describe the DEPLOYED contract (v8 after the minimal switch).
-# The same deployed revision keys the strict-Skill checks and the
-# stale-deployment-claim check below: the "current" regions describe the
+# The revision the deployed docs/contracts/Skills describe. Since preview.45
+# on vm2-126 (D-74) the deployed contract is v10, same as the code revision.
+EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v10"
+# The strict Skills describe the DEPLOYED contract (v10 since preview.45 on
+# vm2-126, D-74). The same deployed revision keys the strict-Skill checks and
+# the stale-deployment-claim check below: the "current" regions describe the
 # deployed instance, not the code on main. Flip this constant together with
 # the Skills in the same commit at the next contract switch.
-EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v9"
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v10"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",
