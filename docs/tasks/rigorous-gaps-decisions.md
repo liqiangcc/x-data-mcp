@@ -392,3 +392,19 @@ T6 度量 ──▶（若值得）下一次 schema 变更
 - 交易所规则本身（例如沪市风险警示的生效时点规则）：我没有去查，只用了仓库里的样本。
 - 全量重建（fresh init）在 schema 27 上的总时长：没有记录。
 - vm2-126 的磁盘余量：本任务不得连生产机。
+
+## 10. 审核备注（Claude，2026-11-06）
+
+以下是 vm2-126 preview.45 真实库上的只读查询（2026-11-05 23:1xZ），补 §9 的部分未验证项：
+
+- **ETF 区间起点（§3.3 的推断成立）。** `security_master` 的 1,846 个 ETF 行里，1,845 行 `effective_from` 晚于 `listing_date`；1,718 行的 `effective_from` 是 2026-11-05。`sh.510050`：`listing_date` 2005-02-23，`effective_from` 2026-11-05。`class_intervals`（`src/research/universe.rs`）在 `listing_date` 不晚于 `effective_from` 时取 `effective_from` 作起点，所以 2026-11-05 之前的 ETF 成员区间基本是空的。没有实际读 `universe_intervals.parquet`。
+- 这条要**提到 P1**：混合 A 股和 ETF 的回测按 `universe_intervals` 取成员时，ETF 会静默消失，符合本文 P1 的定义。
+- **A 股 `known_at`（§3.3）：** 5,566 个 A 股行全部为 NULL，与文中一致。
+- **`normal`（§1.1）：** `risk_warning_intervals` 只有 `delisting_risk_warning`（沪 572、深 749）和 `other_risk_warning`（沪 312、深 541），没有 `normal`。
+- **`adjustment_events`（§2.3）：** 类别 1 共 60,355 行，类别 11 共 254 行。文中 59,361 是更早的读数，上界 0.35% 的量级不变。
+- **磁盘（§5.3、§9）：** vm2 剩余 18 GB，还没有 `/root/x-data-exports`。
+
+其他：
+
+- **§4、§7 的 AC-M2-11：** “不物化涨跌停”已有裁决：D-78 的 O6 决定不做 `price_limits.parquet` 导出。所以不必另开裁决，AC 文字按 D-78 改写，同时保留“generation 字节仍在时可重算”的限定。
+- **`tdxgp.zip`（§1.6、§6.4）：** 官方公开地址在 #308 评论里（`data.tdx.com.cn/vipdoc/tdxgp.zip`，688 MB，每个交易日更新）。host 和 vm2 上都没有这个文件。下载一次是否允许由 owner 决定。
