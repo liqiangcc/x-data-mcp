@@ -307,8 +307,11 @@ plan_market_update {dataset: market.daily, contract_version: v1, end_date: D, sc
 → run_worker_once / get_task_progress（同 A 股批次）
 ```
 
-- 成员：`sh_sz_etf_current` ∩ 已有 ETF 不复权序列。首次采集仍走 `start_collection` v2
-  （`sh_sz_etf_listed_ever`/`sh_sz_etf_current`），日更 plan 不会把没有序列的 ETF 列为 eligible。
+- 成员：`sh_sz_etf_current` ∩ 已有 ETF 不复权序列。日更 plan 不会把没有序列的 ETF 列为 eligible，
+  所以 Skill 在 ETF 批次终态后补发一次 `start_collection`
+  `{dataset:"market.daily", contract_version:"v2", request_id, selection:{kind:"scope", scope:"sh_sz_etf_current"}}`
+  收新上市成员（只收尚无序列且 `.day` 有 bar 的成员，幂等；无新成员时返回 `nothing to collect`，属正常结果）。
+  一次性全量首采（`sh_sz_etf_listed_ever`，含退市 ETF）仍由操作员显式发起，不属于日更。
   退市 ETF 不在 current，不进日更。
 - 同一时刻只能有一个未终态的 `market.daily` 更新任务（`plan_in_progress`），所以 A 股批次终态后
   再发 ETF 批次。想同任务就用 `scope: sh_sz_a_and_etf_current`（含 17 个派生 item）；ETF-only
