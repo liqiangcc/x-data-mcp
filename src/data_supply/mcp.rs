@@ -1350,6 +1350,16 @@ impl DataApi {
                     .map_err(mapped)?;
                 crate::stage_trace::timed("rpc.year_presence.encode", || encode(reply))
             }
+            Handler::Read(tool) => {
+                let query = tool.to_query(input, || {
+                    use super::query::ReadRepository as _;
+                    self.queries
+                        .repository
+                        .last_trading_day_upto(super::query::today())
+                        .map_err(mapped)
+                })?;
+                self.queries.query_v2(query, &self.access).map_err(mapped)
+            }
             Handler::Capabilities => self.capabilities(decode(input)?),
             Handler::Facets => self.catalog_facets(decode(input)?),
         }
@@ -1409,6 +1419,13 @@ impl ToolHandler for DataApi {
             || matches!(
                 name,
                 "query_data"
+                    | "find_securities"
+                    | "get_daily_bars"
+                    | "get_yearly_bars"
+                    | "get_index_bars"
+                    | "get_market_snapshot"
+                    | "get_trading_calendar"
+                    | "get_price_limit_rules"
                     | "list_data_versions"
                     | "get_data_availability"
                     | "get_yearly_base_years"

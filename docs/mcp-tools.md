@@ -310,3 +310,43 @@ v7 增量（历史记录，代码已实现、部署日随二进制切换生效�
 [v7-switch-checklist](contracts/v7-switch-checklist.md)。
 
 此前逐类别工具、共享结果和组合探索已移到 [历史草案](history/mcp-tools-proposals.md)，仅供追溯，不据此额外注册工具。当前兼容差距与首个任务验收统一见实施基线。
+
+## 读取工具（代码面，未部署）
+
+D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批：在 `research` 入口新增 7 个窄输入的只读工具。
+**状态：代码面（未部署）。** 已部署实例仍是上文所述的 5 个 `research` 工具；这 7 个工具随后续 preview 发布后才出现在 `tools/list`，
+`capability_revision` 也要到本系列最后一个 PR 才升级。设计与裁决见 [issue-525-read-tools](tasks/issue-525-read-tools.md)。
+`ops`、`maint` 入口不变。
+
+每个工具把窄输入转成现有 `query_data` 的 v2 查询（`latest_per_entity`），由同一条读路径做校验、完整性检查和列式投影，
+所以同样条件下 `columns`、`entities`、`versions` 与 `query_data` v2 完全一致，响应沿用 v2 信封和分页（`page_size` 1..1000，默认 100；`cursor`）。
+输入类型拒绝多余字段，不暴露 `contract_version`、`version`、`selection`、`filter`。标的写作 `sh.600000`，日期 `YYYY-MM-DD`（也接受 `YYYYMMDD`）。
+
+| 工具 | 必填 | 可选 | 对应的 `query_data` |
+|---|---|---|---|
+| `find_securities` | 无 | `query`（名称片段）、`code`、`industry_code`、分页 | `securities.catalog`，范围现行沪深 A 股 |
+| `get_daily_bars` | `securities`（1..100）、`start_date`、`end_date` | `adjustment`（`qfq`/`raw`）、`fields`、分页 | `market.daily`，`single`/`batch` |
+| `get_yearly_bars` | `securities`（1..100）、`start_year`、`end_year` | `fields`、分页 | `market.yearly`，`single`/`batch` |
+| `get_index_bars` | `indices`（登记的 9 条指数）、`start_date`、`end_date` | `fields`、分页 | `market.index`，`single`/`batch` |
+| `get_market_snapshot` | `start_date`、`end_date` | `universe`（`a_current` 默认、`a_listed_ever`、`etf_current`、`etf_listed_ever`）、`adjustment`、`fields`、分页 | `market.daily`，`universe` + `cross_section` |
+| `get_trading_calendar` | `start_date`、`end_date` | 无 | `market.calendar`，`market` |
+| `get_price_limit_rules` | 无 | `as_of`、分页 | `market.price_limit_rules`，`market` |
+
+语义，均沿用现有规则，没有放松：
+
+- `get_daily_bars`：A 股默认 `qfq`。ETF 不传 `adjustment` 返回 `adjustment_required_for_etf`，传 `qfq` 返回 `adjustment_unavailable`；A 股与 ETF 混查时传 `raw`，全部返回不复权。
+  传入登记的指数（`index_registry`，含别名 `sz.399300`、`sz.399905`）返回 `invalid_arguments`，消息指向 `get_index_bars`；整批拒绝，不丢弃指数。
+  `query_data` 查指数的行为不变，仍返回 `absent` 和 0 行。
+- `get_yearly_bars`：只有 A 股，由前复权日线按自然年派生，没有 `adjustment` 参数。ETF 的 `versions[].status` 为 `absent`、0 行，不影响同批 A 股。
+- `get_index_bars`：`indices` 只能是登记的 9 条（`sh.000001`、`sh.000016`、`sh.000300`、`sh.000688`、`sh.000852`、`sh.000905`、`sh.000906`、`sz.399001`、`sz.399006`）。
+- `get_market_snapshot`：最多 5 个交易日，超过由共享的读路径报 `invalid_arguments`，封装层不绕过；ETF 范围必须传 `adjustment=raw`。
+- `get_price_limit_rules`：不传 `as_of` 时取最近交易日（`last_trading_day_upto(today)`，`today` 为上海日）。该工具没有 `known_at`。
+
+默认 `as_of` 的“今天”由 `data_supply::query::today()` 给出，现在是上海日（`calendar::shanghai_today()`）。
+此前它用 `chrono::Local::now()`，随主机时区变化：vm2-126 是上海时区、aws-node 是 UTC，UTC 16:00–24:00 之间两台机器的默认 `as_of` 会差一天。
+`query_data` 的事实类数据集不传 `as_of` 时同样受益。
+
+`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：16,717 B（12 个工具），CI 预算 18,600 B（owner 批准，D-75）；
+每个工具描述不超过 240 B。`ops`、`maint` 的工具清单和字节数不变。
+
+本批未包含：`get_security_state`、`get_security_history`、`get_security_events`（后续 PR）；`screen_market` 等 XDM-14 的测量结论。
