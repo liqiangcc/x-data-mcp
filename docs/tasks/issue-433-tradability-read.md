@@ -363,3 +363,13 @@ AC 文字（§1.3）在 PR-B 通过后，由 owner 更新到 #391/#433，或随�
 - 没有核实 pi、kiro、x 的客户端是否依赖 `$schema` 或 `title`（选项 b）。
 - 没有核实 `query_data` 在 codemode 里的使用方式（选项 c）。
 - 示例响应里的值是占位。
+
+## 10. 审核备注（Claude，2026-11-06）
+
+已对照 main 代码核实 G2、G3、G4（`tradability.rs`）、G5、G6（`price_limit.rs`），与文中一致。
+
+1. **预算基线已变（§6、Q2）。** #525 PR-2 的任务已要求去掉读 schema 根上的 `$schema` 和 `title`，也就是选项 b。这不改语义：MCP 规定没有 `$schema` 时默认 2020-12。pi 的 MCP 适配层（`extensions/mcp/tools.js` 的 `toParameters`）把 schema 原样透传，读的是工具级 `title`，不是 schema 根上的。x 客户端仍未核实，部署前要确认。
+   按 §6 的估算，选项 b 之后两个工具加 PR-2 约 19,100 B，还超约 500 B，ETF 名称 PR-3 的 `kind` 参数也要占预算。所以 Q2 实际要决定的是这部分：上调预算（a）还是移出 `query_data`（c）。以 PR-2 的实测为准。
+2. **§2.2 `as_of` 缺省的说法要改。** `last_trading_day_upto` 取日历里不晚于今天的最后一天（`sqlite_supply/m2.rs`），日历随日更延伸，所以日更还没跑时，缺省的 `as_of` 是上一个交易日，答案是那一天的，不会落到 `beyond_calendar`。`beyond_calendar` 只在显式传日历之后的日期时出现。没有登记日历时才用今天，此时是 `calendar_missing`。
+3. **PR-A 不等 owner。** G1–G4、G6、G7 和共享加载都是修复：把“未知”说成“确定”的错判改回来，三个函数没有非测试调用方。Q3 的 `ex_rights_unverified`（G5）、G8 和 PR-B 等 owner 决定。
+4. **Q3、Q4、Q5 与审计 T4、T3、T5 是同一组问题，** 要和决策备忘录 `rigorous-gaps-decisions.md` 一起交给 owner，不要分开问。
