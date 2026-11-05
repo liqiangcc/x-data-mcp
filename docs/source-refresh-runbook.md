@@ -58,7 +58,7 @@ import sqlite3
 db = "file:<部署根>/state/preview.sqlite?mode=ro"
 con = sqlite3.connect(db, uri=True)
 
-# 最近 10 次 run：full 的按组计量与未触发整表的 tail 的 <300s 看 seconds。
+# 最近 10 次 run：未触发整表的 tail 的 <300s 看 seconds；full 的门禁看下面的按组查询。
 for row in con.execute("""
     SELECT run_id, mode, status, started_at, finished_at,
            CAST(round((julianday(finished_at) - julianday(started_at)) * 86400) AS INTEGER)
