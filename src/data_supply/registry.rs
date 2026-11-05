@@ -1,7 +1,7 @@
 //! Schema and routing share one descriptor; no advertised handler without a contract.
 use super::read_tools::{
     self, ColumnarPage, DailyBarsInput, IndexBarsInput, MarketSnapshotInput, PriceLimitRulesInput,
-    ReadTool, TradingCalendarInput, YearlyBarsInput,
+    ReadTool, SecurityEventsInput, SecurityStateInput, TradingCalendarInput, YearlyBarsInput,
 };
 use super::wire::*;
 use schemars::{JsonSchema, schema_for};
@@ -61,6 +61,8 @@ pub const RESEARCH_TOOLS: &[&str] = &[
     "get_market_snapshot",
     "get_trading_calendar",
     "get_price_limit_rules",
+    "get_security_state",
+    "get_security_events",
 ];
 /// Ops entry: the daily-sync workflow surface. v9 adds `refresh_exchange_sources`
 /// here and to the Skill's strict allowlist, so the two lists match again.
@@ -667,6 +669,18 @@ pub fn entries() -> Vec<Entry> {
             Handler::Read(ReadTool::PriceLimitRules),
             read_tools::PRICE_LIMIT_RULES_DESCRIPTION,
             json!({}),
+        ),
+        entry::<SecurityStateInput, ColumnarPage>(
+            "get_security_state",
+            Handler::Read(ReadTool::SecurityState),
+            read_tools::SECURITY_STATE_DESCRIPTION,
+            json!({"securities":["sh.600006"],"fact":"risk_warnings","as_of":"2025-12-31"}),
+        ),
+        entry::<SecurityEventsInput, ColumnarPage>(
+            "get_security_events",
+            Handler::Read(ReadTool::SecurityEvents),
+            read_tools::SECURITY_EVENTS_DESCRIPTION,
+            json!({"securities":["sh.600006"],"event":"capital","start_date":"2025-01-01","end_date":"2025-12-31"}),
         ),
         entry::<YearPresenceQuery, YearPresenceReply>(
             "get_yearly_base_years",
