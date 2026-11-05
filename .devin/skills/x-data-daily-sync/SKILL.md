@@ -56,8 +56,9 @@ plan/run 大任务的进度按 `get_task_progress` 的 `unfinished` keyset 分�
 本 Skill 的默认意图是“日行情同步”，不是“只要任一官方文件变化就获取 generation”：
 
 - 只有远端 `day` role 明确不同于当前 active generation（`pending_roles` 包含 `day`），才允许创建 acquisition task。
-- `base_industry` / `gbbq` pending 但 `day` 未 pending 时，只报告 pending source changes 并结束；
-  不下载、不验证、不激活 generation，也不创建数据任务。
+- `base_industry` / `gbbq` pending 但 `day` 未 pending 时，只报告 pending source changes；
+  不下载、不验证、不激活 generation。是否还有已激活 generation 的 head 没发布，只按 §1.1
+  的只读判定处理，判定为无需补发布就以 `no_update` 结束。
 - 部署后空库重建是独立、必须由用户明确提出的操作；不得从 `list_data_versions`
   返回空列表自动推断
   重建授权，也不得借“每日同步”隐式执行。用户明确要求空库重建时，必须报告拟使用的
@@ -107,17 +108,59 @@ manifest 的待采集差异，二者不能混用。若 `pending_roles`/`files[].
 
 - 任一 role 为 `unknown` → 停止并报告（unknown 是停止信号，不是行动提示）。
 - `day` 不在 `pending_roles` → 报告 active generation ref、检查时间、全部 `changed`
-  roles 与 `pending_roles`，立即结束；不得再做 catalog/market 只读探测。固定报告的
-  “最新可用行情日期”在本分支填 `not_queried_by_no_update_branch`，除非此前步骤已获得
-  结构化 `last_record`。即使 `base_industry` 或 `gbbq` pending，也**不调用
-  `acquire_generation`，不创建 generation/data task**。
+  roles 与 `pending_roles`，然后只做 §1.1 的补发布判定；除 §1.1 点名的调用外，不得再做
+  catalog/market 只读探测。即使 `base_industry` 或 `gbbq` pending，也**不调用
+  `acquire_generation`/`verify_generation`/`activate_generation`**；§1.1 判定无需补发布时
+  **不创建 generation/data task**，以 `no_update` 结束。固定报告的“最新可用行情日期”在本分支
+  填 `not_queried_by_no_update_branch`，除非此前步骤已获得结构化 `last_record`，或 §1.1
+  取得了 `plan.target_day`/`target_day`（此时填该日期并注明来源字段）。
 - `day` 在 `pending_roles` → 记录 day 的 remote ETag / Last-Modified /
   Content-Length、active manifest 对照值、checked_at、seen `changed` 结果与全部
   `pending_roles`；只有该结构化证据存在时才继续步骤 2。
 
 不得用当前日期、市场是否已经收盘、GBBQ 时间、旧数据最新日期、上次 probe 的
 `changed` 记忆或自由文本推测 `day` pending。远端 probe 没有明确给出 `day`
-pending 就必须停止。
+pending 就不得 acquire generation；是否补发布只看 §1.1 的结构化判定。
+
+### 1.1 `day` 不 pending 时的补发布判定（只读，固定参数）
+
+active generation 可能已含新行情而 head 没发布（operator 用 `update_data` 代采后，或本 Skill
+激活 generation 后在 `run_market_update` 前中断）。`plan_market_update` 的 `eligible` 只看
+head 的 `last_day`，**一直包含目标日无源 bar 的实体（停牌、无成交）**（§3.1），所以不能用
+`eligible>0` 判断；`get_data_availability` 的 `last_record < target_day` 同理分不开。判据
+是：当前 active generation 激活之后，是否已有一次**成功收尾的 A 股 `run_market_update`**。
+本节只允许下列调用，参数一字不改，不得换形状试探：
+
+1. `activated_at` 取 §0 `sync_status` 的 `active.activated_at`（本会话已调用过就复用，不重复调用）。
+   `active` 为 `null` 或缺 `activated_at` → 没有可补发布的 generation，`no_update` 并如实报告。
+2. `list_tasks({"contract_version":"v1","dataset":"market.daily","operation":"update_data",
+   "status":["succeeded","partially_failed"],"created_from":<activated_at>,"page_size":100})`。
+   `page_complete=false` 时按 `next_cursor` 翻页，直到找到合格项或翻完。
+3. 在返回项里取 `contract_version == "market-plan-run-task-v1"` 的项（`run_market_update`
+   受理的任务，显式 `update_data` 补漏任务不是），从新到旧逐个
+   `get_task_progress({"task_id":<该项>,"page_size":1})`。第一个满足
+   `total > task.plan_counts.eligible` 的就是 A 股 run（它追加了 17 个服务器内部派生 item，
+   §3.2）；ETF 批次（`scope:"sh_sz_etf_current"`）没有派生 item，`total == eligible`，**不算**。
+   找到 → 该 generation 的日线 run 已收尾，`no_update`，不再调用 plan。
+   （非终态的 run 不在第 2 步的状态过滤内：它会让第 4 步的 plan 得到 `eligible>0`，随后 §3.2
+   的 `run_market_update` 返回 `plan_in_progress`，按 §3.2 等待或报告，不另起 run。）
+4. 没找到 → 恰好一次只读
+   `plan_market_update({"dataset":"market.daily","contract_version":"v1"})`：**不传** `end_date`，
+   **不传** `scope`（请求字节与 §3.1 相同）。`target_day_source == "today_fallback"` → 停止并
+   报告。`counts.eligible == 0` → 没有可执行项，`no_update`（`absent` 实体只报告数量，不进入
+   §3.7，也不 `start_collection`）。`counts.eligible > 0` → **补发布**：不做 §2（没有新
+   generation），按 §3 必做清单 §3.0 → §4 走完。本步的 plan 只是探测，不用于 run：§3.0 的
+   `tail` 先于 plan，所以到 §3.1 再按原规则 plan 一次、用那次的 `plan_id` 做 run。
+   “恰好一次”只约束 `no_update` 的判定路径；补发布后的 §3 与有更新日完全相同。
+
+operator 若只用显式 `update_data` 把全部 head 发布到位、没有 `run_market_update`，第 3 步找不到 run，
+第 4 步的 `eligible` 又含停牌实体而大于 0：这时 Skill 会补一次 run，全是 `no_change`，之后第 3 步
+就能找到它。多一次幂等的 run，不会漏日。
+
+本判定只回答“该 generation 的日线 run 是否做过”。run 之后的 §3.3 补漏、§3.3a ETF、
+§3.4–§3.6 年线若在上次会话里被中断，本判定看不到；这和原“立即结束”规则一样，不在本节范围，
+由 operator 另行补做。operator 用显式 `end_date` 起的 run 也会被计作已收尾，Skill 自己从不传
+`end_date`。
 
 ## 2. 获取并激活新 generation
 
@@ -142,7 +185,8 @@ A 股日线的完整有序步骤仍是 `docs/contracts/generic-data-v7.md` §7.1
 补漏后插入 §3.3a 的 ETF 批次，三者都没有改变 A 股 plan/run 的请求字节）。
 **两步补漏（§3.3、§3.6）不可省略**。
 
-**必做步骤清单。** 进入 §3（步骤 1 已确认 `day` pending、§2 的 generation 已 active）后，下列步骤
+**必做步骤清单。** 进入 §3（步骤 1 已确认 `day` pending、§2 的 generation 已 active，或 §1.1 判定
+需要补发布）后，下列步骤
 按顺序全部走完，除 §6 全局停止条件外，任何中间结果都不是提前结束的理由：
 
 ```text
@@ -595,7 +639,7 @@ start_collection{dataset:"market.daily", contract_version:"v2",
 
 ## 6. 全局停止条件（任一命中即停止并报告 refs）
 
-`unknown` 观测、`day` 未明确 pending、缺少同次 day-pending 证据的 inflight acquisition、
+`unknown` 观测、`day` 未明确 pending（不得 acquire；只有 §1.1 判定需要补发布时才继续，且不经 §2）、缺少同次 day-pending 证据的 inflight acquisition、
 `not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝
 （`update_data` 显式批次先按 §3.8 归因，per-item 类别走分裂重试，其余才停）、
 大面积同类 per-item 失败、轮询预算耗尽、工具不可用。任务终态 `partially_failed` 与 per-item

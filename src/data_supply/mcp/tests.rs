@@ -2672,8 +2672,13 @@ fn registered_risk_warnings_carry_no_pending_text_and_state_real_limits() {
     let reason = metadata["coverage_reason"].as_str().unwrap();
     assert!(!reason.contains("pending"), "{reason}");
     assert!(!reason.contains("#308"), "{reason}");
-    assert!(reason.contains("1 SZ"), "{reason}");
-    assert!(reason.contains("1 not_observed"), "{reason}");
+    assert!(
+        reason.starts_with(
+            "1 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); \
+             1 acquisition window(s) observed, 1 not_observed; "
+        ),
+        "{reason}"
+    );
     let limitations = page["limitations"].to_string();
     assert!(!limitations.contains("pending"), "{limitations}");
     assert!(limitations.contains("announcement events"), "{limitations}");
@@ -3112,6 +3117,14 @@ fn capabilities_express_the_etf_raw_shape_and_units() {
     assert_eq!(etf["volume_unit"], json!("share"));
     assert_eq!(etf["volume_quantum"], json!(100));
     assert_eq!(etf["default"], json!(false));
+}
+
+#[test]
+fn memory_budget_refusal_has_its_own_code() {
+    let refused = super::mapped(crate::market_storage::Error::Invalid(
+        "memory_budget_exceeded: near the limit".into(),
+    ));
+    assert_eq!(refused.code, "memory_budget_exceeded");
 }
 
 // ---- D-75 narrow read tools (issue-525 PR-1) -------------------------------

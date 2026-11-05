@@ -1118,6 +1118,12 @@ pub const LIMITATIONS: &[&str] = &[
      appear in security_master, and in universe_intervals when a listing date is \
      known), and delisted ETFs are present only as far as their series were \
      collected, so the ETF history carries survivor bias (D-70 Q2, D-72)",
+    "the default stock selection is the catalog head ∪ every SH/SZ A share in \
+     security_master ∪ every published stock daily series, so delisted A shares \
+     that left the catalog are exported (coverage.delisted_series counts them); \
+     catalog.member_count still counts catalog members only. A pinned \
+     --catalog-version exports exactly that stored catalog and is survivor-biased \
+     by construction; an explicit --entities list exports exactly the named codes",
     "no_trade is derived at export time as instrument_class=2 AND volume=0 AND \
      amount=0 (no stored column); it is NULL on stock rows, false on a traded \
      ETF bar and true on a zero-volume bar. Such bars are kept exactly as stored. \
