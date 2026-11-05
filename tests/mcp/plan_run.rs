@@ -958,6 +958,91 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
     );
 }
 
+/// The facts the daily-sync Skill's `no_update` branch reads (SKILL §1.1, O2,
+/// #440 boundary 3), all through existing v1 read tools. `plan_market_update`
+/// creates no task; `eligible` stays above 0 after a finished run, so it cannot
+/// decide anything; a finished A-share plan-run is found by `list_tasks`
+/// (dataset, operation, status, `created_from`) plus the plan-run contract
+/// name, and told from an ETF-only run (no derived items) by
+/// `get_task_progress.total > task.plan_counts.eligible`.
+#[test]
+fn finished_plan_run_is_discoverable_through_existing_read_tools() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1)), ("sz", "000002", day_u32(1))]);
+    let list = |status: Value, extra: Value| {
+        let mut args = json!({
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "operation": "update_data",
+            "status": status,
+            "page_size": 100,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            args[key] = value.clone();
+        }
+        let page = r.api.call("list_tasks", args).unwrap();
+        assert_eq!(page["page_complete"], true, "{page}");
+        page["items"].as_array().unwrap().clone()
+    };
+    let finished = |extra: Value| list(json!(["succeeded", "partially_failed"]), extra);
+    let all_tasks = || {
+        r.api
+            .call("list_tasks", json!({"page_size": 1000}))
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+
+    // `plan_market_update` is read-only: it creates no task.
+    let tasks_before = all_tasks();
+    let p = plan(&r.api, "market.daily");
+    assert_eq!(all_tasks(), tasks_before, "a plan must not create a task");
+    assert!(finished(json!({})).is_empty());
+
+    let accepted = run(&r.api, "market.daily", "run-o2", &p);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    // Accepted but not executed: not a finished run.
+    assert!(finished(json!({})).is_empty());
+    assert_eq!(list(json!(["pending"]), json!({})).len(), 1);
+
+    r.api.call("run_worker_once", json!({})).unwrap();
+    let runs = finished(json!({}));
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0]["task_id"], task_id);
+    assert_eq!(runs[0]["contract_version"], "market-plan-run-task-v1");
+    assert_eq!(runs[0]["plan_counts"]["eligible"], 2);
+
+    // `created_from` bounds the search to runs created after an activation.
+    let created = runs[0]["created_at"].as_str().unwrap().to_string();
+    assert_eq!(finished(json!({"created_from": created})).len(), 1);
+    let later = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    assert!(finished(json!({"created_from": later})).is_empty());
+
+    // An A-share run carries server-internal derived items: total > eligible.
+    // (An ETF-only run has none; see `etf_only_run_appends_no_changes_...`.)
+    let progress = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": task_id, "page_size": 1}),
+        )
+        .unwrap();
+    assert!(
+        progress["total"].as_u64().unwrap()
+            > progress["task"]["plan_counts"]["eligible"]
+                .as_u64()
+                .unwrap(),
+        "{progress}"
+    );
+
+    // After a finished run `eligible` can still be above 0 (an entity whose
+    // source has no bar for the target day stays behind), so the count alone
+    // cannot tell a finished day from an unpublished one.
+    let after = plan(&r.api, "market.daily");
+    assert_eq!(after["counts"]["eligible"], 2);
+}
+
 /// issue-383 §9.2 failure semantics: an internal derived item that fails
 /// records its own `success=false` and the run ends `partially_failed`; the
 /// already-committed entity items are untouched and nothing is skipped
