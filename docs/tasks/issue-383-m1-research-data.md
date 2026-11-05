@@ -576,6 +576,7 @@ export_research --db <sqlite-path> [--out <dir>] [--dataset all|daily|index|cale
 ```
 
 - **`snapshot_id` 的定义**：`snapshot-` + `sha256(canonical_json({schema, request, catalog, generations, algorithms, series, derived}))` 的前 32 个 hex 字符。规范 JSON 用已有的 `serde_json_canonicalizer`（`Cargo.toml` 里已在）。**排除 `files` 与任何运行信息**，所以同一输入两次导出得到同一个 id（AC-M1-7），而文件字节数/压缩参数不影响身份。
+- **后续（`research-snapshot.v5`，审计 T7）**：身份定义不变，仍不含二进制版本。清单另有顶层 `producer`（写出它的二进制 `git_sha` 与派生算法标签），只记录、不进 `snapshot_id`；同一二进制导出两次 `manifest.json` 仍逐字节相同，不同二进制 `snapshot_id` 相同、`manifest.json` 字节不同。见 data-catalog §5.3。
 - **四层绑定**（BR-M1-7）：目录版本（`catalog_head`）、每条序列的 `version_id` 与摘要格式、每条序列/派生数据集的来源 generation（从 `source_bindings` 反查，逐条写入 `source_generation`）、每个文件的 sha256。
 - **跨代导出（M1 修复 B）**：一条日更可能跨过一次 generation 切换，留下“部分实体在旧代、部分在新代”的库。此时**允许**一次全量导出：`generations` 列出全部来源代，`series`/`derived` 的每一项各自带 `source_generation` 与 `version_id`，所以混合状态是显式、可追溯的，而不是被拒绝。只有某一行的 `source_binding_digest` 在 `source_bindings` 里查不到（血缘无法证明）才失败（`EXPORT_LINEAGE`）。设计原意是“不能产出无法追溯来源的半新半旧快照”，逐行记录来源代满足这一点，同时不再让生产每天跨代时全量导出不可用。
 - **可复现**：`manifest.json` 里不写 `created_at`/`started_at`/`finished_at`/WAL 增量等运行信息；它们只出现在 CLI 的一行摘要（`ExportOutcome`）里。因此同一库、同一输出选项的两次导出，`snapshot_id`、`manifest.json` 和全部 Parquet 文件的 sha256 都逐字节相同（AC-M1-7）。

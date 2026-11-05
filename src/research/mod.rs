@@ -566,8 +566,9 @@ pub const DAILY_COLUMNS: &[&str] = &[
     "amount",
     "r7_raw",
     "volume_quantum",
-    // v4 (M3-2 PR-D): appended, so a reader that addresses columns by position
-    // still finds the eleven v3 columns where it expects them.
+    // M3-2 PR-D (preview.44+, `v4` strings from then on, `v5` from the schema
+    // bump): appended, so a reader that addresses columns by position still
+    // finds the eleven columns preview.42/43 wrote where it expects them.
     "instrument_class",
     "no_trade",
 ];
@@ -683,9 +684,11 @@ pub const PRICE_LIMIT_RULES_COLUMNS: &[&str] = &[
 /// so the file cannot be used to collapse an unproven rename. `v4` (XDM-157)
 /// adds `derived[].verified_through` and the two whole-table dataset identities
 /// (`security_names`/`risk_warnings`) to the manifest. The ETF delivery (M3-2
-/// PR-D, still `v4`: no `v4` snapshot has been deployed) appends
-/// `instrument_class`/`no_trade` to both daily files and
-/// `instrument_class`/`last_trade_date`/`delisting_date` to this file.
+/// PR-D, preview.44+) appends `instrument_class`/`no_trade` to both daily
+/// files and `instrument_class`/`last_trade_date`/`delisting_date` to this
+/// file. It first shipped under the `v4` string, which preview.42/43 had
+/// already used for the shorter layout; `v5` names this layout (see
+/// `manifest::SCHEMA`).
 pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] = &[
     "entity",
     "canonical_entity",
