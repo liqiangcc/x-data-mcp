@@ -7,9 +7,11 @@
 use super::*;
 use crate::research::manifest;
 
+#[cfg(feature = "export")]
 /// Keys `manifest::document` adds on top of the identity.
 const DOCUMENT_ONLY: [&str; 5] = ["snapshot_id", "producer", "files", "limitations", "export"];
 
+#[cfg(feature = "export")]
 fn labels() -> serde_json::Value {
     json!({
         "price_limit": crate::trading_rules::ALGORITHM_VERSION,
@@ -26,6 +28,7 @@ fn the_schema_string_is_v5() {
     assert_eq!(manifest::SCHEMA, "x-data-mcp.research-snapshot.v5");
 }
 
+#[cfg(feature = "export")]
 #[test]
 fn the_dry_run_manifest_names_the_binary_and_the_derivation_labels() {
     use crate::research::export::dry_run;
@@ -67,6 +70,7 @@ fn the_dry_run_manifest_names_the_binary_and_the_derivation_labels() {
     assert!(snapshot.identity.get("producer").is_none());
 }
 
+#[cfg(feature = "export")]
 #[test]
 fn snapshot_id_does_not_depend_on_the_producer() {
     use crate::research::export::dry_run;
