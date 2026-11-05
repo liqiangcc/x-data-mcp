@@ -404,7 +404,9 @@ D-71 准入的两个公告索引也走同一入口：
   按 `START_DATE`/`END_DATE` 分季；分页参数被回显但行集不变（`total=0`、`pageCount=null`），
   所以用 `exchange-sse-unpaged-page-v1` 信封，一次响应就是该窗口全量。
 - `szse_etf_notice_ann`：`announcement/annList`，POST JSON（`seDate`、`channelCode=["etfNotice_disc"]`、
-  `pageNum`、`pageSize=50`）；`pageSize` 会被静默截到 50，必须按 `announceCount` 分页，
+  `pageNum`、`pageSize=50`）；`seDate` 两项为 `YYYY-MM-DD`（紧凑 `YYYYMMDD` 会被静默
+  回成 HTTP 200 + `{}`，信封解析 fail-closed；2026-11-05 线上实测，紧凑日期是
+  preview.44 的缺陷）；`pageSize` 会被静默截到 50，必须按 `announceCount` 分页，
   同一公告按 URL 去重。信封解析器 `exchange-szse-announcement-page-v1`。
 - 两个来源只产生**候选 ∩ 公告命中**的退市 ETF 身份；代码段或「`hsjday` 有、名单无」单独
   不构成身份（D-71）。公告日作为证据另存，不等于终止上市生效日。

@@ -368,6 +368,48 @@ fn szse_page_size_is_capped_at_fifty_and_announce_count_is_the_total() {
 }
 
 #[test]
+fn szse_plan_posts_iso_se_date_bounds() {
+    // Live-verified 2026-11-05: `seDate` must be `YYYY-MM-DD`; the compact
+    // `YYYYMMDD` shape answers HTTP 200 with `{}`, which fails closed.
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    let (_, plan) = plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == AnnouncementKind::Szse)
+        .unwrap();
+    let request = plan.request(2, Some(window), "seDateStart", "seDateEnd");
+    assert_eq!(request.method.as_deref(), Some("POST"));
+    let body: serde_json::Value = serde_json::from_str(request.body.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        body["seDate"],
+        serde_json::json!(["2026-01-01", "2026-03-31"])
+    );
+    assert_eq!(body["channelCode"], serde_json::json!(["etfNotice_disc"]));
+    assert_eq!(body["pageSize"], 50);
+    assert_eq!(body["pageNum"], 2);
+}
+
+#[test]
+fn sse_plan_keeps_compact_window_dates() {
+    // `COMMON_PL_JJXX_JJGG_L` is verified live with `START_DATE=20260101`;
+    // only the SZSE announcement channel needs the dashed shape.
+    let window = Segment::parse("2026-01-01", "2026-03-31").unwrap();
+    let (_, plan) = plans()
+        .into_iter()
+        .find(|(kind, _)| *kind == AnnouncementKind::Sse)
+        .unwrap();
+    let request = plan.request(1, Some(window), "START_DATE", "END_DATE");
+    assert_eq!(request.params["START_DATE"], "20260101");
+    assert_eq!(request.params["END_DATE"], "20260331");
+}
+
+#[test]
+fn szse_empty_object_response_is_a_format_failure_not_zero_rows() {
+    use crate::exchange_source::validate::parse_page;
+    let error = parse_page(PagingFormat::SzseAnnouncement, None, b"{}").unwrap_err();
+    assert_eq!(error.code(), "source_invalid");
+}
+
+#[test]
 fn an_sse_unpaged_quiet_window_is_one_complete_empty_page() {
     use crate::exchange_source::validate::parse_page;
     let body = br#"{"pageHelp":{"pageNo":1,"pageCount":null,"total":0},"result":[]}"#;
