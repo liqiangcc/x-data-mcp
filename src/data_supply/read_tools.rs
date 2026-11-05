@@ -1,4 +1,4 @@
-//! Narrow read tools (D-75, issue-525 PR-1). Each tool takes a small typed
+//! Narrow read tools (D-75, issue-525 PR-1, PR-1b). Each tool takes a small typed
 //! input and becomes one existing v2 [`Query`]; `queries.query_v2` then does
 //! all validation, integrity checks and projection. Nothing here selects,
 //! checks or projects data, so every tool answers byte-for-byte like the
@@ -27,6 +27,8 @@ pub enum ReadTool {
     MarketSnapshot,
     TradingCalendar,
     PriceLimitRules,
+    SecurityState,
+    SecurityEvents,
 }
 
 pub const FIND_SECURITIES_DESCRIPTION: &str = "Find current SH/SZ A-share securities by name, code or industry. Returns code, name and industry. ETFs and delisted codes are not listed.";
@@ -38,6 +40,9 @@ pub const TRADING_CALENDAR_DESCRIPTION: &str = "Trading days in a date range.";
 pub const PRICE_LIMIT_RULES_DESCRIPTION: &str =
     "Price limit rules in effect on as_of. as_of defaults to the latest trading day.";
 
+pub const SECURITY_STATE_DESCRIPTION: &str = "State of securities on one day (as_of, default latest trading day): one fact per call. known_at hides facts learned later. SH name history is empty (SZ only).";
+pub const SECURITY_EVENTS_DESCRIPTION: &str = "Capital changes (capital) or ex-rights/dividend events (adjustment) of securities in a date range.";
+
 /// Tool names this module serves; the decode layer exempts them from the
 /// `query_data`-only top-level `as_of` rule (`get_price_limit_rules` has one).
 pub const NAMES: &[&str] = &[
@@ -48,6 +53,8 @@ pub const NAMES: &[&str] = &[
     "get_market_snapshot",
     "get_trading_calendar",
     "get_price_limit_rules",
+    "get_security_state",
+    "get_security_events",
 ];
 
 const BAR_FIELDS: &[&str] = &["open", "high", "low", "close", "volume", "amount"];
@@ -184,6 +191,79 @@ pub struct MarketSnapshotInput {
 pub struct TradingCalendarInput {
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
+    #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub page_size: usize,
+    pub cursor: Option<String>,
+}
+
+/// The fact `get_security_state` reads; every value takes the same arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateFact {
+    SecurityMaster,
+    SecurityNames,
+    RiskWarnings,
+    Suspensions,
+    Industry,
+}
+
+impl StateFact {
+    fn dataset(self) -> Dataset {
+        match self {
+            Self::SecurityMaster => Dataset::SecurityMaster,
+            Self::SecurityNames => Dataset::SecurityNames,
+            Self::RiskWarnings => Dataset::RiskWarnings,
+            Self::Suspensions => Dataset::Suspensions,
+            Self::Industry => Dataset::IndustryAssignments,
+        }
+    }
+}
+
+fn fact_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    json_schema!({"enum": ["security_master", "security_names", "risk_warnings", "suspensions", "industry"]})
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityStateInput {
+    #[schemars(schema_with = "securities_schema")]
+    pub securities: Vec<Security>,
+    #[schemars(schema_with = "fact_schema")]
+    pub fact: StateFact,
+    pub as_of: Option<NaiveDate>,
+    pub known_at: Option<NaiveDate>,
+    #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub page_size: usize,
+    pub cursor: Option<String>,
+}
+
+/// The event kind `get_security_events` reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    Capital,
+    Adjustment,
+}
+
+fn event_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    json_schema!({"enum": ["capital", "adjustment"]})
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityEventsInput {
+    #[schemars(schema_with = "securities_schema")]
+    pub securities: Vec<Security>,
+    #[schemars(schema_with = "event_schema")]
+    pub event: EventKind,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub page_size: usize,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -390,8 +470,8 @@ impl ReadTool {
                         as_of: None,
                     },
                     None,
-                    default_page(),
-                    None,
+                    a.page_size,
+                    a.cursor,
                 ))
             }
             Self::PriceLimitRules => {
@@ -413,6 +493,81 @@ impl ReadTool {
                     a.cursor,
                 ))
             }
+            Self::SecurityState => {
+                let a: SecurityStateInput = decode(input)?;
+                // The tool's `as_of` is one day: the range collapses to it, so
+                // the day is always written into both ends of the filter.
+                let day = match a.as_of {
+                    Some(day) => day,
+                    None => last_trading_day()?,
+                };
+                let mut q = query(
+                    a.fact.dataset(),
+                    selection(a.securities),
+                    Filter::Daily {
+                        start_date: day,
+                        end_date: day,
+                        as_of: Some(day),
+                    },
+                    None,
+                    a.page_size,
+                    a.cursor,
+                );
+                q.known_at = a.known_at;
+                Ok(q)
+            }
+            Self::SecurityEvents => {
+                let a: SecurityEventsInput = decode(input)?;
+                let dataset = match a.event {
+                    EventKind::Capital => Dataset::CapitalEvents,
+                    EventKind::Adjustment => Dataset::AdjustmentEvents,
+                };
+                Ok(query(
+                    dataset,
+                    selection(a.securities),
+                    Filter::Daily {
+                        start_date: a.start_date,
+                        end_date: a.end_date,
+                        as_of: None,
+                    },
+                    None,
+                    a.page_size,
+                    a.cursor,
+                ))
+            }
         }
+    }
+}
+
+const SH_NAMES_LIMITATION: &str = "name history covers SZ only (D-61): 0 rows for an SH security means the history is not available, not that it has no name";
+
+/// Limitations a tool adds to the answer of `query`. Only `get_security_state`
+/// has one: an SH security asked for `security_names`.
+pub fn extra_limitations(query: &Query) -> Vec<&'static str> {
+    let sh = match &query.selection {
+        Selection::Single { entity } => entity.exchange == Exchange::Sh,
+        Selection::Batch { entities } => entities.iter().any(|e| e.exchange == Exchange::Sh),
+        _ => false,
+    };
+    if query.dataset == Dataset::SecurityNames && sh {
+        vec![SH_NAMES_LIMITATION]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Append `notes` to the answer's `limitations` list.
+pub fn add_limitations(answer: &mut Value, notes: Vec<&'static str>) {
+    if notes.is_empty() {
+        return;
+    }
+    let Some(object) = answer.as_object_mut() else {
+        return;
+    };
+    let list = object
+        .entry("limitations")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Some(list) = list.as_array_mut() {
+        list.extend(notes.into_iter().map(Value::from));
     }
 }

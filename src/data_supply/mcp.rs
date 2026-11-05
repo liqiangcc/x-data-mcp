@@ -1358,7 +1358,10 @@ impl DataApi {
                         .last_trading_day_upto(super::query::today())
                         .map_err(mapped)
                 })?;
-                self.queries.query_v2(query, &self.access).map_err(mapped)
+                let notes = super::read_tools::extra_limitations(&query);
+                let mut answer = self.queries.query_v2(query, &self.access).map_err(mapped)?;
+                super::read_tools::add_limitations(&mut answer, notes);
+                Ok(answer)
             }
             Handler::Capabilities => self.capabilities(decode(input)?),
             Handler::Facets => self.catalog_facets(decode(input)?),
@@ -1426,6 +1429,8 @@ impl ToolHandler for DataApi {
                     | "get_market_snapshot"
                     | "get_trading_calendar"
                     | "get_price_limit_rules"
+                    | "get_security_state"
+                    | "get_security_events"
                     | "list_data_versions"
                     | "get_data_availability"
                     | "get_yearly_base_years"
