@@ -93,8 +93,9 @@
 | 沪深主板、深创业板 2020-08-24 前无 `normal` | **未满足** | 写入器从不写 `normal`；没有 ST 区间的日子，状态是 `unknown`；沪深主板的 ST 与非 ST 幅度不同（5% 对 10%），所以派生返回 `unknown`。只有创业板 2020-08-24 起和科创板（规则与状态无关）、以及处在 ST 区间的日子有确定值。沪市闭世界不成立：GP29 比对 2004–2024 召回 69.1%，所以沪市不写 `normal`。深市见下一行 | 审计 §2.3；备忘录 T3；`tasks/gp29-compare-20261106.md` |
 | 深市风险警示闭世界（写 `normal`） | 在办（D-81） | 深市在简称表覆盖范围内、简称链连续、无 ST/*ST 区间、无 PT/退标记的日子写 `normal`；R1/R4/R5 已合并（#569），闭世界本身未合并。已知盲区：140 个带 ST 区间的已退市代码不在 GP29 包里，无法验证 | D-81；#569；备忘录 §1；`tasks/gp29-compare-20261106.md` |
 | 沪市生效日规则 R2 | 在办（D-84） | 无显式生效日时，生效日 = 公告当日或其后第一个交易日的下一个交易日，档位 `OWNER_RISK_ACCEPTED`（规则推断，不是公告原文） | D-84 R2；[取证摘要](tasks/rigorous-gaps-decisions.md) §11 R2 |
-| 除权日涨跌停基准 | **未满足** | 前收日与 `as_of` 之间有 cat1 事件时返回 `unknown` + `ex_rights_unverified`（#566 已合并）；配股保持 `unknown`（D-84）。除权除息日的交易所基准是除权参考价，`limit-v1` 用除权前最后收盘 | D-81 Q3(a)；D-84；#566；审计 §2.3；备忘录 T4 |
-| `limit-v2`（按除权参考价算） | 在办（D-84） | 2010-09-14 之前优先用官方 `r7_raw`，其余用 `reference_price`；配股继续 `unknown`；2010-09-14 之后档位 `OWNER_RISK_ACCEPTED` | D-84；备忘录 T4；[取证摘要](tasks/rigorous-gaps-decisions.md) §11 |
+| 配股除权日涨跌停基准 | **未满足** | 配股（C4>0）返回 `unknown` + `ex_rights_unverified`（公式准确率约61%） | D-84；审计 §2.3；备忘录 T4 |
+| `limit-v2` 2010-09-14 之前官方基准 | 满足（代码已合并未部署） | 2010-09-14 前，当日 bar 的 r7_raw 非 0 且非哨兵/手标记时用官方除权基准价（分） | D-84；#573 |
+| `limit-v2` 2010-09-14 起用公式 | **未满足** | 2010-09-14 起或 r7_raw=0/哨兵时用 gbbq::reference_price；档位 `OWNER_RISK_ACCEPTED`，只经过证伪检验（越界 0.115%），没有官方基准 | D-84；#573；备忘录 T4 |
 | 涨跌停规则书未覆盖的历史段 | **未满足** | R7（1996-12-16 前）无规则，返回 `unknown`，不回退到普通档；上市后第 2–5 日（主板 1996-12-16…2023-02-16、创业板 2009-10-30…2020-08-23）返回 `rule_missing`，方案待 owner 裁决；主板首日 44%/36% 段（沪 2013-12-13 起、深 2014-06-13 起）仍 `not_encoded`，同样 `rule_missing`；2023 前的首日无涨跌幅段已编码为 `band_side=none`，返回 `unbounded` | §3.3 偏差 7；§3.2 #12；`tasks/price-limit-rule-gaps.md` |
 | `get_tradability`、`get_market_cap` 工具 | 在办（D-82） | 两个只读工具，薄封装 `research::tradability` 等 | D-82；审计 §3 |
 | 市值 G2 对账（末端股本对账） | **未满足** | 生产 `reconciliation` 恒 `not_available`；`base.dbf` 的当前股本解析了没入库；快照日 5,224 只与 `base.dbf` 全部精确相等，但两边同是 TDX，不是独立证据。D-84 已定不存 | D-84 T6；审计 §2.3、§3；备忘录 §5；[取证摘要](tasks/rigorous-gaps-decisions.md) §11 T6 |
@@ -107,7 +108,7 @@
 |---|---|---|---|
 | 同一数据库状态、同一命令，导出字节相同 | 满足（已部署） | `snapshot_id` 和全部文件（含 `manifest.json`）字节相同；`mode=ro` + `query_only`，期间日更改动会拒绝出清单 | `src/research/tests.rs`；#383 评论 3 |
 | 清单绑定目录版本、序列 `version_id`、来源 generation | 满足（已部署） | 每条序列的 `version_id`、来源 generation 和 manifest sha256 都在 `manifest.json`；交易所来源冻结进来源库，按 sha256 保存，可离线重放 | `src/research/manifest.rs`；`tests/source_store/exchange.rs` |
-| 清单记录二进制版本与算法版本 | 满足（代码已合并未部署） | #545 的 `research-snapshot.v5` 加 `producer` 块（`git_sha` 与 `algorithms`），涨跌停 `limit-v1+exr-guard1`、市值 `market-cap-v1` 等读时重算的算法版本才能追溯；preview.45 仍写 `v4`、没有 `producer` | #545；审计 §2.4；备忘录 §4 |
+| 清单记录二进制版本与算法版本 | 满足（代码已合并未部署） | #545 的 `research-snapshot.v5` 加 `producer` 块（`git_sha` 与 `algorithms`），涨跌停 `limit-v2`、市值 `market-cap-v1` 等读时重算的算法版本才能追溯；preview.45 仍写 `v4`、没有 `producer` | #545；审计 §2.4；备忘录 §4 |
 | 另一台机器逐位复现回测结果 | **未满足** | 不做回测引擎，#549 只比导出文件字节（含 `manifest.json`）；同一二进制导出同一库两次逐字节相同（含 `producer` 后 AC-M1-7）；不同二进制：`snapshot_id` 相同但 `producer.git_sha` 不同，Parquet 文件以 `files[].sha256` 为准 | D-83 #549；审计 §2.4；备忘录 §4；#545 的 `research-snapshot.v5` 契约 |
 | 单版本存储：除权会改写整段前复权历史 | **未满足** | 旧 `version_id` 之后无法再读；复现只能靠保留导出目录；导出保留策略见 D-83 T8（不自动删除，只有 owner 能删，配额暂不设，退役代的导出标为不可替代） | [latest-only-storage](latest-only-storage.md)；D-83 T8；#383 评论 5 |
 | generation 字节在两代之后退役 | **未满足** | 无法从原始官方文件重新派生旧快照，只能靠已登记的派生事实；退役策略 D-65 | STATUS「旧代回收」；D-65 |
