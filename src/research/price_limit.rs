@@ -77,9 +77,9 @@ pub const READ_ALGORITHM_VERSION: &str = "limit-v2";
 const BP_SCALE: i128 = 10_000;
 
 /// Sentinel value in r7_raw indicating the field is retired (post 2010-09-14).
-/// Source: evidence/issue-240-r7-analysis/README.md, observed as 0x10000 (65536)
+/// Source: evidence/issue-240-r7-analysis/README.md, observed as hex value
 /// in .day files after 2010-09-14.
-const R7_SENTINEL: u32 = 0x10000;
+const R7_SENTINEL: u32 = 65536; // 0x1_0000
 
 /// Hand-volume marker in r7_raw (from compact_market::HAND_VOLUME_MARKER).
 /// When r7_raw & 0xFFFF_0000 == 0xC364_0000, the value is not a price.
