@@ -1,0 +1,136 @@
+{
+  "catalog_version": "catalog-fabricated",
+  "columns": {
+    "amount": [
+      [
+        "1259251.20"
+      ],
+      [
+        "1259251.20"
+      ]
+    ],
+    "close": [
+      [
+        "10.20"
+      ],
+      [
+        "10.20"
+      ]
+    ],
+    "high": [
+      [
+        "10.50"
+      ],
+      [
+        "10.50"
+      ]
+    ],
+    "low": [
+      [
+        "9.90"
+      ],
+      [
+        "9.90"
+      ]
+    ],
+    "open": [
+      [
+        "10.01"
+      ],
+      [
+        "10.01"
+      ]
+    ],
+    "volume": [
+      [
+        "123456"
+      ],
+      [
+        "123456"
+      ]
+    ]
+  },
+  "contract_version": "v2",
+  "dataset": "market.daily",
+  "dates": [
+    [
+      "2026-11-05"
+    ],
+    [
+      "2026-11-05"
+    ]
+  ],
+  "entities": [
+    "sz.600009",
+    "sz.600011"
+  ],
+  "layout": "panel",
+  "limitations": [
+    "fixed version selection is not a shared source acquisition time",
+    "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+  ],
+  "metadata": {
+    "adjustment": {
+      "field": "price_adjustment",
+      "reason": "fabricated fixture evidence, no real source behind this text",
+      "status": "known",
+      "value": "fabricated"
+    },
+    "coverage_status": "complete",
+    "source": "fabricated",
+    "units": [
+      {
+        "field": "price_currency",
+        "reason": "fabricated fixture evidence, no real source behind this text",
+        "status": "known",
+        "value": "fabricated"
+      },
+      {
+        "field": "price_unit",
+        "reason": "fabricated fixture evidence, no real source behind this text",
+        "status": "known",
+        "value": "fabricated"
+      },
+      {
+        "field": "volume_unit",
+        "reason": "fabricated fixture evidence, no real source behind this text",
+        "status": "known",
+        "value": "fabricated"
+      },
+      {
+        "field": "amount_currency",
+        "reason": "fabricated fixture evidence, no real source behind this text",
+        "status": "known",
+        "value": "fabricated"
+      },
+      {
+        "field": "amount_unit",
+        "reason": "fabricated fixture evidence, no real source behind this text",
+        "status": "known",
+        "value": "fabricated"
+      }
+    ]
+  },
+  "next_cursor": null,
+  "page_complete": true,
+  "row_count": 2,
+  "selection_complete": true,
+  "snapshot_id": "<varies>",
+  "snapshot_time": "<varies>",
+  "versions": [
+    {
+      "coverage_reason": "fabricated coverage for 600009",
+      "entity": "sz.600009",
+      "published_at": "2026-11-05T08:00:00Z",
+      "status": "present",
+      "version_id": "daily-000000000000000000000000000000000000000000000000000000011b35b2a7"
+    },
+    {
+      "coverage_reason": "fabricated coverage for 600011",
+      "entity": "sz.600011",
+      "published_at": "2026-11-05T08:00:00Z",
+      "status": "present",
+      "version_id": "daily-000000000000000000000000000000000000000000000000000000011b35f085"
+    }
+  ]
+}

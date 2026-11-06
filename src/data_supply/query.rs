@@ -528,6 +528,13 @@ fn universe_output_bytes(plan: &QueryPlan, data: &QuerySnapshot) -> Option<usize
     };
     Some(serde_json::to_vec(&whole).ok()?.len())
 }
+/// What [`Queries::query_page`] hands to the v1 and v2 projections.
+struct Page {
+    page: DataPage,
+    plan: QueryPlan,
+    span: Option<Range<usize>>,
+    snapshot: Arc<QuerySnapshot>,
+}
 #[derive(Clone, serde::Serialize)]
 pub struct QuerySnapshot {
     pub manifest: Vec<ManifestEntry>,
@@ -667,7 +674,7 @@ impl<R: ReadRepository> Queries<R> {
     }
     pub fn query(&self, args: Query, access: &Access) -> Result<DataPage, Error> {
         let _inflight = Inflight(&self.inflight);
-        Ok(self.query_page(args, access)?.0)
+        Ok(self.query_page(args, access, true)?.page)
     }
     /// v2 columnar read (v8 PR-3, #387 §5): the same snapshot, page slice and
     /// version verification as v1; only the projection differs.
@@ -680,7 +687,15 @@ impl<R: ReadRepository> Queries<R> {
             default,
             args.dataset.name(),
         )?;
-        let (page, plan, span) = self.query_page(args, access)?;
+        // The columnar answer reads the snapshot's own manifest, so the page
+        // does not carry a copy of it.
+        let Page {
+            page,
+            plan,
+            span,
+            snapshot,
+        } = self.query_page(args, access, false)?;
+        let manifest = &snapshot.manifest;
         let meta = super::columnar::PageMeta {
             snapshot_id: &page.snapshot_id,
             snapshot_time: page.query_time,
@@ -690,32 +705,25 @@ impl<R: ReadRepository> Queries<R> {
             temporal: page.temporal.as_ref(),
         };
         let mut page = match plan.args.dataset {
-            Dataset::Catalog => super::columnar::catalog_table(
-                &page.version_manifest,
-                &page.records,
-                &fields,
-                &meta,
-            ),
+            Dataset::Catalog => {
+                super::columnar::catalog_table(manifest, &page.records, &fields, &meta)
+            }
             Dataset::AdjustmentEvents | Dataset::Calendar => super::columnar::row_table(
                 plan.args.dataset,
-                &page.version_manifest,
+                manifest,
                 &page.records,
                 &fields,
                 &meta,
             ),
-            dataset if dataset.is_temporal_fact() => super::columnar::fact_table(
-                dataset,
-                &page.version_manifest,
-                &page.records,
-                &fields,
-                &meta,
-            ),
+            dataset if dataset.is_temporal_fact() => {
+                super::columnar::fact_table(dataset, manifest, &page.records, &fields, &meta)
+            }
             Dataset::Daily | Dataset::Index
                 if matches!(&plan.args.filter, Filter::CrossSection { .. }) =>
             {
                 super::columnar::cross_section_page(
                     plan.args.dataset,
-                    &page.version_manifest,
+                    manifest,
                     &plan.trade_days,
                     &plan.entities,
                     &page.records,
@@ -726,7 +734,7 @@ impl<R: ReadRepository> Queries<R> {
             }
             dataset => super::columnar::panel_page(
                 dataset,
-                &page.version_manifest,
+                manifest,
                 &plan.entities,
                 &page.records,
                 &fields,
@@ -744,11 +752,9 @@ impl<R: ReadRepository> Queries<R> {
     /// One page of a query: the v1 page, the resolved plan and, for a v2
     /// `universe` price read, the range of `plan.entities` this page reports
     /// (see [`universe_span`]). `None` means "every entity of the plan".
-    fn query_page(
-        &self,
-        args: Query,
-        access: &Access,
-    ) -> Result<(DataPage, QueryPlan, Option<Range<usize>>), Error> {
+    /// `with_manifest` fills `page.version_manifest` (v1 needs it); v2 reads
+    /// `snapshot.manifest` instead, so it skips the copy.
+    fn query_page(&self, args: Query, access: &Access, with_manifest: bool) -> Result<Page, Error> {
         let mut plan = QueryPlan::new(args, access)?;
         plan.resolve(&self.repository, access)?;
         let cursor = plan.args.cursor.clone();
@@ -790,9 +796,11 @@ impl<R: ReadRepository> Queries<R> {
                 bytes,
             }
         };
-        let Content::Data(data) = &saved.content else {
+        let Content::Data(snapshot) = &saved.content else {
             return Err(invalid("cursor category mismatch"));
         };
+        let snapshot = snapshot.clone();
+        let data = &*snapshot;
         self.reserve_pages(saved.bytes)?;
         let refs = data
             .manifest
@@ -803,7 +811,11 @@ impl<R: ReadRepository> Queries<R> {
         let start = saved.offset;
         let end = (saved.offset + plan.args.page_size).min(data.rows.len());
         let records = data.rows[saved.offset..end].to_vec();
-        let manifest = data.manifest.clone();
+        let manifest = if with_manifest {
+            data.manifest.clone()
+        } else {
+            Vec::new()
+        };
         let span = universe_span(&plan, data, start, end);
         let more = end < data.rows.len();
         saved.offset = end;
@@ -829,7 +841,12 @@ impl<R: ReadRepository> Queries<R> {
         if more {
             result.next_cursor = Some(self.save(saved));
         }
-        Ok((result, plan, span))
+        Ok(Page {
+            page: result,
+            plan,
+            span,
+            snapshot,
+        })
     }
     pub fn versions(&self, args: VersionsQuery, access: &Access) -> Result<VersionPage, Error> {
         let _inflight = Inflight(&self.inflight);
