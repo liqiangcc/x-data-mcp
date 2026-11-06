@@ -29,6 +29,7 @@ fn the_main_announcement_prefers_a_formal_notice_over_a_prompt_one() {
             url: "prompt.pdf".into(),
             source_id: "szse_etf_notice_ann",
             source_label: "szse_etf_notice_ann",
+            sec_name: None,
         },
         Announcement {
             exchange: Exchange::Sz,
@@ -38,6 +39,7 @@ fn the_main_announcement_prefers_a_formal_notice_over_a_prompt_one() {
             url: "formal.pdf".into(),
             source_id: "szse_etf_notice_ann",
             source_label: "szse_etf_notice_ann",
+            sec_name: None,
         },
     ];
     let main = main_announcements(&rows);
@@ -56,6 +58,7 @@ fn only_prompt_notices_are_used_and_marked() {
         url: "prompt.pdf".into(),
         source_id: "szse_etf_notice_ann",
         source_label: "szse_etf_notice_ann",
+            sec_name: None,
     }];
     let main = main_announcements(&rows);
     assert!(main[&(Exchange::Sz, "159986".to_string())].only_prompt);
@@ -122,7 +125,9 @@ fn only_a_candidate_that_hits_an_announcement_becomes_a_member_fact() {
                 url: "formal.pdf".into(),
                 source_id: "szse_etf_notice_ann",
                 source_label: "szse_etf_notice_ann",
+            sec_name: None,
                 only_prompt: false,
+                sec_name: None,
             },
         )]),
         rows: Vec::new(),
@@ -159,7 +164,9 @@ fn extraction_turns_an_announcement_identity_into_an_exact_delisting_date() {
                 url: "sse.pdf".into(),
                 source_id: "sse_fund_delist_ann",
                 source_label: "sse_fund_delist_ann",
+            sec_name: None,
                 only_prompt: false,
+                sec_name: None,
             },
         )]),
         rows: Vec::new(),
@@ -244,7 +251,9 @@ fn synthetic_128_candidate_hits_produce_exactly_128_class_two_identity_rows() {
                 url: format!("sse-{index}.pdf"),
                 source_id: "sse_fund_delist_ann",
                 source_label: "sse_fund_delist_ann",
+            sec_name: None,
                 only_prompt: false,
+                sec_name: None,
             },
         );
     }
@@ -261,7 +270,9 @@ fn synthetic_128_candidate_hits_produce_exactly_128_class_two_identity_rows() {
                 url: format!("szse-{index}.pdf"),
                 source_id: "szse_etf_notice_ann",
                 source_label: "szse_etf_notice_ann",
+            sec_name: None,
                 only_prompt: false,
+                sec_name: None,
             },
         );
     }

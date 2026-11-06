@@ -232,7 +232,8 @@ pub type ExtractionMap = BTreeMap<(Exchange, String), ExtractionRecord>;
 pub type LastBarMap = BTreeMap<String, NaiveDate>;
 
 /// One announcement index row. `url` is the announcement/PDF locator used for
-/// deduplication and PDF lookup, not a second fetch.
+/// deduplication and PDF lookup, not a second fetch. `sec_name` is the SZSE
+/// `secName` field (PR-4 delisted ETF names); SSE rows have `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Announcement {
     pub exchange: Exchange,
@@ -242,10 +243,12 @@ pub struct Announcement {
     pub url: String,
     pub source_id: &'static str,
     pub source_label: &'static str,
+    pub sec_name: Option<String>,
 }
 
 /// One announcement hit after the main-announcement rule (D-72 §2.2):
 /// dedupe by URL, drop `提示性` when a formal notice exists, choose the newest.
+/// `sec_name` is the SZSE `secName` field (PR-4 delisted ETF names).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MainAnnouncement {
     pub exchange: Exchange,
@@ -256,9 +259,11 @@ pub struct MainAnnouncement {
     pub source_id: &'static str,
     pub source_label: &'static str,
     pub only_prompt: bool,
+    pub sec_name: Option<String>,
 }
 
-/// One row of the D-72 extraction CSV.
+/// One row of the D-72 extraction CSV. `short_name` (PR-4) is the场内简称
+/// extracted from the termination PDF by the operator's offline script.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractionRecord {
     pub entity: String,
@@ -276,6 +281,8 @@ pub struct ExtractionRecord {
     pub last_operating_day: Option<NaiveDate>,
     #[serde(default)]
     pub registration_date: Option<NaiveDate>,
+    #[serde(default)]
+    pub short_name: Option<String>,
 }
 
 impl ExtractionRecord {
@@ -615,6 +622,7 @@ fn parse_sse(bytes: &[u8]) -> Result<Vec<Announcement>, EtfDelistingError> {
             url,
             source_id: AnnouncementKind::Sse.label(),
             source_label: "sse_fund_delist_ann",
+            sec_name: None,
         });
     }
     Ok(out)
@@ -650,6 +658,7 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<Announcement>, EtfDelistingError> {
                 )
             })?;
         let url = text(row.get("attachPath")).unwrap_or_default();
+        let sec_names = row.get("secName").and_then(Value::as_array);
         let codes = row
             .get("secCode")
             .and_then(Value::as_array)
@@ -659,7 +668,7 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<Announcement>, EtfDelistingError> {
                     "SZSE ETF notice: secCode is not an array",
                 )
             })?;
-        for code in codes {
+        for (index, code) in codes.iter().enumerate() {
             let Some(code) = code.as_str().map(str::trim).filter(|code| !code.is_empty()) else {
                 continue;
             };
@@ -668,6 +677,11 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<Announcement>, EtfDelistingError> {
             if !seen.insert(key) {
                 continue;
             }
+            let sec_name = sec_names
+                .and_then(|names| names.get(index))
+                .and_then(|name| name.as_str())
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty());
             out.push(Announcement {
                 exchange: Exchange::Sz,
                 code: code.to_string(),
@@ -676,6 +690,7 @@ fn parse_szse(bytes: &[u8]) -> Result<Vec<Announcement>, EtfDelistingError> {
                 url: url.clone(),
                 source_id: AnnouncementKind::Szse.label(),
                 source_label: "szse_etf_notice_ann",
+                sec_name,
             });
         }
     }
@@ -731,6 +746,7 @@ pub fn main_announcements(rows: &[Announcement]) -> BTreeMap<(Exchange, String),
                 source_id: chosen.source_id,
                 source_label: chosen.source_label,
                 only_prompt,
+                sec_name: chosen.sec_name.clone(),
             },
         );
     }
@@ -934,6 +950,10 @@ pub fn parse_extraction_csv(bytes: &[u8]) -> Result<Vec<ExtractionRecord>, EtfDe
             confidence: field(&row, "confidence"),
             last_operating_day: optional_day(&row, "last_operating_day")?,
             registration_date: optional_day(&row, "registration_date")?,
+            short_name: {
+                let text = field(&row, "short_name");
+                if text.is_empty() { None } else { Some(text) }
+            },
         });
     }
     Ok(out)
@@ -1064,6 +1084,81 @@ pub fn candidates<'a>(
         })
         .cloned()
         .collect()
+}
+
+/// Build delisted ETF name chains from announcements and extractions (PR-4).
+///
+/// Name source rules:
+/// - SZSE: Use `sec_name` from the main announcement (the termination notice's
+///   `secName` is the name as of the announcement day).
+/// - SSE: Use `short_name` from the extraction CSV (operator-extracted from the
+///   PDF, which is the field name from the termination notice).
+/// - Fallback: If neither is available, the name is unknown (no row).
+///
+/// The interval runs from `announcement_date` to `effective_to` (the delisting
+/// day when known, or the day after the announcement). One name per code.
+///
+/// `source_kind='exchange_snapshot'`, `source_record_id` prefixes distinguish
+/// the announcement source (`sse_fund_delist_ann:URL` or
+/// `szse_etf_notice_ann:URL`).
+pub fn delisted_etf_name_chains(
+    candidates: &BTreeSet<String>,
+    announcements: &AnnouncementSet,
+    extractions: &ExtractionSet,
+    effective_to_map: &BTreeMap<String, NaiveDate>,
+) -> Vec<crate::security_master::names::EtfNameChain> {
+    use crate::security_master::names::{EtfNameChain, EtfNameStep};
+
+    let mut chains = Vec::new();
+    for entity in candidates {
+        let Some((exchange, code)) = split_entity(entity) else {
+            continue;
+        };
+        if !is_etf_candidate_code(exchange, &code) {
+            continue;
+        }
+        let Some(announcement) = announcements.main.get(&(exchange, code.clone())) else {
+            continue;
+        };
+
+        // Decide the name: SZSE uses announcement secName, SSE uses extraction short_name
+        let name = match exchange {
+            Exchange::Sz => announcement.sec_name.as_ref(),
+            Exchange::Sh => extractions
+                .records
+                .get(&(exchange, code.clone()))
+                .and_then(|record| record.short_name.as_ref()),
+            Exchange::Bj => None,
+        };
+
+        let Some(name) = name else {
+            continue;
+        };
+
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+
+        // Build source_record_id: prefix the announcement URL with the source label
+        let source_record_id = format!("{}:{}", announcement.source_label, announcement.url);
+
+        // effective_to is the delisting date from the facts
+        let ended = effective_to_map.get(entity).copied();
+
+        chains.push(EtfNameChain {
+            exchange,
+            code: code.clone(),
+            steps: vec![EtfNameStep {
+                observed_from: announcement.announcement_date,
+                known_at: announcement.announcement_date,
+                name: name.to_string(),
+                source_record_id,
+            }],
+            ended,
+        });
+    }
+    chains
 }
 
 #[derive(Debug, thiserror::Error)]

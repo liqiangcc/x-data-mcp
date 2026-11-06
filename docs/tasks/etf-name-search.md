@@ -325,3 +325,144 @@ owner 2026-11-05 对 Q1–Q9「全部按推荐」，记为 D-76。下表「推�
 2. SSE 序列里 A→B→A 是否发生过。
 3. 128 份退市 PDF 全量的场内简称（沪市 82 只靠它）。
 4. Rust 实现下的扫描与搜索耗时。
+
+## 9. PR-4 退市 ETF 名称：Operator 运行步骤
+
+PR-4 为 128 只退市 ETF 提供名称（沪 82、深 46）。深市从公告索引读 `secName`，沪市需要 operator 从 PDF 提取场内简称。
+
+### 9.1 深市（46 只）
+
+深市退市 ETF 的名称直接从 `szse_etf_notice_ann` 公告索引的 `secName` 字段读取。无需 operator 额外操作，代码自动处理：
+
+- 取证据显示 46/46 有 `secName`
+- 取终止上市公告对应的那个值（按 D-72 的 main-announcement 规则：去重、优先正式公告、取最新日）
+- `source_record_id` 格式：`szse_etf_notice_ann:<URL>`
+
+### 9.2 沪市（82 只）— Operator 提取步骤
+
+沪市公告索引没有简称字段。operator 需要离线提取 PDF 里的场内简称，结果通过 CSV 导入来源库。
+
+**前提条件**：
+- 82 份终止上市 PDF 已按 D-72 冻结进来源库（`source_id=etf_delist_pdf`）
+- 已有 D-72 的 `etf_delist_extract` CSV（含 `delisting_date` 等字段）
+
+**提取脚本要求**（由 operator 实现）：
+
+```python
+#!/usr/bin/env python3
+# 提取 SSE 退市 ETF 的场内简称，追加到现有 extraction CSV
+
+import csv
+import subprocess
+import sys
+from pathlib import Path
+
+# 读取现有 extraction CSV
+input_csv = Path(sys.argv[1])  # etf_delist_extract_v1.csv
+output_csv = Path(sys.argv[2])  # etf_delist_extract_v1_with_names.csv
+pdfs_dir = Path(sys.argv[3])  # 包含 PDF 的目录
+
+with input_csv.open('r', encoding='utf-8') as infile:
+    reader = csv.DictReader(infile)
+    fieldnames = reader.fieldnames
+    if 'short_name' not in fieldnames:
+        fieldnames.append('short_name')
+    
+    rows = list(reader)
+
+for row in rows:
+    # 只处理 SSE 行（沪市）
+    if row['source_id'] != 'sse_fund_delist_ann':
+        continue
+    
+    pdf_sha = row['doc_sha256']
+    pdf_path = pdfs_dir / f"{pdf_sha}.pdf"
+    
+    if not pdf_path.exists():
+        print(f"Warning: {row['entity']} PDF not found: {pdf_sha}", file=sys.stderr)
+        row['short_name'] = ''  # 提取失败留空
+        continue
+    
+    # 用 pdftotext -layout 提取第 1 页
+    result = subprocess.run(
+        ['pdftotext', '-layout', '-f', '1', '-l', '1', str(pdf_path), '-'],
+        capture_output=True, text=True, encoding='utf-8'
+    )
+    
+    if result.returncode != 0:
+        print(f"Warning: {row['entity']} pdftotext failed", file=sys.stderr)
+        row['short_name'] = ''
+        continue
+    
+    # 正则提取：场内简称：XXX（可能含空格）
+    import re
+    match = re.search(r'场内简称[：:]]\s*([^\n]{1,20})', result.stdout)
+    if match:
+        name = match.group(1).strip()
+        # 去掉 ETF 和数字间的空格："民企 ETF" -> "民企ETF"
+        name = re.sub(r'\s+', '', name)
+        row['short_name'] = name
+        print(f"{row['entity']}: {name}")
+    else:
+        print(f"Warning: {row['entity']} no short_name found in PDF", file=sys.stderr)
+        row['short_name'] = ''
+
+with output_csv.open('w', encoding='utf-8', newline='') as outfile:
+    writer = csv.DictWriter(outfile, fieldnames=fieldnames)
+    writer.writeheader()
+    writer.writerows(rows)
+
+print(f"\nDone. Output: {output_csv}", file=sys.stderr)
+```
+
+**运行步骤**：
+
+1. 在有来源库与 PDF 的机器（vm2）上运行提取脚本：
+   ```bash
+   python3 extract_etf_short_names.py \
+       /path/to/current/etf_delist_extract_v1.csv \
+       /path/to/etf_delist_extract_v1_with_names.csv \
+       /path/to/pdf_blobs/
+   ```
+
+2. 检查输出：
+   - 82 个沪市实体应该都有 `short_name`
+   - 提不到的（正则没匹配上）留空，代码会写 `name: null` + `name_basis: unavailable`
+   - **不用公告标题里的基金全称代替**，也不猜
+
+3. 导入新 CSV 到来源库（替换旧的 extraction）：
+   ```bash
+   source_store import --store /path/to/source-store \
+       --index etf_delist_extract_v1_with_names.csv \
+       --blobs /path/to/pdf_blobs/ \
+       --format etf-delisting
+   ```
+
+4. 验证导入：检查清单里 `source_id=etf_delist_extract`、`parser_version=etf-delist-extract-v1` 的行包含新 sha
+
+**CSV 格式**：
+
+新增 `short_name` 列（可选，空值表示未提取到）：
+
+```csv
+entity,delisting_date,announcement_date,source_id,doc_url,doc_sha256,page_no,snippet,extractor,extracted_at,confidence,last_operating_day,registration_date,short_name
+sh.510070,2020-11-20,2020-11-13,sse_fund_delist_ann,http://...,862c9ae6...,1,"...",pdftotext-v1,2026-11-05T12:00:00Z,high,2020-11-19,,民企ETF
+sh.512780,2021-08-27,2021-08-20,sse_fund_delist_ann,http://...,df063400...,1,"...",pdftotext-v1,2026-11-05T12:00:00Z,high,,,京津冀基
+```
+
+### 9.3 代码处理逻辑
+
+- **SZSE**: `secName` 从 announcement 读取，无需 CSV 字段
+- **SSE**: `short_name` 从 extraction CSV 读取
+- 都没有时：`name: null`、`name_basis: unavailable`（不是空串）
+- `source_record_id`: `{source_label}:{URL}`（如 `sse_fund_delist_ann:http://...`）
+- 区间：`effective_from` = `announcement_date`，`effective_to` = 主表的 `effective_to`（退市日）
+
+### 9.4 测试
+
+合成 CSV 应包含：
+- 一个有 `short_name` 的沪市行
+- 一个 `short_name` 为空的沪市行
+- 一个深市行（`short_name` 列可选）
+
+生产 CSV 位置：按 D-72，提取结果只进来源库，不提交公开仓库。测试用合成记录。
