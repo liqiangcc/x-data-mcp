@@ -1,5 +1,5 @@
 //! `price_limits(entity, as_of)` — the `limit-v1` derivation (issue-391 §8,
-//! AC-M2-9/AC-M2-10).
+//! AC-M2-9/AC-M2-10), read-time label [`READ_ALGORITHM_VERSION`].
 //!
 //! Layer position (separation points 2/4/6):
 //!
@@ -8,7 +8,7 @@
 //!   this file; changing a rule is a data change (AC-M2-10).
 //! - The **inputs** are parsed facts: the 不复权 last bar before `as_of`, the
 //!   listing date and the risk status from the read model. The derived answer
-//!   is never stored; it carries `algorithm_version='limit-v1'` and the rule's
+//!   is never stored; it carries [`READ_ALGORITHM_VERSION`] and the rule's
 //!   `basis_ref`.
 //! - Every missing input propagates as `unknown` with a distinct reason. A
 //!   missing rule is not "10%", a missing ST interval is not "normal", and an
@@ -26,6 +26,17 @@
 //! rules, R9) and the result is aligned to the rule's minimum tick. The
 //! previous close is the last **bar** before `as_of`, not the previous
 //! calendar day, so a suspension uses the pre-suspension close.
+//!
+//! **Ex-rights days (D-81, issue-433 G5).** That base is the last *unadjusted*
+//! close, which is the exchange's reference price only when nothing happened
+//! in between. When the entity has a category-1 `adjustment_events` row with
+//! `prev_day < effective_day <= as_of`, the exchange's reference price is the
+//! ex-rights price and this derivation does not compute it, so the answer is
+//! `unknown` + `ex_rights_unverified` instead of a wrong `known`. The check
+//! runs after the rule lookup and only on the path that needs a previous
+//! close: a rule with `band_side='none'` stays `unbounded` and never reads a
+//! previous close or an event. Category 11 (ETF share conversion) is not an
+//! ex-rights price event for this purpose.
 
 use std::collections::BTreeSet;
 
@@ -40,15 +51,28 @@ use super::universe::{UniverseRequest, member_state_report_in};
 use crate::compact_market::canonical_entity;
 use crate::market_data::{Adjustment, Period};
 use crate::security_master::{Exchange, RiskStatus};
-use crate::sqlite_market::series;
+use crate::sqlite_market::{derived, series};
 use crate::trading_calendar::TradingCalendar;
 use crate::trading_rules::{
-    ALGORITHM_VERSION, BandSide, BasisStatus, DATASET_KIND, ListingPhase, MinTickRule,
-    PriceLimitRule, Rounding, RuleBoard, RuleBook, RuleLookup, RuleMarket, StatusClass,
+    BandSide, BasisStatus, DATASET_KIND, ListingPhase, MinTickRule, PriceLimitRule, Rounding,
+    RuleBoard, RuleBook, RuleLookup, RuleMarket, StatusClass,
 };
 
 /// `derived_dataset_versions.dataset_kind` this read model consumes.
 pub const DATASET_PRICE_LIMIT_RULES: &str = DATASET_KIND;
+
+/// Label of the read-time derivation, carried by [`PriceLimitReport`] and the
+/// export `producer` block.
+///
+/// This is deliberately not [`crate::trading_rules::ALGORITHM_VERSION`] (`limit-v1`): that constant
+/// is stored in the registered `price_limit_rules` dataset
+/// (`derived_dataset_versions.algorithm_version`, part of the dataset
+/// evidence), so changing it would re-register the rule dataset although no
+/// rule row changed. The rule dataset keeps `limit-v1`; the read-time answer
+/// changed (ex-rights days are `unknown`), so it gets its own label. `limit-v2`
+/// is reserved for an algorithm that really computes the ex-rights reference
+/// price.
+pub const READ_ALGORITHM_VERSION: &str = "limit-v1+exr-guard1";
 
 /// The basis-point denominator. This is a scale, not an amplitude: every band
 /// comes from the rule row's `band_bp`.
@@ -146,6 +170,7 @@ pub enum PriceLimitReason {
     BoardUnsupported,
     NoSeries,
     NoPrevClose,
+    ExRightsUnverified,
     InvalidRule,
 }
 
@@ -168,6 +193,7 @@ impl PriceLimitReason {
             Self::BoardUnsupported => "board_unsupported",
             Self::NoSeries => "no_series",
             Self::NoPrevClose => "no_prev_close",
+            Self::ExRightsUnverified => "ex_rights_unverified",
             Self::InvalidRule => "invalid_rule",
         }
     }
@@ -273,7 +299,7 @@ impl PriceLimitReport {
             min_tick_units: None,
             tick_price_scale: None,
             candidates: Vec::new(),
-            algorithm_version: ALGORITHM_VERSION,
+            algorithm_version: READ_ALGORITHM_VERSION,
             rules_version: None,
             temporal: report,
         }
@@ -458,6 +484,14 @@ pub fn price_limit_in(
     answer.prev_close_units = Some(prev_close);
     answer.prev_close_day = Some(prev_day);
     answer.price_scale = Some(price_scale);
+
+    // The base is the last unadjusted close. A category-1 event in
+    // `(prev_day, as_of]` means the exchange used an ex-rights reference
+    // price this derivation does not compute (D-81).
+    if derived::has_category1_event_between(c, entity, prev_day, temporal.as_of)? {
+        answer.reason = Some(PriceLimitReason::ExRightsUnverified);
+        return Ok(answer);
+    }
 
     let limits = match compute_limit(prev_close, price_scale, rule, tick) {
         Ok(limits) => limits,
