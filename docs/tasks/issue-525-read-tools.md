@@ -153,8 +153,50 @@ pi 查 2 只标的的最新两天行情用了 5 轮。提示里要求它先弄�
 | ETF 名称不可查 | "沪深 300 ETF 的代码是什么"查不到，只能已知代码 | 名单来源里有简称，但没有进读模型。另开数据任务，不放进本次 |
 | 沪市名称历史 | D-61：沪市和北交所 `NOT_AVAILABLE`，只有深市有 | 用 `limitations` 写明，不改数据范围 |
 | `as_of` 默认值用 `Local::now()` | vm2 时区是上海，host 是 UTC，默认值可能差一天 | 已有待办：`query.rs:248` 改成 `shanghai_today`，放进 PR-1 |
-| `versions[]` 重复长文本 | 混查 2 行响应 4.5 KB，其中多为 `adjustment.reason` | 不在本次，基线测完再定 |
+| `versions[]` 重复长文本 | 混查 2 行响应 4.5 KB，其中多为 `adjustment.reason` | 测过两种做法，都没有合并，见 §6.1 |
 | 指数走 `query_data` 仍静默 `absent` | 老接口行为不变 | 只在新工具里报错 |
+
+## 6.1 响应瘦身：测过，没有做（2026-11-06）
+
+`versions` 的大头是逐实体不同的 `adjustment.reason`、`coverage_reason` 和 `lineage`。试了两种不丢信息的做法，都没有合并，代码不进 main。下面的数字来自夹具（按 `src/official_market.rs`、`src/yearly_publication/runner.rs` 的证据文本构造，模型的 `versions` 与生产实测差 0.3%），不是生产字节；整个 `panel` 响应，不含 MCP `content.text` 的重复。
+
+| 场景 | 现状 B | 对象键部分共享 | 长文本表 |
+|---|---|---|---|
+| 年线 batch 100 只 A 股 | 157,097 | 143,363（−8.7%） | 96,612（−38.5%） |
+| 日线 batch 100 只 A 股 | 103,420 | 97,297（−5.9%） | 68,150（−34.1%） |
+| 单只 A 股，日线 | 2,604 | 2,604（0） | 2,446（−6.1%） |
+| 单只 A 股，年线 | 2,920 | 2,920（0） | 2,762（−5.4%） |
+| 1 只 A 股 + 1 只 ETF 混查 | 5,019 | 4,986（−0.7%） | 4,446（−11.4%） |
+| 100 只 A 股 + 100 只 ETF | 462,829 | 453,292（−2.1%） | 229,010（−50.5%） |
+
+- **对象键部分共享**（分支 `work/44`）：相同字段写进共享 `metadata`，行里只写不同字段，读法是行盖在共享对象上。
+- **长文本表**（#552，分支 `work/20-versions`）：响应顶层 `texts`，被移出的键改名 `*_parts`，约 300 行切分代码。
+
+### 各客户端看到什么
+
+读的是 `@earendil-works/pi-coding-agent` 1.3.0 的 `dist/extensions/mcp/tools.js`（`limitMcpContent`、`convertMcpResult`、`MCP_OUTPUT_MAX_BYTES = 20 KiB`）和其依赖 `pi-mcp` 的 `protocol/content.js`；其余行来自 VM1-20 的分析，未重新核对。
+
+| 客户端 | 模型看到 | 脚本/程序看到 |
+|---|---|---|
+| pi 直接暴露 MCP 工具 | 只看 `content` 文本；超过 20 KiB 保留首尾、删掉中间，全文存临时文件并给路径。`structuredContent` 不进模型 | 无 |
+| pi codemode | 只看脚本 `return` 的内容 | 完整 `CallToolResult`（`content`、`structuredContent`），不截断 |
+| pi 收到空 `content` | 回退为带缩进的 `JSON.stringify(structuredContent)`，比紧凑 JSON 大 | 同上 |
+| x 的 `KlineReader` | 无 | 只读 `structuredContent`，走 v1，不受本次影响 |
+| Claude connector | 只有 `content`（#387 §5.4 引用） | 无 |
+| ChatGPT | 要求同一份 JSON 也在 `content`（同上） | 无 |
+| Devin | 未验证（v8 §13 U-2） | 未验证 |
+
+`content.text` 保持 `full`（Claude 2026-11-06 决定）：socket 上的重复字节只占墙钟 2.2%（0.24 s / 10.79 s，年线全市场筛选一轮 16.82 MB），而直接暴露、Claude、ChatGPT 的模型只能从 `content` 读到数据；`off` 会让 pi 回退成带缩进的 JSON，Claude connector 什么也看不到。
+
+### 为什么都不做
+
+- 100 只 batch 在 pi 直接暴露下 `text` 超过 20 KiB，改前改后都被截掉中间；codemode 下模型看不到这份数据；传输只占墙钟 2.2%。所以批量场景的字节省下来，模型和延迟都得不到好处。
+- 真正受益的是直接暴露下的小批量和单只。单只 A 股，部分共享省 0，长文本表省 6%（158 B）却把 `units[].reason` 变成下标引用。
+- 代价是永久的：v2 响应形状变化，契约多一条解码规则。长文本表还要求模型在批量查询里自己拼 `coverage_reason`。
+
+### 未做的选项
+
+窄工具默认不带证据长文本（`coverage_reason`、`adjustment.reason`、`units[].reason`），要看时再用参数取。这会让 `text` 与 `structuredContent` 不再相同，且没有证据说明模型不需要它们；要看 preview.46 评测的数据再定。
 
 ## 7. 实现方式
 
