@@ -47,7 +47,7 @@ fn empty_store_reports_store_empty_and_exits_zero() {
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["status"], "store_empty");
     assert_eq!(report["scope"], "all");
-    assert_eq!(report["scopes"].as_array().unwrap().len(), 5);
+    assert_eq!(report["scopes"].as_array().unwrap().len(), 6);
     assert!(!store_path.exists(), "a read must not create the store");
 }
 
@@ -338,4 +338,84 @@ fn exempt_requires_a_reason_a_recorder_and_owner_approval_for_evidence() {
     let rows = backend.read_retire_exemptions(GENERATION).unwrap();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().any(|row| row.recorded_by == "owner"));
+}
+
+/// T13: the deploy hook runs `replay --scope all --db <fresh init db>` with a
+/// store that already holds the frozen A-3 suspension pages. The fresh database
+/// has no `security_master`/calendar yet, so suspensions is `not_ready`; the
+/// command must still exit 0, report it, and write nothing for it.
+#[test]
+fn all_on_a_fresh_database_exits_zero_and_reports_suspensions_not_ready() {
+    use x_data_mcp::exchange_source::SourceId;
+    use x_data_mcp::exchange_source::request::{
+        ExchangeRequest, PagingFormat, SSE_SOA_PARSER_VERSION,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("store"));
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/exchange-a3/window_2008_q1.json");
+    let fingerprint = ExchangeRequest::new(
+        SourceId::SseSuspension,
+        x_data_mcp::official_security::a3::SSE_SOA_URL,
+    )
+    .param(x_data_mcp::official_security::a3::FROM_PARAM, "20080101")
+    .param(x_data_mcp::official_security::a3::TO_PARAM, "20080331")
+    .paged(PagingFormat::SseSoaPageNo, 1)
+    .fingerprint();
+    let mut registration = Registration::new(
+        SourceId::SseSuspension.as_str(),
+        StoreKind::HttpFetch,
+        fingerprint,
+        "2008-07-01T00:00:00Z",
+    );
+    registration.parser_version = Some(SSE_SOA_PARSER_VERSION.to_string());
+    registration.basis_status = Some("approved_source".to_string());
+    store
+        .register(&fs::read(fixture).unwrap(), &registration)
+        .unwrap();
+
+    let run = |extra: &[&str]| {
+        std::process::Command::new(cli())
+            .args([
+                "replay",
+                "--store",
+                store.root().to_str().unwrap(),
+                "--db",
+                db.to_str().unwrap(),
+                "--scope",
+                "all",
+            ])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+    let output = run(&[]);
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "ok");
+    let scopes = report["scopes"].as_array().unwrap();
+    assert_eq!(scopes.len(), 6);
+    let suspensions = &scopes[5];
+    assert_eq!(suspensions["scope"], "suspensions");
+    assert_eq!(suspensions["status"], "not_ready");
+    assert!(
+        suspensions["not_ready_reason"]
+            .as_str()
+            .unwrap()
+            .contains("security_master")
+    );
+
+    // Verifying that same database compares nothing for suspensions, so it
+    // keeps the stable failing code and a non-zero exit.
+    let verify = run(&["--verify-only"]);
+    assert_eq!(verify.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&verify.stdout).unwrap();
+    assert_eq!(report["status"], "suspension_replay_not_ready");
 }
