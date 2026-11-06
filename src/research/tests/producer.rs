@@ -14,7 +14,7 @@ const DOCUMENT_ONLY: [&str; 5] = ["snapshot_id", "producer", "files", "limitatio
 #[cfg(feature = "export")]
 fn labels() -> serde_json::Value {
     json!({
-        "price_limit": crate::trading_rules::ALGORITHM_VERSION,
+        "price_limit": crate::research::price_limit::READ_ALGORITHM_VERSION,
         "market_cap": crate::research::market_cap::ALGORITHM_VERSION,
         "security_master": crate::security_master::assembly::ALGORITHM_VERSION,
         "security_names": crate::security_master::names::ALGORITHM_VERSION,
@@ -51,8 +51,10 @@ fn the_dry_run_manifest_names_the_binary_and_the_derivation_labels() {
     // The literal labels, so a silent rename of a constant is a visible diff.
     assert_eq!(
         document["producer"]["algorithms"]["price_limit"],
-        "limit-v1"
+        "limit-v1+exr-guard1"
     );
+    // The registered rule dataset keeps its own label.
+    assert_eq!(crate::trading_rules::ALGORITHM_VERSION, "limit-v1");
     assert_eq!(
         document["producer"]["algorithms"]["market_cap"],
         "market-cap-v1"

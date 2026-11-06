@@ -193,7 +193,8 @@ design.md「扩展契约」逐条核对：
 - 解析：`etf-list-v2`（业务版本）。`EtfListRow` 增加 `name`（SSE `fundAbbr`，SZSE 证券简称）和 `full_name`（SSE `secNameFull`，SZSE 无）。
   字段选择以 PR-0 的取证为准（Q2）。名称做 `trim` 与内部空白压缩；是否复用 `names::normalize_name` 的 XD/XR/DR 前缀剥离
   要用真实字节测试后再定，名单是静态简称，剥前缀对 ETF 没有收益，反而可能误伤以这些字母开头的名称。
-- 名称链：`scan_history` 为每个代码返回按观测日排序的 `(日, name)`，相邻重复合并。当前名称取当前名单，与链末项不同时用当前名单观测日补一段（§1.2 限制 2）。
+- 名称链：`scan_history` 为每个代码返回按观测日排序的 `(日, name)`，相邻重复合并。**不补段。** 当前名单的名称与链末项不同时（SSE 的 A→B→A，§1.2 限制 2），写入链本身（末段是 B），把这些代码的数量和前若干个样本写进 item 证据（`names_behind_current`），读面在 `limitations` 里说明。
+  早先这里写的是「用当前名单观测日补一段」，不采用：能用的日期只有 refresh run 的 `verified_through`，它每次都变，补出来的行内容会随时钟变化；replay 没有 run 记录，live 与 replay 逐行相同的等价就不成立。A→B→A 在 SSE 的真实序列里还没有观测到（取证 §5，SSE 只有 1 份快照），这里说的是「没观测到」，不是「不会发生」。
 - 行：
   - `effective_from` = 该名称首次观测日；`effective_to` = 下一名称的 `effective_from`，`certainty='interval'`；末段无后继则 `unbounded`。
     已移出名单的代码，末段在主表 `effective_to` 闭合。

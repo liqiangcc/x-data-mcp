@@ -2287,7 +2287,7 @@ fn calendar_is_market_level_and_entity_free() {
     assert_eq!(error.code, "invalid_arguments");
 }
 
-/// AC-V8-6: adjustment events expose effective-day facts and never a
+/// AC-V8-6: adjustment events expose the `effective_day` column and never a
 /// `known_at` column (M1 stores NULL; v8 §4.6 keeps it out of the wire).
 #[test]
 fn adjustment_events_have_no_known_at_and_no_entity_gate() {
@@ -2309,10 +2309,26 @@ fn adjustment_events_have_no_known_at_and_no_entity_gate() {
         .unwrap();
     assert_eq!(page["layout"], "table");
     assert_eq!(page["entities"], json!([SYMBOL]));
+    assert_eq!(page["columns"]["effective_day"], json!(["2020-01-06"]));
     assert_eq!(page["columns"]["category"], json!([1]));
     assert_eq!(page["columns"]["c1"], json!(["1.50"]));
     assert!(page["columns"].get("known_at").is_none(), "{page}");
-    assert!(page["columns"].get("effective_day").is_none(), "{page}");
+    // `fields` can still pick the date alone.
+    let only_day = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.adjustment_events",
+                "contract_version":"v2",
+                "selection":{"kind":"single","entity":SYMBOL},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"},
+                "fields":["effective_day"]
+            }),
+        )
+        .unwrap();
+    assert_eq!(only_day["columns"], json!({"effective_day":["2020-01-06"]}));
 }
 
 /// AC-V8-8: a universe availability is one aggregate row, not one row per
@@ -2607,6 +2623,7 @@ fn seed_security_names(f: &Fixture) {
     f.backend
         .commit_security_names(&SecurityNameWrite {
             set: &set,
+            etf: crate::sqlite_market::security_names::EtfPart::Keep,
             task_id: "task-names",
             item_id: "derived:security_names",
             generation_id: "gen-names",
@@ -2845,6 +2862,35 @@ fn query_security_names(f: &Fixture, known_at: Option<&str>) -> Value {
     f.api.call("query_data", request).unwrap()
 }
 
+/// The row key `effective_from` is a default column of `market.security_master`
+/// (a `table` layout has no `dates`); `fields` can still drop it.
+#[test]
+fn security_master_default_columns_include_the_row_key() {
+    let f = fixture();
+    seed_security_master(&f, &[("sh.600006", None)]);
+    let query = |fields: Option<Value>| {
+        let mut request = json!({
+            "dataset":"market.security_master","contract_version":"v2",
+            "selection":{"kind":"single","entity":"sh.600006"},
+            "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+            "version":{"kind":"latest_per_entity"}
+        });
+        if let Some(fields) = fields {
+            request["fields"] = fields;
+        }
+        f.api.call("query_data", request).unwrap()
+    };
+    let page = query(None);
+    assert_eq!(page["row_count"], 1, "{page}");
+    assert_eq!(page["columns"]["effective_from"], json!(["2018-01-01"]));
+    assert!(page["columns"].get("effective_to").is_none(), "{page}");
+    let narrowed = query(Some(json!(["instrument_class"])));
+    assert!(
+        narrowed["columns"].get("effective_from").is_none(),
+        "{narrowed}"
+    );
+}
+
 /// XDM-163: `market.security_names` is no longer a placeholder. The read face
 /// serves the stored intervals with the row shape and metadata the other M2
 /// fact datasets use, and the `known_at` filter is a Shanghai-day information
@@ -2909,6 +2955,99 @@ fn security_names_read_face_serves_intervals_and_filters_known_at() {
     assert_eq!(second["row_count"], 2);
     assert_eq!(second["columns"]["name"], json!(["ST旧名", "新名"]));
     assert_eq!(second["temporal"]["unknown_known_at_rows"], 1);
+}
+
+/// D-76: ETF observed names share the table but have no read surface yet
+/// (PR-3). A query that names an ETF code gets the answer it always got (no
+/// rows), and the A-share answer is the same with or without ETF rows stored.
+#[test]
+fn stored_etf_name_rows_do_not_change_the_security_names_read_face() {
+    use crate::security_master::Exchange;
+    use crate::security_master::names::{
+        EtfNameSet, NameCertainty, NameInterval, NameSet, NameSourceKind,
+    };
+    use crate::sqlite_market::security_names::{EtfPart, SecurityNameWrite};
+
+    let plain = fixture();
+    seed_security_names(&plain);
+    seed_names_refresh_run(&plain, "2026-11-02");
+    let expected = query_security_names(&plain, None);
+
+    let with_etf = fixture();
+    seed_security_names(&with_etf);
+    seed_names_refresh_run(&with_etf, "2026-11-02");
+    let etf_row = |exchange: Exchange, code: &str| NameInterval {
+        exchange,
+        code: code.into(),
+        effective_from: NaiveDate::from_ymd_opt(2026, 11, 5).unwrap(),
+        effective_to: None,
+        name: "沪深300ETF".into(),
+        certainty: NameCertainty::Unbounded,
+        known_at: Some(NaiveDate::from_ymd_opt(2026, 11, 5).unwrap()),
+        source_kind: NameSourceKind::ExchangeSnapshot,
+        source_record_id: Some(format!("sse_etf_list:{}", "a".repeat(64))),
+    };
+    let etf = EtfNameSet {
+        rows: vec![
+            etf_row(Exchange::Sh, "510300"),
+            etf_row(Exchange::Sz, "159915"),
+        ],
+        entities: [
+            (Exchange::Sh, "510300".to_string()),
+            (Exchange::Sz, "159915".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    // The same A-share rows the seed wrote, plus the ETF subset.
+    let a_share = NameSet {
+        rows: with_etf
+            .backend
+            .read(crate::sqlite_market::security::read_security_names)
+            .unwrap()
+            .iter()
+            .map(|row| row.to_interval().unwrap())
+            .collect(),
+        coverage: Vec::new(),
+        pending_sources: Vec::new(),
+    };
+    with_etf
+        .backend
+        .commit_security_names(&SecurityNameWrite {
+            set: &a_share,
+            etf: EtfPart::Replace(&etf),
+            task_id: "task-names",
+            item_id: "derived:security_names",
+            generation_id: "gen-names",
+            generation_manifest_sha256: &"41".repeat(32),
+            member_sha256: &"42".repeat(32),
+            security_event_sha256: &"43".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-names"}),
+        })
+        .unwrap();
+
+    let after = query_security_names(&with_etf, None);
+    assert_eq!(after["columns"], expected["columns"]);
+    assert_eq!(after["entities"], expected["entities"]);
+    assert_eq!(after["row_count"], expected["row_count"]);
+
+    // Asking for the ETF itself returns no row: no read face exists yet.
+    let etf_query = with_etf
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.security_names",
+                "contract_version": "v2",
+                "selection": {"kind": "single",
+                              "entity": {"exchange": "sh", "code": "510300"}},
+                "filter": {"kind": "daily", "start_date": "2026-01-01",
+                           "end_date": "2026-12-31", "as_of": "2026-12-31"},
+                "version": {"kind": "latest_per_entity"}
+            }),
+        )
+        .unwrap();
+    assert_eq!(etf_query["row_count"], 0, "{etf_query}");
 }
 
 /// An empty database (no registration) answers `absent` with zero rows and no
@@ -4277,6 +4416,10 @@ fn get_security_events_answers_like_query_data_for_both_kinds() {
         )
         .unwrap();
     assert_eq!(adjustment["dataset"], "market.adjustment_events");
+    assert_eq!(
+        adjustment["columns"]["effective_day"],
+        json!(["2020-01-06"])
+    );
     assert_eq!(adjustment["columns"]["category"], json!([1]));
     same_answer(
         &adjustment,
@@ -4394,6 +4537,7 @@ fn seed_name_history(f: &Fixture) {
     f.backend
         .commit_security_names(&SecurityNameWrite {
             set: &set,
+            etf: crate::sqlite_market::security_names::EtfPart::Keep,
             task_id: "task-names",
             item_id: "derived:security_names",
             generation_id: "gen-names",

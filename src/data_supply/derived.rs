@@ -35,9 +35,14 @@ use crate::{
     official_market::MaterializeSession,
     security_master::assembly::{self, PendingSource},
     sqlite_market::{
-        backend::MarketBackend, calendar::CalendarWrite, index::IndexWrite,
-        risk_warnings::RiskWarningWrite, rules::TradingRulesWrite, security::SecurityMasterWrite,
-        security_names::SecurityNameWrite, suspensions::SuspensionWrite,
+        backend::MarketBackend,
+        calendar::CalendarWrite,
+        index::IndexWrite,
+        risk_warnings::RiskWarningWrite,
+        rules::TradingRulesWrite,
+        security::SecurityMasterWrite,
+        security_names::{EtfPart, SecurityNameWrite},
+        suspensions::SuspensionWrite,
     },
     task_control::{self, Change, ItemOutcome, ItemSpec, Stage, Status, TaskItem},
     trading_calendar::TradingCalendar,
@@ -326,6 +331,51 @@ enum EtfAttempt {
 struct EtfReport {
     evidence: Value,
     failure: Option<(String, String)>,
+}
+
+/// What the ETF observed-name branch of `derived:security_names` decided
+/// (D-76 Q1).
+///
+/// `set` is `Some` only when the ETF lists answered: the writer then replaces
+/// the ETF subset. `None` (pending or failed) means the writer keeps the stored
+/// ETF rows; an unavailable ETF source never deletes a name and never blocks
+/// the A-share rows. `failure` ends the item as a failure so the run is
+/// `partially_failed`.
+pub(crate) struct EtfNameBranch {
+    pub(crate) set: Option<crate::security_master::names::EtfNameSet>,
+    pub(crate) evidence: Value,
+    pub(crate) pending: Option<PendingSource>,
+    pub(crate) failure: Option<(String, String)>,
+}
+
+pub(crate) fn etf_name_branch(
+    market: &MarketBackend,
+    today: chrono::NaiveDate,
+    policy: crate::source_store::Policy,
+) -> EtfNameBranch {
+    use crate::official_security::etf_list::{NamesRun, run_names};
+    match run_names(market, today, policy) {
+        Ok(NamesRun::Admitted(names)) => EtfNameBranch {
+            set: Some(names.set),
+            evidence: names.evidence,
+            pending: None,
+            failure: None,
+        },
+        Ok(NamesRun::Pending(source)) => EtfNameBranch {
+            set: None,
+            evidence: json!({"status": "pending", "reason": source.reason,
+                             "stored_etf_rows": "kept"}),
+            pending: Some(source),
+            failure: None,
+        },
+        Err(error) => EtfNameBranch {
+            set: None,
+            evidence: json!({"status": "failed", "code": error.code(),
+                             "detail": error.to_string(), "stored_etf_rows": "kept"}),
+            pending: None,
+            failure: Some((error.code().to_string(), error.to_string())),
+        },
+    }
 }
 
 fn etf_failure_evidence(code: &str, detail: &str, preserved: usize) -> Value {
@@ -875,8 +925,26 @@ fn execute(
             crate::official_security::security_names::RunSource::Admitted(admitted) => {
                 let evidence = admitted.evidence();
                 let generation_evidence = source.generation_evidence(generation_manifest_sha256);
+                let mut pending = admitted.set.pending_sources.clone();
+                // D-76 Q1: the ETF observed-name branch. It reads the frozen
+                // ETF lists like `derived:security_master` does. Its failure
+                // keeps the stored ETF rows (never deletes them), still writes
+                // the A-share rows, and ends the item as a failure so the run
+                // is `partially_failed`. A-share rows and their evidence are
+                // computed above and are untouched by this branch.
+                let EtfNameBranch {
+                    set: etf_set,
+                    evidence: etf_evidence,
+                    pending: etf_pending,
+                    failure: etf_failure,
+                } = etf_name_branch(market, today, policy);
+                pending.extend(etf_pending);
                 let registration = market.commit_security_names(&SecurityNameWrite {
                     set: &admitted.set,
+                    etf: match &etf_set {
+                        Some(set) => EtfPart::Replace(set),
+                        None => EtfPart::Keep,
+                    },
                     task_id,
                     item_id: &item.item_id,
                     generation_id,
@@ -885,17 +953,25 @@ fn execute(
                     security_event_sha256: &source.security_event_sha256,
                     generation_evidence: &generation_evidence,
                 })?;
-                let pending = admitted.set.pending_sources.clone();
-                return Ok(json!({
+                let evidence = json!({
                     "dataset": item.item_id,
                     "version_id": registration.map(|row| row.version_id),
                     "row_count": admitted.set.rows.len(),
+                    "etf_row_count": etf_set.as_ref().map(|set| set.rows.len()),
                     "coverage_windows": admitted.set.coverage.len(),
                     "not_observed_windows": admitted.set.not_observed_windows(),
                     "source": evidence,
+                    "etf_names": etf_evidence,
                     "pending_sources": pending_json(&pending),
                     "elapsed_ms": elapsed_ms(started),
-                }));
+                });
+                if let Some((code, detail)) = etf_failure {
+                    return Err(ItemFailure::Evidence(
+                        Error::Invalid(format!("ETF name source: {code}: {detail}")),
+                        evidence,
+                    ));
+                }
+                return Ok(evidence);
             }
         }
     }
