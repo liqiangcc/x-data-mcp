@@ -46,10 +46,10 @@ pi 查 2 只标的的最新两天行情用了 5 轮。提示里要求它先弄�
 
 ### 4.1 `find_securities`
 ```json
-{"query?":"名称片段","code?":"600519","industry_code?":"X2102","page_size?":100,"cursor?":""}
+{"query?":"名称片段","code?":"600519","industry_code?":"X2102","kind?":"stock|etf","page_size?":100,"cursor?":""}
 ```
-映射：`securities.catalog` + `catalog/current_sh_sz_a` + `filter.kind=catalog`。
-范围：现行 A 股。ETF 和退市标的不在内（见 §6）。
+映射：`kind=stock`（缺省）：`securities.catalog` + `catalog/current_sh_sz_a` + `filter.kind=catalog`，范围现行 A 股，与加 `kind` 之前逐字相同。
+`kind=etf`（ETF 名称 PR-3，D-76 Q6 选 (a)）：`market.security_names` 上的内部过滤 `Filter::FindEtf`，范围主表里的沪深 ETF（现行和退市），按最新名称搜索，列为 `name`、`name_basis`、`status`、`instrument_class`、`listing_date`、`delisting_date`、`name_observed_from`。归一化、`limitations`、退市 ETF 的 `name: null` 见 [mcp-tools](../mcp-tools.md) 的 `find_securities` 一条和 [v11 契约](../contracts/generic-data-v11.md) §7。
 
 ### 4.2 `get_daily_bars`
 ```json
@@ -150,7 +150,7 @@ pi 查 2 只标的的最新两天行情用了 5 轮。提示里要求它先弄�
 
 | 缺口 | 影响 | 建议 |
 |---|---|---|
-| ETF 名称不可查 | "沪深 300 ETF 的代码是什么"查不到，只能已知代码 | 名单来源里有简称，但没有进读模型。另开数据任务，不放进本次 |
+| ETF 名称不可查 | "沪深 300 ETF 的代码是什么"查不到，只能已知代码 | 已由 ETF 名称任务补上（[etf-name-search](etf-name-search.md)）：名称自首次观测日起写入，`find_securities kind=etf` 可查。退市 ETF 名称（PR-4）、短写法（`华夏300`）仍查不到 |
 | 沪市名称历史 | D-61：沪市和北交所 `NOT_AVAILABLE`，只有深市有 | 用 `limitations` 写明，不改数据范围 |
 | `as_of` 默认值用 `Local::now()` | vm2 时区是上海，host 是 UTC，默认值可能差一天 | 已有待办：`query.rs:248` 改成 `shanghai_today`，放进 PR-1 |
 | `versions[]` 重复长文本 | 混查 2 行响应 4.5 KB，其中多为 `adjustment.reason` | 测过两种做法，都没有合并，见 §6.1 |
@@ -209,7 +209,7 @@ pi 查 2 只标的的最新两天行情用了 5 轮。提示里要求它先弄�
 
 | 工具 | 字节 |
 |---|---|
-| `find_securities` | 485 |
+| `find_securities` | 485（原型；加 `kind` 后实测 597，见 v11 契约 §3） |
 | `get_daily_bars` | 759 |
 | `get_yearly_bars` | 762 |
 | `get_index_bars` | 663 |

@@ -17,6 +17,16 @@ Two modes, both offline:
     the check that a Rust-only test cannot make: that a third-party reader
     accepts the bytes the exporter wrote.
 
+Before any reader runs, ``--snapshot-dir`` also checks the bytes themselves
+    (the cross-machine check of #549): every listed file must exist with the
+    ``bytes`` and ``sha256`` the manifest records, ``snapshot_id`` must equal
+    the id recomputed from the manifest's identity, and the directory must hold
+    nothing the manifest does not list. One changed byte in a listed file, or
+    in the identity part of ``manifest.json``, fails. The script prints the
+    sha256 of ``manifest.json`` itself so two machines can compare it, and
+    ``--manifest-sha256`` fails when it differs (the manifest's ``producer``,
+    ``limitations`` and ``export`` blocks are in no other hash).
+
 ``--measure``
     Write production-shaped daily tables with the §7.4 schema and snappy and
     print bytes/row plus the extrapolation to the full history. This is the
@@ -35,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import pathlib
 import sys
@@ -329,6 +340,96 @@ DAY_COLUMN = {
     "code_migrations.parquet": "effective_from",
 }
 
+
+# Keys `manifest::document` adds on top of the identity (src/research/manifest.rs).
+# `snapshot_id` is the hash of everything else, so a reader recomputes it from
+# the manifest minus these. The same rule holds for v2 to v5.
+DOCUMENT_ONLY = ("snapshot_id", "producer", "files", "limitations", "export")
+ID_PREFIX = "snapshot-"
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def canonical_json(value) -> str:
+    """RFC 8785 for the value kinds an identity holds.
+
+    The Rust side hashes `serde_json_canonicalizer` output. The identity has
+    only objects, arrays, strings, integers, booleans and null, so sorting keys
+    by UTF-16 code units and writing minimal escapes reproduces it. A float is
+    refused rather than guessed: its ES6 text form is not Python's.
+    """
+    if isinstance(value, float):
+        raise ValueError("a float in the identity has no canonical form here")
+    if isinstance(value, dict):
+        items = sorted(value.items(), key=lambda item: item[0].encode("utf-16-be"))
+        return "{" + ",".join(
+            json.dumps(key, ensure_ascii=False) + ":" + canonical_json(item)
+            for key, item in items
+        ) + "}"
+    if isinstance(value, list):
+        return "[" + ",".join(canonical_json(item) for item in value) + "]"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def recompute_snapshot_id(manifest: dict) -> str:
+    identity = {k: v for k, v in manifest.items() if k not in DOCUMENT_ONLY}
+    digest = hashlib.sha256(canonical_json(identity).encode("utf-8")).hexdigest()
+    return ID_PREFIX + digest[:32]
+
+
+def byte_problems(directory: pathlib.Path, manifest: dict) -> list[str]:
+    """Every way the directory's bytes differ from what the manifest records.
+
+    Reads each listed file once. Needs no reader library, so it is the part of
+    this script a machine without pyarrow can still run in spirit; it returns
+    the problems instead of recording them so `--self-check` can assert both
+    outcomes.
+    """
+    problems: list[str] = []
+    try:
+        expected_id = recompute_snapshot_id(manifest)
+    except ValueError as error:
+        problems.append(f"snapshot_id cannot be recomputed: {error}")
+    else:
+        if manifest.get("snapshot_id") != expected_id:
+            problems.append(
+                f"snapshot_id {manifest.get('snapshot_id')!r} != {expected_id} "
+                "recomputed from the manifest identity"
+            )
+    listed = set()
+    for entry in manifest.get("files") or []:
+        name = entry.get("path")
+        if not isinstance(name, str) or name != pathlib.PurePath(name).name or name in ("", ".", ".."):
+            problems.append(f"files[].path {name!r} is not a plain file name")
+            continue
+        listed.add(name)
+        path = directory / name
+        if not path.is_file():
+            problems.append(f"{name}: listed in the manifest but missing")
+            continue
+        want_sha = entry.get("sha256")
+        want_bytes = entry.get("bytes")
+        if not isinstance(want_sha, str) or not isinstance(want_bytes, int):
+            problems.append(f"{name}: the manifest records no bytes/sha256 (a --dry-run manifest?)")
+            continue
+        size = path.stat().st_size
+        if size != want_bytes:
+            problems.append(f"{name}: {size} bytes on disk, manifest says {want_bytes}")
+        actual = sha256_file(path)
+        if actual != want_sha:
+            problems.append(f"{name}: sha256 {actual} != manifest {want_sha}")
+    for path in sorted(directory.iterdir()):
+        if path.name != "manifest.json" and path.name not in listed:
+            problems.append(f"{path.name}: in the directory but not listed in the manifest")
+    return problems
+
+
 failures: list[str] = []
 
 
@@ -520,11 +621,18 @@ def check_producer(manifest: dict) -> None:
     print(f"ok   producer: git_sha {sha}, {len(algorithms or {})} derivation labels")
 
 
-def check_snapshot(directory: pathlib.Path) -> None:
+def check_snapshot(directory: pathlib.Path, manifest_sha256: str | None = None) -> None:
     manifest_path = directory / "manifest.json"
     check(manifest_path.is_file(), f"{directory}: manifest.json is missing")
     if not manifest_path.is_file():
         return
+    manifest_actual = sha256_file(manifest_path)
+    print(f"manifest.json sha256 {manifest_actual}")
+    if manifest_sha256 is not None:
+        check(
+            manifest_actual == manifest_sha256.lower(),
+            f"manifest.json sha256 {manifest_actual} != expected {manifest_sha256}",
+        )
     manifest = json.loads(manifest_path.read_text())
     version = SCHEMAS.get(manifest.get("schema"))
     check(
@@ -539,6 +647,16 @@ def check_snapshot(directory: pathlib.Path) -> None:
     )
     files = manifest.get("files") or []
     check(len(files) > 0, "manifest lists no file")
+    # Bytes first: a reader would only report a corrupt file as a type error.
+    problems = byte_problems(directory, manifest)
+    for problem in problems:
+        check(False, problem)
+    if not problems:
+        total = sum(entry["bytes"] for entry in files)
+        print(
+            f"ok   bytes: {len(files)} files, {total} bytes match files[].sha256; "
+            f"{manifest.get('snapshot_id')} recomputes from the identity"
+        )
     listed = {entry.get("path") for entry in files}
     # §10.4: a v3 snapshot always carries the M3 files, even when the intervals
     # are empty (a real empty file, not an absent one). A v2 snapshot never
@@ -618,6 +736,99 @@ def check_snapshot(directory: pathlib.Path) -> None:
             connection.close()
 
 
+def self_check_bytes() -> None:
+    """The byte check passes on a consistent directory and fails on each
+    kind of difference (one byte, a size, a missing, an extra and a renamed
+    file, an identity edit)."""
+    identity = {
+        "schema": "x-data-mcp.research-snapshot.v5",
+        "request": {"entities": "catalog", "start": None},
+        "series": [{"entity": "sh.600000", "record_count": 3}],
+    }
+    payload = {"a.parquet": b"alpha" * 100, "b.parquet": b"beta"}
+
+    def build(root: pathlib.Path, producer: bool = True) -> dict:
+        files = []
+        for name, data in payload.items():
+            (root / name).write_bytes(data)
+            files.append(
+                {
+                    "path": name,
+                    "bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        manifest = {
+            **identity,
+            "snapshot_id": recompute_snapshot_id(identity),
+            "files": files,
+            "limitations": [],
+            "export": {},
+        }
+        # v2 to v4 manifests carry no `producer`; the id rule is the same.
+        if producer:
+            manifest["producer"] = {"git_sha": "unknown"}
+        (root / "manifest.json").write_text(json.dumps(manifest))
+        return manifest
+
+    # The same canonical form the Rust identity hash uses: keys sorted, no
+    # spaces, null kept. A fixed id pins the hash input against drift.
+    check(
+        canonical_json({"b": [1, None], "a": "x\u00e9"}) == '{"a":"x\u00e9","b":[1,null]}',
+        "canonical_json does not sort keys / keep non-ASCII text",
+    )
+
+    def mutate(label: str, change) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            manifest = build(root)
+            change(root, manifest)
+            check(
+                len(byte_problems(root, manifest)) > 0,
+                f"byte check missed: {label}",
+            )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        manifest = build(root)
+        check(byte_problems(root, manifest) == [], "byte check fails a consistent directory")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        manifest = build(root, producer=False)
+        check(
+            byte_problems(root, manifest) == [],
+            "byte check fails a consistent directory without a producer block",
+        )
+
+    def flip(root, manifest):
+        data = bytearray((root / "a.parquet").read_bytes())
+        data[7] ^= 1
+        (root / "a.parquet").write_bytes(bytes(data))
+
+    def truncate(root, manifest):
+        (root / "b.parquet").write_bytes(b"bet")
+
+    def remove(root, manifest):
+        (root / "b.parquet").unlink()
+
+    def extra(root, manifest):
+        (root / "stray.parquet").write_bytes(b"x")
+
+    def identity_edit(root, manifest):
+        manifest["series"][0]["record_count"] = 4
+
+    def traversal(root, manifest):
+        manifest["files"][0]["path"] = "../a.parquet"
+
+    mutate("one flipped byte", flip)
+    mutate("a shortened file", truncate)
+    mutate("a missing file", remove)
+    mutate("an unlisted file", extra)
+    mutate("an edited identity", identity_edit)
+    mutate("a path outside the directory", traversal)
+    print("ok   byte check: consistent directory passes, 6 differences fail")
+
+
 def self_check() -> None:
     """Exercise the readers and the §7.4 type contract without Rust."""
     import decimal
@@ -658,6 +869,8 @@ def self_check() -> None:
     check(etf_layout(4, mixed) is None, "v4 mixed layout not rejected")
     check(etf_layout(5, short) is True, "v5 is the ETF layout whatever it lists")
     check(etf_layout(3, long) is False, "v3 has no ETF layout")
+
+    self_check_bytes()
 
     for name, expected in CONTRACT.items():
         with tempfile.TemporaryDirectory() as tmp:
@@ -756,6 +969,10 @@ def measure() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--snapshot-dir", type=pathlib.Path)
+    parser.add_argument(
+        "--manifest-sha256",
+        help="expected sha256 of manifest.json (compare it across machines)",
+    )
     parser.add_argument("--self-check", action="store_true")
     parser.add_argument("--measure", action="store_true")
     args = parser.parse_args()
@@ -764,7 +981,9 @@ def main() -> int:
     if args.measure:
         measure()
     if args.snapshot_dir:
-        check_snapshot(args.snapshot_dir)
+        check_snapshot(args.snapshot_dir, args.manifest_sha256)
+    if args.manifest_sha256 and not args.snapshot_dir:
+        parser.error("--manifest-sha256 needs --snapshot-dir")
     if not args.self_check and not args.measure and not args.snapshot_dir:
         parser.error("one of --self-check / --measure / --snapshot-dir is required")
     print(f"pyarrow {pa.__version__}, duckdb {getattr(duckdb, '__version__', 'missing')}")
