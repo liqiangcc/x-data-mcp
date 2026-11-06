@@ -53,9 +53,16 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
         );
     }
     // `cargo nextest --features export` also builds `export_research`, so the
-    // smoke's export section runs there; the default build skips it.
+    // smoke's export section runs there; the default build skips it. Check if
+    // the binary actually exists in the bin directory rather than relying on
+    // cfg!(feature = "export"), which doesn't reflect residual binaries.
     let mut expected_checks = 12;
-    if cfg!(feature = "export") {
+    let export_binary = bin.join(if cfg!(windows) {
+        "export_research.exe"
+    } else {
+        "export_research"
+    });
+    if export_binary.exists() {
         expected_checks += 1;
         assert!(
             value["checks"]

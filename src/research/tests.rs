@@ -1008,6 +1008,7 @@ impl Fixture {
     /// Give the 前复权 bars 6dp values whose low digits vary, so the size test
     /// measures a qfq file shaped like production instead of a run of small
     /// integers that compresses unrealistically well.
+    #[cfg(feature = "export")]
     fn scramble_forward_prices(&self) {
         let c = self.write();
         let keys: Vec<i64> = c
@@ -1964,6 +1965,7 @@ mod with_export {
     /// 10 B/row for each file; the fixed-width qfq columns alone are more than
     /// 40 B/row, so the estimate was below the physical floor.
     #[test]
+    #[cfg(feature = "export")]
     fn daily_parquet_bytes_per_row_match_the_measured_fixture() {
         let fixture = Fixture::with_days(4000);
         fixture.scramble_forward_prices();
