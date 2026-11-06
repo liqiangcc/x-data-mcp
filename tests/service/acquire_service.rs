@@ -1363,3 +1363,258 @@ fn automatic_retention_and_manual_retire_use_the_same_gate() {
         .unwrap();
     assert_eq!(retired.state, "evidence_only");
 }
+
+// ---------------------------------------------------------------------------
+// #583: a generation that was never activated retires without exemptions
+// ---------------------------------------------------------------------------
+
+/// Install one generation and stop before any activation: the resulting
+/// `byte_verified`/`consistency_verified` state is unreachable once a
+/// generation has swapped the active pointer, so the acquire store records no
+/// activation for it.
+fn unactivated_generation(service: &AcquireService, request: &str) -> String {
+    let acceptance = install(service, request);
+    generation_of(service, &acceptance.task_id)
+}
+
+#[test]
+fn never_activated_generations_retire_without_derived_facts() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+
+    // The 2026-11-06 incident shape: two generations acquired before the day
+    // was pending and never activated. Refused activation attempts (before
+    // verification, and with a stale expected-previous) are not activation
+    // records either.
+    let gen_byte = unactivated_generation(&service, "req-unact-byte");
+    let refused = service
+        .activate_generation("activate-unact-refused", &gen_byte, Some("not-the-active"))
+        .unwrap();
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("generation_not_consistency_verified"),
+        "{refused:?}"
+    );
+    verify(&service, &gen_byte);
+    let refused = service
+        .activate_generation("activate-unact-conflict", &gen_byte, Some("not-the-active"))
+        .unwrap();
+    assert_eq!(refused.state, "refused", "{refused:?}");
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("activation_conflict"),
+        "{refused:?}"
+    );
+    remirror(mirror.path(), 600108, today_u32());
+    let gen_verified = unactivated_generation(&service, "req-unact-verified");
+    verify(&service, &gen_verified);
+    let states = service.sync_status().unwrap();
+    let state_of = |id: &str| {
+        states
+            .generations
+            .iter()
+            .find(|g| g.generation_id == id)
+            .unwrap()
+            .state
+            .clone()
+    };
+    assert_eq!(state_of(&gen_byte), "consistency_verified");
+    assert_eq!(state_of(&gen_verified), "consistency_verified");
+    assert!(states.active.is_none(), "nothing was activated");
+
+    // Source evidence is registered; no `generation_facts` row exists for
+    // either generation (nothing was ever written for them).
+    for generation in [&gen_byte, &gen_verified] {
+        register_evidence(&service, &gate, generation);
+        let manifest = manifest_of(&service, generation);
+        let retired = service
+            .retire_generation(
+                &format!("retire-unact-{:.8}", generation),
+                generation,
+                &manifest,
+            )
+            .unwrap();
+        assert_eq!(retired.state, "evidence_only", "{retired:?}");
+        assert!(retired.reason_code.is_none(), "{retired:?}");
+        let detail = retired.detail.unwrap();
+        assert!(detail.contains("never activated"), "{detail}");
+        assert!(!detail.contains("exemptions:"), "{detail}");
+        // Bytes are gone; the audit artifacts stay.
+        assert!(
+            service
+                .generations()
+                .verify_installed(generation, chrono::Utc::now())
+                .is_err()
+        );
+    }
+    assert!(
+        service
+            .generations()
+            .decision(&gen_verified)
+            .unwrap()
+            .is_some()
+    );
+    // No exemption row was needed or written: the retire path never exempts.
+    let backend = MarketBackend::open(&SqliteTasks::new(&gate.database)).unwrap();
+    let manifest = manifest_of(&service, &gen_verified);
+    assert!(
+        backend
+            .read_retire_exemptions(&manifest)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_never_activated_generation_still_needs_source_store_evidence() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    let generation = unactivated_generation(&service, "req-unact-noevidence");
+    let manifest = manifest_of(&service, &generation);
+
+    // Nothing registered in the source store: the irreproducible bytes are
+    // not proven saved, so no activation state may waive that.
+    let refused = service
+        .retire_generation("req-unact-noevidence-retire", &generation, &manifest)
+        .unwrap();
+    assert_eq!(refused.state, "refused", "{refused:?}");
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("source_store_evidence_missing")
+    );
+    let detail = refused.detail.unwrap();
+    assert!(detail.contains(TDXHY_SOURCE_ID), "{detail}");
+    assert!(detail.contains(INCON_SOURCE_ID), "{detail}");
+    // The refusal is the evidence step alone: no fact gap is reported, and
+    // the detail still says why the fact step did not apply.
+    assert!(!detail.contains("missing derived facts"), "{detail}");
+    assert!(detail.contains("never activated"), "{detail}");
+    // Refused means untouched: the bytes are still there.
+    assert!(
+        service
+            .generations()
+            .verify_installed(&generation, chrono::Utc::now())
+            .is_ok()
+    );
+}
+
+#[test]
+fn an_activated_generation_still_needs_derived_facts() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    // gen_a swapped the active pointer, so it may have written derived facts:
+    // the relaxation does not apply to it.
+    let (gen_a, _gen_b) = superseded_pair(&service, mirror.path());
+    let manifest = manifest_of(&service, &gen_a);
+    register_evidence(&service, &gate, &gen_a);
+    let refused = service
+        .retire_generation("req-act-facts", &gen_a, &manifest)
+        .unwrap();
+    assert_eq!(refused.state, "refused", "{refused:?}");
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("derived_facts_missing")
+    );
+    let detail = refused.detail.unwrap();
+    assert!(
+        detail.contains("replay --scope generation_facts"),
+        "{detail}"
+    );
+    assert!(detail.contains("capital_events"), "{detail}");
+    assert!(!detail.contains("never activated"), "{detail}");
+}
+
+/// The retire leaves a durable "who asked, when, why it was allowed" record:
+/// the request row (caller identity + payload + acceptance time) and its
+/// terminal outcome carrying the detail that names the never-activated rule.
+#[test]
+fn a_never_activated_retire_leaves_an_audit_trail() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    let generation = unactivated_generation(&service, "req-unact-audit");
+    let manifest = manifest_of(&service, &generation);
+    register_evidence(&service, &gate, &generation);
+    let request_id = "retire-unact-audit";
+    let retired = service
+        .retire_generation(request_id, &generation, &manifest)
+        .unwrap();
+    assert_eq!(retired.state, "evidence_only");
+
+    let db = x_data_mcp::acquire::store::Db::new(service.db_path());
+    let request = db.request(request_id).unwrap().expect("request row");
+    assert_eq!(request.kind, "retire_generation");
+    assert!(
+        request.payload.contains(&generation),
+        "the payload names the generation: {}",
+        request.payload
+    );
+    assert!(
+        request.created_at.timestamp() > 0,
+        "accepted at is recorded"
+    );
+    let outcome: Option<Value> = db.outcome(request_id).unwrap();
+    let outcome = outcome.expect("terminal outcome");
+    assert_eq!(outcome["state"], json!("evidence_only"));
+    assert_eq!(outcome["generation_id"], json!(generation));
+    assert_eq!(outcome["reason_code"], Value::Null);
+    let detail = outcome["detail"].as_str().unwrap();
+    assert!(detail.contains("never activated"), "{detail}");
+
+    // Replaying the same request_id returns the recorded outcome verbatim
+    // instead of retiring twice: the audit row is the idempotency registry.
+    let replay = service
+        .retire_generation(request_id, &generation, &manifest)
+        .unwrap();
+    assert!(replay.reused, "{replay:?}");
+    assert_eq!(replay.state, "evidence_only");
+}
+
+/// The activation record is the durable request log, not just the row state:
+/// a generation whose lifecycle row lost its `superseded` state (the crash
+/// window between the pointer swap and the row update) still counts as
+/// activated, so its derived facts are still required.
+#[test]
+fn a_lost_lifecycle_state_does_not_make_an_activated_generation_retirable() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let gate = gate_fixture(root.path());
+    let service = open_gated(root.path(), mirror.path(), &gate);
+    let (gen_a, _gen_b) = superseded_pair(&service, mirror.path());
+    let manifest = manifest_of(&service, &gen_a);
+
+    let db = x_data_mcp::acquire::store::Db::new(service.db_path());
+    let row = db.generation(&gen_a).unwrap().expect("generation row");
+    assert_eq!(row.state, "superseded");
+    db.upsert_generation(&x_data_mcp::acquire::store::Generation {
+        state: "consistency_verified".into(),
+        ..row
+    })
+    .unwrap();
+
+    register_evidence(&service, &gate, &gen_a);
+    let refused = service
+        .retire_generation("req-lost-state", &gen_a, &manifest)
+        .unwrap();
+    assert_eq!(refused.state, "refused", "{refused:?}");
+    assert_eq!(
+        refused.reason_code.as_deref(),
+        Some("derived_facts_missing")
+    );
+    assert!(
+        !refused.detail.unwrap().contains("never activated"),
+        "a recorded activation keeps the strict rule"
+    );
+}

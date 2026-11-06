@@ -754,6 +754,8 @@ retire(generation) 前置：
 
 **PR-8 落地（2026-10-29，XDM-108）**：门禁实现在 acquire 进程（`src/generation_gate.rs`），手动 `retire_generation` 与激活后的自动保留都经过同一个 `RetireGate::check`，字节删除前没有旁路。读面不写市场库：acquire 以只读连接（`query_only`）读 `generation_facts`/`retire_exemptions`，WAL 读不占 data_service 的写租约（D-56）。来源库根沿用 `X_DATA_MCP_SOURCE_STORE`，默认 `<market db parent>/source-store`；acquire 服务需要显式 `--market-db`，未配置时退役一律 `retire_gate_unconfigured`，不会静默放行。证据检查对每个 role 取清单里**该代 manifest sha 的全部登记**逐一按 sha 读回，任一可读即视为证据在库（重复登记不误报）；全部失败或未登记才报 `source_store_evidence_missing`，并列出 `(role, source_id, sha256)`。派生事实按 `(role, fact_kind)` 集合判断，缺失时 `derived_facts_missing` 并提示 `replay --scope generation_facts`；索引可重建，不作为唯一依据。豁免由 `source_store exempt` 写入（必需非空 reason、recorded_by、时间；`source_store_evidence` 键另需 `--owner-approve-evidence`），退役成功时回复 `detail=exemptions: <keys>` 留痕，豁免行不随字节删除。
 
+**#583 修订（2026-11-06，PR-8 门禁的派生事实段）**：第 3 步（派生事实索引）只对**激活过的代**生效。任务受理时从 active pointer 冻结 `source_generation_id`，从未激活的代不可能写过派生事实，要求它先有 `generation_facts` 行只能靠手工豁免绕开（2026-11-06 事故的 3 个未激活代）。门禁新增 `ActivationRecord`：`NeverActivated` 时跳过第 3 步，第 2 步（来源库证据）与第 1/4 步（active/pin/in-flight、豁免）不变；激活过的代行为不变。「从未激活」由 acquire 服务从持久行判定并要求正向证据（激活前 `state` + active pointer + `activate_generation` 请求结果），读不出来时退役被拒而不是放行。回复 `detail` 带 `derived facts not required: generation was never activated`。无 schema 变化。
+
 **遗留代补登记（XDM-150，方案 A）**：来源库出现之前采集的 generation，成员字节可能已经在库里（`archive_import` 行，sha 与重算一致），但清单里没有 `origin=generation:<manifest sha>` 的成员行 —— 门禁按 provenance 判定，所以照旧拒绝（XDM-146 报告 §3、§4.3 方案 A）。`source_store import` 补不上：它的 origin 形状固定为 `<batch>:<container>!<suffix>`；唯一写 `generation:<sha>` 的 `industry::register_generation_members` 只在日更行业 item 里对当前代调用。新增运维子命令：
 
 ```bash

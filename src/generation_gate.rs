@@ -16,6 +16,17 @@
 //!    (`source_store replay --scope generation_facts`), so a missing row is
 //!    a hint to replay, never proof that the facts are gone.
 //!
+//! The derived-fact step answers "is this generation's market data still
+//! represented somewhere else before its bytes go". A generation that was
+//! **never activated** cannot have written any: tasks freeze
+//! `source_generation_id` from the active pointer at acceptance, so no task
+//! ever ran on it (`#583`). Asking it for facts is unsatisfiable except by a
+//! hand-written exemption, which is why [`ActivationRecord::NeverActivated`]
+//! skips that step. The skip needs *positive* evidence from the acquire
+//! store's durable rows — anything the caller cannot prove counts as
+//! [`ActivationRecord::Activated`], i.e. the unchanged stricter rule. The
+//! source-store evidence step is checked for every generation either way.
+//!
 //! Both the manual `retire_generation` path and the automatic "keep the
 //! newest two superseded generations" retention call [`RetireGate::check`]
 //! through the same acquire helper. An exemption (`retire_exemptions`) can
@@ -108,6 +119,22 @@ impl GenerationFact {
     }
 }
 
+/// Whether the acquire store records that a generation was ever activated.
+///
+/// The caller decides this from durable rows, never from an argument a user
+/// supplied; the gate only consumes the verdict. The default for anything
+/// unproven is [`ActivationRecord::Activated`], so a store that cannot answer
+/// keeps the strict rule instead of silently dropping a check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivationRecord {
+    /// An activation is recorded, or one cannot be ruled out: the derived-fact
+    /// step applies exactly as before.
+    Activated,
+    /// No activation was ever recorded, so the generation cannot have
+    /// registered a derived fact; the derived-fact step does not apply.
+    NeverActivated,
+}
+
 /// One `retire_exemptions` row: the explicit, auditable exception path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetireExemption {
@@ -157,6 +184,10 @@ pub struct GateCheck {
     pub missing_evidence: Vec<EvidenceGap>,
     pub missing_facts: Vec<FactGap>,
     pub exemptions: Vec<String>,
+    /// True when the derived-fact step was skipped because the generation was
+    /// never activated (`#583`). Carried into the retire reply so the reason
+    /// the facts were not required is visible in the audit trail.
+    pub derived_facts_skipped: bool,
 }
 
 impl GateCheck {
@@ -213,6 +244,9 @@ impl GateCheck {
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+        if self.derived_facts_skipped {
+            parts.push("derived facts not required: generation was never activated".to_string());
         }
         if !self.exemptions.is_empty() {
             parts.push(format!("exemptions: {}", self.exemptions.join(",")));
@@ -289,23 +323,55 @@ impl RetireGate {
         self.index.database()
     }
 
-    /// Check one generation before its bytes are deleted.
-    pub fn check(&self, generation_manifest_sha256: &str) -> Result<GateCheck, GateError> {
+    /// Check one generation before its bytes are deleted. `activation` says
+    /// whether the acquire store records an activation; only
+    /// [`ActivationRecord::NeverActivated`] relaxes the derived-fact step.
+    pub fn check(
+        &self,
+        generation_manifest_sha256: &str,
+        activation: ActivationRecord,
+    ) -> Result<GateCheck, GateError> {
         let (facts, exemptions) = self
             .index
             .state(generation_manifest_sha256)
             .map_err(GateError::Index)?;
-        evaluate(&self.store, generation_manifest_sha256, &facts, &exemptions)
+        evaluate_with_activation(
+            &self.store,
+            generation_manifest_sha256,
+            &facts,
+            &exemptions,
+            activation,
+        )
     }
 }
 
 /// Pure gate evaluation: the same function serves the retire path and the
 /// tests, so "manual and automatic retire use one gate" is structural.
+///
+/// This is the activated-generation rule; a generation known to have never
+/// been activated goes through [`evaluate_with_activation`].
 pub fn evaluate(
     store: &SourceStore,
     generation_manifest_sha256: &str,
     facts: &[GenerationFact],
     exemptions: &[RetireExemption],
+) -> Result<GateCheck, GateError> {
+    evaluate_with_activation(
+        store,
+        generation_manifest_sha256,
+        facts,
+        exemptions,
+        ActivationRecord::Activated,
+    )
+}
+
+/// Gate evaluation with the activation verdict supplied by the caller.
+pub fn evaluate_with_activation(
+    store: &SourceStore,
+    generation_manifest_sha256: &str,
+    facts: &[GenerationFact],
+    exemptions: &[RetireExemption],
+    activation: ActivationRecord,
 ) -> Result<GateCheck, GateError> {
     let exempted: BTreeSet<&str> = exemptions
         .iter()
@@ -369,23 +435,28 @@ pub fn evaluate(
     }
 
     // Step 3 — derived-fact index (rebuildable; missing means "replay first").
-    let registered: BTreeSet<(String, String)> = facts
-        .iter()
-        .map(|fact| (fact.role.clone(), fact.fact_kind.clone()))
-        .collect();
+    // A never-activated generation never ran a task, so it has nothing to
+    // account for here (`#583`); its evidence rows were still checked above.
+    let derived_facts_skipped = activation == ActivationRecord::NeverActivated;
     let mut missing_facts = Vec::new();
-    for (role, fact_kind) in REQUIRED_FACTS {
-        let gap = FactGap {
-            role: role.to_string(),
-            fact_kind: fact_kind.to_string(),
-        };
-        if registered.contains(&(role.to_string(), fact_kind.to_string())) {
-            continue;
-        }
-        if exempted.contains(gap.key().as_str()) {
-            used.push(gap.key());
-        } else {
-            missing_facts.push(gap);
+    if !derived_facts_skipped {
+        let registered: BTreeSet<(String, String)> = facts
+            .iter()
+            .map(|fact| (fact.role.clone(), fact.fact_kind.clone()))
+            .collect();
+        for (role, fact_kind) in REQUIRED_FACTS {
+            let gap = FactGap {
+                role: role.to_string(),
+                fact_kind: fact_kind.to_string(),
+            };
+            if registered.contains(&(role.to_string(), fact_kind.to_string())) {
+                continue;
+            }
+            if exempted.contains(gap.key().as_str()) {
+                used.push(gap.key());
+            } else {
+                missing_facts.push(gap);
+            }
         }
     }
 
@@ -393,6 +464,7 @@ pub fn evaluate(
         missing_evidence,
         missing_facts,
         exemptions: used,
+        derived_facts_skipped,
     })
 }
 

@@ -138,7 +138,9 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。热�
 冷归档仍需 #259 容量目标与 #260 另行裁定，被自动退役的字节不再可用于完整 source replay。任何被 task/session 引用的 generation
 必须保留，状态需区分 hot、cold、evidence-only 和 unavailable，不能在删除原字节后继续声称可完整 source replay。
 
-退役前有 M3 门禁（`#446` §8.3，PR-8）：该代不可再生的行业原始成员必须已按 sha 在来源库读回，且 `generation_facts` 覆盖全部必需 kind。任一项不满足就拒绝删除，返回 `source_store_evidence_missing` 或 `derived_facts_missing`（附缺失清单；索引缺失先跑 `source_store replay --scope generation_facts`），自动保留遇到拒绝只跳过该代、不使激活失败，下轮再试。证据缺失如果是「字节在库里但 `origin` 不是 `generation:<sha>`」（来源库出现之前采集的遗留代），owner 用 `source_store register-generation-member --generation <sha> --generation-dir <代目录> --store <来源库>` 补登记后再重试（只追加、幂等，见 [来源库](source-store.md) §4.3）；其余情况人工退役因门禁被拒时，只有 owner 能用 `source_store exempt` 写豁免；Skill/agent 不得自行豁免或补登记。
+退役前有 M3 门禁（`#446` §8.3，PR-8）：该代不可再生的行业原始成员必须已按 sha 在来源库读回，且**激活过的代**其 `generation_facts` 覆盖全部必需 kind。任一项不满足就拒绝删除，返回 `source_store_evidence_missing` 或 `derived_facts_missing`（附缺失清单；索引缺失先跑 `source_store replay --scope generation_facts`），自动保留遇到拒绝只跳过该代、不使激活失败，下轮再试。证据缺失如果是「字节在库里但 `origin` 不是 `generation:<sha>`」（来源库出现之前采集的遗留代），owner 用 `source_store register-generation-member --generation <sha> --generation-dir <代目录> --store <来源库>` 补登记后再重试（只追加、幂等，见 [来源库](source-store.md) §4.3）；其余情况人工退役因门禁被拒时，只有 owner 能用 `source_store exempt` 写豁免；Skill/agent 不得自行豁免或补登记。
+
+**从未激活的代不要求派生事实（#583）。** 任务受理时从 active pointer 冻结 `source_generation_id`，所以从未换过 active pointer 的代不可能写过任何派生事实；要求它先有 `generation_facts` 行，只能靠手工豁免绕开，2026-11-06 事故里的 3 个未激活代就是这种情况。现在门禁对这类代跳过派生事实步骤，**来源证据检查不变**（缺证据仍 `source_store_evidence_missing`，字节不动），激活过的代行为一字不变。判定「从未激活」要正向证据：acquire 库的 `generations.state` 只可能是激活前的 `byte_verified`/`consistency_verified`/`not_verified`/`conflict`/`corrupt`，`active`/`superseded`/`evidence_only` 或未知状态一律按激活过处理；此外 active pointer 指名、`activate_generation` 请求记录里该代有 `state=active` 的结果、或有受理未落结果的激活请求，也都算激活过（指针交换与行更新之间的崩溃窗口靠这份持久请求日志兜住）。判定所需的事实读不出来时退役被拒（`retire_gate_unavailable`），不删字节。跳过时回复 `detail` 带 `derived facts not required: generation was never activated`。
 
 `acquire_generation` 被 `generation_capacity` 拒绝时，同样需要 owner/operator 先腾出热代；退役现在可能被上述门禁拦下，所以「腾位」不再是必然成功的动作：先按提示重放索引，来源库证据缺失先试补登记（遗留代）或由 owner 显式写证据豁免（`source_store exempt ... --owner-approve-evidence`）。不要为了腾位删除 generation 目录或绕过 acquire。
 
@@ -155,7 +157,7 @@ Immutable 不表示所有约 550MiB generation 永久保留在 ECS 热盘。热�
 | `get_acquisition_request` | 在响应丢失或超时后按 request identity 恢复事实 |
 | `verify_generation` | 使用 #131 契约和显式 CompatibilityEvidence 产生 consistency decision；不激活 |
 | `activate_generation` | 对 `consistency_verified` generation 执行 expected-previous 条件激活；不更新行情。激活成功后自动保留：按安装时间保留最近 2 个 `superseded` generation（含刚被取代的前一代），更旧者自动退役为 `evidence_only`（字节删除）；有 live pin 或在途获取任务的代跳过且不使激活失败；回复 `retired_generations` 列出本次退役的 id，replay 返回同一列表 |
-| `retire_generation` | owner/operator 显式确认后按引用与留存规则退役 generation；与上面的自动保留共用同一 pin/在途任务检查与 M3 退役门禁，active 代永不退役；门禁拒绝时返回 `source_store_evidence_missing`/`derived_facts_missing`（或未配置/不可读时为 `retire_gate_unconfigured`/`retire_gate_unavailable`），原字节保留 |
+| `retire_generation` | owner/operator 显式确认后按引用与留存规则退役 generation；与上面的自动保留共用同一 pin/在途任务检查与 M3 退役门禁，active 代永不退役；来源证据对所有代都要检查，派生事实只对**激活过的代**要求（从未激活的代不要求派生事实，见上文；#583）；门禁拒绝时返回 `source_store_evidence_missing`/`derived_facts_missing`（或未配置/不可读时为 `retire_gate_unconfigured`/`retire_gate_unavailable`），原字节保留 |
 | `sync_status` | 只读返回 active/pending generation、manifest 和 consistency 状态 |
 | `run_worker_once` | operator/debug-only；正常长期服务不由 Skill 调用 |
 
