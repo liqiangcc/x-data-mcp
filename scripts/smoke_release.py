@@ -271,7 +271,11 @@ def export_smoke(binaries):
             "x-data-mcp.research-snapshot.v2",
             "x-data-mcp.research-snapshot.v3",
             "x-data-mcp.research-snapshot.v4",
+            "x-data-mcp.research-snapshot.v5",
         }, manifest["schema"]
+        if manifest["schema"].endswith(".v5"):
+            assert manifest["producer"]["git_sha"], manifest["producer"]
+            assert "git_sha" not in manifest["algorithms"], manifest["algorithms"]
         assert manifest["snapshot_id"] == summary["snapshot_id"] == directory.name, summary
         files = {entry["path"]: entry for entry in manifest["files"]}
         assert set(files) == {"daily_raw.parquet", "daily_qfq.parquet"}, files
@@ -349,11 +353,11 @@ def main():
         try:
             assert request("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = request("tools/list", {})["tools"]
-            assert len(tools) == 25
+            assert len(tools) == 34
             capabilities = call("get_data_capabilities", {})
             assert capabilities["production_ready"] is False
             assert capabilities["capability_revision"] == "generic-data-v10"
-            checks.append("initialize_discovery_25_tools_generic_data_v9")
+            checks.append("initialize_discovery_34_tools_generic_data_v9")
             catalog = call("query_data", dict(dataset="securities.catalog", contract_version="v1", selection=dict(kind="catalog", scope="current_sh_sz_a"), filter=dict(kind="catalog"), version=dict(kind="latest_per_entity")))
             entity = catalog["records"][0]["entity"]
             assert catalog["records"][0]["industry"]["status"] == "missing"

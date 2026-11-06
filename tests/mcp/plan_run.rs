@@ -958,6 +958,91 @@ fn daily_plan_is_deterministic_and_runs_end_to_end() {
     );
 }
 
+/// The facts the daily-sync Skill's `no_update` branch reads (SKILL §1.1, O2,
+/// #440 boundary 3), all through existing v1 read tools. `plan_market_update`
+/// creates no task; `eligible` stays above 0 after a finished run, so it cannot
+/// decide anything; a finished A-share plan-run is found by `list_tasks`
+/// (dataset, operation, status, `created_from`) plus the plan-run contract
+/// name, and told from an ETF-only run (no derived items) by
+/// `get_task_progress.total > task.plan_counts.eligible`.
+#[test]
+fn finished_plan_run_is_discoverable_through_existing_read_tools() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1)), ("sz", "000002", day_u32(1))]);
+    let list = |status: Value, extra: Value| {
+        let mut args = json!({
+            "contract_version": "v1",
+            "dataset": "market.daily",
+            "operation": "update_data",
+            "status": status,
+            "page_size": 100,
+        });
+        for (key, value) in extra.as_object().unwrap() {
+            args[key] = value.clone();
+        }
+        let page = r.api.call("list_tasks", args).unwrap();
+        assert_eq!(page["page_complete"], true, "{page}");
+        page["items"].as_array().unwrap().clone()
+    };
+    let finished = |extra: Value| list(json!(["succeeded", "partially_failed"]), extra);
+    let all_tasks = || {
+        r.api
+            .call("list_tasks", json!({"page_size": 1000}))
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+
+    // `plan_market_update` is read-only: it creates no task.
+    let tasks_before = all_tasks();
+    let p = plan(&r.api, "market.daily");
+    assert_eq!(all_tasks(), tasks_before, "a plan must not create a task");
+    assert!(finished(json!({})).is_empty());
+
+    let accepted = run(&r.api, "market.daily", "run-o2", &p);
+    let task_id = accepted["task_id"].as_str().unwrap().to_string();
+    // Accepted but not executed: not a finished run.
+    assert!(finished(json!({})).is_empty());
+    assert_eq!(list(json!(["pending"]), json!({})).len(), 1);
+
+    r.api.call("run_worker_once", json!({})).unwrap();
+    let runs = finished(json!({}));
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0]["task_id"], task_id);
+    assert_eq!(runs[0]["contract_version"], "market-plan-run-task-v1");
+    assert_eq!(runs[0]["plan_counts"]["eligible"], 2);
+
+    // `created_from` bounds the search to runs created after an activation.
+    let created = runs[0]["created_at"].as_str().unwrap().to_string();
+    assert_eq!(finished(json!({"created_from": created})).len(), 1);
+    let later = (Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    assert!(finished(json!({"created_from": later})).is_empty());
+
+    // An A-share run carries server-internal derived items: total > eligible.
+    // (An ETF-only run has none; see `etf_only_run_appends_no_changes_...`.)
+    let progress = r
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": task_id, "page_size": 1}),
+        )
+        .unwrap();
+    assert!(
+        progress["total"].as_u64().unwrap()
+            > progress["task"]["plan_counts"]["eligible"]
+                .as_u64()
+                .unwrap(),
+        "{progress}"
+    );
+
+    // After a finished run `eligible` can still be above 0 (an entity whose
+    // source has no bar for the target day stays behind), so the count alone
+    // cannot tell a finished day from an unpublished one.
+    let after = plan(&r.api, "market.daily");
+    assert_eq!(after["counts"]["eligible"], 2);
+}
+
 /// issue-383 §9.2 failure semantics: an internal derived item that fails
 /// records its own `success=false` and the run ends `partially_failed`; the
 /// already-committed entity items are untouched and nothing is skipped
@@ -4844,4 +4929,385 @@ fn a_terminal_series_that_grows_past_the_delisting_day_fails_the_check_without_a
     );
     // The failed check left the series exactly as the run stored it.
     assert_eq!(series_facts(&r.tasks, "sh.600007"), before);
+}
+
+// ---- D-75 narrow read tools, end to end (issue-525 PR-1) -------------------
+//
+// One real daily plan-run leaves a catalog, two daily series, the trading
+// calendar, the nine index series and the price-limit rule book. Each tool is
+// called through the public handler and compared with the equivalent
+// `query_data` v2 call. The fixture has two entities and three days.
+
+/// Run one daily plan so every dataset the read tools serve is populated.
+fn ran_rig() -> Rig {
+    let r = rig(&[("sh", "600006", day_u32(1)), ("sz", "000002", day_u32(1))]);
+    let p = plan(&r.api, "market.daily");
+    run(&r.api, "market.daily", "run-read-tools", &p);
+    r.api.call("run_worker_once", json!({})).unwrap();
+    r
+}
+
+/// The values two answers must share. `snapshot_id` / `snapshot_time` differ
+/// per call by design.
+fn same_answer(tool: &Value, query: &Value) {
+    for key in [
+        "layout",
+        "columns",
+        "entities",
+        "dates",
+        "trade_days",
+        "row_count",
+        "versions",
+        "metadata",
+        "temporal",
+    ] {
+        assert_eq!(tool.get(key), query.get(key), "{key}");
+    }
+}
+
+fn window() -> (String, String) {
+    (day_u32(10).to_string(), day_u32(0).to_string())
+}
+
+fn dashed(day: &str) -> String {
+    format!("{}-{}-{}", &day[..4], &day[4..6], &day[6..])
+}
+
+#[test]
+fn read_tools_find_securities_and_daily_bars_end_to_end() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = ran_rig();
+    let (start, end) = window();
+
+    let found = r
+        .api
+        .call("find_securities", json!({"code":"600006"}))
+        .unwrap();
+    let catalog = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"securities.catalog","contract_version":"v2",
+                   "selection":{"kind":"catalog","scope":"current_sh_sz_a"},
+                   "filter":{"kind":"catalog","code":"600006"},
+                   "version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    assert_eq!(found["entities"], json!(["sh.600006"]));
+    same_answer(&found, &catalog);
+
+    let tool = r
+        .api
+        .call(
+            "get_daily_bars",
+            json!({"securities":["sh.600006","sz.000002"],"start_date":start,"end_date":end,
+                   "fields":["close"]}),
+        )
+        .unwrap();
+    let query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.daily","contract_version":"v2",
+                   "selection":{"kind":"batch","entities":["sh.600006","sz.000002"]},
+                   "filter":{"kind":"daily","start_date":dashed(&start),"end_date":dashed(&end)},
+                   "version":{"kind":"latest_per_entity"},"fields":["close"]}),
+        )
+        .unwrap();
+    assert_eq!(tool["layout"], "panel");
+    assert_eq!(tool["entities"], json!(["sh.600006", "sz.000002"]));
+    assert!(tool["row_count"].as_u64().unwrap() >= 3, "{tool}");
+    same_answer(&tool, &query);
+
+    // An index code is redirected instead of returning an `absent` page.
+    let error = r
+        .api
+        .call(
+            "get_daily_bars",
+            json!({"securities":["sh.000300"],"start_date":start,"end_date":end}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error.message.contains("get_index_bars"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn read_tools_index_calendar_and_rules_end_to_end() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = ran_rig();
+    let (start, end) = window();
+    let (start_d, end_d) = (dashed(&start), dashed(&end));
+
+    let tool = r
+        .api
+        .call(
+            "get_index_bars",
+            json!({"indices":["sh.000001","sh.000300"],"start_date":start,"end_date":end,
+                   "fields":["close"]}),
+        )
+        .unwrap();
+    let query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.index","contract_version":"v2",
+                   "selection":{"kind":"batch","entities":["sh.000001","sh.000300"]},
+                   "filter":{"kind":"daily","start_date":start_d,"end_date":end_d},
+                   "version":{"kind":"latest_per_entity"},"fields":["close"]}),
+        )
+        .unwrap();
+    assert!(tool["row_count"].as_u64().unwrap() > 0, "{tool}");
+    same_answer(&tool, &query);
+
+    let calendar = r
+        .api
+        .call(
+            "get_trading_calendar",
+            json!({"start_date":start,"end_date":end}),
+        )
+        .unwrap();
+    let calendar_query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.calendar","contract_version":"v2",
+                   "selection":{"kind":"market"},
+                   "filter":{"kind":"daily","start_date":start_d,"end_date":end_d},
+                   "version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    assert!(calendar["columns"]["trade_day"].as_array().unwrap().len() >= 3);
+    same_answer(&calendar, &calendar_query);
+
+    // Without `as_of` the rules resolve at the last trading day up to today.
+    let last_day = calendar["columns"]["trade_day"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rules = r.api.call("get_price_limit_rules", json!({})).unwrap();
+    let explicit = r
+        .api
+        .call("get_price_limit_rules", json!({"as_of":last_day}))
+        .unwrap();
+    let rules_query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.price_limit_rules","contract_version":"v2",
+                   "selection":{"kind":"market"},
+                   "filter":{"kind":"daily","start_date":last_day,"end_date":last_day,"as_of":last_day},
+                   "version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    assert!(rules["row_count"].as_u64().unwrap() > 0, "{rules}");
+    assert_eq!(rules["temporal"]["as_of"], json!(last_day));
+    same_answer(&rules, &explicit);
+    same_answer(&rules, &rules_query);
+}
+
+#[test]
+fn read_tools_market_snapshot_and_yearly_end_to_end() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = ran_rig();
+    let (start, end) = window();
+    let (start_d, end_d) = (dashed(&start), dashed(&end));
+
+    let snapshot = r
+        .api
+        .call(
+            "get_market_snapshot",
+            json!({"start_date":start,"end_date":end,"fields":["close"]}),
+        )
+        .unwrap();
+    let snapshot_query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.daily","contract_version":"v2",
+                   "selection":{"kind":"universe"},
+                   "filter":{"kind":"cross_section","start_date":start_d,"end_date":end_d},
+                   "version":{"kind":"latest_per_entity"},"fields":["close"]}),
+        )
+        .unwrap();
+    assert_eq!(snapshot["layout"], "cross_section");
+    assert_eq!(snapshot["entities"], json!(["sh.600006", "sz.000002"]));
+    same_answer(&snapshot, &snapshot_query);
+
+    // The fixture calendar has three trading days, so a wider date window
+    // still stays inside the five-day cap. The six-day refusal is covered on
+    // a six-day calendar in `data_supply::mcp::tests`; the wrapper adds no
+    // second limit of its own.
+    let wide = r
+        .api
+        .call(
+            "get_market_snapshot",
+            json!({"start_date":day_u32(40).to_string(),"end_date":end,"fields":["close"]}),
+        )
+        .unwrap();
+    assert_eq!(wide["trade_days"], snapshot["trade_days"]);
+
+    // The daily run publishes no yearly series; the tool reports that the
+    // same way `query_data` does.
+    let yearly = r
+        .api
+        .call(
+            "get_yearly_bars",
+            json!({"securities":["sh.600006"],"start_year":2020,"end_year":2030}),
+        )
+        .unwrap();
+    let yearly_query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.yearly","contract_version":"v2",
+                   "selection":{"kind":"single","entity":"sh.600006"},
+                   "filter":{"kind":"yearly","start_year":2020,"end_year":2030},
+                   "version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    same_answer(&yearly, &yearly_query);
+}
+
+#[test]
+fn read_tools_state_and_events_end_to_end() {
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = ran_rig();
+    let (start, end) = window();
+    // Events: the run wrote one adjustment event set and one capital event for
+    // sh.600006. A wide range keeps the test independent of the fixture's dates.
+    for (event, dataset) in [
+        ("capital", "market.capital_events"),
+        ("adjustment", "market.adjustment_events"),
+    ] {
+        let tool = r
+            .api
+            .call(
+                "get_security_events",
+                json!({"securities":["sh.600006"],"event":event,
+                       "start_date":"1990-01-01","end_date":end}),
+            )
+            .unwrap();
+        let query = r
+            .api
+            .call(
+                "query_data",
+                json!({"dataset":dataset,"contract_version":"v2",
+                       "selection":{"kind":"single","entity":"sh.600006"},
+                       "filter":{"kind":"daily","start_date":"1990-01-01","end_date":dashed(&end)},
+                       "version":{"kind":"latest_per_entity"}}),
+            )
+            .unwrap();
+        assert_eq!(tool["dataset"], dataset);
+        assert!(tool["row_count"].as_u64().unwrap() > 0, "{event}: {tool}");
+        same_answer(&tool, &query);
+    }
+
+    // State: the run wrote `security_master` for both codes. The default
+    // `as_of` is the last trading day, written into both ends of the filter.
+    let calendar = r
+        .api
+        .call(
+            "get_trading_calendar",
+            json!({"start_date":start,"end_date":end}),
+        )
+        .unwrap();
+    let last_day = calendar["columns"]["trade_day"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
+    let state = r
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sh.600006","sz.000002"],"fact":"security_master"}),
+        )
+        .unwrap();
+    let query = r
+        .api
+        .call(
+            "query_data",
+            json!({"dataset":"market.security_master","contract_version":"v2",
+                   "selection":{"kind":"batch","entities":["sh.600006","sz.000002"]},
+                   "filter":{"kind":"daily","start_date":last_day,"end_date":last_day,"as_of":last_day},
+                   "version":{"kind":"latest_per_entity"}}),
+        )
+        .unwrap();
+    assert_eq!(state["temporal"]["as_of"], json!(last_day));
+    assert!(state["temporal"].is_object());
+    same_answer(&state, &query);
+
+    // Names for an SH code: the answer says the history is SZ-only.
+    let names = r
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities":["sh.600006"],"fact":"security_names","as_of":last_day}),
+        )
+        .unwrap();
+    assert_eq!(names["row_count"], 0);
+    assert!(
+        names["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("SZ only (D-61)")),
+        "{names}"
+    );
+}
+
+#[test]
+fn read_tools_are_research_only_and_listed_with_their_inputs() {
+    use x_data_mcp::data_supply::registry::EntryKind;
+    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let r = rig(&[("sh", "600006", day_u32(1))]);
+    let names = [
+        "find_securities",
+        "get_daily_bars",
+        "get_yearly_bars",
+        "get_index_bars",
+        "get_market_snapshot",
+        "get_trading_calendar",
+        "get_price_limit_rules",
+        "get_security_state",
+        "get_security_events",
+    ];
+    for entry in [EntryKind::Ops, EntryKind::Maint] {
+        for name in names {
+            assert!(!entry.allows(name), "{} serves {name}", entry.name());
+        }
+    }
+    for name in names {
+        assert!(EntryKind::Research.allows(name), "{name}");
+    }
+    let listed = r.api.tools();
+    let listed = listed.as_array().unwrap();
+    for name in names {
+        let tool = listed.iter().find(|t| t["name"] == name).unwrap();
+        assert_eq!(tool["inputSchema"]["type"], "object", "{name}");
+        // No internal query field leaks into a narrow tool's schema.
+        for hidden in [
+            "dataset",
+            "contract_version",
+            "selection",
+            "filter",
+            "version",
+        ] {
+            assert!(
+                tool["inputSchema"]["properties"].get(hidden).is_none(),
+                "{name} exposes {hidden}"
+            );
+        }
+    }
 }

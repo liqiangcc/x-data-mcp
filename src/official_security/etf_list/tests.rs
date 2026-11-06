@@ -39,12 +39,14 @@ fn the_two_lists_parse_to_the_real_member_counts() {
     assert!(sse.iter().all(|row| row.listing_date.is_some()));
     assert_eq!(sse[0].code, "510000");
     assert_eq!(sse[0].listing_date, Some(day(2010, 1, 1)));
+    assert_eq!(sse[0].name.as_deref(), Some("合成ETF0000"));
 
     let szse = parse(ListKind::Szse, SZSE).unwrap();
     assert_eq!(szse.len(), 770);
     assert!(szse.iter().all(|row| row.exchange == Exchange::Sz));
     assert!(szse.iter().all(|row| row.listing_date.is_none()));
     assert_eq!(szse[0].code, "159000");
+    assert_eq!(szse[0].name.as_deref(), Some("合成ETF159000"));
     assert_eq!(szse[769].code, "159769");
 }
 
@@ -89,6 +91,7 @@ fn identity_rows_are_class_two_and_keep_the_two_listing_sources() {
         rows,
         history: Vec::new(),
         effective_to: BTreeMap::new(),
+        names: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -139,6 +142,7 @@ fn a_szse_code_without_a_tdx_ssdate_keeps_an_unknown_listing_day() {
         rows,
         history: Vec::new(),
         effective_to: BTreeMap::new(),
+        names: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -205,6 +209,7 @@ fn etf_rows_do_not_change_the_a_share_security_master_rows() {
         rows,
         history: Vec::new(),
         effective_to: BTreeMap::new(),
+        names: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -253,6 +258,7 @@ fn the_adapter_evidence_pins_the_business_parser_version() {
         rows: parse(ListKind::Sse, SSE).unwrap(),
         history: Vec::new(),
         effective_to: BTreeMap::new(),
+        names: BTreeMap::new(),
         first_seen: BTreeMap::new(),
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -266,6 +272,359 @@ fn the_adapter_evidence_pins_the_business_parser_version() {
     };
     let evidence = admitted.evidence();
     assert_eq!(evidence["parser_version"], PARSER_VERSION);
+    assert_eq!(PARSER_VERSION, "etf-list-v2");
+    // Names are parsed, not published: the item evidence keeps its v1 shape.
+    let mut keys: Vec<&str> = evidence
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "adapter",
+            "as_of",
+            "first_seen_newest",
+            "first_seen_oldest",
+            "freshness",
+            "history_member_count",
+            "member_count",
+            "parser_version",
+            "removed_member_count",
+            "snapshot_ids",
+            "source_bindings",
+            "sse_rows",
+            "szse_rows",
+        ]
+    );
     assert_eq!(evidence["sse_rows"], 947);
     assert_eq!(evidence["member_count"], 947);
+}
+
+// ------------------------------------------------------ names (etf-list-v2) ---
+
+fn sse_body(rows: &[serde_json::Value]) -> Vec<u8> {
+    serde_json::json!({
+        "pageHelp": {"pageNo": 1, "pageCount": 1, "total": rows.len(), "data": rows}
+    })
+    .to_string()
+    .into_bytes()
+}
+
+fn sse_row(code: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut row = serde_json::json!({"fundCode": code, "listingDate": "20100101"});
+    for (key, value) in extra.as_object().unwrap() {
+        row[key] = value.clone();
+    }
+    row
+}
+
+fn name_of(rows: &[EtfListRow], code: &str) -> Option<String> {
+    rows.iter()
+        .find(|row| row.code == code)
+        .unwrap_or_else(|| panic!("{code} is not in the parsed rows"))
+        .name
+        .clone()
+}
+
+#[test]
+fn sse_name_is_sec_name_full_and_never_fund_abbr() {
+    let body = sse_body(&[
+        sse_row(
+            "510300",
+            serde_json::json!({"secNameFull": "沪深300ETF华泰柏瑞", "fundAbbr": "300ETF"}),
+        ),
+        sse_row(
+            "588000",
+            serde_json::json!({"secNameFull": "科创50ETF华夏", "fundAbbr": "科创50"}),
+        ),
+        // Only the short name is published: there is no name, not `300ETF`.
+        sse_row("510310", serde_json::json!({"fundAbbr": "HS300ETF"})),
+    ]);
+    let rows = parse(ListKind::Sse, &body).unwrap();
+    assert_eq!(
+        name_of(&rows, "510300").as_deref(),
+        Some("沪深300ETF华泰柏瑞")
+    );
+    assert_eq!(name_of(&rows, "588000").as_deref(), Some("科创50ETF华夏"));
+    assert_eq!(name_of(&rows, "510310"), None);
+}
+
+#[test]
+fn sse_names_keep_published_width_and_case_and_normalise_only_whitespace() {
+    let body = sse_body(&[
+        sse_row(
+            "510001",
+            serde_json::json!({"secNameFull": "  沪深300ETF\u{3000}华泰柏瑞\t "}),
+        ),
+        sse_row(
+            "510002",
+            serde_json::json!({"secNameFull": "沪深 300  ETF\u{a0}易方达"}),
+        ),
+        // Full-width letters and digits and lower case are the published text;
+        // folding them is the search side's job, not the parser's.
+        sse_row(
+            "510003",
+            serde_json::json!({"secNameFull": "沪深３００ｅｔｆ南方"}),
+        ),
+        sse_row(
+            "510004",
+            serde_json::json!({"secNameFull": "红利etf\u{200b}国泰"}),
+        ),
+    ]);
+    let rows = parse(ListKind::Sse, &body).unwrap();
+    assert_eq!(
+        name_of(&rows, "510001").as_deref(),
+        Some("沪深300ETF 华泰柏瑞")
+    );
+    assert_eq!(
+        name_of(&rows, "510002").as_deref(),
+        Some("沪深 300 ETF 易方达")
+    );
+    assert_eq!(
+        name_of(&rows, "510003").as_deref(),
+        Some("沪深３００ｅｔｆ南方")
+    );
+    assert_eq!(name_of(&rows, "510004").as_deref(), Some("红利etf国泰"));
+}
+
+#[test]
+fn an_sse_name_that_is_missing_empty_blank_or_not_text_is_none_and_keeps_the_row() {
+    let body = sse_body(&[
+        sse_row("510010", serde_json::json!({"fundAbbr": "A"})),
+        sse_row("510011", serde_json::json!({"secNameFull": ""})),
+        sse_row("510012", serde_json::json!({"secNameFull": " \u{3000}\t "})),
+        sse_row("510013", serde_json::json!({"secNameFull": null})),
+        sse_row("510014", serde_json::json!({"secNameFull": 510014})),
+        sse_row(
+            "510015",
+            serde_json::json!({"secNameFull": "\u{200b}\u{feff}"}),
+        ),
+        sse_row(
+            "510016",
+            serde_json::json!({"secNameFull": "红利ETF华泰柏瑞"}),
+        ),
+    ]);
+    let rows = parse(ListKind::Sse, &body).unwrap();
+    assert_eq!(rows.len(), 7, "a missing name never drops or fails the row");
+    for code in ["510010", "510011", "510012", "510013", "510014", "510015"] {
+        assert_eq!(name_of(&rows, code), None, "{code}");
+    }
+    assert_eq!(name_of(&rows, "510016").as_deref(), Some("红利ETF华泰柏瑞"));
+    assert!(rows.iter().all(|row| row.listing_date.is_some()));
+}
+
+fn szse_book(header: &[&str], rows: &[&[&str]]) -> Vec<u8> {
+    let rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| row.iter().map(|cell| cell.to_string()).collect())
+        .collect();
+    crate::official_security::test_szse_xlsx(header, &rows, "2026-11-05T03:18:10Z")
+}
+
+const SZSE_HEADER: [&str; 5] = [
+    "证券代码",
+    "证券简称",
+    "拟合指数",
+    "当前规模(份)",
+    "基金管理人",
+];
+
+#[test]
+fn szse_name_is_the_short_name_column_wherever_it_sits() {
+    let reordered = szse_book(
+        &["基金管理人", "证券代码", "拟合指数", "证券简称"],
+        &[
+            &["合成基金", "159915", "399006 创业板指", "创业板ETF易方达"],
+            &[
+                "合成基金",
+                "159919",
+                "399300 沪深300",
+                "  沪深300ETF\u{3000}嘉实 ",
+            ],
+        ],
+    );
+    let rows = parse(ListKind::Szse, &reordered).unwrap();
+    assert_eq!(name_of(&rows, "159915").as_deref(), Some("创业板ETF易方达"));
+    assert_eq!(name_of(&rows, "159919").as_deref(), Some("沪深300ETF 嘉实"));
+    assert!(rows.iter().all(|row| row.exchange == Exchange::Sz));
+}
+
+#[test]
+fn an_empty_or_short_szse_name_cell_is_none_and_never_borrowed_from_other_columns() {
+    let book = szse_book(
+        &SZSE_HEADER,
+        &[
+            &["159901", "", "399001 深证100", "1", "甲"],
+            &["159902", " \u{3000} ", "399001 深证100", "1", "甲"],
+            // Row shorter than the header: the short-name cell is absent.
+            &["159903"],
+            &["159904", "中小100ETF华夏", "", "1", "乙"],
+        ],
+    );
+    let rows = parse(ListKind::Szse, &book).unwrap();
+    assert_eq!(rows.len(), 4);
+    assert_eq!(name_of(&rows, "159901"), None);
+    assert_eq!(name_of(&rows, "159902"), None);
+    assert_eq!(name_of(&rows, "159903"), None);
+    assert_eq!(name_of(&rows, "159904").as_deref(), Some("中小100ETF华夏"));
+}
+
+#[test]
+fn a_szse_workbook_without_the_name_column_still_gives_identity_with_no_names() {
+    let book = szse_book(
+        &["证券代码", "拟合指数", "基金管理人"],
+        &[&["159901", "399001 深证100", "甲"], &["159902", "", "乙"]],
+    );
+    let rows = parse(ListKind::Szse, &book).unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.code.as_str()).collect::<Vec<_>>(),
+        ["159901", "159902"]
+    );
+    assert!(rows.iter().all(|row| row.name.is_none()));
+}
+
+#[test]
+fn adding_names_changes_no_identity_row() {
+    let mut rows = parse(ListKind::Sse, SSE).unwrap();
+    rows.extend(parse(ListKind::Szse, SZSE).unwrap());
+    let without_names: Vec<EtfListRow> = rows
+        .iter()
+        .cloned()
+        .map(|mut row| {
+            row.name = None;
+            row
+        })
+        .collect();
+    let admitted = |rows: Vec<EtfListRow>| {
+        let first_seen = rows
+            .iter()
+            .map(|row| ((row.exchange, row.code.clone()), day(2026, 11, 3)))
+            .collect();
+        Admitted {
+            rows,
+            history: Vec::new(),
+            effective_to: BTreeMap::new(),
+            names: BTreeMap::new(),
+            first_seen,
+            bindings: Vec::new(),
+            snapshot_ids: BTreeMap::new(),
+            freshness: Freshness::fetched(day(2026, 11, 3)),
+        }
+    };
+    let tdx = BTreeMap::new();
+    assert_eq!(
+        identity_rows(&admitted(rows), &tdx).unwrap(),
+        identity_rows(&admitted(without_names), &tdx).unwrap()
+    );
+}
+
+fn obs(y: i32, m: u32, d: u32, name: &str) -> NameObservation {
+    NameObservation {
+        observed_from: day(y, m, d),
+        name: name.into(),
+    }
+}
+
+fn sample(d: u32, acquired: &str, sha: &str, name: &str) -> NameSample {
+    (day(2026, 11, d), acquired.into(), sha.into(), name.into())
+}
+
+#[test]
+fn a_chain_merges_adjacent_repeats_and_starts_a_segment_on_each_change() {
+    let chain = name_chain(vec![
+        sample(5, "2026-11-05T01:00:00Z", "a", "甲ETF"),
+        sample(6, "2026-11-06T01:00:00Z", "b", "甲ETF"),
+        sample(7, "2026-11-07T01:00:00Z", "c", "乙ETF"),
+        sample(8, "2026-11-08T01:00:00Z", "d", "乙ETF"),
+    ]);
+    assert_eq!(
+        chain,
+        vec![obs(2026, 11, 5, "甲ETF"), obs(2026, 11, 7, "乙ETF")]
+    );
+}
+
+#[test]
+fn a_chain_keeps_a_to_b_to_a_when_all_three_snapshots_are_in_the_manifest() {
+    let chain = name_chain(vec![
+        sample(7, "2026-11-07T01:00:00Z", "c", "甲ETF"),
+        sample(5, "2026-11-05T01:00:00Z", "a", "甲ETF"),
+        sample(6, "2026-11-06T01:00:00Z", "b", "乙ETF"),
+    ]);
+    assert_eq!(
+        chain,
+        vec![
+            obs(2026, 11, 5, "甲ETF"),
+            obs(2026, 11, 6, "乙ETF"),
+            obs(2026, 11, 7, "甲ETF"),
+        ]
+    );
+}
+
+#[test]
+fn several_snapshots_on_one_day_give_that_day_the_name_of_the_last_one() {
+    let chain = name_chain(vec![
+        sample(5, "2026-11-05T09:00:00Z", "z", "乙ETF"),
+        sample(5, "2026-11-05T01:00:00Z", "y", "甲ETF"),
+    ]);
+    assert_eq!(chain, vec![obs(2026, 11, 5, "乙ETF")]);
+    // Same second: the sha breaks the tie, so the answer never depends on
+    // manifest order.
+    let a = name_chain(vec![
+        sample(5, "2026-11-05T01:00:00Z", "a", "甲ETF"),
+        sample(5, "2026-11-05T01:00:00Z", "b", "乙ETF"),
+    ]);
+    let b = name_chain(vec![
+        sample(5, "2026-11-05T01:00:00Z", "b", "乙ETF"),
+        sample(5, "2026-11-05T01:00:00Z", "a", "甲ETF"),
+    ]);
+    assert_eq!(a, b);
+    assert_eq!(a, vec![obs(2026, 11, 5, "乙ETF")]);
+}
+
+#[test]
+fn names_behind_current_lists_codes_where_the_selected_list_disagrees_with_the_chain() {
+    let rows = vec![
+        named_row("510300", Some("甲ETF")),
+        named_row("510310", Some("乙ETF")),
+        named_row("510320", None),
+        named_row("510330", Some("丙ETF")),
+    ];
+    let key = |code: &str| (Exchange::Sh, code.to_string());
+    let admitted = Admitted {
+        rows,
+        history: Vec::new(),
+        effective_to: BTreeMap::new(),
+        names: BTreeMap::from([
+            (key("510300"), vec![obs(2026, 11, 5, "甲ETF")]),
+            // Chain ends at B while the selected list says A.
+            (
+                key("510310"),
+                vec![obs(2026, 11, 5, "乙ETF"), obs(2026, 11, 6, "丁ETF")],
+            ),
+            (key("510320"), vec![obs(2026, 11, 5, "旧ETF")]),
+        ]),
+        first_seen: BTreeMap::new(),
+        bindings: Vec::new(),
+        snapshot_ids: BTreeMap::new(),
+        freshness: Freshness::fetched(day(2026, 11, 6)),
+    };
+    // 510330 has no chain at all but a current name: also unplaced in time.
+    assert_eq!(
+        admitted.names_behind_current(),
+        vec![key("510310"), key("510330")]
+    );
+}
+
+fn named_row(code: &str, name: Option<&str>) -> EtfListRow {
+    EtfListRow {
+        exchange: Exchange::Sh,
+        code: code.into(),
+        listing_date: Some(day(2010, 1, 1)),
+        sub_class: None,
+        index_code: None,
+        name: name.map(str::to_string),
+    }
 }

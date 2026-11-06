@@ -21,6 +21,14 @@
 # it is renamed aside and `task_sqlite init21` creates a fresh compact
 # database at the path the service unit already uses.
 #
+# Directory skeleton: on a new host `$DEPLOY_ROOT/releases`, `reports`, the
+# database directory, the generation root and the socket directories do not
+# exist yet. Once the package has been verified (and never in --dry-run) the
+# script creates each missing one with mode 0700, the mode the runtime requires
+# for sockets and the database lease. Directories that already exist are left
+# untouched: no mode, owner or content change on a live host. The source store
+# is data and is never created here (see the runbook).
+#
 # Fail-closed:
 #   * any unmet precondition exits non-zero before touching /opt;
 #   * once the mutating phase starts, any later failure restores the
@@ -121,6 +129,11 @@ dep = {"status": status, "code_sha": sha or None, "release": tag,
        "source_store_replay": replay,
        "rollback_outcome": rollback or None,
        "production": "NOT_PRODUCTION_READY"}
+# A new host has no reports/ yet; create just that one level (the deploy root
+# must already exist) so a failure report still lands somewhere.
+reports_dir = pathlib.Path(reports)
+if reports_dir.parent.is_dir():
+    reports_dir.mkdir(mode=0o700, exist_ok=True)
 pathlib.Path(f"{reports}/{short}-phaseg-deployment.json").write_text(
     json.dumps(dep, indent=2))
 PY
@@ -298,6 +311,19 @@ svc_before=$(systemctl show "$DATA_SERVICE" "$ACQ_SERVICE" -p Id,ActiveState 2>/
 target_exec=$(python3 "$SCRIPTS_DIR/data_unit_layout.py" --exec-start "$data_exec" --target) \
     || fail "cannot render the target data unit ExecStart"
 
+# Directories the deploy writes into. They are created in sorted order, so a
+# parent is always made before its children and each one gets mode 0700
+# (`mkdir -m` applies to the last component only).
+# The source store is data, not skeleton: it is never created here, so a host
+# whose clone step was skipped shows up as `store_empty` instead of looking fine.
+LAYOUT_DIRS=("$DEPLOY_ROOT" "$DEPLOY_ROOT/releases" "$REPORTS" "$(dirname "$DB")"
+             "$ACQ_ROOT" "$(dirname "$SOCK_ACQ")")
+for socket in "${DATA_SOCKETS[@]}"; do LAYOUT_DIRS+=("$(dirname "$socket")"); done
+missing_dirs=()
+while IFS= read -r dir; do
+    [[ -z "$dir" || -d "$dir" ]] || missing_dirs+=("$dir")
+done < <(printf '%s\n' "${LAYOUT_DIRS[@]}" | sort -u)
+
 if [[ "$DRY_RUN" == "1" ]]; then
     cat <<EOF
 DRY-RUN phase-g deploy $TAG
@@ -314,6 +340,7 @@ DRY-RUN phase-g deploy $TAG
   market db:       $DB (user_version=$schema_before)
   acquire root:    $ACQ_ROOT
   acquire socket:  $SOCK_ACQ
+  missing dirs:    ${missing_dirs[*]:-none} (a real run creates them, mode 0700)
   plan: fetch+verify tarball -> stage release dir -> archive existing db
         aside (never migrated/deleted) -> task_sqlite init21 fresh db ->
         stop tunnel, acquire then data -> switch current -> start data, acquire
@@ -359,6 +386,15 @@ tar -xzf "$WORK/$TARBALL" -C "$WORK/stage" --strip-components=1 || fail "unpack"
 "$WORK/stage/bin/mcp_data" --version | grep -q "$SHA" || fail "binary version does not embed $SHA"
 [[ -x "$WORK/stage/bin/acquire_service" && -x "$WORK/stage/bin/task_sqlite" ]] \
     || fail "release lacks acquire_service/task_sqlite"
+# Package verified: only now write to the host. A new host has none of these.
+step=prepare_layout
+for dir in "${missing_dirs[@]}"; do
+    [[ -d "$dir" ]] && continue  # an earlier entry's parents may have created it
+    if [[ -e "$dir" || -L "$dir" ]]; then fail "$dir exists and is not a directory"; fi
+    mkdir -p -m 700 "$dir" || fail "create directory $dir"
+    echo "created $dir (0700)"
+done
+
 step=install_release
 if [[ ! -d "$RELEASE_DIR" ]]; then
     mv "$WORK/stage" "$RELEASE_DIR" || fail "install release dir"

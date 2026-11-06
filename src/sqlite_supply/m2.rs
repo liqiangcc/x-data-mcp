@@ -28,7 +28,7 @@ use crate::data_supply::wire::*;
 use crate::market_storage::Error;
 use crate::research::temporal::{Temporal, TemporalReport};
 use crate::security_master::assembly;
-use crate::sqlite_market::{derived, rules, security};
+use crate::sqlite_market::{derived, evidence_store, rules, security};
 
 /// The dataset's `derived_dataset_versions.dataset_kind` for the datasets that
 /// register one whole-market row. `capital_events` is per entity and handled
@@ -173,6 +173,7 @@ pub(super) fn query(
         manifest: vec![],
         rows: vec![],
         temporal: None,
+        limitations: vec![],
     };
     match dataset {
         Dataset::SecurityMaster => {
@@ -211,8 +212,13 @@ fn security_master(
         "assembled from TDX facts and admitted exchange lists; 知晓时间 is per row (§12.2)",
     )?);
     if registration.is_none() {
+        note_unregistered(result, Dataset::SecurityMaster);
         return Ok(());
     }
+    result.limitations.push(
+        "known_at is stored only where a source supplies one and is NULL otherwise, never proxied by the effective day"
+            .into(),
+    );
     let as_of = report.as_of;
     let selected: Option<BTreeSet<String>> = match &plan.args.selection {
         Selection::Market { .. } => None,
@@ -303,6 +309,7 @@ fn security_names(
         // No registration means the dataset was never written (or a quiet,
         // empty source removed it); `absent` with zero rows is the answer, and
         // the read never invents a current name to fill the gap.
+        note_unregistered(result, Dataset::SecurityNames);
         return Ok(());
     }
     let as_of = report.as_of;
@@ -358,6 +365,7 @@ fn capital_events(
             "parsed from gbbq; the source carries no announcement day, so known_at is NULL (BR-M1-9)",
         )?);
         if registration.is_none() {
+            note_unregistered(result, Dataset::CapitalEvents);
             continue;
         }
         for event in security::read_capital_events(c, &entity.symbol())? {
@@ -397,16 +405,27 @@ fn risk_warnings(
     result: &mut QuerySnapshot,
 ) -> Result<(), Error> {
     let registration = registration(c, Dataset::RiskWarnings, None)?;
+    // A registered version describes itself from its own stored evidence
+    // (D-58 coverage windows and row counts); an unregistered dataset has no
+    // metadata at all and says so in `limitations`.
+    let described = match registration.as_ref() {
+        Some(registration) => Some(risk_warning_description(c, registration)?),
+        None => None,
+    };
     result.manifest.push(derived_or_absent(
         c,
         Dataset::RiskWarnings,
         None,
         registration.as_ref(),
-        "historical ST is pending #308; rows exist only after the source is admitted",
+        described
+            .as_ref()
+            .map_or("", |described| described.coverage_reason.as_str()),
     )?);
-    if registration.is_none() {
+    let Some(described) = described else {
+        note_unregistered(result, Dataset::RiskWarnings);
         return Ok(());
-    }
+    };
+    result.limitations.extend(described.limitations);
     let as_of = report.as_of;
     let selected: BTreeSet<String> = plan.entities.iter().map(Security::symbol).collect();
     for row in security::read_risk_warning_intervals(c)? {
@@ -458,11 +477,19 @@ fn suspensions(
         Dataset::Suspensions,
         None,
         registration.as_ref(),
-        "confirmed rows need an admitted announcement source; unresolved_gap is derived (AC-M2-8)",
+        "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); \
+         every other gap is a derived `unresolved_gap` (AC-M2-8)",
     )?);
     if registration.is_none() {
+        note_unregistered(result, Dataset::Suspensions);
         return Ok(());
     }
+    result.limitations.push(
+        "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; \
+         SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; \
+         intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+            .into(),
+    );
     let as_of = report.as_of;
     let selected: BTreeSet<String> = plan.entities.iter().map(Security::symbol).collect();
     for row in security::read_suspension_intervals(c)? {
@@ -508,11 +535,18 @@ fn price_limit_rules(
         Dataset::PriceLimitRules,
         None,
         registration.as_ref(),
-        "rule rows are effective-dated data; M2 does not derive limit prices",
+        "effective-dated rule rows (effective_to is exclusive); this dataset returns the rules, not derived limit prices",
     )?);
     if registration.is_none() {
+        note_unregistered(result, Dataset::PriceLimitRules);
         return Ok(());
     }
+    result.limitations.push(
+        "no rule row starts before 1996-12-16 (NOT_AVAILABLE, D-44), so earlier dates are `unknown`, never `no limit`; \
+         the first-day 44%/36% ranges (SH from 2013-12-13, SZ from 2014-06-13, until 2023-02-16) are not encoded (D-64); \
+         rule rows carry no known_at"
+            .into(),
+    );
     let as_of = report.as_of;
     for rule in rules::read_trading_rules(c)?.price_limits {
         // Rule rows carry no 知晓时间 (§12.4 export columns); observing `None`
@@ -548,6 +582,109 @@ fn price_limit_rules(
         check_budget(result)?;
     }
     Ok(())
+}
+
+/// What a registered `market.risk_warnings` version says about itself.
+struct RiskWarningDescription {
+    coverage_reason: String,
+    limitations: Vec<String>,
+}
+
+/// Describe a registered risk-warning version from its stored evidence (the
+/// row counts and acquisition windows the writer recorded) plus the D-58
+/// source limits. Nothing here depends on the dataset being "pending": the
+/// registration exists, so the source was admitted and written.
+fn risk_warning_description(
+    c: &Connection,
+    registration: &derived::DerivedVersionRow,
+) -> Result<RiskWarningDescription, Error> {
+    let (_, canonical) = evidence_store::read_evidence(c, &registration.evidence_digest)?;
+    let evidence: serde_json::Value = serde_json::from_str(&canonical)
+        .map_err(|error| Error::Integrity(format!("risk_warnings evidence: {error}")))?;
+    // Keys are those `replace_risk_warnings` writes into the registered
+    // evidence (pinned by `registered_evidence_has_the_keys_the_reader_uses`).
+    let count = |key: &str| evidence[key].as_u64();
+    let mut parts = Vec::new();
+    if let (Some(sz), Some(sh)) = (count("sz_rows"), count("sh_rows")) {
+        parts.push(format!(
+            "{sz} SZ and {sh} SH stored ST interval row(s) (SH intervals are built from announcement events)"
+        ));
+    }
+    if let (Some(observed), Some(not_observed)) =
+        (count("observed_windows"), count("not_observed_windows"))
+    {
+        parts.push(format!(
+            "{observed} acquisition window(s) observed, {not_observed} not_observed"
+        ));
+    }
+    let coverage_reason = format!(
+        "{}{}a day without a covering row is `unknown`, never `normal` (D-58)",
+        parts.join("; "),
+        if parts.is_empty() { "" } else { "; " }
+    );
+
+    let mut limitations = vec![
+        "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); \
+         SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), \
+         not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)"
+            .to_owned(),
+        "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+            .to_owned(),
+    ];
+    // Windows the writer could not observe (e.g. the SSE archive starts in
+    // 2000-01 but returns nothing for 2000-2003) are listed from the stored
+    // evidence, so the answer states the real SH start instead of the archive's.
+    let mut gaps: BTreeMap<String, (usize, String, String)> = BTreeMap::new();
+    for window in evidence["coverage"].as_array().into_iter().flatten() {
+        if window["observed"].as_bool() != Some(false) {
+            continue;
+        }
+        let (Some(exchange), Some(from), Some(to)) = (
+            window["exchange"].as_str(),
+            window["from"].as_str(),
+            window["to"].as_str(),
+        ) else {
+            continue;
+        };
+        let entry = gaps
+            .entry(exchange.to_owned())
+            .or_insert_with(|| (0, from.to_owned(), to.to_owned()));
+        entry.0 += 1;
+        if from < entry.1.as_str() {
+            entry.1 = from.to_owned();
+        }
+        if to > entry.2.as_str() {
+            entry.2 = to.to_owned();
+        }
+    }
+    if !gaps.is_empty() {
+        let listed = gaps
+            .iter()
+            .map(|(exchange, (windows, from, to))| {
+                format!("{exchange}: {windows} window(s) between {from} and {to}")
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        limitations.push(format!(
+            "windows with no usable source pages are not_observed and stay `unknown`: {listed}"
+        ));
+    }
+    Ok(RiskWarningDescription {
+        coverage_reason,
+        limitations,
+    })
+}
+
+/// An unregistered dataset has no metadata, so the reason for an empty answer
+/// travels in `limitations`.
+fn note_unregistered(result: &mut QuerySnapshot, dataset: Dataset) {
+    let note = format!(
+        "{} has no registered version: it has not been written yet, so zero rows means `unknown`, not that no such fact exists",
+        dataset.name()
+    );
+    if !result.limitations.contains(&note) {
+        result.limitations.push(note);
+    }
 }
 
 fn derived_or_absent(

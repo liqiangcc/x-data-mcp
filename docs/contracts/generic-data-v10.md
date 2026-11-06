@@ -41,8 +41,8 @@ ETF 身份来源在来源库注册，不新增 MCP 工具：
 
 | `source_id` | 请求 | 用途 | parser |
 |---|---|---|---|
-| `sse_etf_list` | SSE `commonSoaQuery.do?sqlId=FUND_LIST` | 沪市 ETF 身份 + `listingDate` + `subClass` + `INDEX_CODE` | `etf-list-v1` |
-| `szse_etf_list` | SZSE `ShowReport?SHOWTYPE=xlsx&CATALOGID=1945` | 深市 ETF 身份（上市日取 `base.dbf SSDATE`） | `etf-list-v1` |
+| `sse_etf_list` | SSE `commonSoaQuery.do?sqlId=FUND_LIST` | 沪市 ETF 身份 + `listingDate` + `subClass` + `INDEX_CODE`（`etf-list-v2` 另解析 `secNameFull`，尚无读面） | `etf-list-v2` |
+| `szse_etf_list` | SZSE `ShowReport?SHOWTYPE=xlsx&CATALOGID=1945` | 深市 ETF 身份（上市日取 `base.dbf SSDATE`；`etf-list-v2` 另解析证券简称，尚无读面） | `etf-list-v2` |
 | `sse_fund_delist_ann` | SSE `commonQuery.do?sqlId=COMMON_PL_JJXX_JJGG_L&TITLE=终止上市` | 沪市退市 ETF 公告索引（按季分段，分页无效） | `etf-delist-ann-v1` |
 | `szse_etf_notice_ann` | SZSE `announcement/annList`（POST，`channelCode=etf_notice_disc`） | 深市退市 ETF 公告索引（`pageSize=50`、`announceCount` 为总数） | `etf-delist-ann-v1` |
 | `etf_delist_pdf` | 人工确认的终止上市公告 PDF | D-72 精确退市日原文证据 | `pdf-v1`（只冻结，不解析） |
@@ -51,7 +51,7 @@ ETF 身份来源在来源库注册，不新增 MCP 工具：
 `ebs` 只是报价锚，不是身份来源（D-70 Q1）。两个来源的冻结字节、`exchange_source_snapshots`
 索引行与 `replay --scope exchange` 语义沿用 M3 §6/§9.4；`parser_version` 在快照清单里仍是
 envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业务解析器版本
-`etf-list-v1` 记录在 `derived:security_master` 的 item evidence。
+`etf-list-v2` 记录在 `derived:security_master` 的 item evidence。
 
 ### 1.3 写入语义
 
@@ -137,10 +137,18 @@ envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业�
 
 ### 1.6 PR-D：研究快照导出 `research-snapshot.v4` 收录 ETF
 
-导出不是 MCP 工具（AC-M1-10），所以本节不改 `tools/list`、能力修订或 wire 形状。版本仍记为
-`x-data-mcp.research-snapshot.v4`：v4（XDM-157）在代码里已合并但**从未部署**（已部署的导出是
-v3），所以 ETF 列并入 v4，不再升 v5。读取方以 `manifest.files[].columns` 判断列集；v2/v3 目录
-的列集不变，仍按各自契约可读（`scripts/export_smoke.py` 按 schema 版本取列契约）。
+导出不是 MCP 工具（AC-M1-10），所以本节不改 `tools/list`、能力修订或 wire 形状。ETF 列首次随 preview.44
+写出，当时仍记为 `x-data-mcp.research-snapshot.v4`；该判断（「v4 从未部署」）与事实不符：v4
+（XDM-157）已随 preview.42/43 部署，列更少。所以**同一个 `v4` 字符串对应两种列布局**：preview.42/43
+的日线文件 11 列、universe 文件 7 列；preview.44/45 的 13 列、10 列。
+
+**版本（审计 T7，Refs #383；代码已实现，未部署）**：清单 schema 升为 `x-data-mcp.research-snapshot.v5`，
+`v5` 的列集就是下表追加后的列（preview.44/45 的 `v4` 列，不变）。读取方的判定路径：`v5` 一律是 ETF
+布局；`v2`/`v3` 一律不是；`v4` 看 `manifest.files[].columns` 是否含 `instrument_class`。已写出的 `v4`
+目录不会被改写。`v5` 另在清单顶层加 `producer`（`git_sha`、派生算法标签），只记录，不进 `snapshot_id`。
+没有采用 `column_layout` 字段：旧目录没有它，无法判定。细节见
+[data-catalog §5.3](../data-catalog.md)。v2–v5 目录都可读（`scripts/export_smoke.py` 按 schema 版本
+与列取契约）。
 
 **哪些 ETF 进导出**
 

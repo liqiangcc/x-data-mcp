@@ -82,6 +82,18 @@ pub(crate) fn open_read_only(path: &Path) -> Result<Connection, Error> {
 
 /// The catalog the entity selection resolved to, plus the member set the stock
 /// filter uses (`None` for an explicit list).
+///
+/// The member set depends on the selection (#446 §10.4; the survivor-bias fix):
+///
+/// - default (`CatalogHead`): catalog head members ∪ every SH/SZ A-share row of
+///   `security_master` ∪ every published stock daily series. A delisted code is
+///   by definition not in today's catalog, so a catalog-only set would drop all
+///   of them from `daily_*` and `factors`. `binding.member_count` still counts
+///   the catalog members only (the manifest schema is unchanged).
+/// - `CatalogVersion`: the members of that stored version and nothing else. A
+///   pinned version is a deliberate request for that catalog snapshot, so it is
+///   survivor-biased by construction; the manifest says `catalog_version`.
+/// - `Explicit`: no member set; the list decides.
 pub(crate) struct Catalog {
     pub binding: CatalogBinding,
     pub members: Option<BTreeSet<String>>,
@@ -121,6 +133,7 @@ pub(crate) fn catalog(c: &Connection, selection: &EntitySelection) -> Result<Cat
         }
     };
     let version_id = version_id.expect("catalog selections always name a version");
+    let default_selection = matches!(selection, EntitySelection::CatalogHead);
     let mut statement = c
         .prepare(
             "SELECT exchange || '.' || code FROM catalog_members WHERE version_id=?1 ORDER BY 1",
@@ -136,14 +149,50 @@ pub(crate) fn catalog(c: &Connection, selection: &EntitySelection) -> Result<Cat
             "catalog version {version_id} has no member"
         )));
     }
+    let member_count = members.len();
+    let members = if default_selection {
+        default_members(c, members)?
+    } else {
+        members
+    };
     Ok(Catalog {
         binding: CatalogBinding {
             selection: selection.as_str(),
             version_id: Some(version_id),
-            member_count: members.len(),
+            member_count,
         },
         members: Some(members),
     })
+}
+
+/// The default A-share member set: catalog ∪ main-table A shares ∪ published
+/// stock daily series (#446 §10.4: "成员集取自主表，不取目录").
+///
+/// The three parts overlap almost completely. They are all named because each
+/// covers a case the others miss: the catalog is today's list, the main table
+/// holds the delisted codes that also have no series yet, and the series set
+/// holds anything published whose main-table row is missing. A member without a
+/// series or a factor set simply produces no entry downstream.
+fn default_members(
+    c: &Connection,
+    mut members: BTreeSet<String>,
+) -> Result<BTreeSet<String>, Error> {
+    members.extend(super::universe::listed_ever_entities(c)?);
+    let mut statement = c
+        .prepare(
+            "SELECT DISTINCT s.entity FROM market_series s \
+             WHERE s.period=?1 AND s.instrument_class=?2",
+        )
+        .map_err(db)?;
+    let published = statement
+        .query_map(params![period_day(), INSTRUMENT_CLASS_STOCK], |r| {
+            r.get::<_, String>(0)
+        })
+        .map_err(db)?;
+    for entity in published {
+        members.insert(entity.map_err(db)?);
+    }
+    Ok(members)
 }
 
 type RawSeries = (
@@ -198,7 +247,9 @@ fn period_day() -> i64 {
 /// An explicit entity list is validated against the published series: naming an
 /// entity that has no daily series is a request error, not a silently smaller
 /// export. Catalog selections need no such check — a member without a published
-/// series is simply not part of the snapshot, and `catalog.member_count` says so.
+/// series is simply not part of the snapshot. The default selection's member set
+/// is wider than the catalog (see [`Catalog`]), so delisted series are included;
+/// `catalog.member_count` counts the catalog members only.
 ///
 /// ETFs are not catalog members (D-70 Q5), so a catalog selection takes every
 /// published ETF series, and an explicit list takes the ETFs it names. The

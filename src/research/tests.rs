@@ -41,6 +41,9 @@ use crate::trading_calendar::TradingCalendar;
 
 const GEN1: &str = "gen-1";
 const GEN2: &str = "gen-2";
+/// Delisted A shares that are not members of the fixture's catalog head
+/// ([`Fixture::with_delisted_off_catalog`]).
+const OFF_CATALOG_DELISTED: [&str; 2] = ["sh.600001", "sz.000003"];
 const MANIFEST_SHA: &str = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
 const CREATED_AT: &str = "2026-10-26T00:00:00Z";
 
@@ -116,17 +119,24 @@ impl Fixture {
     /// keeps the three-day `days()` window; the calendar follows the stock
     /// window so every stock bar is inside it.
     fn with_days(stock_day_count: usize) -> Self {
-        Self::build(stock_day_count, false)
+        Self::build(stock_day_count, false, false)
     }
 
     /// The default fixture plus three ETF identities (M3-2 PR-D): a live ETF
     /// whose last bar is a zero-volume bar, a delisted ETF with a tail of
     /// zero bars, and a listed ETF without any `.day` member.
     fn with_etf() -> Self {
-        Self::build(3, true)
+        Self::build(3, true, false)
     }
 
-    fn build(stock_day_count: usize, etf: bool) -> Self {
+    /// The default fixture plus two delisted A shares that are **not** catalog
+    /// members (`sh.600001`, `sz.000003`), each with a full set of per-entity
+    /// rows, to prove the default selection does not drop them.
+    fn with_delisted_off_catalog() -> Self {
+        Self::build(3, false, true)
+    }
+
+    fn build(stock_day_count: usize, etf: bool, delisted: bool) -> Self {
         let dir = tempdir();
         let path = dir.path().join("market.db");
         SqliteTasks::new(&path).initialize_compact().unwrap();
@@ -134,12 +144,12 @@ impl Fixture {
         let mut c = Connection::open(&path).unwrap();
         c.pragma_update(None, "foreign_keys", true).unwrap();
         let tx = c.transaction().unwrap();
-        Self::populate(&tx, stock_day_count, etf);
+        Self::populate(&tx, stock_day_count, etf, delisted);
         tx.commit().unwrap();
         Self { _dir: dir, path }
     }
 
-    fn populate(c: &Connection, stock_day_count: usize, etf: bool) {
+    fn populate(c: &Connection, stock_day_count: usize, etf: bool, delisted: bool) {
         let stock_days = history_days(stock_day_count);
         let calendar_days = stock_days.clone();
         let generation_evidence = evidence_store::put_evidence(
@@ -164,7 +174,11 @@ impl Fixture {
 
         // Two stocks × two 口径, all bound to generation 1.
         let mut seed = 0x10;
-        for (entity, base) in [("sh.600000", 1000i64), ("sz.000001", 2000i64)] {
+        let mut stocks = vec![("sh.600000", 1000i64), ("sz.000001", 2000i64)];
+        if delisted {
+            stocks.extend(OFF_CATALOG_DELISTED.map(|entity| (entity, 3000i64)));
+        }
+        for (entity, base) in stocks {
             for adjustment in [Adjustment::Raw, Adjustment::Forward] {
                 seed += 1;
                 let price_scale = match adjustment {
@@ -269,7 +283,11 @@ impl Fixture {
         .unwrap();
 
         // One factor event per stock, through the production replace path.
-        for entity in ["sh.600000", "sz.000001"] {
+        let mut factor_entities = vec!["sh.600000", "sz.000001"];
+        if delisted {
+            factor_entities.extend(OFF_CATALOG_DELISTED);
+        }
+        for entity in factor_entities {
             let set = AdjustmentEventSet {
                 entity: entity.into(),
                 events: vec![AdjustmentEvent {
@@ -358,8 +376,8 @@ impl Fixture {
         if etf {
             Self::populate_etf_series(c, binding, version_evidence);
         }
-        Self::populate_security_master(c, binding, etf);
-        Self::populate_industry(c);
+        Self::populate_security_master(c, binding, etf, delisted);
+        Self::populate_industry(c, delisted);
     }
 
     /// ETF 不复权 series at 3dp (厘). Synthetic bars: the real-byte anchors
@@ -481,9 +499,23 @@ impl Fixture {
     /// `sqlite_market::industry::replace_industry`), so the export reads the
     /// same interval rows the v8 dataset serves. One snapshot gives one open
     /// interval per code and puts `coverage_start` at the fixture's first day.
-    fn populate_industry(c: &Connection) {
-        let rebuild =
-            crate::industry::rebuild(&[Self::industry_facts(days()[0], "X5001")]).unwrap();
+    fn populate_industry(c: &Connection, delisted: bool) {
+        let mut facts = Self::industry_facts(days()[0], "X5001");
+        if delisted {
+            for entity in OFF_CATALOG_DELISTED {
+                let (exchange, code) = entity.split_once('.').unwrap();
+                facts.members.push(crate::industry::IndustryMember {
+                    exchange: exchange.into(),
+                    code: code.into(),
+                    level: 2,
+                    industry_code: "X5002".into(),
+                    t_code: "T5002".into(),
+                });
+            }
+            facts.record.row_count += 2;
+            facts.record.scope_member_count += 2;
+        }
+        let rebuild = crate::industry::rebuild(&[facts]).unwrap();
         crate::sqlite_market::industry::replace_industry(c, &rebuild).unwrap();
     }
 
@@ -543,21 +575,25 @@ impl Fixture {
     /// exception: it has no writer yet (#308 owns that path), so the rows are
     /// inserted directly — the export only needs rows to prove the file, and
     /// the DDL CHECKs are the contract until the writer exists.
-    fn populate_security_master(c: &Connection, binding: Digest, etf: bool) {
+    fn populate_security_master(c: &Connection, binding: Digest, etf: bool, off_catalog: bool) {
         use crate::security_master::assembly::{Assembly, CodeMigrationFact, MigrationCertainty};
         use crate::security_master::{
             CapitalEvent, CapitalEventSet, Exchange, IssuerResolution, ListingSource,
             SuspensionCertainty, SuspensionInterval, SuspensionReason,
         };
         let window = days();
-        let rows: Vec<SecurityLifecycleFact> = ["sh.600000", "sz.000001"]
+        let mut master_entities = vec!["sh.600000", "sz.000001"];
+        if off_catalog {
+            master_entities.extend(OFF_CATALOG_DELISTED);
+        }
+        let rows: Vec<SecurityLifecycleFact> = master_entities
             .into_iter()
             .map(|entity| {
                 let (exchange, code) = entity.split_once('.').unwrap();
                 // One delisted member so the manifest's `coverage.delisted_series`
                 // is a non-zero count and the universe file has to express the
                 // closed interval (#446 §10.4).
-                let delisted = entity == "sz.000001";
+                let delisted = entity == "sz.000001" || OFF_CATALOG_DELISTED.contains(&entity);
                 SecurityLifecycleFact {
                     exchange: if exchange == "sh" {
                         Exchange::Sh
@@ -636,6 +672,38 @@ impl Fixture {
         )
         .unwrap();
 
+        for entity in off_catalog
+            .then_some(OFF_CATALOG_DELISTED)
+            .into_iter()
+            .flatten()
+        {
+            security::replace_capital_events(
+                c,
+                &CapitalEventSet {
+                    entity: entity.into(),
+                    events: vec![
+                        CapitalEvent::from_raw(
+                            0,
+                            window[0],
+                            9,
+                            [
+                                f32::to_bits(0.0),
+                                f32::to_bits(0.0),
+                                f32::to_bits(50_000.0),
+                                f32::to_bits(60_000.0),
+                            ],
+                        )
+                        .unwrap(),
+                    ],
+                    excluded: 0,
+                    excluded_by_category: std::collections::BTreeMap::new(),
+                },
+                binding,
+                "task-capital-delisted",
+                "derived:capital_events",
+            )
+            .unwrap();
+        }
         security::replace_capital_events(
             c,
             &CapitalEventSet {
@@ -688,14 +756,27 @@ impl Fixture {
             }),
         )
         .unwrap();
-        for (code, status, raw) in [
+        let mut risk_rows = vec![
             ("600000", crate::security_master::RiskStatus::Normal, "N"),
             (
                 "000001",
                 crate::security_master::RiskStatus::OtherRiskWarning,
                 "ST",
             ),
-        ] {
+        ];
+        if off_catalog {
+            risk_rows.push((
+                "600001",
+                crate::security_master::RiskStatus::OtherRiskWarning,
+                "ST",
+            ));
+            risk_rows.push((
+                "000003",
+                crate::security_master::RiskStatus::OtherRiskWarning,
+                "ST",
+            ));
+        }
+        for (code, status, raw) in risk_rows {
             c.execute(
                 "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
                  raw_status_code,normalized_status,announced_at,known_at,source_kind,\
@@ -713,24 +794,30 @@ impl Fixture {
             .unwrap();
         }
 
+        let gap = |exchange: Exchange, code: &str| SuspensionInterval {
+            exchange,
+            code: code.into(),
+            start_day: window[1],
+            end_day: window[1],
+            certainty: SuspensionCertainty::UnresolvedGap,
+            missing_days: 1,
+            reason: SuspensionReason::MissingBarNoEvent,
+            known_at: None,
+            source_kind: "bar_evidence".into(),
+            source_record_id: None,
+        };
+        let mut gaps = vec![gap(Exchange::Sz, "000001")];
+        if off_catalog {
+            gaps.push(gap(Exchange::Sh, "600001"));
+            gaps.push(gap(Exchange::Sz, "000003"));
+        }
         let set = SuspensionSet {
-            rows: vec![SuspensionInterval {
-                exchange: Exchange::Sz,
-                code: "000001".into(),
-                start_day: window[1],
-                end_day: window[1],
-                certainty: SuspensionCertainty::UnresolvedGap,
-                missing_days: 1,
-                reason: SuspensionReason::MissingBarNoEvent,
-                known_at: None,
-                source_kind: "bar_evidence".into(),
-                source_record_id: None,
-            }],
             // The writer recomputes these and refuses a set that disagrees,
             // so the fixture states them instead of leaving them zero.
             confirmed_rows: 0,
-            gap_rows: 1,
-            single_day_gap_rows: 1,
+            gap_rows: gaps.len(),
+            single_day_gap_rows: gaps.len(),
+            rows: gaps,
             multi_day_gap_rows: 0,
             deferred_beyond_calendar: 0,
             deferred_samples: Vec::new(),
@@ -746,6 +833,53 @@ impl Fixture {
             "derived:suspensions",
         )
         .unwrap();
+
+        if off_catalog {
+            use crate::security_master::coverage::CoverageWindow;
+            use crate::security_master::names::{
+                NameCertainty, NameInterval, NameSet, NameSourceKind,
+            };
+            // SZ is the only exchange with a dated name history (D-61), so the
+            // SZ delisted code carries the name rows.
+            let name = |name: &str, from: NaiveDate, to: Option<NaiveDate>| NameInterval {
+                exchange: Exchange::Sz,
+                code: "000003".into(),
+                effective_from: from,
+                effective_to: to,
+                name: name.into(),
+                certainty: if to.is_some() {
+                    NameCertainty::Interval
+                } else {
+                    NameCertainty::Unbounded
+                },
+                known_at: None,
+                source_kind: NameSourceKind::SzseNameHistory,
+                source_record_id: Some(format!("000003|{from}")),
+            };
+            crate::sqlite_market::security_names::replace_security_names(
+                c,
+                &NameSet {
+                    rows: vec![
+                        name("PT金田A", window[0], Some(window[1])),
+                        name("PT金田", window[1], None),
+                    ],
+                    coverage: vec![CoverageWindow {
+                        source_kind: "szse_name_history".into(),
+                        exchange: Exchange::Sz,
+                        from: window[0],
+                        to: window[2],
+                        observed: true,
+                        rows: 2,
+                        reason: "fixture".into(),
+                    }],
+                    pending_sources: Vec::new(),
+                },
+                binding,
+                "task-names",
+                "derived:security_names",
+            )
+            .unwrap();
+        }
 
         crate::sqlite_market::rules::replace_trading_rules(
             c,
@@ -2070,4 +2204,6 @@ mod with_export {
     }
 }
 
+mod delisted;
 mod etf;
+mod producer;

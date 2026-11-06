@@ -1310,20 +1310,20 @@ owner 2026-10-28 对 Q1–Q8 回复「按推荐」：下表默认值即裁决，
 
 ### 14.3 验收清单（私有栈，部署前）
 
-本节是 PR-13 的验收半边：PR-13a 只交付文档（本表与数据目录/设计同步），**下表没有执行过任何一项**，状态一律「未执行」。执行前提：包含 PR-1a…PR-9 的 release 部署到私有栈，配置 `X_DATA_MCP_SOURCE_STORE`（指向部署状态目录下的来源库）与 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（仅本地验收）；生产实例与 `/opt` 不动。证据（命令输出、JSON、行数、sha256）逐条贴回 #446，不写进本仓库。
+本节是 PR-13 的验收半边：PR-13a 只交付文档（本表与数据目录/设计同步），**下表执行状态**已按 §14.12 第 7 条（preview.39 私有栈首轮，2026-10-31）同步，之后的验收读数以 [STATUS](../STATUS.md) 为准，本表不跟进；未在 §14.12 第 7 条出现的 AC 保持「未执行」，AC-M3-4 例外（见其行）。执行前提：包含 PR-1a…PR-9 的 release 部署到私有栈，配置 `X_DATA_MCP_SOURCE_STORE`（指向部署状态目录下的来源库）与 `X_DATA_MCP_UNSAFE_NONLOCAL_FS=1`（仅本地验收）；生产实例与 `/opt` 不动。证据（命令输出、JSON、行数、sha256）逐条贴回 #446，不写进本仓库。
 
 | AC | 私有栈动作 | 要贴回 #446 的证据 | 状态 |
 |---|---|---|---|
-| AC-M3-1 | fresh-init 后查询 `market.security_master`，`selection.kind=universe`、`filter.as_of=2015-01-05`；把返回成员与「2015 年以来退市且有 bar」清单逐条核对（退市股序列已首采） | 成员数与按代码清单、每条 `membership_basis`、`unknown` 逐条原因；与当日 catalog 快照的差集 | 未执行（依赖退市股首采） |
-| AC-M3-2 | 用 `research-snapshot.v3` 的 `universe_intervals` + `daily_raw` 统计 10 年逐年样本数，与主表「当年在册数」逐年对比 | 逐年样本数/在册数表；每个偏差的代码与原因（退市日 `unknown`、代码复用、来源缺失） | 未执行 |
-| AC-M3-3 | `query_data` 读 `market.industry_assignments`：`as_of` 取 2015-01-05、`industry_coverage_start` 与起点前一日；再用顶层 `known_at` 读一次 | 行内 `effective_from`/`effective_to`/`source_snapshot_sha256`/`evidence_grade`/`status`/`reason`；起点前 `status=unknown`；`known_at` 排除 NULL 的计数；没有当前行业回填 | 未执行 |
-| AC-M3-4 | `source_store import --store … --index … --blobs … --tiers A,B --kind industry`（含 9 份 `base.zip`/7 个 `tdxhy.cfg`，重复执行一次）→ `source_store replay --store … --db … --scope industry` | 7 个不同内容各一条 `industry_snapshots` 记录与变更集；A/B 档与 `effective_from_basis`；C 档只作交叉核对；重复导入 `already_present`；两次重放 `summary` 相同且回读 `match` | 未执行 |
-| AC-M3-5 | 对 superseded generation 调 `retire_generation` 四次：① 缺派生事实；② 来源库有字节但索引缺行；③ blob 不可读；④ owner 用 `source_store exempt … --owner-approve-evidence` 后重试 | 四次响应 JSON（`derived_facts_missing` 清单 / `source_store_evidence_missing` + 重放提示 / `source_store_corrupt` / 成功 + `exemptions:`）、豁免行、原字节仍在；active 与 pin 检查不回归 | 未执行 |
-| AC-M3-6 | 连续两代 generation 各跑一次 `plan_market_update`/`run_market_update`，读两次 `derived:delisted_series_check` 的 item evidence | 两代 run/task id；登记的与核对的 `record_count`/`first_day`/`last_day`/`content_digest`；只允许尾追加；再造一次改写/消失 → 实体清单与 `partially_failed` | 未执行（依赖退市股首采） |
-| AC-M3-7 | 绑定交易所快照后重跑 `derived:security_master`，统计 `listing_date`/`delisting_date` 的 `unknown` 与 `listing_conflict`/`delisting_conflict` | 部署前后 `unknown` 计数（退市日 ≤2 且逐条解释）、冲突行两侧值、与 `SSDATE` 零冲突回归 | 未执行 |
+| AC-M3-1 | fresh-init 后查询 `market.security_master`，`selection.kind=universe`、`filter.as_of=2015-01-05`；把返回成员与「2015 年以来退市且有 bar」清单逐条核对（退市股序列已首采） | 成员数与按代码清单、每条 `membership_basis`、`unknown` 逐条原因；与当日 catalog 快照的差集 | 已执行（preview.39 私有栈，2026-10-31；证据摘要见 §14.12 第 7 条） |
+| AC-M3-2 | 用 `research-snapshot.v3` 的 `universe_intervals` + `daily_raw` 统计 10 年逐年样本数，与主表「当年在册数」逐年对比 | 逐年样本数/在册数表；每个偏差的代码与原因（退市日 `unknown`、代码复用、来源缺失） | 已执行（同上；用 DB 只读统计，`research-snapshot.v3` 导出的交叉核对未跑） |
+| AC-M3-3 | `query_data` 读 `market.industry_assignments`：`as_of` 取 2015-01-05、`industry_coverage_start` 与起点前一日；再用顶层 `known_at` 读一次 | 行内 `effective_from`/`effective_to`/`source_snapshot_sha256`/`evidence_grade`/`status`/`reason`；起点前 `status=unknown`；`known_at` 排除 NULL 的计数；没有当前行业回填 | 已执行（同上） |
+| AC-M3-4 | `source_store import --store … --index … --blobs … --tiers A,B --kind industry`（含 9 份 `base.zip`/7 个 `tdxhy.cfg`，重复执行一次）→ `source_store replay --store … --db … --scope industry` | 7 个不同内容各一条 `industry_snapshots` 记录与变更集；A/B 档与 `effective_from_basis`；C 档只作交叉核对；重复导入 `already_present`；两次重放 `summary` 相同且回读 `match` | 无记录（§14.12 第 7 条状态表没有这一行，不是「未执行」也不是「已执行」；已知读数：`replay --scope industry` `match`，7 快照 / 5,235 assignments，部署时 `replay --scope all` 同；本行要求的 `source_store import` 重复导入 `already_present`、7 个不同内容各一条记录的逐条核对没有贴在 #446，是否等同需作者确认；状态与 #446 正文「AC 执行状态」一致） |
+| AC-M3-5 | 对 superseded generation 调 `retire_generation` 四次：① 缺派生事实；② 来源库有字节但索引缺行；③ blob 不可读；④ owner 用 `source_store exempt … --owner-approve-evidence` 后重试 | 四次响应 JSON（`derived_facts_missing` 清单 / `source_store_evidence_missing` + 重放提示 / `source_store_corrupt` / 成功 + `exemptions:`）、豁免行、原字节仍在；active 与 pin 检查不回归 | 部分（场景①②已执行；③④待补，见 §14.12 第 7、8 条） |
+| AC-M3-6 | 连续两代 generation 各跑一次 `plan_market_update`/`run_market_update`，读两次 `derived:delisted_series_check` 的 item evidence | 两代 run/task id；登记的与核对的 `record_count`/`first_day`/`last_day`/`content_digest`；只允许尾追加；再造一次改写/消失 → 实体清单与 `partially_failed` | 部分（首轮 `checked=0`；2026-11-01 第 1 代日更 `checked` 337、unchanged 337，见 [STATUS](../STATUS.md)「2026-11-01 第 1 代日更」；「造改写/消失」一例在 §14.12 与 STATUS 中未见记录，不在此标已执行） |
+| AC-M3-7 | 绑定交易所快照后重跑 `derived:security_master`，统计 `listing_date`/`delisting_date` 的 `unknown` 与 `listing_conflict`/`delisting_conflict` | 部署前后 `unknown` 计数（退市日 ≤2 且逐条解释）、冲突行两侧值、与 `SSDATE` 零冲突回归 | 已执行（preview.39 私有栈，2026-10-31；见 §14.12 第 3、7 条） |
 | AC-M3-8 | 不在本设计承诺（§14.1，建议另拆）；若 owner 另拆，按完整快照规格（文件集、字节布局、跨机重放命令）执行 | 另拆任务的规格与跨机重放结果 | 未执行（不在本轮承诺） |
-| AC-M3-9 | fresh init 空库 `source_store replay --store … --db … --scope all`（期望 `store_empty`）→ `source_store import …` → `source_store replay --scope all --db`（期望 `match`）→ `source_store verify`；全程断网 | 三次 JSON（`store_empty`、导入统计、`summary` 与 `rebuilt`）、`manifest.jsonl` 的 sha256、重建表行数 | 未执行（本批覆盖 A-1/A-2、行业、`generation_facts`、风险警示与简称；停复牌的 `replay` scope 仍未接入，另开任务） |
-| AC-M3-10 | 用交易所来源入口抓一个已知有数据的季度、一个 0 行窗口，并用一个 >1 季度窗口做对照；检查分段（≤1 季度）与分页计数 | 请求指纹、每个窗口的返回计数、`not_observed`/`unverified_zero`/失败分类；证明没有写出「无事件/无变更」 | 未执行 |
+| AC-M3-9 | fresh init 空库 `source_store replay --store … --db … --scope all`（期望 `store_empty`）→ `source_store import …` → `source_store replay --scope all --db`（期望 `match`）→ `source_store verify`；全程断网 | 三次 JSON（`store_empty`、导入统计、`summary` 与 `rebuilt`）、`manifest.jsonl` 的 sha256、重建表行数 | 部分（`replay --scope all --verify-only` 已跑，generation_facts 与 risk_warnings 当时 `drift`，原因见 §14.12 第 7、10 条；此后 2026-11-02 preview.42 fresh init 的 `replay --scope all` 五个 scope 均 `ok`/`database=match`，见 [STATUS](../STATUS.md)「2026-11-02」部署第 1 条；完整「清库重建」式断网重放仍未见记录；停复牌的 `replay` scope 现单独运行、不在 `all` 内，§14.12 第 10 条） |
+| AC-M3-10 | 用交易所来源入口抓一个已知有数据的季度、一个 0 行窗口，并用一个 >1 季度窗口做对照；检查分段（≤1 季度）与分页计数 | 请求指纹、每个窗口的返回计数、`not_observed`/`unverified_zero`/失败分类；证明没有写出「无事件/无变更」 | 已执行（preview.39 私有栈，2026-10-31；见 §14.12 第 7 条） |
 
 ### 14.4 PR-11 落地记录（A-3 停复牌写入器）
 
@@ -1713,7 +1713,7 @@ item 成功，计数与样例进证据；不写 `missing_days=0`，不放宽其�
 
 ### 14.11 SSE 公告 URL 百分号编码（2026-10-31，XDM-144）
 
-状态：**未合并、未部署**（本分支实现，Rust 正确性待 PR CI；Refs #446）。
+状态：**已合并并已部署**（PR #482，commit `5411662`，2026-10-31T19:46:26Z 合入 main，见 §14.12 第 4 条；preview.40 起包含，见 [STATUS](../STATUS.md)）。下文是写作时的分析。
 
 背景：preview.39 首次重建（2026-10-31，`task-4411ad3`）中 `derived:risk_warnings` 以
 `source_unavailable` 失败，helper 报
@@ -1862,6 +1862,7 @@ AC-M3-5 的场景③/④待 XDM-144 发布后补。
 | AC-M3-1 | 已执行 | `market.security_master` + `universe` + `filter.as_of=2015-01-05`：2,595 个成员；`listing_source` exchange_list 2,590 / tdx_ssdate 5；`delisting_source` unknown 2,367 / exchange_list 228；flags 2579 空 / listing_conflict 1 / delisting_conflict 15；`issuer_resolution` code_date 2,594 / ambiguous 1；2015 年以来退市 256 个且全部有 bar；与当日目录差集：universe 不在目录 232（退市股）、目录不在 universe 2,862（2015 后上市）；`listing_date` unknown 0；逐条成员 TSV 在验收目录 |
 | AC-M3-2 | 已执行 | 2015–2025 逐年「有 bar 实体（`instrument_class=0`）vs 主表当年在册」：2812/2819、3034/3039、3466/3476、3569/3576、3767/3774、4155/4160、4620/4627、4948/4952、5142/5145、5171/5177、5212/5215，delta −3..−10；`bars_only=0`，`reg_only` 全部是「主表在册但当年整年无 bar」：3 个迁移别名（`sh.601313`、`sz.000022`、`sz.000043`，序列在新代码下）+ 24 个整年停牌代码（如 `sh.600485` 2017/2018/2021、`sz.000029` 2017–2019）。首版脚本把 9 条指数序列算进 bars 才出现 +8/+9，已修正。计数用 DB 只读统计，`research-snapshot.v3` 导出的交叉核对未跑 |
 | AC-M3-3 | 已执行 | `as_of=2015-01-05` → 3/3 `status=unknown, reason=before_coverage`；覆盖起点 2026-09-30；`as_of=2026-10-08`/`2026-10-28` → `assigned`（`X5001`，`name_status=unknown_dictionary`，grade A）；`known_at` 读面可用且 `unknown_known_at_rows=0`；5,235 行 assignment 全部 `unknown_dictionary`——**区间起点落在归档快照上**（5,234 行起于 2026-09-30 那个快照、1 行起于 2026-10-24 那个），而 6 个归档快照的 `dictionary_sha256` 全为 NULL（只有 2026-10-28 的 generation 快照有字典），按 §5.6 不得用当前名称回填。**不是「旧代的 `incon.dat` 没登记」**：XDM-146 §6 实测，把同一份 `incon.dat` 重新登记给这些归档快照，5,235 行里只有 1 行的名称会变 |
+| AC-M3-4 | 无记录 | 本表（2026-10-31 首轮）没有执行读数；设计 §14.3 与 #446 正文同口径标「无记录」，后续读数以 [STATUS](../STATUS.md) 和 #446 为准 |
 | AC-M3-5 | 部分 | P1（无 `--market-db`）`retire_gate_unconfigured`；P2（有来源库、缺证据）`source_store_evidence_missing`，字节未变，detail 无 replay 提示（§10 第 2 条实测形态）；③/④待 XDM-144 后的第一次跨代日更补 |
 | AC-M3-6 | 未执行 | 首轮 `derived:delisted_series_check` `checked=0`（主表在 plan 解析时为空，符合设计）；需要第二个 generation 的日更才有有效读数（PR-5 规定取第二次日更） |
 | AC-M3-7 | 已执行 | 主表 5,565 行；`listing_date` unknown 0；337 个已退市行全部有日期；上市冲突 2 行 / 退市冲突 15 行（两侧值见 §3）；`listing_source` / `delisting_source` 分布见 §3 |
