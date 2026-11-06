@@ -44,7 +44,7 @@ use super::temporal::{KnownAtCoverage, Temporal};
 use super::tradability::{
     ALGORITHM_VERSION, Tradability, TradabilityReason, tradability, tradability_in,
 };
-use super::universe::{UniverseRequest, member_state, universe};
+use super::universe::{UniverseRequest, member_state, member_state_report, universe};
 use crate::compact_market::{CompactBar, EvidenceKind, SourceBinding, VersionEvidence};
 use crate::market_data::{
     Adjustment, AdjustmentEvidence, CalendarBatch, CalendarInputDates, CoverageStatus,
@@ -1807,4 +1807,98 @@ fn shared_context_timing() {
             shared_time.as_secs_f64() * 1e3
         );
     }
+}
+
+/// D-81 R1: `known_at = D` means "known after D's close". The cutoff is
+/// inclusive, so a decision on D that wants only what was certainly known by
+/// the open must cut at the previous day. This is the engine's convention, not
+/// a filter change: the same interval is hidden at `D-1` and visible at `D`.
+#[test]
+fn a_risk_interval_known_on_d_is_visible_at_d_and_hidden_at_the_previous_day() {
+    let fixture = Fixture::new();
+    let days = days();
+    let d = days[3];
+    {
+        let c = Connection::open(&fixture.path).unwrap();
+        // 000001 is `normal` from day 0; from `d` it is an announced warning
+        // whose `known_at` is the announcement day `d` itself.
+        c.execute(
+            "UPDATE risk_warning_intervals SET effective_to=?1 WHERE code='000001'",
+            params![crate::compact_market::epoch_day(d)],
+        )
+        .unwrap();
+        let evidence = c
+            .query_row(
+                "SELECT evidence_digest FROM risk_warning_intervals WHERE code='000001'",
+                [],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .unwrap();
+        c.execute(
+            "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
+             raw_status_code,normalized_status,announced_at,known_at,source_kind,\
+             source_record_id,source_document_sha256,source_generation_id,evidence_digest) \
+             VALUES('sz','000001',?1,NULL,'implement:other_risk_warning',\
+             'other_risk_warning',?2,?2,'exchange_announcement','fixture-d',NULL,NULL,?3)",
+            params![crate::compact_market::epoch_day(d), d.to_string(), evidence],
+        )
+        .unwrap();
+    }
+    let c = fixture.read();
+    let status_at = |cutoff: NaiveDate| {
+        let request = UniverseRequest::new(d).with_known_at(cutoff);
+        let state = member_state(&c, "sz.000001", &request).unwrap().unwrap();
+        state.status
+    };
+    // Known on D: visible when the information set is cut at D ...
+    assert_eq!(status_at(d), RiskStatus::OtherRiskWarning);
+    // ... and not yet part of the information set at D-1. The state is then
+    // the earlier interval, which ended on `d`, so the day is uncovered.
+    assert_eq!(status_at(days[2]), RiskStatus::Unknown);
+    // The two cutoffs differ only by the one excluded row, and it is counted.
+    let hidden = member_state_report(
+        &c,
+        "sz.000001",
+        &UniverseRequest::new(d).with_known_at(days[2]),
+    )
+    .unwrap()
+    .1;
+    let visible = member_state_report(&c, "sz.000001", &UniverseRequest::new(d).with_known_at(d))
+        .unwrap()
+        .1;
+    let excluded = |report: &super::temporal::TemporalReport| {
+        report
+            .dataset("risk_warnings")
+            .unwrap()
+            .excluded_known_at_rows
+    };
+    assert_eq!(excluded(&hidden), excluded(&visible) + 1);
+}
+
+/// D-81 R5, read side: a `marker_only_unresolved` interval is a status that
+/// is neither `normal` nor a warning class. The member state carries it as is,
+/// and the tradability answer does not take the risk status as evidence of
+/// anything (it reads the calendar, the suspensions and the bars).
+#[test]
+fn a_marker_only_unresolved_interval_is_not_normal_for_the_member_state() {
+    let fixture = Fixture::new();
+    {
+        let c = Connection::open(&fixture.path).unwrap();
+        c.execute(
+            "UPDATE risk_warning_intervals SET normalized_status='marker_only_unresolved', \
+             raw_status_code='unresolved:same_day_action_conflict' WHERE code='000001'",
+            [],
+        )
+        .unwrap();
+    }
+    let c = fixture.read();
+    let request = UniverseRequest::new(days()[2]);
+    let state = member_state(&c, "sz.000001", &request).unwrap().unwrap();
+    assert_eq!(state.status, RiskStatus::MarkerOnlyUnresolved);
+    assert_ne!(state.status, RiskStatus::Normal);
+    let report = tradability(&c, "sz.000001", Temporal::effective_only(days()[2])).unwrap();
+    assert_eq!(
+        report.member.map(|member| member.status),
+        Some(RiskStatus::MarkerOnlyUnresolved)
+    );
 }

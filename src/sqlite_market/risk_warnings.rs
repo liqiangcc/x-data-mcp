@@ -82,6 +82,7 @@ pub(crate) fn replace_risk_warnings(
         "record_count": rows.len(),
         "sz_rows": rows.iter().filter(|row| row.exchange == crate::security_master::Exchange::Sz).count(),
         "sh_rows": rows.iter().filter(|row| row.exchange == crate::security_master::Exchange::Sh).count(),
+        "same_day_conflicts": set.same_day_conflict_evidence(),
         "observed_windows": set.observed_windows(),
         "not_observed_windows": set.not_observed_windows(),
         "coverage": set.coverage.iter().map(|window| json!({
