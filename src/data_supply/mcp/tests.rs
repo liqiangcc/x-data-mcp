@@ -2287,7 +2287,7 @@ fn calendar_is_market_level_and_entity_free() {
     assert_eq!(error.code, "invalid_arguments");
 }
 
-/// AC-V8-6: adjustment events expose effective-day facts and never a
+/// AC-V8-6: adjustment events expose the `effective_day` column and never a
 /// `known_at` column (M1 stores NULL; v8 §4.6 keeps it out of the wire).
 #[test]
 fn adjustment_events_have_no_known_at_and_no_entity_gate() {
@@ -2309,10 +2309,26 @@ fn adjustment_events_have_no_known_at_and_no_entity_gate() {
         .unwrap();
     assert_eq!(page["layout"], "table");
     assert_eq!(page["entities"], json!([SYMBOL]));
+    assert_eq!(page["columns"]["effective_day"], json!(["2020-01-06"]));
     assert_eq!(page["columns"]["category"], json!([1]));
     assert_eq!(page["columns"]["c1"], json!(["1.50"]));
     assert!(page["columns"].get("known_at").is_none(), "{page}");
-    assert!(page["columns"].get("effective_day").is_none(), "{page}");
+    // `fields` can still pick the date alone.
+    let only_day = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset":"market.adjustment_events",
+                "contract_version":"v2",
+                "selection":{"kind":"single","entity":SYMBOL},
+                "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+                "version":{"kind":"latest_per_entity"},
+                "fields":["effective_day"]
+            }),
+        )
+        .unwrap();
+    assert_eq!(only_day["columns"], json!({"effective_day":["2020-01-06"]}));
 }
 
 /// AC-V8-8: a universe availability is one aggregate row, not one row per
@@ -2843,6 +2859,35 @@ fn query_security_names(f: &Fixture, known_at: Option<&str>) -> Value {
         request["known_at"] = json!(day);
     }
     f.api.call("query_data", request).unwrap()
+}
+
+/// The row key `effective_from` is a default column of `market.security_master`
+/// (a `table` layout has no `dates`); `fields` can still drop it.
+#[test]
+fn security_master_default_columns_include_the_row_key() {
+    let f = fixture();
+    seed_security_master(&f, &[("sh.600006", None)]);
+    let query = |fields: Option<Value>| {
+        let mut request = json!({
+            "dataset":"market.security_master","contract_version":"v2",
+            "selection":{"kind":"single","entity":"sh.600006"},
+            "filter":{"kind":"daily","start_date":"2020-01-06","end_date":"2020-01-06"},
+            "version":{"kind":"latest_per_entity"}
+        });
+        if let Some(fields) = fields {
+            request["fields"] = fields;
+        }
+        f.api.call("query_data", request).unwrap()
+    };
+    let page = query(None);
+    assert_eq!(page["row_count"], 1, "{page}");
+    assert_eq!(page["columns"]["effective_from"], json!(["2018-01-01"]));
+    assert!(page["columns"].get("effective_to").is_none(), "{page}");
+    let narrowed = query(Some(json!(["instrument_class"])));
+    assert!(
+        narrowed["columns"].get("effective_from").is_none(),
+        "{narrowed}"
+    );
 }
 
 /// XDM-163: `market.security_names` is no longer a placeholder. The read face
@@ -4277,6 +4322,10 @@ fn get_security_events_answers_like_query_data_for_both_kinds() {
         )
         .unwrap();
     assert_eq!(adjustment["dataset"], "market.adjustment_events");
+    assert_eq!(
+        adjustment["columns"]["effective_day"],
+        json!(["2020-01-06"])
+    );
     assert_eq!(adjustment["columns"]["category"], json!([1]));
     same_answer(
         &adjustment,

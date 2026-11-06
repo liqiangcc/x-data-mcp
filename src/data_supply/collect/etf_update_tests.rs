@@ -985,8 +985,7 @@ impl Env {
 /// collection path are readable through `query_data` `market.adjustment_events`.
 ///
 /// Pinned read behavior: v2 only; `single`/`batch` selection; rows carry
-/// `category` and `c1..c4` but neither `effective_day` nor `basis_status`;
-/// rows follow the source (gbbq decode) order; an ETF without factor events is
+/// `effective_day`, `category` and `c1..c4` but no `basis_status`; rows follow the source (gbbq decode) order; an ETF without factor events is
 /// `absent`.
 #[test]
 fn etf_cat1_and_cat11_factor_facts_are_readable_through_adjustment_events() {
@@ -996,6 +995,7 @@ fn etf_cat1_and_cat11_factor_facts_are_readable_through_adjustment_events() {
     let cat1 = env.facts("market.adjustment_events", etf("sz", "159919"), FULL_RANGE);
     assert_eq!(cat1["layout"], json!("table"));
     assert_eq!(cat1["entities"], json!(["sz.159919"]));
+    assert_eq!(cat1["columns"]["effective_day"], json!(["2025-03-31"]));
     assert_eq!(cat1["columns"]["category"], json!([1]));
     assert_eq!(
         cat1["columns"]["c1"],
@@ -1016,6 +1016,11 @@ fn etf_cat1_and_cat11_factor_facts_are_readable_through_adjustment_events() {
     assert_eq!(cat11["entities"], json!(["sz.159901", "sz.159901"]));
     assert_eq!(cat11["columns"]["category"], json!([11, 11]));
     assert_eq!(
+        cat11["columns"]["effective_day"],
+        json!(["2021-04-12", "2010-11-22"]),
+        "the date tells the two events apart"
+    );
+    assert_eq!(
         cat11["columns"]["c3"],
         json!(["2", "5"]),
         "source order (2021 then 2010), not date order"
@@ -1025,11 +1030,10 @@ fn etf_cat1_and_cat11_factor_facts_are_readable_through_adjustment_events() {
         json!("present")
     );
 
-    // The wire carries no date and no basis column. The date range is the
-    // only way to tell the two cat11 events apart.
+    // The wire carries the date but no basis column and no known_at.
     for page in [&cat1, &cat11] {
         let columns = page["columns"].as_object().unwrap();
-        assert!(columns.get("effective_day").is_none(), "{page}");
+        assert!(columns.contains_key("effective_day"), "{page}");
         assert!(columns.get("basis_status").is_none(), "{page}");
         assert!(columns.get("known_at").is_none(), "{page}");
     }
@@ -1039,6 +1043,7 @@ fn etf_cat1_and_cat11_factor_facts_are_readable_through_adjustment_events() {
         ("2021-01-01", "2021-12-31"),
     );
     assert_eq!(only_2021["columns"]["c3"], json!(["2"]));
+    assert_eq!(only_2021["columns"]["effective_day"], json!(["2021-04-12"]));
     let none_in_range = env.facts(
         "market.adjustment_events",
         etf("sz", "159901"),

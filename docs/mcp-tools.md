@@ -354,6 +354,7 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `researc
   对沪市标的查 `security_names` 时，`limitations` 追加“name history covers SZ only (D-61)…”：名称历史只覆盖深市，0 行表示没有这段历史，不表示没有名称。混合批次里有沪市标的时同样追加；`query_data` 的响应不变。
 - `get_security_history`：问“这段时间有过哪些状态”，返回与 `start_date..end_date` 有重叠的全部区间（多段 ST 全部返回，窗口外的不返回），没有 `as_of`，响应的 `temporal` 没有 `as_of` 键。`known_at` 照旧先应用：晚于它才知道的行和 `known_at` 为空的行被排除并计数。`fact` 不含 `security_master`（主表是每个证券的生命周期记录，不是状态序列）。沪市查 `security_names` 的 `limitations` 与 `get_security_state` 相同。细节见 [generic-data-v11](contracts/generic-data-v11.md) §2.1。
 - `get_security_events`：问“这段时间发生了什么”，返回日期范围内的事件。这两个数据集没有可用的知晓时间，所以没有 `known_at`，也没有 `as_of`。
+  `event=adjustment` 的响应带 `effective_day` 列（除权除息生效日，`YYYY-MM-DD`，与 `category`、`c1..c4` 按行对齐）；`event=capital` 本来就有。行仍按源顺序，不按日期排序，需要按日期排序时由调用方处理。`query_data` 读 `market.adjustment_events` 得到同一列（v11 起，见 [generic-data-v11](contracts/generic-data-v11.md) §6）。
 
 默认 `as_of` 的“今天”由 `data_supply::query::today()` 给出，现在是上海日（`calendar::shanghai_today()`）。
 此前它用 `chrono::Local::now()`，随主机时区变化：vm2-126 是上海时区、aws-node 是 UTC，UTC 16:00–24:00 之间两台机器的默认 `as_of` 会差一天。
