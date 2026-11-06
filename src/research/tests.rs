@@ -2189,6 +2189,72 @@ mod with_export {
         );
     }
 
+    /// D-83: the listing reads a real export. The fixture binds `gen-1`; once
+    /// the acquire store says it is `evidence_only`, the directory is marked
+    /// irreplaceable, and a changed byte count shows up as damage.
+    #[test]
+    fn list_snapshots_reads_a_real_export() {
+        use crate::research::retention::{GenerationStates, list_snapshots};
+
+        let fixture = Fixture::new();
+        let out = tempdir();
+        let outcome = export(
+            fixture.path(),
+            &ExportRequest::default(),
+            &options(out.path()),
+        )
+        .unwrap();
+        let store = out.path().join("acquire.sqlite");
+        let exports = out.path().join("exports");
+        std::fs::create_dir(&exports).unwrap();
+        std::fs::rename(&outcome.directory, exports.join(&outcome.snapshot_id)).unwrap();
+        let make = |state: &str| {
+            let _ = std::fs::remove_file(&store);
+            let c = Connection::open(&store).unwrap();
+            c.execute_batch(
+                "CREATE TABLE generations (generation_id TEXT PRIMARY KEY, \
+                 state TEXT NOT NULL, manifest_sha256 TEXT NOT NULL)",
+            )
+            .unwrap();
+            for id in [GEN1, GEN2] {
+                c.execute(
+                    "INSERT INTO generations VALUES (?1, ?2, ?3)",
+                    params![id, state, MANIFEST_SHA],
+                )
+                .unwrap();
+            }
+        };
+
+        make("superseded");
+        let listing =
+            list_snapshots(&exports, Some(&store), &GenerationStates::load(&store)).unwrap();
+        assert_eq!(listing.problem_count(), 0, "{}", listing.to_text());
+        let entry = &listing.snapshots[0];
+        assert_eq!(entry["snapshot_id"], outcome.snapshot_id.as_str());
+        assert_eq!(entry["schema"], crate::research::manifest::SCHEMA);
+        assert_eq!(entry["irreplaceable"], false);
+        let total: u64 = outcome.files.iter().map(|f| f.bytes).sum();
+        assert!(
+            entry["bytes"].as_u64().unwrap() > total,
+            "files plus manifest"
+        );
+
+        make("evidence_only");
+        let listing =
+            list_snapshots(&exports, Some(&store), &GenerationStates::load(&store)).unwrap();
+        assert_eq!(listing.snapshots[0]["irreplaceable"], true);
+
+        let first = &outcome.files[0].path;
+        let file = exports.join(&outcome.snapshot_id).join(first);
+        let mut bytes = std::fs::read(&file).unwrap();
+        bytes.push(0);
+        std::fs::write(&file, bytes).unwrap();
+        let listing =
+            list_snapshots(&exports, Some(&store), &GenerationStates::load(&store)).unwrap();
+        assert_eq!(listing.snapshots[0]["status"], "damaged");
+        assert!(listing.problem_count() > 0);
+    }
+
     #[test]
     fn smoke_export_for_external_readers() {
         let Some(target) = std::env::var_os("X_DATA_EXPORT_SMOKE_DIR") else {
