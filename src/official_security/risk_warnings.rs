@@ -726,14 +726,16 @@ fn merge_sets(
             .map(|(code, opt_date)| {
                 (
                     code.clone(),
-                    opt_date.unwrap_or_else(|| NaiveDate::from_ymd_opt(9999, 12, 31).expect("far future")),
+                    opt_date.unwrap_or_else(|| {
+                        NaiveDate::from_ymd_opt(9999, 12, 31).expect("far future")
+                    }),
                 )
             })
             .collect()
     } else {
         BTreeMap::new()
     };
-    
+
     let mut set = risk_warnings::assemble_sz(changes, sz_coverage, &dates_for_assembly)?;
     let sh = risk_warnings::assemble_sh(&sh_events, gaps, sh_coverage)?;
     set.rows.extend(sh.rows);
@@ -751,35 +753,40 @@ fn read_sz_delisting_dates(
     market: &MarketBackend,
     changes: &[SzNameChange],
 ) -> Result<BTreeMap<String, Option<NaiveDate>>, Error> {
-    market.read(|_conn| {
-        let mut dates = BTreeMap::new();
-        let codes: BTreeSet<&str> = changes.iter().map(|c| c.code.as_str()).collect();
-        
-        // Read all security_master rows for Shenzhen A-shares
-        let all_rows = crate::sqlite_market::security::read_security_master(_conn)
-            .map_err(|e| crate::market_storage::Error::Invalid(format!("failed to read security_master: {e}")))?;
-        
-        // Filter and group by code
-        for row in all_rows {
-            if row.exchange != crate::security_master::Exchange::Sz {
-                continue;
+    market
+        .read(|_conn| {
+            let mut dates = BTreeMap::new();
+            let codes: BTreeSet<&str> = changes.iter().map(|c| c.code.as_str()).collect();
+
+            // Read all security_master rows for Shenzhen A-shares
+            let all_rows =
+                crate::sqlite_market::security::read_security_master(_conn).map_err(|e| {
+                    crate::market_storage::Error::Invalid(format!(
+                        "failed to read security_master: {e}"
+                    ))
+                })?;
+
+            // Filter and group by code
+            for row in all_rows {
+                if row.exchange != crate::security_master::Exchange::Sz {
+                    continue;
+                }
+                if row.instrument_class != 0 {
+                    continue; // Only A-shares
+                }
+                let code = &row.code;
+                if !codes.contains(code.as_str()) {
+                    continue;
+                }
+
+                // Take the last row for each code (highest effective_from)
+                // effective_to: Some = delisted, None = still listed
+                dates.insert(code.clone(), row.effective_to);
             }
-            if row.instrument_class != 0 {
-                continue; // Only A-shares
-            }
-            let code = &row.code;
-            if !codes.contains(code.as_str()) {
-                continue;
-            }
-            
-            // Take the last row for each code (highest effective_from)
-            // effective_to: Some = delisted, None = still listed
-            dates.insert(code.clone(), row.effective_to);
-        }
-        
-        Ok(dates)
-    })
-    .map_err(|e| Error::invalid(format!("failed to read delisting dates: {e}")))
+
+            Ok(dates)
+        })
+        .map_err(|e| Error::invalid(format!("failed to read delisting dates: {e}")))
 }
 
 /// Binding of both sources, sorted by `source_id`. A bulletin source with no
@@ -819,10 +826,10 @@ fn admitted(
     let sz_coverage = sz_coverage(&sz.changes)?;
     let (sh_coverage, gaps) = sh.coverage(windows);
     let sh_events = sh.events.events.len();
-    
+
     // D-81 task 49: Read delisting dates for normal interval computation
     let delisting_dates = read_sz_delisting_dates(market, &sz.changes)?;
-    
+
     let set = merge_sets(
         &sz.changes,
         sz_coverage,
@@ -1675,7 +1682,9 @@ pub fn replay(
         sh_events.events,
         sh_coverage,
         gaps,
-        market.and_then(|m| read_sz_delisting_dates(m, &sz_changes).ok()).as_ref(),
+        market
+            .and_then(|m| read_sz_delisting_dates(m, &sz_changes).ok())
+            .as_ref(),
     )
 }
 

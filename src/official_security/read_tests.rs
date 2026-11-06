@@ -1394,9 +1394,21 @@ fn a_sz_normal_dataset_replays_row_for_row_and_needs_the_database() {
         )
         .unwrap();
         let scope = &report.scopes[0];
-        assert_eq!(scope.summary.as_deref(), Some(daily_digest.as_str()), "attempt {attempt}");
-        assert_eq!(scope.database, Some("match"), "attempt {attempt}: {scope:?}");
-        assert!(scope.drift.is_empty(), "attempt {attempt}: {:?}", scope.drift);
+        assert_eq!(
+            scope.summary.as_deref(),
+            Some(daily_digest.as_str()),
+            "attempt {attempt}"
+        );
+        assert_eq!(
+            scope.database,
+            Some("match"),
+            "attempt {attempt}: {scope:?}"
+        );
+        assert!(
+            scope.drift.is_empty(),
+            "attempt {attempt}: {:?}",
+            scope.drift
+        );
     }
 
     // Without a database the replay has no main table, so it writes no normal

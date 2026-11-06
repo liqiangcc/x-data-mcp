@@ -670,16 +670,21 @@ fn has_star_without_st(name: &str) -> bool {
     normalized.starts_with('*') && !normalized.contains("ST")
 }
 
+/// D-81 task 49: Does the (normalized) name carry an ST marker?
+/// Separate from `warning_status` on purpose: `warning_status` classifies the
+/// ST interval rows and must not change; this only decides `normal`.
+fn has_st_marker(name: &str) -> bool {
+    normalize_name(name).contains("ST")
+}
+
 /// D-81 task 49: Check if a name is "plain" - eligible for Normal status.
 /// A plain name has no ST, no PT prefix, no 退 suffix, and no * without ST.
-/// Handles full-width characters via NFKC normalization.
+/// Each predicate normalizes via NFKC, so full-width markers count too.
 fn is_plain_name(name: &str) -> bool {
-    let normalized = normalize_name(name);
-    !normalized.contains("ST")
-        && !normalized.starts_with("PT")
-        && !normalized.ends_with("退市")
-        && !normalized.ends_with("退")
-        && !(normalized.starts_with('*') && !normalized.contains("ST"))
+    !has_st_marker(name)
+        && !has_pt_prefix(name)
+        && !has_tui_suffix(name)
+        && !has_star_without_st(name)
 }
 
 /// D-81 task 49: For Shenzhen codes only, write `normal` as the complement
@@ -794,10 +799,10 @@ fn add_normal_intervals_sz(
     }
 
     // Close the last segment at effective end (min of coverage and delisting), but only if it's still open
-    if let Some(last) = segments.last_mut() {
-        if last.end.is_none() {
-            last.end = Some(effective_end);
-        }
+    if let Some(last) = segments.last_mut()
+        && last.end.is_none()
+    {
+        last.end = Some(effective_end);
     }
 
     // Build occupied days from warning/conflict intervals for this code
@@ -807,9 +812,7 @@ fn add_normal_intervals_sz(
             continue;
         }
         let start = interval.effective_from;
-        let end = interval
-            .effective_to
-            .unwrap_or(effective_end);
+        let end = interval.effective_to.unwrap_or(effective_end);
         occupied_intervals.push((start, end));
     }
     occupied_intervals.sort();
@@ -824,9 +827,7 @@ fn add_normal_intervals_sz(
         // the previous segment to this one should remain unknown (no normal row).
         // So we only write normal intervals starting from this segment's start.
         let seg_start = segment.start.max(first_day);
-        let seg_end = segment
-            .end
-            .unwrap_or(effective_end);
+        let seg_end = segment.end.unwrap_or(effective_end);
         if seg_end <= seg_start {
             continue;
         }
@@ -1046,12 +1047,7 @@ mod tests {
     fn delisting_dates(codes: &[(&str, Option<NaiveDate>)]) -> BTreeMap<String, NaiveDate> {
         codes
             .iter()
-            .map(|(code, date)| {
-                (
-                    code.to_string(),
-                    date.unwrap_or_else(|| day(9999, 12, 31)),
-                )
-            })
+            .map(|(code, date)| (code.to_string(), date.unwrap_or_else(|| day(9999, 12, 31))))
             .collect()
     }
 
@@ -1079,7 +1075,8 @@ mod tests {
             change("000001", "1998-04-28", "深发展A", "ST深发展"),
             change("000002", "1998-02-02", "万科A", "ST万科"),
         ];
-        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new()).expect("a conflict is isolated, not fatal");
+        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new())
+            .expect("a conflict is isolated, not fatal");
         validate_set(&set.rows).expect("the rows are a valid interval set");
         let by_code = |code: &str| -> Vec<&RiskWarningInterval> {
             set.rows.iter().filter(|row| row.code == code).collect()
@@ -1387,7 +1384,12 @@ mod tests {
             rows: 2,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("plain names");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("plain names");
         validate_set(&set.rows).expect("valid set");
 
         // Should have normal intervals
@@ -1424,7 +1426,12 @@ mod tests {
             rows: 3,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("mixed periods");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("mixed periods");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1471,7 +1478,12 @@ mod tests {
             rows: 2,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("PT prefix");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("PT prefix");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1505,7 +1517,12 @@ mod tests {
             rows: 1,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("退 suffix");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("退 suffix");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1538,7 +1555,12 @@ mod tests {
             rows: 2,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("* without ST");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("* without ST");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1569,7 +1591,12 @@ mod tests {
             rows: 1,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("late first name");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("late first name");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1599,7 +1626,12 @@ mod tests {
             rows: 0,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("no names");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("no names");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1627,7 +1659,12 @@ mod tests {
             rows: 4,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("conflict recovery");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("conflict recovery");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1672,7 +1709,12 @@ mod tests {
             rows: 1,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("coverage limit");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("coverage limit");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1706,7 +1748,12 @@ mod tests {
             rows: 3,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("conflict at end");
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("conflict at end");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1830,7 +1877,10 @@ mod tests {
                 normal.source_record_id.as_deref(),
                 Some("1998-01-05|000001|万科B")
             );
-            assert_eq!(normal.source_document_sha256.as_deref(), Some("a".repeat(64).as_str()));
+            assert_eq!(
+                normal.source_document_sha256.as_deref(),
+                Some("a".repeat(64).as_str())
+            );
         }
     }
 
