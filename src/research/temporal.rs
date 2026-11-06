@@ -113,7 +113,9 @@ impl DatasetTemporal {
 /// The `temporal` block every M2 read-model answer carries (§12.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemporalReport {
-    pub as_of: NaiveDate,
+    /// `None` for a history read: every interval overlapping the window, with
+    /// no record-set day (`TemporalReport::history`).
+    pub as_of: Option<NaiveDate>,
     pub known_at: Option<NaiveDate>,
     pub datasets: BTreeMap<&'static str, DatasetTemporal>,
 }
@@ -121,8 +123,19 @@ pub struct TemporalReport {
 impl TemporalReport {
     pub fn new(temporal: Temporal) -> Self {
         Self {
-            as_of: temporal.as_of,
+            as_of: Some(temporal.as_of),
             known_at: temporal.known_at,
+            datasets: BTreeMap::new(),
+        }
+    }
+
+    /// A history read selects no record set: only the information set
+    /// (`known_at`) applies, and the window decides which intervals are
+    /// returned.
+    pub fn history(known_at: Option<NaiveDate>) -> Self {
+        Self {
+            as_of: None,
+            known_at,
             datasets: BTreeMap::new(),
         }
     }

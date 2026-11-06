@@ -144,7 +144,7 @@ fn three_entries_in_one_process_match_the_single_socket_surfaces_byte_for_byte()
     // Baseline: one single-socket service per entry, one at a time (the write
     // lease is exclusive, so they cannot overlap).
     let mut baseline: Vec<String> = Vec::new();
-    for (entry, expected) in [("research", 14usize), ("ops", 16), ("maint", 9)] {
+    for (entry, expected) in [("research", 15usize), ("ops", 16), ("maint", 9)] {
         let socket = dir.path().join(format!("solo-{entry}.sock"));
         let mut service = Service::start(&db, &[(&socket, entry)], 60000);
         let (count, line) = tools_list(&socket);
@@ -319,7 +319,7 @@ fn research_and_maint_start_without_an_ops_socket() {
     let research = dir.path().join("research.sock");
     let maint = dir.path().join("maint.sock");
     let mut service = Service::start(&db, &[(&research, "research"), (&maint, "maint")], 60000);
-    assert_eq!(tools_list(&research).0, 14);
+    assert_eq!(tools_list(&research).0, 15);
     assert_eq!(tools_list(&maint).0, 9);
     assert!(
         service.child.try_wait().unwrap().is_none(),
