@@ -203,6 +203,8 @@ Skill 必须：
 
 Skill 通过仓库分发，正文只保存在 `.devin/skills/`。如需跨项目使用，再从同一源打包为 pinned plugin；业务 MCP 不返回 Skill URL/content。
 
+**启动方式的坑（2026-11-06 事故）**：日更 agent 的工具白名单没有文件读取，Skill 正文只能靠启动提示词带进去。用 pi 1.3.0 经 herdr 发 `/skill:x-data-daily-sync` 时，斜杠命令没有被展开，会话里没有 Skill 正文，agent 只能凭 MCP 的结构化返回判断停止条件，漏掉 §3.0、§3.3、§3.3a、§3.6、§4 仍报 `completed`（`scripts/check_daily_run.py` 把这类会话判为未通过）。因此启动脚本（部署机 `/root/x-daily-sync/start-440.sh`）必须把 `.devin/skills/x-data-daily-sync/SKILL.md` 去掉 frontmatter 后包进 `<skill name="x-data-daily-sync">` 放进提示词（约 55 KB），不能只写 `/skill:` 一行。每次日更跑完用 `check_daily_run.py` 核对会话里 Skill 正文是否生效。该目录是部署机状态，迁移时随 `docs/new-host-runbook.md` 的 rsync 一起带走。
+
 ## 目标工作流
 
 下面的顺序属于 Skill，不属于 Tool/Capability 返回。
