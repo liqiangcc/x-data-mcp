@@ -141,6 +141,9 @@ fn write_mirror(dir: &Path, generation: Generation) {
         gbbq_factor_record(0, "159919", 20250331, 1, [0.661, 0.0, 0.0, 0.0]),
         gbbq_factor_record(0, "159901", 20210412, 11, [0.0, 0.0, 2.0, 0.0]),
         gbbq_factor_record(0, "159901", 20101122, 11, [0.0, 0.0, 5.0, 0.0]),
+        // cat9 (股本变动) is a capital fact, not a factor fact: it reaches
+        // `market.capital_events` and stays out of `market.adjustment_events`.
+        gbbq_factor_record(0, "159919", 20240601, 9, [100.0, 100.0, 120.0, 120.0]),
     ];
     if second {
         // A new dividend between the generations: the `.day` member of
@@ -941,5 +944,308 @@ fn stored_hand_bar_in_the_base_window_is_no_change_then_append_never_a_rewrite()
         env.quanta("sz.159338")[2],
         Some(100),
         "the stored hand bar keeps volume_quantum=100"
+    );
+}
+
+const FULL_RANGE: (&str, &str) = ("2000-01-01", "2100-01-01");
+
+fn fact_query(dataset: &str, selection: Value, range: (&str, &str), version: &str) -> Value {
+    json!({
+        "dataset": dataset,
+        "contract_version": version,
+        "selection": selection,
+        "filter": {"kind": "daily", "start_date": range.0, "end_date": range.1},
+        "version": {"kind": "latest_per_entity"},
+    })
+}
+
+fn etf(exchange: &str, code: &str) -> Value {
+    json!({"kind": "single", "entity": {"exchange": exchange, "code": code}})
+}
+
+impl Env {
+    /// `query_data` v2 over the local owner's tool surface.
+    fn facts(&self, dataset: &str, selection: Value, range: (&str, &str)) -> Value {
+        self.api
+            .call("query_data", fact_query(dataset, selection, range, "v2"))
+            .unwrap()
+    }
+    fn version_of(page: &Value, entity: &str) -> Value {
+        page["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["entity"] == json!(entity))
+            .unwrap_or_else(|| panic!("no versions row for {entity}: {page}"))
+            .clone()
+    }
+}
+
+/// T14 / AC-M3-2-6: the ETF cat1 and cat11 factor facts written by the ETF
+/// collection path are readable through `query_data` `market.adjustment_events`.
+///
+/// Pinned read behavior: v2 only; `single`/`batch` selection; rows carry
+/// `category` and `c1..c4` but neither `effective_day` nor `basis_status`;
+/// rows follow the source (gbbq decode) order; an ETF without factor events is
+/// `absent`.
+#[test]
+fn etf_cat1_and_cat11_factor_facts_are_readable_through_adjustment_events() {
+    let env = setup();
+
+    // cat1: 159919 (0.661 dividend). cat11: 159901 (2:1 and 5:1, source order).
+    let cat1 = env.facts("market.adjustment_events", etf("sz", "159919"), FULL_RANGE);
+    assert_eq!(cat1["layout"], json!("table"));
+    assert_eq!(cat1["entities"], json!(["sz.159919"]));
+    assert_eq!(cat1["columns"]["category"], json!([1]));
+    assert_eq!(
+        cat1["columns"]["c1"],
+        json!(["0.661"]),
+        "f32 shortest, not 2dp"
+    );
+    assert_eq!(cat1["columns"]["c3"], json!(["0"]));
+    let row = Env::version_of(&cat1, "sz.159919");
+    assert_eq!(row["status"], json!("present"));
+    assert!(row["version_id"].as_str().is_some_and(|v| v.len() == 64));
+    assert_eq!(
+        cat1["metadata"]["source"],
+        json!("derived:adjustment_events")
+    );
+    assert_eq!(cat1["metadata"]["coverage_status"], json!("complete"));
+
+    let cat11 = env.facts("market.adjustment_events", etf("sz", "159901"), FULL_RANGE);
+    assert_eq!(cat11["entities"], json!(["sz.159901", "sz.159901"]));
+    assert_eq!(cat11["columns"]["category"], json!([11, 11]));
+    assert_eq!(
+        cat11["columns"]["c3"],
+        json!(["2", "5"]),
+        "source order (2021 then 2010), not date order"
+    );
+    assert_eq!(
+        Env::version_of(&cat11, "sz.159901")["status"],
+        json!("present")
+    );
+
+    // The wire carries no date and no basis column. The date range is the
+    // only way to tell the two cat11 events apart.
+    for page in [&cat1, &cat11] {
+        let columns = page["columns"].as_object().unwrap();
+        assert!(columns.get("effective_day").is_none(), "{page}");
+        assert!(columns.get("basis_status").is_none(), "{page}");
+        assert!(columns.get("known_at").is_none(), "{page}");
+    }
+    let only_2021 = env.facts(
+        "market.adjustment_events",
+        etf("sz", "159901"),
+        ("2021-01-01", "2021-12-31"),
+    );
+    assert_eq!(only_2021["columns"]["c3"], json!(["2"]));
+    let none_in_range = env.facts(
+        "market.adjustment_events",
+        etf("sz", "159901"),
+        ("2022-01-01", "2022-12-31"),
+    );
+    assert_eq!(none_in_range["row_count"], json!(0));
+    assert_eq!(
+        Env::version_of(&none_in_range, "sz.159901")["status"],
+        json!("present"),
+        "a present version with no rows in range is not absent"
+    );
+
+    // A batch mixes present and absent members: 510050 has no factor events
+    // (no registration), 589001 has no series at all. Both are `absent`.
+    let batch = env.facts(
+        "market.adjustment_events",
+        json!({"kind": "batch", "entities": [
+            {"exchange": "sz", "code": "159919"},
+            {"exchange": "sz", "code": "159901"},
+            {"exchange": "sh", "code": "510050"},
+            {"exchange": "sh", "code": "589001"},
+        ]}),
+        FULL_RANGE,
+    );
+    assert_eq!(batch["row_count"], json!(3));
+    for (entity, status) in [
+        ("sz.159919", "present"),
+        ("sz.159901", "present"),
+        ("sh.510050", "absent"),
+        ("sh.589001", "absent"),
+    ] {
+        assert_eq!(Env::version_of(&batch, entity)["status"], json!(status));
+    }
+
+    // v1 is not a contract for this dataset.
+    let v1 = env
+        .api
+        .call(
+            "query_data",
+            fact_query(
+                "market.adjustment_events",
+                etf("sz", "159919"),
+                FULL_RANGE,
+                "v1",
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(v1.code, "invalid_arguments");
+    assert!(
+        v1.message.contains("requires contract_version v2"),
+        "{}",
+        v1.message
+    );
+
+    // The version list names the same version the query read.
+    let versions = env
+        .api
+        .call(
+            "list_data_versions",
+            json!({
+                "dataset": "market.adjustment_events",
+                "contract_version": "v2",
+                "selection": etf("sz", "159919"),
+            }),
+        )
+        .unwrap();
+    assert_eq!(versions["row_count"], json!(1), "{versions}");
+    assert_eq!(
+        versions["versions"][0]["version_id"],
+        Env::version_of(&cat1, "sz.159919")["version_id"]
+    );
+}
+
+/// The stored `basis_status` is per row (cat1 verified, cat11 pending) but has
+/// no read face; the storage accessor is the only place it is observable.
+#[test]
+fn etf_factor_rows_store_basis_status_per_category() {
+    let env = setup();
+    let basis = |entity: &str| {
+        env.backend
+            .read(|c| derived::read_adjustment_events(c, entity))
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.category, e.basis_status.as_str()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(basis("sz.159919"), vec![(1, "verified")]);
+    assert_eq!(basis("sz.159901"), vec![(11, "pending"), (11, "pending")]);
+}
+
+/// A later generation's new cat1 event replaces the whole set: the read face
+/// shows the new row and a new `version_id`.
+#[test]
+fn etf_factor_read_follows_a_metadata_only_update() {
+    let env = setup();
+    let before = env.facts("market.adjustment_events", etf("sz", "159901"), FULL_RANGE);
+    let before_version = Env::version_of(&before, "sz.159901")["version_id"].clone();
+    env.advance_generation();
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-facts", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159901"),
+        "{}",
+        error_of(&task, "sz.159901")
+    );
+
+    let after = env.facts("market.adjustment_events", etf("sz", "159901"), FULL_RANGE);
+    assert_eq!(after["columns"]["category"], json!([11, 11, 1]));
+    assert_eq!(after["columns"]["c1"], json!(["0", "0", "0.1"]));
+    assert_ne!(
+        Env::version_of(&after, "sz.159901")["version_id"],
+        before_version
+    );
+    // The untouched cat1 member keeps its version.
+    let untouched = env.facts("market.adjustment_events", etf("sz", "159919"), FULL_RANGE);
+    assert_eq!(untouched["columns"]["c1"], json!(["0.661"]));
+}
+
+/// `selection.kind=universe` has no ETF scope for `market.adjustment_events`
+/// (the ETF scopes are `market.daily` only), and the access gate applies to
+/// ETF entities like any other.
+#[test]
+fn etf_factor_reads_have_no_universe_scope_and_respect_access() {
+    let env = setup();
+    let scope = env
+        .api
+        .call(
+            "query_data",
+            fact_query(
+                "market.adjustment_events",
+                json!({"kind": "universe", "scope": "sh_sz_etf_current"}),
+                FULL_RANGE,
+                "v2",
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(scope.code, "invalid_arguments");
+    assert!(
+        scope.message.contains("only supported for market.daily"),
+        "{}",
+        scope.message
+    );
+
+    let query = |access: &Access| {
+        let query: Query = serde_json::from_value(fact_query(
+            "market.adjustment_events",
+            etf("sz", "159919"),
+            FULL_RANGE,
+            "v2",
+        ))
+        .unwrap();
+        Queries::new(SqliteSupply {
+            market: env.backend.clone(),
+        })
+        .query_v2(query, access)
+    };
+    assert!(query(&Access::local()).is_ok());
+    let mut no_dataset = Access::local();
+    no_dataset.datasets.remove(&Dataset::AdjustmentEvents);
+    assert!(
+        query(&no_dataset)
+            .unwrap_err()
+            .to_string()
+            .contains("forbidden")
+    );
+    let mut other_securities = Access::local();
+    other_securities.securities =
+        Some([crate::data_supply::wire::Security::parse("sz.159901").unwrap()].into());
+    assert!(
+        query(&other_securities)
+            .unwrap_err()
+            .to_string()
+            .contains("forbidden")
+    );
+}
+
+/// `market.capital_events` for an ETF: only the capital categories are stored,
+/// so cat1/cat11 never appear there. An ETF with a cat9 record reads it; an
+/// ETF with only cat1/cat11 records is `absent` (nothing registered).
+#[test]
+fn etf_capital_events_read_only_capital_categories() {
+    let env = setup();
+    let page = env.facts("market.capital_events", etf("sz", "159919"), FULL_RANGE);
+    assert_eq!(page["entities"], json!(["sz.159919"]), "{page}");
+    assert_eq!(page["columns"]["category"], json!([9]));
+    assert_eq!(page["columns"]["suspicious"], json!([false]));
+    assert_eq!(page["row_count"], json!(1));
+    assert_eq!(
+        Env::version_of(&page, "sz.159919")["status"],
+        json!("present")
+    );
+    assert_eq!(page["metadata"]["source"], json!("derived:capital_events"));
+
+    let factor_only = env.facts("market.capital_events", etf("sz", "159901"), FULL_RANGE);
+    assert_eq!(factor_only["row_count"], json!(0));
+    assert_eq!(
+        Env::version_of(&factor_only, "sz.159901")["status"],
+        json!("absent")
+    );
+    assert!(
+        factor_only["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l
+                .as_str()
+                .is_some_and(|l| l.contains("no registered version"))),
+        "{factor_only}"
     );
 }

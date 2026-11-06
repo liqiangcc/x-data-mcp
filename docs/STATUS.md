@@ -272,7 +272,7 @@ this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮
 启动摘要的 `mcp_target_value` 与 `wait_service_ready.py … --entry research` 都读回 research 面。
 `get_data_capabilities({})` 的 `capability_revision=**generic-data-v9**`、`production_ready=false`。
 
-代码（main）注册 34 data tools（含 D-75 的 9 个只读工具，research 入口 14，未部署）：三个入口 `research`/`ops`/`maint` 由
+代码（main）注册 35 data tools（含 D-75 的 10 个只读工具，research 入口 15，未部署）：三个入口 `research`/`ops`/`maint` 由
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
 `outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
 隧道改指 `research.sock`（Ops-D）已于 2026-11-02 preview.42 部署窗口执行（见「服务」表）；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），

@@ -240,6 +240,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // cache is process-scoped, so every connection's accept path and the
     // worker share the same byte-verification verdicts.
     let generation = x_data_mcp::data_supply::generation::GenerationSource::from_env();
+    // One cursor pool and memory budget for the whole process: every
+    // connection's DataApi draws from the same caps (VM1-23).
+    let read_limits = x_data_mcp::data_supply::read_limits::ReadLimits::production();
     let factory = {
         let gate = gate.clone();
         move |entry: EntryKind| {
@@ -251,7 +254,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 generation.clone(),
             )
             .map(|api| {
-                api.with_entry(entry)
+                api.with_read_limits(&read_limits)
+                    .with_entry(entry)
                     .with_source_store_policy(source_store_policy)
                     .with_worker_gate(gate.clone())
             })

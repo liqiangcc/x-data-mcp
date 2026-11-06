@@ -34,13 +34,16 @@ use chrono::NaiveDate;
 use rusqlite::{Connection, params};
 use serde_json::json;
 
+use super::context::ResearchContext;
 use super::market_cap::{
     MarketCapOptions, MarketCapReason, MarketCapState, Reconciliation, ShareOptions, ShareReason,
     ShareScope, shares_at,
 };
 use super::member_state::{MemberFlag, Membership, NotMemberReason};
 use super::temporal::{KnownAtCoverage, Temporal};
-use super::tradability::{Tradability, TradabilityReason, tradability};
+use super::tradability::{
+    ALGORITHM_VERSION, Tradability, TradabilityReason, tradability, tradability_in,
+};
 use super::universe::{UniverseRequest, member_state, universe};
 use crate::compact_market::{CompactBar, EvidenceKind, SourceBinding, VersionEvidence};
 use crate::market_data::{
@@ -1066,9 +1069,245 @@ fn tradability_reports_the_calendar_and_listing_states() {
         report.state,
         Tradability::NotTradable(TradabilityReason::Delisted)
     );
-    // An entity that is not in the main table at all.
-    let report = tradability(&c, "sz.999999", Temporal::effective_only(days[0])).unwrap();
-    assert_eq!(report.reason_code(), "not_listed");
+}
+
+/// G4: the main table is not a closed world. A code it does not contain is
+/// `unknown`, not "not listed".
+#[test]
+fn a_code_missing_from_the_main_table_is_unknown_not_in_master() {
+    let fixture = Fixture::new();
+    let c = fixture.read();
+    let report = tradability(&c, "sz.999999", Temporal::effective_only(days()[0])).unwrap();
+    assert_eq!(
+        report.state,
+        Tradability::Unknown(TradabilityReason::NotInMaster)
+    );
+    assert_eq!(report.reason_code(), "not_in_master");
+    assert!(report.member.is_none());
+    assert!(!report.state.is_tradable());
+}
+
+/// G3: an index or ETF row is listed, just not in this derivation's scope.
+#[test]
+fn a_non_a_share_is_unknown_not_a_share() {
+    let fixture = Fixture::new();
+    let c = fixture.read();
+    let report = tradability(&c, "sh.000300", Temporal::effective_only(days()[0])).unwrap();
+    assert_eq!(
+        report.state,
+        Tradability::Unknown(TradabilityReason::NotAShare)
+    );
+    assert_eq!(report.reason_code(), "not_a_share");
+    assert_eq!(
+        report.member.unwrap().membership,
+        Membership::Out(NotMemberReason::NotAShare)
+    );
+}
+
+/// G1: a main-table row hidden by the `known_at` filter is a missing input.
+/// Every A-share row has `known_at = NULL` in production, so reporting
+/// `not_listed` here would turn the whole market into "not tradable".
+#[test]
+fn a_row_hidden_by_known_at_is_unknown_known_at_unavailable() {
+    let fixture = Fixture::new();
+    let c = fixture.read();
+    let days = days();
+    // `sz.000631` has a NULL main-table `known_at`.
+    let report = tradability(&c, "sz.000631", Temporal::known_by(days[0], days[9])).unwrap();
+    assert_eq!(
+        report.state,
+        Tradability::Unknown(TradabilityReason::KnownAtUnavailable)
+    );
+    assert_eq!(report.reason_code(), "known_at_unavailable");
+    assert_eq!(
+        report.member.unwrap().membership,
+        Membership::Out(NotMemberReason::ExcludedByKnownAt)
+    );
+    // The same row without the filter still answers normally.
+    let report = tradability(&c, "sz.000631", Temporal::effective_only(days[0])).unwrap();
+    assert_eq!(report.state, Tradability::Tradable);
+    // A row whose `known_at` the filter admits is not affected.
+    let report = tradability(&c, "sz.000001", Temporal::known_by(days[0], days[0])).unwrap();
+    assert_eq!(report.state, Tradability::Tradable);
+}
+
+/// G2: the calendar does not predict. A date after its last day is `unknown`;
+/// a date inside the covered span that is absent stays `non_trading_day`.
+#[test]
+fn a_date_beyond_the_calendar_is_unknown_not_a_non_trading_day() {
+    let fixture = Fixture::new();
+    let c = fixture.read();
+    let days = days();
+    let last = *days.last().unwrap();
+    let next_monday = day(2006, 10, 23);
+    assert!(next_monday > last);
+    let report = tradability(&c, "sz.000001", Temporal::effective_only(next_monday)).unwrap();
+    assert_eq!(
+        report.state,
+        Tradability::Unknown(TradabilityReason::BeyondCalendar)
+    );
+    assert_eq!(report.reason_code(), "beyond_calendar");
+    // The calendar's last day itself is in the calendar.
+    let report = tradability(&c, "sz.000001", Temporal::effective_only(last)).unwrap();
+    assert_eq!(report.state, Tradability::Tradable);
+    // Inside the covered span and absent: provably not a trading day.
+    for saturday in [day(2006, 10, 14), day(2006, 10, 15)] {
+        let report = tradability(&c, "sz.000001", Temporal::effective_only(saturday)).unwrap();
+        assert_eq!(
+            report.state,
+            Tradability::NotTradable(TradabilityReason::NonTradingDay),
+            "{saturday}"
+        );
+    }
+    // A date before the first calendar day is not beyond the calendar; it is
+    // before every listing in the fixture, so membership decides first.
+    let report = tradability(&c, "sz.000001", Temporal::effective_only(day(2006, 10, 1))).unwrap();
+    assert_eq!(
+        report.state,
+        Tradability::NotTradable(TradabilityReason::NotListed)
+    );
+}
+
+/// G7: the algorithm version travels with every report.
+#[test]
+fn every_report_carries_the_algorithm_version() {
+    let fixture = Fixture::new();
+    let c = fixture.read();
+    assert_eq!(ALGORITHM_VERSION, "tradability-v1");
+    for (entity, as_of) in [
+        ("sz.000001", days()[0]),
+        ("sz.000631", days()[3]),
+        ("sz.999999", days()[0]),
+        ("sh.000300", days()[0]),
+        ("sz.000003", days()[DELIST_DAY]),
+        ("sz.000001", day(2006, 10, 14)),
+    ] {
+        let report = tradability(&c, entity, Temporal::effective_only(as_of)).unwrap();
+        assert_eq!(report.algorithm_version, "tradability-v1", "{entity}");
+    }
+}
+
+/// The verdicts that predate issue-433 keep their reason codes.
+#[test]
+fn the_established_not_tradable_and_unknown_reasons_are_unchanged() {
+    let fixture = Fixture::with_confirmed_migration();
+    let c = fixture.read();
+    let days = days();
+    let at = |entity: &str, as_of: NaiveDate| {
+        tradability(&c, entity, Temporal::effective_only(as_of))
+            .unwrap()
+            .state
+    };
+    // delisted: on and after the delisting date.
+    assert_eq!(
+        at("sz.000003", days[DELIST_DAY]),
+        Tradability::NotTradable(TradabilityReason::Delisted)
+    );
+    assert_eq!(at("sz.000003", days[DELIST_DAY - 1]), Tradability::Tradable);
+    // not_listed: before the listing date.
+    assert_eq!(
+        at("sz.000002", days[1]),
+        Tradability::NotTradable(TradabilityReason::NotListed)
+    );
+    assert_eq!(at("sz.000002", days[2]), Tradability::Tradable);
+    // not_listed: the listing date is unknown and no bar exists yet.
+    assert_eq!(
+        at("sz.000005", days[1]),
+        Tradability::NotTradable(TradabilityReason::NotListed)
+    );
+    // not_listed: the interval ended with a confirmed migration.
+    assert_eq!(
+        at("sz.300114", days[MIGRATION_DAY]),
+        Tradability::NotTradable(TradabilityReason::NotListed)
+    );
+    assert_eq!(at("sz.302132", days[MIGRATION_DAY]), Tradability::Tradable);
+    // not_listed: before the code's first interval began.
+    assert_eq!(
+        at("sh.600018", day(2000, 1, 3)),
+        Tradability::NotTradable(TradabilityReason::NotListed)
+    );
+    // suspended, data_gap, no_bar, calendar-covered non-trading day.
+    assert_eq!(
+        at("sz.000004", days[3]),
+        Tradability::NotTradable(TradabilityReason::Suspended)
+    );
+    assert_eq!(
+        at("sz.000631", days[3]),
+        Tradability::Unknown(TradabilityReason::DataGap)
+    );
+    assert_eq!(
+        at("sz.000631", days[9]),
+        Tradability::Tradable,
+        "the bar after the gap"
+    );
+    assert_eq!(
+        at("sz.000004", days[5]),
+        Tradability::Tradable,
+        "after the suspension"
+    );
+    assert_eq!(
+        at("sz.000001", day(2006, 10, 14)),
+        Tradability::NotTradable(TradabilityReason::NonTradingDay)
+    );
+    // no_bar: the confirmed announcement is hidden by `known_at`, so nothing
+    // explains the missing bar.
+    assert_eq!(
+        tradability(&c, "sz.000004", Temporal::known_by(days[3], days[1]))
+            .unwrap()
+            .state,
+        Tradability::Unknown(TradabilityReason::NoBar)
+    );
+}
+
+/// issue-433 §5.2: one shared context answers each entity exactly as the
+/// single-entity call does, field by field (state, member, evidence, and the
+/// `temporal` counts), for every fixture witness on every day, with and
+/// without a `known_at` filter.
+#[test]
+fn a_shared_context_answers_every_entity_like_the_single_entity_call() {
+    for fixture in [
+        Fixture::new(),
+        Fixture::with_confirmed_migration(),
+        Fixture::without_calendar(),
+    ] {
+        let c = fixture.read();
+        let ctx = ResearchContext::new(&c);
+        let entities = [
+            "sz.000001",
+            "sz.000002",
+            "sz.000003",
+            "sh.600018",
+            "sz.300114",
+            "sz.302132",
+            "sz.000631",
+            "sz.000004",
+            "sz.000005",
+            "sh.600519",
+            "sh.600028",
+            "sh.000300",
+            "sz.999999",
+        ];
+        let mut probes = days();
+        probes.extend([day(2006, 10, 14), day(2006, 10, 23), day(2000, 1, 3)]);
+        let mut compared = 0;
+        for known_at in [None, Some(days()[0]), Some(days()[9])] {
+            for as_of in &probes {
+                let temporal = Temporal {
+                    as_of: *as_of,
+                    known_at,
+                };
+                // Reverse the order too: a context must not depend on which
+                // entity was asked first.
+                for entity in entities.iter().rev() {
+                    let single = tradability(&c, entity, temporal).unwrap();
+                    let shared = tradability_in(&ctx, entity, temporal).unwrap();
+                    assert_eq!(single, shared, "{entity} {as_of} {known_at:?}");
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, 3 * probes.len() * entities.len());
+    }
 }
 
 #[test]
@@ -1319,4 +1558,253 @@ fn a_member_state_lookup_returns_the_interval_covering_the_day() {
         .unwrap()
         .unwrap();
     assert_eq!(index.membership.reason(), Some(NotMemberReason::NotAShare));
+}
+
+/// Timing of the shared context against N single-entity calls (issue-433
+/// §5.2). Not a gate: it only prints numbers, on a **synthetic** database whose
+/// table sizes are set to the order of magnitude STATUS reports for the
+/// production tables, with none of its data. Run it explicitly:
+///
+/// ```text
+/// cargo nextest run --run-ignored only -E 'test(shared_context_timing)' --no-capture
+/// ```
+#[test]
+#[ignore = "timing report, not a check"]
+fn shared_context_timing() {
+    use std::time::Instant;
+
+    const SECURITIES: usize = 5_600;
+    const ETFS: usize = 1_800;
+    const SUSPENSIONS: usize = 70_000;
+    const RISK_ROWS: usize = 2_000;
+    const CALENDAR_DAYS: usize = 8_800;
+    const BARS_PER_SERIES: usize = 30;
+
+    let dir = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/dev/shm")
+        .unwrap();
+    let path = dir.path().join("market.db");
+    SqliteTasks::new(&path).initialize_compact().unwrap();
+    let mut c = Connection::open(&path).unwrap();
+    c.pragma_update(None, "foreign_keys", true).unwrap();
+    let tx = c.transaction().unwrap();
+
+    // Weekdays only, ending 2026-11-05.
+    let mut all_days = Vec::with_capacity(CALENDAR_DAYS);
+    let mut cursor = day(2026, 11, 5);
+    while all_days.len() < CALENDAR_DAYS {
+        if !matches!(
+            chrono::Datelike::weekday(&cursor),
+            chrono::Weekday::Sat | chrono::Weekday::Sun
+        ) {
+            all_days.push(cursor);
+        }
+        cursor = cursor.pred_opt().unwrap();
+    }
+    all_days.reverse();
+    let recent: Vec<NaiveDate> = all_days[all_days.len() - BARS_PER_SERIES..].to_vec();
+    let as_of = *recent.last().unwrap();
+
+    let generation = evidence_store::put_evidence(
+        &tx,
+        EvidenceKind::Generation,
+        &json!({"generation_id": GEN1, "manifest_sha256": MANIFEST_SHA}),
+    )
+    .unwrap();
+    let binding = evidence_store::put_source_binding(
+        &tx,
+        &SourceBinding {
+            generation_id: GEN1.into(),
+            generation_manifest_sha256: [0x0b; 32],
+            day_member_sha256: [0x0c; 32],
+            security_event_sha256: [0x0e; 32],
+            evidence_digest: generation,
+        },
+    )
+    .unwrap();
+    let version_evidence =
+        evidence_store::put_evidence(&tx, EvidenceKind::Version, &series_evidence()).unwrap();
+
+    let code_of = |i: usize| format!("{:06}", 1 + i);
+    let listing = day(2010, 1, 4);
+    let mut rows = Vec::new();
+    for i in 0..SECURITIES {
+        rows.push(lifecycle(
+            Exchange::Sz,
+            &code_of(i),
+            listing,
+            None,
+            Some(listing),
+            None,
+            IssuerResolution::IssuerKey,
+            0,
+            None,
+        ));
+    }
+    for i in 0..ETFS {
+        rows.push(lifecycle(
+            Exchange::Sh,
+            &format!("5{:05}", i),
+            listing,
+            None,
+            Some(listing),
+            None,
+            IssuerResolution::CodeDate,
+            2,
+            None,
+        ));
+    }
+    for i in 0..SECURITIES {
+        let entity = format!("sz.{}", code_of(i));
+        let bars: Vec<CompactBar> = recent
+            .iter()
+            .enumerate()
+            .map(|(n, d)| bar(*d, 1000 + (i + n) as i64))
+            .collect();
+        let mut digest = [0u8; 32];
+        digest[..8].copy_from_slice(&(i as u64 + 1).to_le_bytes());
+        let key = series::insert_series(
+            &tx,
+            &NewSeries {
+                entity: entity.clone(),
+                period: Period::Day,
+                adjustment: Adjustment::Raw,
+                instrument_class: crate::market_data::INSTRUMENT_CLASS_STOCK,
+                price_scale: 2,
+                content_digest: digest,
+                record_count: bars.len() as i64,
+                first_day: bars[0].trade_day,
+                last_day: bars[bars.len() - 1].trade_day,
+                coverage_status: CoverageStatus::Complete,
+                source_binding_digest: binding,
+                evidence_digest: version_evidence,
+                last_event_seq: 1,
+                created_at: CREATED_AT.into(),
+                updated_at: CREATED_AT.into(),
+            },
+        )
+        .unwrap();
+        series::insert_bars(&tx, key, &bars).unwrap();
+    }
+    security::replace_security_master(
+        &tx,
+        &Assembly {
+            rows,
+            migrations: Vec::new(),
+            conflicts: Vec::new(),
+            pending_sources: Vec::new(),
+            unresolved: Vec::new(),
+            exchange_as_of: Some(as_of),
+        },
+        binding,
+        "task-master",
+        "derived:security_master",
+    )
+    .unwrap();
+
+    let evidence =
+        evidence_store::put_evidence(&tx, EvidenceKind::Derived, &json!({"fixture": "scale"}))
+            .unwrap();
+    for i in 0..RISK_ROWS {
+        tx.execute(
+            "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
+             raw_status_code,normalized_status,announced_at,known_at,source_kind,\
+             source_record_id,source_document_sha256,source_generation_id,evidence_digest) \
+             VALUES('sz',?1,?2,NULL,'normal','normal',NULL,NULL,'exchange_announcement',\
+             'scale',NULL,NULL,?3)",
+            params![
+                code_of(i % SECURITIES),
+                crate::compact_market::epoch_day(listing) + (i / SECURITIES) as i64,
+                evidence.as_slice()
+            ],
+        )
+        .unwrap();
+    }
+    // Old, non-overlapping gap rows spread over the securities; none covers
+    // the probe day, so every probed entity reaches the bar lookup.
+    for i in 0..SUSPENSIONS {
+        let start = crate::compact_market::epoch_day(listing) + 10 * (i / SECURITIES) as i64;
+        tx.execute(
+            "INSERT INTO suspension_intervals(exchange,code,start_day,end_day,certainty,\
+             missing_days,reason,known_at,source_kind,source_record_id,evidence_digest) \
+             VALUES('sz',?1,?2,?3,'unresolved_gap',3,'missing_bar_no_event',NULL,'scale',\
+             'gap',?4)",
+            params![
+                code_of(i % SECURITIES),
+                start,
+                start + 4,
+                evidence.as_slice()
+            ],
+        )
+        .unwrap();
+    }
+
+    let batch = CalendarBatch {
+        inputs: vec![
+            CalendarInputDates {
+                entity: "sh.000001".into(),
+                member: "sh\\lday\\sh000001.day".into(),
+                day_member_sha256: "aa".repeat(32),
+                days: all_days.clone(),
+            },
+            CalendarInputDates {
+                entity: "sz.399001".into(),
+                member: "sz\\lday\\sz399001.day".into(),
+                day_member_sha256: "bb".repeat(32),
+                days: all_days.clone(),
+            },
+        ],
+        security_event_sha256: crate::hash::sha256(&0u64.to_le_bytes()),
+    };
+    let calendar = TradingCalendar::union(&batch).unwrap();
+    let coverage = calendar::measure_coverage(&tx, &calendar).unwrap();
+    calendar::commit_calendar(
+        &tx,
+        &CalendarWrite {
+            batch: &batch,
+            coverage: &coverage,
+            task_id: "task-calendar",
+            item_id: "derived:calendar",
+            generation_id: GEN1,
+            generation_manifest_sha256: MANIFEST_SHA,
+            generation_evidence: &json!({"generation_id": GEN1}),
+        },
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    drop(c);
+
+    let c = super::read::open_read_only(&path).unwrap();
+    let temporal = Temporal::effective_only(as_of);
+    println!(
+        "fixture: {SECURITIES} A shares + {ETFS} ETF master rows, {SECURITIES} raw series x \
+         {BARS_PER_SERIES} bars, {RISK_ROWS} risk rows, {SUSPENSIONS} suspension rows, \
+         {CALENDAR_DAYS} calendar days (synthetic)"
+    );
+    for n in [1usize, 10, 100] {
+        let entities: Vec<String> = (0..n)
+            .map(|i| format!("sz.{}", code_of(i * 37 % SECURITIES)))
+            .collect();
+        let started = Instant::now();
+        let single: Vec<_> = entities
+            .iter()
+            .map(|e| tradability(&c, e, temporal).unwrap())
+            .collect();
+        let single_time = started.elapsed();
+        let started = Instant::now();
+        let ctx = ResearchContext::new(&c);
+        let shared: Vec<_> = entities
+            .iter()
+            .map(|e| tradability_in(&ctx, e, temporal).unwrap())
+            .collect();
+        let shared_time = started.elapsed();
+        assert_eq!(single, shared);
+        assert!(single.iter().all(|r| r.state == Tradability::Tradable));
+        println!(
+            "tradability n={n:>3}: one call each {:>9.1} ms, shared context {:>8.1} ms",
+            single_time.as_secs_f64() * 1e3,
+            shared_time.as_secs_f64() * 1e3
+        );
+    }
 }

@@ -1,0 +1,60 @@
+sz.000001 2026-09-29
+  rows: []
+  temporal: {"as_of":"2026-09-29","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000001 2026-09-30
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000001" }), day: 2026-09-30, cells: {"effective_from": Text("2026-09-30"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Text("2026-10-12"), "evidence_grade": Text("A"), "industry_code": Text("X5001"), "known_at": Text("2026-09-30"), "level": Int(2), "name": Text("软件服务"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("89965cabad4417412c67cbad3519b8acfd8cd9aeeb43fb379db6551c3609264e"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-09-30","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000001 2026-10-16
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000001" }), day: 2026-10-12, cells: {"effective_from": Text("2026-10-12"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Null, "evidence_grade": Text("A"), "industry_code": Text("X5002"), "known_at": Text("2026-10-12"), "level": Int(2), "name": Text("硬件设备"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("f0b5234a4a6ce4d602efec2a24464d54c50fa7fd299005fbc8f3bd39c914b018"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-10-16","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000001 2026-10-19
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000001" }), day: 2026-10-12, cells: {"effective_from": Text("2026-10-12"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Null, "evidence_grade": Text("A"), "industry_code": Text("X5002"), "known_at": Text("2026-10-12"), "level": Int(2), "name": Text("硬件设备"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("f0b5234a4a6ce4d602efec2a24464d54c50fa7fd299005fbc8f3bd39c914b018"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-10-19","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000001 2026-10-31
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000001" }), day: 2026-10-12, cells: {"effective_from": Text("2026-10-12"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Null, "evidence_grade": Text("A"), "industry_code": Text("X5002"), "known_at": Text("2026-10-12"), "level": Int(2), "name": Text("硬件设备"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("f0b5234a4a6ce4d602efec2a24464d54c50fa7fd299005fbc8f3bd39c914b018"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-10-31","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000004 2026-09-29
+  rows: []
+  temporal: {"as_of":"2026-09-29","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000004 2026-09-30
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000004" }), day: 2026-09-30, cells: {"effective_from": Text("2026-09-30"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Text("2026-10-16"), "evidence_grade": Text("A"), "industry_code": Text("X5001"), "known_at": Text("2026-09-30"), "level": Int(2), "name": Text("软件服务"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("89965cabad4417412c67cbad3519b8acfd8cd9aeeb43fb379db6551c3609264e"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-09-30","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000004 2026-10-16
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000004" }), day: 2026-10-16, cells: {"effective_from": Null, "effective_from_basis": Null, "effective_to": Null, "evidence_grade": Null, "industry_code": Null, "known_at": Null, "level": Null, "name": Null, "name_status": Null, "reason": Text("missing_in_snapshot"), "scheme": Null, "source_snapshot_sha256": Null, "status": Text("unknown")} }]
+  temporal: {"as_of":"2026-10-16","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000004 2026-10-19
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000004" }), day: 2026-10-19, cells: {"effective_from": Null, "effective_from_basis": Null, "effective_to": Null, "evidence_grade": Null, "industry_code": Null, "known_at": Null, "level": Null, "name": Null, "name_status": Null, "reason": Text("missing_in_snapshot"), "scheme": Null, "source_snapshot_sha256": Null, "status": Text("unknown")} }]
+  temporal: {"as_of":"2026-10-19","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000004 2026-10-31
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000004" }), day: 2026-10-31, cells: {"effective_from": Null, "effective_from_basis": Null, "effective_to": Null, "evidence_grade": Null, "industry_code": Null, "known_at": Null, "level": Null, "name": Null, "name_status": Null, "reason": Text("missing_in_snapshot"), "scheme": Null, "source_snapshot_sha256": Null, "status": Text("unknown")} }]
+  temporal: {"as_of":"2026-10-31","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000005 2026-09-29
+  rows: []
+  temporal: {"as_of":"2026-09-29","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000005 2026-09-30
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000005" }), day: 2026-09-30, cells: {"effective_from": Null, "effective_from_basis": Null, "effective_to": Null, "evidence_grade": Null, "industry_code": Null, "known_at": Null, "level": Null, "name": Null, "name_status": Null, "reason": Text("missing_in_snapshot"), "scheme": Null, "source_snapshot_sha256": Null, "status": Text("unknown")} }]
+  temporal: {"as_of":"2026-09-30","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000005 2026-10-16
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000005" }), day: 2026-10-16, cells: {"effective_from": Null, "effective_from_basis": Null, "effective_to": Null, "evidence_grade": Null, "industry_code": Null, "known_at": Null, "level": Null, "name": Null, "name_status": Null, "reason": Text("missing_in_snapshot"), "scheme": Null, "source_snapshot_sha256": Null, "status": Text("unknown")} }]
+  temporal: {"as_of":"2026-10-16","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000005 2026-10-19
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000005" }), day: 2026-10-19, cells: {"effective_from": Text("2026-10-19"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Null, "evidence_grade": Text("A"), "industry_code": Text("X5003"), "known_at": Text("2026-10-19"), "level": Int(2), "name": Text("新材料"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("df625a36a06c64a1cb88572c0a97098efca1604f7a7688d68682e79339e47b15"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-10-19","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sz.000005 2026-10-31
+  rows: [Fact { entity: Some(Security { exchange: Sz, code: "000005" }), day: 2026-10-19, cells: {"effective_from": Text("2026-10-19"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Null, "evidence_grade": Text("A"), "industry_code": Text("X5003"), "known_at": Text("2026-10-19"), "level": Int(2), "name": Text("新材料"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("df625a36a06c64a1cb88572c0a97098efca1604f7a7688d68682e79339e47b15"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-10-31","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sh.600006 2026-09-29
+  rows: []
+  temporal: {"as_of":"2026-09-29","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sh.600006 2026-09-30
+  rows: [Fact { entity: Some(Security { exchange: Sh, code: "600006" }), day: 2026-09-30, cells: {"effective_from": Text("2026-09-30"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Text("2026-10-28"), "evidence_grade": Text("A"), "industry_code": Text("X5001"), "known_at": Text("2026-09-30"), "level": Int(2), "name": Text("软件服务"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("89965cabad4417412c67cbad3519b8acfd8cd9aeeb43fb379db6551c3609264e"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-09-30","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sh.600006 2026-10-16
+  rows: [Fact { entity: Some(Security { exchange: Sh, code: "600006" }), day: 2026-09-30, cells: {"effective_from": Text("2026-09-30"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Text("2026-10-28"), "evidence_grade": Text("A"), "industry_code": Text("X5001"), "known_at": Text("2026-09-30"), "level": Int(2), "name": Text("软件服务"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("89965cabad4417412c67cbad3519b8acfd8cd9aeeb43fb379db6551c3609264e"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-10-16","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sh.600006 2026-10-19
+  rows: [Fact { entity: Some(Security { exchange: Sh, code: "600006" }), day: 2026-09-30, cells: {"effective_from": Text("2026-09-30"), "effective_from_basis": Text("publisher_last_modified"), "effective_to": Text("2026-10-28"), "evidence_grade": Text("A"), "industry_code": Text("X5001"), "known_at": Text("2026-09-30"), "level": Int(2), "name": Text("软件服务"), "name_status": Text("resolved"), "reason": Null, "scheme": Text("tdx_research_industry"), "source_snapshot_sha256": Text("89965cabad4417412c67cbad3519b8acfd8cd9aeeb43fb379db6551c3609264e"), "status": Text("assigned")} }]
+  temporal: {"as_of":"2026-10-19","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
+sh.600006 2026-10-31
+  rows: [Fact { entity: Some(Security { exchange: Sh, code: "600006" }), day: 2026-10-31, cells: {"effective_from": Null, "effective_from_basis": Null, "effective_to": Null, "evidence_grade": Null, "industry_code": Null, "known_at": Null, "level": Null, "name": Null, "name_status": Null, "reason": Text("missing_in_snapshot"), "scheme": Null, "source_snapshot_sha256": Null, "status": Text("unknown")} }]
+  temporal: {"as_of":"2026-10-31","known_at":null,"unknown_known_at_rows":0,"datasets_without_known_at":[]}
