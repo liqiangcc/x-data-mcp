@@ -14,6 +14,8 @@
 | compact schema | 27 | **不变**（27，没有迁移） |
 | `query_data` 的输入与输出 | | 工具和 `get_security_history` 的读取模式不改变它（见 §4）；但同一修订里有别的 v2 变化，见 §1.1 |
 | `tools/list` 输入 schema | 根上有 `$schema`、`title` | 读 schema 去掉这两项（见 §3） |
+| `market.adjustment_events` 的 v2 列 | `category, c1..c4`（没有日期） | **追加 `effective_day`**（见 §6） |
+| `market.security_master` 的 v2 缺省列 | 不含 `effective_from` | **追加 `effective_from`**（见 §6） |
 
 加工具不改 schema，也不改 `query_data` 的 wire 形状。`TemporalBlock.as_of` 在内部变为可选，但 `query_data` 永远写它，已发布的 schema 保持 `{"type":"string","format":"date"}`。
 
