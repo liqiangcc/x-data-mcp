@@ -316,6 +316,14 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
   `units`、`adjustment`、`lineage`、`index`（`src/data_supply/columnar.rs:129-205`）。逐实体不同的
   值下沉到该实体的 `versions` 行；全为 null 的键不出现。生产里 `coverage_status` 会因
   fail-closed 实体而逐实体不同，所以它经常出现在 `versions` 行而不是共享 `metadata`。
+- **对象键的部分共享（代码面，未部署；#525）：** `adjustment`、`lineage`、`index` 是对象。各实体的对象只在
+  个别字段不同时（典型：`adjustment.reason` 带逐实体的事件数，`field`/`status`/`value` 全员相同），
+  相同的字段写在共享 `metadata.<key>`，每行只在 `versions[].<key>` 里写不同的字段。读法：**把行里的对象
+  逐字段盖在共享对象上，行优先**；行里没有该键时，整个对象取共享的。全员相同时与之前一样整个对象在
+  `metadata`，行里没有该键。A 股和 ETF 混查时 `adjustment.value` 不同（`qfq`/`raw`），`value` 便落在各行里，
+  `field`、`status` 仍在共享对象里。`coverage_reason`、`adjustment.reason`、`units[].reason` 等文本保持原键
+  原值，不做切分或引用。只有 v2 有此形状，v1 `version_manifest` 不变。实现：
+  `src/data_supply/columnar.rs` 的 `OBJECT_KEYS`、`common_fields`。
 - `metadata.adjustment` 是既有的 `Evidence` 对象
   `{field:"price_adjustment", status, value, reason}`（`src/data_supply/wire.rs:379-386`，
   `src/sqlite_supply.rs:1142-1149`），`value` 为 `"raw"`/`"qfq"`。它**不含** `price_scale` 或

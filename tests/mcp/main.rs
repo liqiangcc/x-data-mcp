@@ -18,4 +18,5 @@ mod universe_page;
 mod v8_read_v2;
 mod v8_task_v2;
 mod v8_tool_surface;
+mod versions_slim;
 mod yearly_presence;
