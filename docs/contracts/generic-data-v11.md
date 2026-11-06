@@ -16,6 +16,7 @@
 | `tools/list` 输入 schema | 根上有 `$schema`、`title` | 读 schema 去掉这两项（见 §3） |
 | `market.adjustment_events` 的 v2 列 | `category, c1..c4`（没有日期） | **追加 `effective_day`**（见 §6） |
 | `market.security_master` 的 v2 缺省列 | 不含 `effective_from` | **追加 `effective_from`**（见 §6） |
+| `find_securities` 的输入 | `query`、`code`、`industry_code`、分页 | **追加可选 `kind`**（`stock` 缺省，`etf`），缺省响应不变（见 §7） |
 
 加工具不改 schema，也不改 `query_data` 的 wire 形状。`TemporalBlock.as_of` 在内部变为可选，但 `query_data` 永远写它，已发布的 schema 保持 `{"type":"string","format":"date"}`。
 
@@ -38,7 +39,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 
 | 工具 | 必填 | 可选 | 对应的 `query_data` |
 |---|---|---|---|
-| `find_securities` | 无 | `query`、`code`、`industry_code`、分页 | `securities.catalog` |
+| `find_securities` | 无 | `query`、`code`、`industry_code`、`kind`（`stock`/`etf`）、分页 | `kind=stock`（缺省）：`securities.catalog`；`kind=etf`：见 §7，**没有对应的 `query_data` 请求** |
 | `get_daily_bars` | `securities`（1..100）、`start_date`、`end_date` | `adjustment`、`fields`、分页 | `market.daily` |
 | `get_yearly_bars` | `securities`、`start_year`、`end_year` | `fields`、分页 | `market.yearly` |
 | `get_index_bars` | `indices`（登记的 9 条）、`start_date`、`end_date` | `fields`、分页 | `market.index` |
@@ -87,19 +88,19 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 
 | 入口 | 工具数 | 改动前 | 改动后 | 预算 |
 |---|---|---|---|---|
-| `research` | 14 → 15 | 18,437 B | **18,094 B** | 18,600 B |
+| `research` | 14 → 15 | 18,437 B | **18,094 B**（PR-2）→ **18,197 B**（加 `find_securities.kind`） | 18,600 B |
 | `ops` | 16 | 30,748 B | **29,872 B** | 30,800 B |
 | `maint` | 9 | 13,523 B | **13,195 B** | 14,500 B |
 
 测量方式：`tests/mcp/v8_tool_surface.rs` 的 `tools_list_stays_within_entry_budgets_without_output_schema`，`serde_json::to_vec(tools)`，代码版本为本 PR。预算上限没有改。`ops` 的 `plan_market_update`、`run_market_update`、`start_collection`、`refresh_exchange_sources`、`update_data`，和 `maint` 的 `backfill_data` 等写工具除去根上的两项外与改动前相同。
 
-`research` 紧凑目录（`get_data_capabilities` 不带参数）为 2,559 B（15 个工具），测试上限由 2,500 B 改为 2,600 B；这个上限不是 SLO 门禁。
+`research` 紧凑目录（`get_data_capabilities` 不带参数）为 2,559 B（15 个工具），测试上限由 2,500 B 改为 2,600 B；这个上限不是 SLO 门禁。加 `kind` 后紧凑目录仍是 2,559 B。
 
 10 个新工具的 `tools/list` 条目（名称 + 描述 + 输入 schema，字节）：
 
 | 工具 | 字节 |
 |---|---|
-| `find_securities` | 494 |
+| `find_securities` | 494（加 `kind` 前）→ **597**（加 `kind` 后） |
 | `get_daily_bars` | 785 |
 | `get_yearly_bars` | 807 |
 | `get_index_bars` | 674 |
@@ -109,9 +110,9 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 | `get_security_events` | 656 |
 | `get_trading_calendar` | 377 |
 | `get_price_limit_rules` | 350 |
-| **合计** | **6,461** |
+| **合计** | **6,461**（加 `kind` 前）→ **6,564** |
 
-每个工具描述不超过 240 B。
+每个工具描述不超过 240 B。`find_securities` 的描述为 193 B（测试按 240 B 检查）。
 
 ## 4. `query_data` 不变的证据
 
@@ -141,3 +142,32 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 | `market.industry_assignments` | `effective_from` | 列 | 不变 |
 
 `market.adjustment_events` 的行仍按源（gbbq 解码）顺序，不是日期顺序。`basis_status` 不在读面上。
+
+## 7. `find_securities kind=etf`（ETF 名称 PR-3，D-76 Q6 (a)，Refs #509）
+
+只加一个可选输入 `kind`，不新增工具，所以 `capability_revision` 仍是 `generic-data-v11`（升级放到读取工具系列的最后一个 PR）。`tools/list` 的 `research` 增加 103 B（`find_securities` 494 → 597 B，`kind` 的 schema 是 `{"enum":["stock","etf"],"default":"stock"}`，工具描述改为两种范围），测量方式与 §3 相同。
+
+```json
+{"kind":"etf","query?":"沪深300ETF","code?":"510300","page_size?":100,"cursor?":""}
+```
+
+- **缺省与 `kind=stock` 不变**：不传 `kind`，或传 `kind=stock`，走原来的 `securities.catalog` 请求，`columns`、`entities`、`versions`、`metadata`、`limitations` 与加 `kind` 之前逐字相同，与 `query_data` 的等价测试照旧通过。
+- **范围**：主表（`security_master`）里 `instrument_class=2` 的沪深行，现行和退市。ETF 仍不进 `securities.catalog`（D-70 Q5）。
+- **搜索**：`query` 经 NFKC、去全部空白、转小写后，对**最新名称**做子串匹配（D-76 Q8）。不做拼音和模糊。`华夏300`、`广发500` 这类交易所短写法搜不到（短写法不是名称的子串，见 [etf-name-search](../tasks/etf-name-search.md) §8.1）。去空白后为空的 `query` 返回 `invalid_arguments`。`code` 为六位精确匹配，与 `query` 取交集。
+- **行内容**（固定列，没有 `fields`）：
+
+| 列 | 含义 |
+|---|---|
+| `name` | 最新观测到的名称；没有名称时为 `null`，不返回空串 |
+| `name_basis` | `observed_from_first_snapshot`，或 `unavailable`（没有观测到名称） |
+| `status` | `current`（与 `sh_sz_etf_current` 同一判断）或 `delisted` |
+| `instrument_class` | 恒为 `2` |
+| `listing_date`、`delisting_date` | 主表值；只知道移出名单、不知道退市日时 `delisting_date` 为 `null` |
+| `name_observed_from` | 最新名称首次被名单快照看到的日期（`basis=fetch_time`），不是交易所的改名日；无名称时为 `null` |
+
+- **`limitations`**（每次回答都带，结果为 0 行时也带）：名称历史从首次观测日开始，更早的改名不可得；短写法搜不到；退市 ETF 可能没有名称（`name: null`、`name_basis: unavailable`），用代码找；`delisted` 的含义。主表或名称未登记时另有 `has no registered version`，0 行表示未知，不表示没有。
+- **退市 ETF 的名称**：本批没有来源（PR-4）。2026-11-03 之前退市的存量按代码可以找到，`name` 为 `null`；按名称搜不到它们。
+- **错误**（`invalid_arguments`）：`kind` 不是 `stock`/`etf`（含大小写不同、`all`、空串、非字符串），`kind=etf` 带 `industry_code`，空白 `query`，多余字段（`as_of`、`fields`、`include_delisted` 等），游标与请求不匹配。
+- **读路径**：内部过滤 `Filter::FindEtf { code, name_query }` 与 `Filter::History` 同一种做法，`serde(skip_deserializing)` 且 `schemars(skip)`，`query_data` 构造不了（`filter.kind=find_etf` 返回 `invalid_arguments`），也不改 `query_data` 的 schema。它只与 `market.security_names` + `selection.kind=market` 配对，其余组合在 `QueryPlan::new` 里报 `dataset/filter range mismatch`。搜索归一化是 `security_master::names::search_key`，增加了依赖 `unicode-normalization`（0.1，纯 Rust，带 `tinyvec`）。
+- **不变**：`market.security_names` 与 `get_security_state`/`get_security_history` 对 ETF 仍不返回 `exchange_snapshot` 行；`security_names.parquet` 不含 ETF（Q7）。
+- **未验证**：线上真实名单未测（代码面，未部署）；约 1.7 千行 ETF 的内存搜索耗时没有单独测量，每次调用读一遍主表和名称表（与 `market.security_master` 的读法相同）。
