@@ -140,11 +140,12 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // get_security_history (15 tools) and drops the root `$schema` and `title`
     // from every read input schema, which lowers all three entries: research
     // 18,437 -> 18,094 B, ops 30,748 -> 29,872 B, maint 13,523 -> 13,195 B
-    // (budgets unchanged).
+    // (budgets unchanged). D-82 (issue-433 PR-B) adds get_tradability and
+    // get_market_cap (17 tools), raising the budget to 19,600 B.
     // The research/ops budgets carry that documented surface growth; they are
     // not relaxed for any other reason.
     let budgets = [
-        (EntryKind::Research, 15usize, 18_600usize),
+        (EntryKind::Research, 17usize, 19_600usize),
         (EntryKind::Ops, 16usize, 30_800usize),
         (
             EntryKind::Maint,

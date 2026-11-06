@@ -17,6 +17,11 @@ use serde_json::Value;
 #[derive(Debug, JsonSchema)]
 pub struct ColumnarPage {}
 
+/// Output schema for derived tools (D-82): a table with tool-specific columns,
+/// `inputs`, `algorithm_versions`, `temporal` and `limitations`.
+#[derive(Debug, JsonSchema)]
+pub struct TableReply {}
+
 /// Which narrow tool a registry entry routes to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReadTool {
@@ -30,6 +35,8 @@ pub enum ReadTool {
     SecurityState,
     SecurityHistory,
     SecurityEvents,
+    Tradability,
+    MarketCap,
 }
 
 pub const FIND_SECURITIES_DESCRIPTION: &str = "Find securities by name or code. Default kind=stock: current SH/SZ A-shares with industry. kind=etf: ETFs, current and delisted; names are observed from the first list snapshot and may be null.";
@@ -44,6 +51,8 @@ pub const PRICE_LIMIT_RULES_DESCRIPTION: &str =
 pub const SECURITY_STATE_DESCRIPTION: &str = "State of securities on one day (as_of, default latest trading day): one fact per call. known_at hides facts learned later. SH name history is empty (SZ only).";
 pub const SECURITY_HISTORY_DESCRIPTION: &str = "All intervals of one fact that overlap start_date..end_date (names, risk warnings, suspensions, industry). known_at hides facts learned later. SH name history is empty (SZ only).";
 pub const SECURITY_EVENTS_DESCRIPTION: &str = "Capital changes (capital) or ex-rights/dividend events (adjustment) of securities in a date range.";
+pub const TRADABILITY_DESCRIPTION: &str = "Whether each A-share could trade on as_of, plus its price limits that day. state is tradable, not_tradable or unknown; unknown is never tradable. as_of defaults to the latest trading day.";
+pub const MARKET_CAP_DESCRIPTION: &str = "Market cap of securities on as_of (default latest trading day). scope is required: float_a, company_total or a_share_total. company_total is A+B+H; a_share_total is always unknown.";
 
 /// Tool names this module serves; the decode layer exempts them from the
 /// `query_data`-only top-level `as_of` rule (`get_price_limit_rules` has one).
@@ -58,6 +67,8 @@ pub const NAMES: &[&str] = &[
     "get_security_state",
     "get_security_history",
     "get_security_events",
+    "get_tradability",
+    "get_market_cap",
 ];
 
 const BAR_FIELDS: &[&str] = &["open", "high", "low", "close", "volume", "amount"];
@@ -336,6 +347,37 @@ pub struct PriceLimitRulesInput {
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
     pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TradabilityInput {
+    #[schemars(schema_with = "securities_schema")]
+    pub securities: Vec<Security>,
+    pub as_of: Option<NaiveDate>,
+}
+
+/// The scope `get_market_cap` calculates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketCapScope {
+    FloatA,
+    CompanyTotal,
+    AShareTotal,
+}
+
+fn scope_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    json_schema!({"enum": ["float_a", "company_total", "a_share_total"]})
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MarketCapInput {
+    #[schemars(schema_with = "securities_schema")]
+    pub securities: Vec<Security>,
+    #[schemars(schema_with = "scope_schema")]
+    pub scope: MarketCapScope,
+    pub as_of: Option<NaiveDate>,
 }
 
 fn decode<T: DeserializeOwned>(input: Value) -> Result<T, ApiError> {
@@ -633,6 +675,11 @@ impl ReadTool {
                     a.page_size,
                     a.cursor,
                 ))
+            }
+            Self::Tradability | Self::MarketCap => {
+                // These tools bypass the Query path and are handled directly in
+                // the dispatch layer (Handler::Derived).
+                unreachable!("Tradability and MarketCap should use Handler::Derived")
             }
         }
     }

@@ -510,6 +510,31 @@ impl DataApi {
             },
         })
     }
+
+    /// D-82: derived tools call research functions and assemble table responses.
+    fn derived_tool(
+        &self,
+        tool: super::read_tools::ReadTool,
+        input: Value,
+    ) -> Result<Value, super::Error> {
+        use super::read_tools::ReadTool;
+        match tool {
+            ReadTool::Tradability => {
+                // TODO: implement tradability handler
+                Err(super::Error::Invalid(
+                    "get_tradability not yet implemented".to_string(),
+                ))
+            }
+            ReadTool::MarketCap => {
+                // TODO: implement market_cap handler
+                Err(super::Error::Invalid(
+                    "get_market_cap not yet implemented".to_string(),
+                ))
+            }
+            _ => unreachable!("only Tradability and MarketCap use Handler::Derived"),
+        }
+    }
+
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
         let crate::task_control::RequestOutcome::Task(f) = a.record.outcome else {
             return Err(ApiError::new(
@@ -1370,6 +1395,10 @@ impl DataApi {
                 let mut answer = self.queries.query_v2(query, &self.access).map_err(mapped)?;
                 super::read_tools::add_limitations(&mut answer, notes);
                 Ok(answer)
+            }
+            Handler::Derived(tool) => {
+                // D-82: derived read-only tools call research functions directly.
+                self.derived_tool(tool, input).map_err(mapped)
             }
             Handler::Capabilities => self.capabilities(decode(input)?),
             Handler::Facets => self.catalog_facets(decode(input)?),
