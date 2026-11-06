@@ -329,7 +329,7 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `researc
 
 | 工具 | 必填 | 可选 | 对应的 `query_data` |
 |---|---|---|---|
-| `find_securities` | 无 | `query`（名称片段）、`code`、`industry_code`、分页 | `securities.catalog`，范围现行沪深 A 股 |
+| `find_securities` | 无 | `query`（名称片段）、`code`、`industry_code`、`kind`（`stock` 默认/`etf`）、分页 | `kind=stock`：`securities.catalog`，范围现行沪深 A 股；`kind=etf`：没有对应的 `query_data` 请求，见下 |
 | `get_daily_bars` | `securities`（1..100）、`start_date`、`end_date` | `adjustment`（`qfq`/`raw`）、`fields`、分页 | `market.daily`，`single`/`batch` |
 | `get_yearly_bars` | `securities`（1..100）、`start_year`、`end_year` | `fields`、分页 | `market.yearly`，`single`/`batch` |
 | `get_index_bars` | `indices`（登记的 9 条指数）、`start_date`、`end_date` | `fields`、分页 | `market.index`，`single`/`batch` |
@@ -342,6 +342,14 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `researc
 
 语义，均沿用现有规则，没有放松：
 
+- `find_securities`：缺省 `kind=stock`，与 `kind` 出现之前逐字相同（`columns`、`entities`、`versions`、`limitations` 都不变，与 `query_data` 的 `securities.catalog` 等价）。
+  `kind=etf` 按名称或代码找 ETF，现行和退市都在内（退市的只能按代码或不带条件列出）。底层是 `market.security_names` 上的内部过滤 `Filter::FindEtf`（不可反序列化、不进 schema，`query_data` 构造不了，`filter.kind=find_etf` 返回 `invalid_arguments`），读取在 `sqlite_supply/m2.rs` 的 `find_etf`。
+  - `query` 的归一化（D-76 Q8）：Unicode NFKC，去掉全部空白，转小写，对**最新名称**做子串匹配。`沪深300ETF`、`300etf`、`沪深３００ＥＴＦ`、`沪深 300 Etf` 命中同一批。不做拼音、不做模糊。去空白后为空的 `query` 返回 `invalid_arguments`。`code` 是六位精确匹配，和 `query` 同时给出时取交集。
+  - 范围：主表里 `instrument_class=2` 的沪深行。`status=current` 与 `sh_sz_etf_current` 用同一个判断（`research::universe::is_current_etf`），否则 `delisted`。按代码排序，分页和游标与其他工具相同，游标绑定到发出它的请求。
+  - 列（固定，没有 `fields`）：`name`、`name_basis`、`status`、`instrument_class`、`listing_date`、`delisting_date`、`name_observed_from`。`name_basis` 取 `observed_from_first_snapshot` 或 `unavailable`；没有名称时 `name` 为 `null`（不会是空串），不会按代码段、基金公司或 A 股名称去猜。`name_observed_from` 是**最新名称**首次被名单快照看到的日子，不是交易所的改名日。
+  - 响应的 `limitations` 写明：名称历史从首次观测日开始，更早的改名不可得；`华夏300`、`广发500` 这类交易所短写法搜不到；退市 ETF 可能没有名称（`name: null`、`name_basis: unavailable`），用代码找；`delisted` 的含义。结果为 0 行时同样带这些说明。
+  - `kind=etf` 不接受 `industry_code`（ETF 没有行业）；其他非法值（`ETF`、`all`、空串、非字符串）和多余字段都返回 `invalid_arguments`。ETF 名称只来自 PR-2 写入的 `exchange_snapshot` 行；`market.security_names` 与 `get_security_*` 对 ETF 的读取不变（仍不返回这些行，见 [etf-name-search](tasks/etf-name-search.md) §5.3）。
+  - 退市 ETF 的名称（PR-4）未做：2026-11-03 之前退市的存量没有名称。
 - `get_daily_bars`：A 股默认 `qfq`。ETF 不传 `adjustment` 返回 `adjustment_required_for_etf`，传 `qfq` 返回 `adjustment_unavailable`；A 股与 ETF 混查时传 `raw`，全部返回不复权。
   传入登记的指数（`index_registry`，含别名 `sz.399300`、`sz.399905`）返回 `invalid_arguments`，消息指向 `get_index_bars`；整批拒绝，不丢弃指数。
   `query_data` 查指数的行为不变，仍返回 `absent` 和 0 行。

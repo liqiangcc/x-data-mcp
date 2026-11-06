@@ -261,29 +261,111 @@ fn universe_intervals_give_etfs_both_dates() {
     assert_eq!(
         rows[2..],
         [
-            // Live ETF: open interval, last traded bar is the 21st.
+            // Live ETF: open interval from the listing day (D-80, not from the
+            // first observation day), last traded bar is the 21st.
             (
                 "sh.510050",
                 2,
-                day(2026, 10, 20),
+                ETF_LISTED_510050,
                 None,
                 Some(day(2026, 10, 21)),
                 None
             ),
             // Listed, no `.day` member: the identity is there, the dates are
             // unknown (never invented).
-            ("sh.513330", 2, day(2026, 10, 20), None, None, None),
+            ("sh.513330", 2, ETF_LISTED_513330, None, None, None),
             // Delisted: existence ends on the termination date, tradable
             // window ends on the last bar with volume.
             (
                 "sz.159919",
                 2,
-                day(2026, 10, 20),
+                ETF_LISTED_159919,
                 Some(day(2026, 10, 22)),
                 Some(day(2026, 10, 21)),
                 Some(day(2026, 10, 22))
             ),
         ]
+    );
+}
+
+/// D-80: a fund listed in 2005 and first observed in 2026 is a member for the
+/// years in between. Before the fix `member_from` was the observation day, so
+/// a 2015–2025 backtest read an empty ETF universe from `universe_intervals`.
+#[test]
+fn etf_membership_covers_the_years_between_listing_and_first_observation() {
+    let fixture = Fixture::with_etf();
+    let c = fixture.read();
+    let intervals = crate::research::universe::member_intervals_with_etf(&c).unwrap();
+    let members_at = |as_of: NaiveDate| -> Vec<&str> {
+        intervals
+            .iter()
+            .filter(|i| i.instrument_class == 2)
+            .filter(|i| i.member_from <= as_of && i.member_to.is_none_or(|to| as_of < to))
+            .map(|i| i.entity.as_str())
+            .collect()
+    };
+    // 2020: 510050 (2005) and 159919 (2012) are listed, 513330 (2017-12-20)
+    // is listed too.
+    assert_eq!(
+        members_at(day(2020, 6, 30)),
+        ["sh.510050", "sh.513330", "sz.159919"]
+    );
+    // Between 2012 and 2017 only the first two exist.
+    assert_eq!(members_at(day(2015, 1, 5)), ["sh.510050", "sz.159919"]);
+    // The listing day itself is in, the day before is out.
+    assert_eq!(members_at(ETF_LISTED_510050), ["sh.510050"]);
+    assert!(members_at(day(2005, 2, 22)).is_empty());
+    // After the termination date the delisted fund is out; the others stay.
+    assert_eq!(members_at(day(2026, 10, 22)), ["sh.510050", "sh.513330"]);
+    // Every ETF interval says it was proven by the listing day.
+    assert!(
+        intervals
+            .iter()
+            .filter(|i| i.instrument_class == 2)
+            .all(|i| i.basis == crate::research::member_state::MembershipBasis::ListingDate)
+    );
+}
+
+/// D-80 keeps the first observation day as `known_at`: a `known_at` earlier
+/// than it excludes the row and counts the exclusion, even though the interval
+/// itself started years before.
+#[test]
+fn a_known_at_before_the_first_observation_excludes_and_counts_the_etf_row() {
+    use crate::research::temporal::{Temporal, TemporalReport};
+    let fixture = Fixture::with_etf();
+    let c = fixture.read();
+    let etf_rows: Vec<_> = crate::sqlite_market::security::read_security_master(&c)
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.instrument_class == 2)
+        .collect();
+    assert_eq!(etf_rows.len(), 3);
+    for row in &etf_rows {
+        assert!(row.effective_from < row.known_at.unwrap(), "{}", row.code);
+    }
+    let as_of = day(2020, 6, 30);
+    let mut early = TemporalReport::new(Temporal::known_by(as_of, day(2020, 6, 30)));
+    let admitted = etf_rows
+        .iter()
+        .filter(|row| early.observe("security_master", row.known_at))
+        .count();
+    assert_eq!(admitted, 0);
+    let entry = early.dataset("security_master").unwrap();
+    assert_eq!(entry.rows, 3);
+    assert_eq!(entry.excluded_known_at_rows, 3);
+    assert_eq!(entry.unknown_known_at_rows, 0);
+
+    let mut late = TemporalReport::new(Temporal::known_by(as_of, day(2026, 10, 20)));
+    assert!(
+        etf_rows
+            .iter()
+            .all(|row| late.observe("security_master", row.known_at))
+    );
+    assert_eq!(
+        late.dataset("security_master")
+            .unwrap()
+            .excluded_known_at_rows,
+        0
     );
 }
 

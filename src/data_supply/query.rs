@@ -69,7 +69,22 @@ impl QueryPlan {
         // already rejects every `universe` selection, so a v1 request cannot
         // quietly acquire the listed-ever member set.
         universe_scope(args.dataset, &args.selection)?;
-        let entities = entities(args.dataset, &args.selection, access)?;
+        // `find_securities kind=etf` is the only reader of `Filter::FindEtf`:
+        // it names no entity and takes no point-in-time argument. Any other
+        // pairing of the filter, dataset and selection is a plan bug.
+        let find_etf = matches!(args.filter, Filter::FindEtf { .. });
+        if find_etf
+            && (args.dataset != Dataset::SecurityNames
+                || !matches!(args.selection, Selection::Market { .. })
+                || args.known_at.is_some())
+        {
+            return Err(invalid("dataset/filter range mismatch"));
+        }
+        let entities = if find_etf {
+            Vec::new()
+        } else {
+            entities(args.dataset, &args.selection, access)?
+        };
         match (&args.filter, args.dataset) {
             (
                 Filter::Daily {
@@ -119,6 +134,7 @@ impl QueryPlan {
                 Dataset::Yearly,
             ) if *start_year >= 1 && end_year >= start_year && *end_year <= 9999 => {}
             (Filter::Catalog { .. }, Dataset::Catalog) => {}
+            (Filter::FindEtf { .. }, Dataset::SecurityNames) => {}
             _ => return Err(invalid("dataset/filter range mismatch")),
         }
         match &mut args.version {
@@ -179,24 +195,23 @@ impl QueryPlan {
                 "selection.catalog_version and filter.as_of are mutually exclusive for point-in-time universes",
             ));
         }
-        let temporal =
-            args.dataset
-                .is_temporal_fact()
-                .then(|| crate::data_supply::query::TemporalPlan {
-                    as_of: if matches!(args.filter, Filter::History { .. }) {
-                        None
-                    } else {
-                        Some(as_of.unwrap_or_else(|| {
-                            // Replaced in `resolve` once the calendar is available; the
-                            // value here only keeps a point-in-time `as_of` present.
-                            match &args.filter {
-                                Filter::Daily { end_date, .. } => *end_date,
-                                _ => NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
-                            }
-                        }))
-                    },
-                    known_at: args.known_at,
-                });
+        let temporal = (args.dataset.is_temporal_fact() && !find_etf).then(|| {
+            crate::data_supply::query::TemporalPlan {
+                as_of: if matches!(args.filter, Filter::History { .. }) {
+                    None
+                } else {
+                    Some(as_of.unwrap_or_else(|| {
+                        // Replaced in `resolve` once the calendar is available; the
+                        // value here only keeps a point-in-time `as_of` present.
+                        match &args.filter {
+                            Filter::Daily { end_date, .. } => *end_date,
+                            _ => NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
+                        }
+                    }))
+                },
+                known_at: args.known_at,
+            }
+        });
         Ok(Self {
             args,
             entities,
@@ -680,7 +695,13 @@ impl<R: ReadRepository> Queries<R> {
     /// version verification as v1; only the projection differs.
     pub fn query_v2(&self, args: Query, access: &Access) -> Result<serde_json::Value, Error> {
         let _inflight = Inflight(&self.inflight);
-        let (allowed, default) = super::columnar::query_fields(args.dataset);
+        let (allowed, default) = match args.filter {
+            Filter::FindEtf { .. } => (
+                super::columnar::FIND_ETF_FIELDS,
+                super::columnar::FIND_ETF_FIELDS,
+            ),
+            _ => super::columnar::query_fields(args.dataset),
+        };
         let fields = super::columnar::select(
             args.fields.as_deref(),
             allowed,

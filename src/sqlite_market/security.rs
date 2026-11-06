@@ -713,10 +713,19 @@ pub(crate) fn apply_etf_delisting(
             update.announcement_date,
             update.delisting_date,
         );
-        // The row may already start earlier because the code first appeared
-        // in a list snapshot. `member_rows` takes the minimum there, so replay
-        // must do the same instead of moving the start to the announcement.
-        let target_from = row.effective_from.min(values.effective_from);
+        // The first observation day is the row's `known_at`; `member_rows`
+        // takes the minimum of it and the announcement-derived start, then
+        // applies D-80 (the listing day opens the interval). Replay uses the
+        // same two steps instead of moving the start to the announcement.
+        let first_seen = row
+            .known_at
+            .unwrap_or(row.effective_from)
+            .min(values.effective_from);
+        let target_from = assembly::member_effective_from(
+            first_seen,
+            row.listing_date,
+            Some(values.effective_to),
+        );
         let target_known = Some(match row.known_at {
             Some(day) => day.min(values.effective_from),
             None => values.effective_from,

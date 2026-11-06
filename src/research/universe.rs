@@ -283,6 +283,14 @@ pub struct MemberInterval {
     pub delisting_date: Option<NaiveDate>,
 }
 
+/// Whether a class-2 main-table row is a current ETF: still open and with no
+/// delisting source. `etf_current_entities` and `find_securities kind=etf`
+/// share this one predicate, so "current" cannot mean two things.
+pub fn is_current_etf(row: &crate::security_master::SecurityLifecycleFact) -> bool {
+    row.effective_to.is_none()
+        && row.delisting_source == crate::security_master::DelistingSource::Unknown
+}
+
 /// ETF current members: class=2 rows whose identity is still open and whose
 /// delisting source is still unknown (M3-2 PR-A2).
 ///
@@ -295,8 +303,7 @@ pub fn etf_current_entities(c: &Connection) -> Result<Vec<String>, Error> {
         .into_iter()
         .filter(|row| row.instrument_class == 2)
         .filter(|row| matches!(row.exchange, Exchange::Sh | Exchange::Sz))
-        .filter(|row| row.effective_to.is_none())
-        .filter(|row| row.delisting_source == crate::security_master::DelistingSource::Unknown)
+        .filter(is_current_etf)
         .map(|row| row.entity())
         .collect();
     Ok(members.into_iter().collect())

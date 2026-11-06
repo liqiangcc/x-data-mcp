@@ -187,11 +187,19 @@ fn etf_identity_reads_both_frozen_lists_and_is_idempotent() {
     let identity = etf_list::identity_rows(&first, &std::collections::BTreeMap::new()).unwrap();
     assert_eq!(identity.len(), 1_717);
     assert!(identity.iter().all(|row| row.instrument_class == 2));
+    // D-80: a member with a listing day starts there (SSE rows carry one from
+    // the list); without one (SZSE here: no TDX dates are passed) it starts at
+    // the first frozen snapshot's acquisition date.
     assert!(
         identity
             .iter()
-            .all(|row| row.effective_from == day(2026, 10, 30)),
-        "effective_from is the first frozen snapshot's acquisition date"
+            .all(|row| row.effective_from == row.listing_date.unwrap_or(day(2026, 10, 30))),
+        "effective_from is the listing day, else the first snapshot's acquisition date"
+    );
+    assert!(
+        identity
+            .iter()
+            .any(|row| row.listing_date.is_some() && row.effective_from < day(2026, 10, 30))
     );
     assert!(
         identity

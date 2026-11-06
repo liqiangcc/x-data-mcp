@@ -215,6 +215,48 @@ fn class_zero(
         .collect()
 }
 
+/// D-80: the listing day opens an ETF row's interval and the A-share rows of
+/// the same assembly are exactly what they were without any ETF.
+#[test]
+fn etf_rows_start_at_the_listing_day_and_a_share_rows_are_unchanged() {
+    let alone = a_share_assembly();
+    let before = alone.rows.clone();
+    let mut assembled = a_share_assembly();
+    let facts = vec![etf_member(crate::security_master::Exchange::Sh, "510050")];
+    let report = merge_etf_identity(
+        &mut assembled,
+        Vec::new(),
+        EtfAttempt::Facts {
+            facts: Ok(facts),
+            evidence: json!({}),
+            failure: None,
+            preserve_previous: false,
+        },
+    );
+    assert!(report.failure.is_none());
+    assert_eq!(class_zero(&assembled.rows), before);
+    // The A-share block is byte-identical, so is its digest.
+    assert_eq!(
+        assembly::assembly_digest(&class_zero(&assembled.rows), &[]),
+        assembly::assembly_digest(&before, &[])
+    );
+    let etf: Vec<_> = assembled
+        .rows
+        .iter()
+        .filter(|row| row.instrument_class == 2)
+        .collect();
+    assert_eq!(etf.len(), 1);
+    // Listed 2005-02-23, first observed 2026-11-03.
+    assert_eq!(
+        etf[0].effective_from,
+        chrono::NaiveDate::from_ymd_opt(2005, 2, 23).unwrap()
+    );
+    assert_eq!(
+        etf[0].known_at,
+        chrono::NaiveDate::from_ymd_opt(2026, 11, 3)
+    );
+}
+
 #[test]
 fn an_etf_failure_keeps_the_previous_class_two_rows_and_still_writes_a_shares() {
     let mut assembled = a_share_assembly();
