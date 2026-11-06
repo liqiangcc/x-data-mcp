@@ -334,6 +334,16 @@ T 日股票池 `universe(as_of=T)`。
 主板涨跌停因此在非 ST 区间的日子里也是 `unknown`（审计第 2.3 节）。数据量见
 [STATUS](STATUS.md)（本文件不写部署数字）。
 
+**风险警示时点规则（D-81 R1、R4、R5，代码面，未部署）**：契约全文见
+[generic-data-v11 §5](contracts/generic-data-v11.md)。(R1) `known_at` 是日期，`known_at = D`
+表示 D 日收盘后才保证已知；收盘后决策用截止 `D`，开盘或盘中决策必须用 `known_at ≤ D-1`
+（上一交易日）。过滤本身不变（`≤`，含当日）。(R4) 一期不支持按更正重放：沪市同一
+`(公告 id, 事件)` 在日更读取的页里日期不同，`derived:risk_warnings` 以 `source_invalid` 失败，
+不再保留第一个日期。(R5，修订 D-68 第 4 项) 同日实施与撤销（沪）或同日两条简称变更（深）只影响该代码：
+冲突日写一行 `marker_only_unresolved`，其余代码照常发布，冲突代码与日期进数据集证据
+（`same_day_conflicts`：数量加前 20 个样本）；`marker_only_unresolved` 在读路径上不是 `normal`。
+算法版本 `risk-warnings-v1` → `v2`，解析器 `v5` → `v6`，内容摘要与 `version_id` 不变，无 schema 变化。
+
 **简称与历史 ST 的知晓时间（XDM-157，已部署）**：深市简称/ST 行的 `known_at`
 不再是 NULL，而是“首次包含该行的快照入库日”（`issue-446` §5.3/Q4）：适配器解析后按来源库清单
 （`manifest.jsonl` 的 `acquired_at`）的**上海日期**（`crate::calendar::shanghai_date_of`；UTC

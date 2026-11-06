@@ -119,7 +119,48 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - `src/research/industry/industry_query_golden.txt`：`market.industry_assignments` 在 4 个标的 × 5 个 `as_of` 上的行与 `temporal`，同样在改动前记录。
 - `m2.rs` 的单元测试保留原有的 `as_of` 半开区间断言，增加 `as_of: None` 的窗口重叠断言。
 
-## 5. 未验证
+## 5. 风险警示的时点规则（D-81 R1、R4、R5）
+
+适用于 `market.risk_warnings`（`query_data`、`get_security_state`、`get_security_history` 读到的 `risk_warning_intervals`）。**compact schema 不变**，`tools/list` 与响应形状不变。`ALGORITHM_VERSION` 在代码面升级，影响见下。
+
+### 5.1 R1：`known_at` 是日期，`known_at = D` 表示 D 日收盘后才保证已知
+
+过滤用 `known_at ≤ cutoff`（`temporal.rs`），两端都含。因此：
+
+| 决策时点 | 该用的 `known_at` 截止 | 理由 |
+|---|---|---|
+| 收盘后（盘后选股、复盘） | `D` | D 日公告在 D 日收盘后已知 |
+| 开盘或盘中（按 D 日开盘价成交、盘中信号） | `≤ D-1`（上一交易日） | 公告可能在 D 日盘中才发布，D 日的 `known_at` 不保证开盘前已知 |
+
+`known_at` 只有日期，没有盘中时刻（D-81 R3 留给二期），所以同一天内无法再细分。这是引擎调用方的约定，不是过滤规则的改动：同一行在截止 `D-1` 时被排除，在截止 `D` 时可见。测试：`research::read_model_tests::a_risk_interval_known_on_d_is_visible_at_d_and_hidden_at_the_previous_day`。
+
+### 5.2 R4：一期不支持按更正重放
+
+库里是更正后的最新值，`known_at` 是首个包含该行的快照日；更正前的值取不回来，所以“更正发生之前的世界是什么样”不可重放。
+
+- **沪市**：同一 `(公告 id, 事件)`（事件 = 动作 + 状态）在日更实际读取的页里出现两次、生效日或公告日不同，`derived:risk_warnings` 以 `source_invalid` 失败，错误文本带公告 id、代码、两组日期和 `D-81 R4`。以前保留第一次的日期、丢弃更正后的日期。完全相同的重复（两个标题过滤器都命中同一公告）照旧只读一次。
+- **重放**：`replay --scope risk_warnings` 与日更使用同一条规则，但只对日更会读的页生效。同一窗口、同一过滤器下，日更只读最新 `END_DATE` 的那一页集；重放还持有更早 `END_DATE` 的旧页（`superseded_bulletins`），旧页只补充新页没有的事件，与日期不一致不报错。否则重放会在日更成功的数据上失败。
+- **深市**：简称表被更正时仍走 `BrokenChain` fail-closed，不变。
+
+### 5.3 R5（修订 D-68 第 4 项）：同日冲突只影响该代码
+
+以前同一代码同日既有实施又有撤销（沪市 `SameDayActionConflict`），或同日有两条简称变更（深市 `SameDayConflict`），整个数据集失败。现在：
+
+- 冲突代码在冲突日写**一行** `marker_only_unresolved`（`effective_from` = 冲突日，`effective_to` = 次日；表的 CHECK 已含这个状态）。冲突日之前打开的区间在冲突日结束，不跨过冲突日延伸。冲突日之后到下一个事件之前**没有行**，读作 `unknown`。其余代码照常发布。
+- `raw_status_code` 为 `unresolved:same_day_action_conflict`（沪）或 `unresolved:same_day_name_changes`（深）；`source_record_id` 是涉事记录 id 按字典序用逗号连接；`source_document_sha256` 取其中字典序最小的一条记录；`known_at` 取涉事行中最晚的一个，任何一行为空则为空。这些值与行的输入顺序无关，所以重放与日更逐行相同。
+- 数据集证据（item 的 `source.same_day_conflicts` 与登记证据 `same_day_conflicts`）写 `count`、`codes` 和前 20 个 `(exchange, code, day, kind, source_record_id)` 样本。
+- 不变的 fail-closed：`BrokenChain`、同日两个不同状态的实施（`SameDayStatusConflict`）、无状态的实施事件、区间重叠、重复主键。深市同日冲突只在这组变更与链仍能连接时隔离；连接不上的仍是 `BrokenChain`。
+- 读路径：`marker_only_unresolved` 不是 `normal`。`member_state` 原样返回该状态；`price_limit` 把它与 `unknown` 同样处理（`StUnknown`，不写 `status_class`，只有所有状态共用一个涨跌幅档时才给出已知的涨跌幅并标 `status_unknown_band_invariant`）；`tradability` 不读风险状态。
+
+### 5.4 版本号与部署后的影响
+
+- `risk_warnings` 的 `ALGORITHM_VERSION`：`risk-warnings-v1` → `risk-warnings-v2`。它写入 `derived_dataset_versions.algorithm_version`、登记证据和导出 `producer.algorithms`（不属于导出快照的身份）。没有代码读取该值做兼容判断。
+- 内容摘要（`dataset_digest`，前缀仍是 `risk-warnings-v1`）、`digest_format`、`version_id` 不变。没有同日冲突的数据集重新组装后行逐字节相同，`version_id` 不变，只有 `algorithm_version` 一列在下一次 `derived:risk_warnings` 写入时更新为 `v2`。
+- 解析器版本（item 证据的 `parser_version`）：`risk-warnings-v5` → `risk-warnings-v6`，只影响证据标注。
+- 预期的数据影响：D-68 之后 preview.42 全量页集上 `SameDay*` 冲突为 0，所以线上现有 884 行沪市记录预计不变；这一点没有在线上核对（本任务不访问线上）。部署后第一次日更若出现冲突，会多出 `marker_only_unresolved` 行并在证据里列出，而不是让 item 失败。
+- 无 schema 变化，无 `tools/list` 变化，无需重新 `init`。
+
+## 6. 未验证
 
 线上真实数据未测；本代码面未部署，`tools/list` 字节为本地实测，线上以部署后的读回为准。
 

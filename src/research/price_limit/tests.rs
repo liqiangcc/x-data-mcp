@@ -1564,3 +1564,39 @@ fn the_r2_pre_2000_sh_row_does_not_make_an_unknown_st_status_known() {
     assert!(bands.contains(&Some(500)), "{bands:?}");
     assert!(bands.contains(&Some(1_000)), "{bands:?}");
 }
+
+/// D-81 R5: a code the risk-warning source could not settle
+/// (`marker_only_unresolved`) is not `normal` for the price limit. It is
+/// handled exactly like an unknown status: no `status_class`, no borrowed
+/// ST/non-ST rule, and an answer only where every status shares one band.
+#[test]
+fn a_marker_only_unresolved_status_is_never_read_as_normal() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    {
+        let c = Connection::open(&fixture.path).unwrap();
+        // 000001 (main board) and 300001 (GEM) were `normal`.
+        c.execute(
+            "UPDATE risk_warning_intervals SET normalized_status='marker_only_unresolved', \
+             raw_status_code='unresolved:same_day_action_conflict' \
+             WHERE code IN ('000001','300001')",
+            [],
+        )
+        .unwrap();
+    }
+    let c = fixture.open();
+    // ST and normal are two different rows on the main board, so the limit
+    // is not borrowed from either (same answer as an absent interval).
+    let main = ask(&c, "sz.000001", days()[9]);
+    assert_eq!(main.state, PriceLimitState::Unknown);
+    assert_eq!(main.reason, Some(PriceLimitReason::StUnknown));
+    assert_eq!(main.status_class, None);
+    assert!(!main.status_unknown_band_invariant);
+    assert!(!main.candidates.is_empty());
+    // GEM shares one band for every status: the limit is known, the status is
+    // still not, and the report says so instead of claiming `normal`.
+    let gem = ask(&c, "sz.300001", days()[9]);
+    assert_eq!(gem.state, PriceLimitState::Known);
+    assert_eq!(gem.status_class, None);
+    assert!(gem.status_unknown_band_invariant);
+}
