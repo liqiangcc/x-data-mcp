@@ -695,7 +695,7 @@ impl DataApi {
             }
             
             // Collect input versions
-            let mut inputs: Vec<Value> = Vec::new();
+            let inputs: Vec<Value> = Vec::new();
             // TODO: collect actual input dataset versions
             
             let mut datasets_without_known_at = Vec::new();
@@ -784,11 +784,190 @@ impl DataApi {
         })
     }
     
-    fn get_market_cap(&self, _input: Value) -> Result<Value, super::Error> {
-        // TODO: implement market_cap handler
-        Err(super::Error::Invalid(
-            "get_market_cap not yet implemented".to_string(),
-        ))
+    fn get_market_cap(&self, input: Value) -> Result<Value, super::Error> {
+        use super::read_tools::{MarketCapInput, MarketCapScope, decode, reject_indices};
+        use crate::research::temporal::Temporal;
+        use crate::research::market_cap::{ShareScope, market_cap, MarketCapOptions, ShareOptions};
+
+        // Check for known_at
+        if let Value::Object(ref obj) = input {
+            if obj.contains_key("known_at") {
+                return Err(super::Error::Invalid(
+                    "known_at is not accepted: A-share inputs lack known_at columns. \
+                     Use get_security_state for facts with known_at.".to_string(),
+                ));
+            }
+        }
+        
+        let args: MarketCapInput = decode(input.clone()).map_err(|e| {
+            super::Error::Invalid(format!("{}", e.message))
+        })?;
+        
+        reject_indices(&args.securities).map_err(|e| {
+            super::Error::Invalid(format!("{}", e.message))
+        })?;
+        
+        let as_of = match args.as_of {
+            Some(day) => day,
+            None => {
+                use super::query::ReadRepository as _;
+                self.queries
+                    .repository
+                    .last_trading_day_upto(super::query::today())
+                    .map_err(super::Error::from)?
+            }
+        };
+        
+        let scope = match args.scope {
+            MarketCapScope::FloatA => ShareScope::FloatA,
+            MarketCapScope::CompanyTotal => ShareScope::CompanyTotal,
+            MarketCapScope::AShareTotal => ShareScope::AShareTotal,
+        };
+        
+        // Read in a transaction
+        let answer = self.queries.repository.market.read(|c| {
+            let temporal = Temporal {
+                as_of,
+                known_at: None,
+            };
+            
+            let options = MarketCapOptions {
+                shares: ShareOptions {
+                    allow_suspicious: false,
+                    current_float_reference: None,
+                    current_total_reference: None,
+                },
+                // reconciliation is always not_available per task spec
+                exclude_low_confidence: false,
+            };
+            
+            let mut states = Vec::new();
+            let mut reasons = Vec::new();
+            let mut market_caps = Vec::new();
+            let mut closes = Vec::new();
+            let mut shares_col = Vec::new();
+            let mut share_event_days = Vec::new();
+            let mut share_event_categories = Vec::new();
+            let mut chain_break_days = Vec::new();
+            let mut reconciliations = Vec::new();
+            
+            for entity in &args.securities {
+                let entity_str = entity.symbol();
+                
+                let cap = market_cap(c, &entity_str, temporal, scope, &options)
+                    .map_err(|e| match e {
+                        crate::research::Error::Integrity(s) => super::Error::Integrity(s),
+                        e => super::Error::from(crate::market_storage::Error::Storage(e.to_string())),
+                    })?;
+                
+                states.push(Value::String(
+                    match cap.state {
+                        crate::research::market_cap::MarketCapState::Known => "known",
+                        crate::research::market_cap::MarketCapState::Unknown => "unknown",
+                    }.to_string()
+                ));
+                
+                if let Some(reason) = cap.reason {
+                    reasons.push(Value::String(reason.as_str().to_string()));
+                } else {
+                    reasons.push(Value::String("known".to_string()));
+                }
+                
+                // Market cap in yuan (divide cents by 100, format as 2 decimal places)
+                if let Some(value) = cap.value_units {
+                    let yuan = value / 100;
+                    let cents = (value % 100).abs();
+                    market_caps.push(Value::String(format!("{}.{:02}", yuan, cents)));
+                } else {
+                    market_caps.push(Value::Null);
+                }
+                
+                // Close price
+                if let (Some(price), Some(scale)) = (cap.price_cents, cap.price_scale) {
+                    closes.push(Value::String(format_price(price, scale)));
+                } else {
+                    closes.push(Value::Null);
+                }
+                
+                // Shares
+                if let Some(shares) = cap.shares {
+                    shares_col.push(Value::Number(shares.into()));
+                } else {
+                    shares_col.push(Value::Null);
+                }
+                
+                // Share event day
+                if let Some(day) = cap.share_day {
+                    share_event_days.push(Value::String(day.to_string()));
+                } else {
+                    share_event_days.push(Value::Null);
+                }
+                
+                // Share event category
+                if let Some(cat) = cap.share_category {
+                    share_event_categories.push(Value::Number(cat.into()));
+                } else {
+                    share_event_categories.push(Value::Null);
+                }
+                
+                // Chain break day
+                if let Some(day) = cap.chain_break_day {
+                    chain_break_days.push(Value::String(day.to_string()));
+                } else {
+                    chain_break_days.push(Value::Null);
+                }
+                
+                // Reconciliation is always not_available
+                reconciliations.push(Value::String("not_available".to_string()));
+            }
+            
+            let inputs: Vec<Value> = Vec::new();
+            
+            let mut datasets_without_known_at = Vec::new();
+            datasets_without_known_at.push("capital_events");
+            datasets_without_known_at.push("series_bars");
+            
+            let mut limitations = Vec::new();
+            if scope == ShareScope::CompanyTotal {
+                limitations.push("company_total is A+B+H shares; not A-share-only total");
+            }
+            
+            Ok(serde_json::json!({
+                "tool": "get_market_cap",
+                "layout": "table",
+                "snapshot_time": chrono::Utc::now().to_rfc3339(),
+                "as_of": as_of.to_string(),
+                "scope": match scope {
+                    ShareScope::FloatA => "float_a",
+                    ShareScope::CompanyTotal => "company_total",
+                    ShareScope::AShareTotal => "a_share_total",
+                },
+                "entities": args.securities.iter().map(|e| e.symbol()).collect::<Vec<_>>(),
+                "columns": {
+                    "state": states,
+                    "reason": reasons,
+                    "market_cap": market_caps,
+                    "close": closes,
+                    "shares": shares_col,
+                    "share_event_day": share_event_days,
+                    "share_event_category": share_event_categories,
+                    "chain_break_day": chain_break_days,
+                    "reconciliation": reconciliations,
+                },
+                "inputs": inputs,
+                "algorithm_versions": {
+                    "market_cap": "market-cap-v1",
+                },
+                "limitations": limitations,
+                "temporal": {
+                    "as_of": as_of.to_string(),
+                    "known_at": Value::Null,
+                    "datasets_without_known_at": datasets_without_known_at,
+                },
+            }))
+        })?;
+        
+        Ok(answer)
     }
 
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
