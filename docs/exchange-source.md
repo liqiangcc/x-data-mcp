@@ -413,7 +413,8 @@ D-70 Q1 准入的两份 ETF 名录也走同一入口，不另起抓取链路：
   行由清单字节决定，不读时钟、不读当前名单、不读 run 记录，所以日更和 `replay` 逐行相同。
   ETF 来源失败或 pending 时保留库内已有 ETF 行，A 股行照常写入；item 报部分失败。
   详见 [来源库](source-store.md) §4.1。
-- 身份是**单调**的：读取时取所有已冻结名单快照的并集，首次出现定 `effective_from`；
+- 身份是**单调**的：读取时取所有已冻结名单快照的并集，首次出现定 `known_at`（成员有上市日时
+  `effective_from` 取上市日，没有上市日时才取首次出现日，D-80）；
   较新快照移出的代码保留 class=2 行并以第一次缺失观测作 `effective_to`，
   `sh_sz_etf_current` 不再包含它、`sh_sz_etf_listed_ever` 仍包含。
 
