@@ -1,7 +1,7 @@
 //! Fabricated universe repository and a minimal `ToolHandler` over `Queries`,
 //! shaped like the research entry's `get_market_data` path (v2 columnar read,
 //! full-text `content` plus `structuredContent`). No real data, no database.
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use serde_json::{Value, json};
 use x_data_mcp::{
     data_supply::{
@@ -68,7 +68,7 @@ impl ReadRepository for Fake {
                 status: ManifestStatus::Present,
                 metadata: Some(Metadata {
                     source: "fabricated".into(),
-                    published_at: Utc::now(),
+                    published_at: "2026-11-05T08:00:00Z".parse().unwrap(),
                     coverage_status: "complete".into(),
                     coverage_reason: format!("fabricated coverage for {}", entity.code),
                     units: [

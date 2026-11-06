@@ -310,6 +310,28 @@ pub(crate) fn read_adjustment_events(
     Ok(events)
 }
 
+/// Whether `entity` has a category-1 (A-share ex-rights/ex-dividend) event with
+/// `after < effective_day <= up_to`. Indexed by `adjustment_events_entity_day`;
+/// category 11 (ETF share conversion) is not looked at.
+pub(crate) fn has_category1_event_between(
+    c: &Connection,
+    entity: &str,
+    after: NaiveDate,
+    up_to: NaiveDate,
+) -> Result<bool, Error> {
+    c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM adjustment_events \
+         WHERE entity=?1 AND effective_day>?2 AND effective_day<=?3 AND category=1)",
+        params![
+            entity,
+            compact_market::epoch_day(after),
+            compact_market::epoch_day(up_to)
+        ],
+        |r| r.get::<_, bool>(0),
+    )
+    .map_err(storage)
+}
+
 /// Replace one entity's whole factor set (§3.6 item 4: delete+insert, never an
 /// incremental patch) and refresh its version registration, inside the
 /// caller's transaction.
