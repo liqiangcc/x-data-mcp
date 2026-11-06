@@ -69,14 +69,25 @@ pub const DATASET_PRICE_LIMIT_RULES: &str = DATASET_KIND;
 /// (`derived_dataset_versions.algorithm_version`, part of the dataset
 /// evidence), so changing it would re-register the rule dataset although no
 /// rule row changed. The rule dataset keeps `limit-v1`; the read-time answer
-/// changed (ex-rights days are `unknown`), so it gets its own label. `limit-v2`
-/// is reserved for an algorithm that really computes the ex-rights reference
-/// price.
-pub const READ_ALGORITHM_VERSION: &str = "limit-v1+exr-guard1";
+/// uses the `limit-v2` algorithm for ex-rights day basis determination.
+pub const READ_ALGORITHM_VERSION: &str = "limit-v2";
 
 /// The basis-point denominator. This is a scale, not an amplitude: every band
 /// comes from the rule row's `band_bp`.
 const BP_SCALE: i128 = 10_000;
+
+/// Sentinel value in r7_raw indicating the field is retired (post 2010-09-14).
+/// Source: evidence/issue-240-r7-analysis/README.md, observed as hex value
+/// in .day files after 2010-09-14.
+const R7_SENTINEL: u32 = 65536; // 0x1_0000
+
+/// Hand-volume marker in r7_raw (from compact_market::HAND_VOLUME_MARKER).
+/// When r7_raw & 0xFFFF_0000 == 0xC364_0000, the value is not a price.
+const R7_HAND_MARKER: u32 = crate::compact_market::HAND_VOLUME_MARKER;
+const R7_HAND_MARKER_MASK: u32 = 0xFFFF_0000;
+
+/// Cutoff date for r7_raw official reference price (before this date, r7_raw != 0 is official).
+const R7_CUTOFF_DATE: (i32, u32, u32) = (2010, 9, 14);
 
 /// The board a code belongs to. M2's universe is A shares only; a code that
 /// does not fall into a known A-share segment is `board_unsupported` rather
@@ -144,6 +155,27 @@ impl PriceLimitState {
             Self::Known => "known",
             Self::Unbounded => "unbounded",
             Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Source of the price limit basis (§3.2 #12, limit-v2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitBasis {
+    /// Previous close (no ex-rights event)
+    PrevClose,
+    /// Official r7_raw reference price (before 2010-09-14)
+    OfficialR7,
+    /// Computed reference price from gbbq formula (2010-09-14 onward)
+    ReferencePrice,
+}
+
+impl LimitBasis {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PrevClose => "prev_close",
+            Self::OfficialR7 => "official_r7",
+            Self::ReferencePrice => "reference_price",
         }
     }
 }
@@ -231,6 +263,8 @@ pub struct PriceLimitReport {
     pub status_unknown_band_invariant: bool,
     pub limit_up_units: Option<i64>,
     pub limit_down_units: Option<i64>,
+    /// The source of the price limit basis (limit-v2).
+    pub limit_basis: Option<LimitBasis>,
     /// The last 不复权 bar before `as_of`, in the series' price scale.
     pub prev_close_units: Option<i64>,
     pub prev_close_day: Option<NaiveDate>,
@@ -283,6 +317,7 @@ impl PriceLimitReport {
             status_unknown_band_invariant: false,
             limit_up_units: None,
             limit_down_units: None,
+            limit_basis: None,
             prev_close_units: None,
             prev_close_day: None,
             price_scale: None,
@@ -485,15 +520,19 @@ pub fn price_limit_in(
     answer.prev_close_day = Some(prev_day);
     answer.price_scale = Some(price_scale);
 
-    // The base is the last unadjusted close. A category-1 event in
-    // `(prev_day, as_of]` means the exchange used an ex-rights reference
-    // price this derivation does not compute (D-81).
-    if derived::has_category1_event_between(c, entity, prev_day, temporal.as_of)? {
-        answer.reason = Some(PriceLimitReason::ExRightsUnverified);
-        return Ok(answer);
-    }
+    // limit-v2: determine the price limit basis (D-84, issue-433 §2).
+    let (basis_price, basis) =
+        match ex_rights_basis(c, entity, prev_close, price_scale, prev_day, temporal.as_of)? {
+            Some((price, basis)) => (price, basis),
+            None => {
+                // Allotment or non-positive reference price
+                answer.reason = Some(PriceLimitReason::ExRightsUnverified);
+                return Ok(answer);
+            }
+        };
+    answer.limit_basis = Some(basis);
 
-    let limits = match compute_limit(prev_close, price_scale, rule, tick) {
+    let limits = match compute_limit(basis_price, price_scale, rule, tick) {
         Ok(limits) => limits,
         Err(()) => {
             answer.reason = Some(PriceLimitReason::InvalidRule);
@@ -505,6 +544,74 @@ pub fn price_limit_in(
     answer.state = PriceLimitState::Known;
     answer.reason = None;
     Ok(answer)
+}
+
+/// Determine the ex-rights day basis price (limit-v2).
+/// Returns None if allotment event (C4>0) or non-positive reference price.
+fn ex_rights_basis(
+    c: &Connection,
+    entity: &str,
+    prev_close: i64,
+    price_scale: u32,
+    prev_day: NaiveDate,
+    as_of: NaiveDate,
+) -> Result<Option<(i64, LimitBasis)>, Error> {
+    // Check if there are cat1 events between prev_day and as_of
+    if !derived::has_category1_event_between(c, entity, prev_day, as_of)? {
+        // No ex-rights event: use prev_close directly
+        return Ok(Some((prev_close, LimitBasis::PrevClose)));
+    }
+
+    // Get all events in this range
+    let events = derived::read_adjustment_events_between(c, entity, prev_day, as_of)?;
+
+    // Check for allotment (C4>0)
+    let has_allotment = events.iter().any(|e| {
+        use rust_decimal::prelude::*;
+        e.factors[3] > Decimal::ZERO
+    });
+
+    if has_allotment {
+        // Allotment event: formula only ~61% accurate
+        return Ok(None);
+    }
+
+    // Check if as_of is before 2010-09-14 and try r7_raw
+    let (year, month, day) = R7_CUTOFF_DATE;
+    let cutoff_date = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
+
+    if as_of < cutoff_date {
+        // Try to get r7_raw on as_of
+        if let Some(r7_value) = series::r7_raw_on_day(c, entity, as_of)? {
+            // Check if r7_raw is a valid price (not sentinel or hand marker)
+            let is_sentinel =
+                r7_value == R7_SENTINEL || (r7_value & R7_HAND_MARKER_MASK) == R7_HAND_MARKER;
+
+            if r7_value != 0 && !is_sentinel {
+                // Use r7_raw as official reference price (in fen, scale 2)
+                // Convert from fen to series price_scale
+                if price_scale < 2 {
+                    // Cannot convert, price_scale too small
+                    return Ok(None);
+                }
+                let r7_in_series_scale = if price_scale == 2 {
+                    i64::from(r7_value)
+                } else {
+                    // Convert fen to higher precision: multiply by 10^(price_scale - 2)
+                    i64::from(r7_value)
+                        .checked_mul(10_i64.pow(price_scale - 2))
+                        .ok_or_else(|| Error::Invalid("r7_raw conversion overflow".into()))?
+                };
+                return Ok(Some((r7_in_series_scale, LimitBasis::OfficialR7)));
+            }
+        }
+    }
+
+    // Use gbbq reference_price
+    match compute_reference_price(prev_close, price_scale, &events) {
+        Some(price) => Ok(Some((price, LimitBasis::ReferencePrice))),
+        None => Ok(None), // Non-positive reference price
+    }
 }
 
 struct ComputedLimit {
@@ -615,6 +722,40 @@ fn divide_round(value: i128, scale: i128, rounding: Rounding) -> i128 {
         Rounding::Floor => value.div_euclid(scale),
         Rounding::Ceil => (value + scale - 1).div_euclid(scale),
     }
+}
+
+/// Compute the reference price for ex-rights days using gbbq formula (limit-v2).
+/// First rounds to fen (HALF_UP), then applies the limit band.
+/// Returns the basis price in the bar's price scale units.
+fn compute_reference_price(
+    prev_close_units: i64,
+    price_scale: u32,
+    events: &[crate::market_data::AdjustmentEvent],
+) -> Option<i64> {
+    use rust_decimal::prelude::*;
+
+    // Convert prev_close to Decimal in yuan using Decimal::new
+    let prev_close_yuan = Decimal::new(prev_close_units, price_scale);
+
+    // Chain all events in order
+    let mut result = prev_close_yuan;
+    for event in events {
+        result = crate::gbbq::reference_price(result, &event.factors);
+    }
+
+    // Check for non-positive result
+    if result <= Decimal::ZERO {
+        return None;
+    }
+
+    // Round to fen (2dp) with HALF_UP
+    let result_fen = result.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero);
+
+    // Convert back to the bar's price scale
+    let result_units = result_fen.checked_mul(Decimal::new(10_i64.pow(price_scale), 0))?;
+
+    // Extract i64, checking for overflow
+    result_units.to_i64()
 }
 
 fn status_class(board: Board, status: RiskStatus) -> Result<StatusClass, PriceLimitReason> {

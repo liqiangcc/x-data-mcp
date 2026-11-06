@@ -111,6 +111,8 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 | `get_security_events` | 656 |
 | `get_trading_calendar` | 377 |
 | `get_price_limit_rules` | 350 |
+
+**涨跌停读时派生（limit-v2）**：规则数据集标签仍是 `limit-v1`；读时派生标签已升级为 `limit-v2`（D-84），实现除权日基准价算法。配股 `unknown`；2010-09-14 前用官方 r7_raw（非哨兵/手标记）；其余用 gbbq::reference_price（OWNER_RISK_ACCEPTED：证伪检验通过，越界 0.115%）。
 | **合计** | **6,461**（加 `kind` 前）→ **6,564** |
 
 每个工具描述不超过 240 B。`find_securities` 的描述为 193 B（测试按 240 B 检查）。
