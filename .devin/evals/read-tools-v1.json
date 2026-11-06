@@ -27,7 +27,9 @@
       "get_security_history",
       "get_security_events",
       "get_trading_calendar",
-      "get_price_limit_rules"
+      "get_price_limit_rules",
+      "get_tradability",
+      "get_market_cap"
     ],
     "new-no-query": [
       "get_data_capabilities",
@@ -43,7 +45,9 @@
       "get_security_history",
       "get_security_events",
       "get_trading_calendar",
-      "get_price_limit_rules"
+      "get_price_limit_rules",
+      "get_tradability",
+      "get_market_cap"
     ]
   },
   "acceptance": {
@@ -586,6 +590,244 @@
           ]
         }
       ]
+    },
+    {
+      "id": "q14",
+      "title": "sh.600519 在 2020-01-07 能否买入",
+      "group": "new_tools",
+      "prompt": "sh.600519（贵州茅台）在 2020-01-07 能否买入？先简述依据，最后单独一行写\"结论：能买\"\"结论：不能买\"或\"结论：无法确定\"。",
+      "oracles": {
+        "tradability": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600519"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        },
+        "suspension": {
+          "request": {
+            "dataset": "market.suspensions",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600519"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07",
+              "as_of": "2020-01-07"
+            },
+            "page_size": 10
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "tradability",
+          "oracles": [
+            "tradability",
+            "suspension"
+          ]
+        }
+      ],
+      "requires_tools": [
+        "get_tradability"
+      ]
+    },
+    {
+      "id": "q15",
+      "title": "sz.300750 在 2020-08-25 的涨停价",
+      "group": "new_tools",
+      "prompt": "sz.300750 在 2020-08-25 的涨停价是多少？给出涨停价的数值。",
+      "oracles": {
+        "prev_bar": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.300750"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-08-24",
+              "end_date": "2020-08-24"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        },
+        "curr_bar": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.300750"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-08-25",
+              "end_date": "2020-08-25"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        },
+        "adjustments": {
+          "request": {
+            "dataset": "market.adjustment_events",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.300750"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-08-24",
+              "end_date": "2020-08-25"
+            },
+            "page_size": 10
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "limit_price",
+          "oracles": [
+            "prev_bar",
+            "curr_bar"
+          ],
+          "band_bp": 2000,
+          "min_tick_cents": 1
+        }
+      ],
+      "requires_tools": [
+        "get_tradability"
+      ],
+      "skip_if": [
+        {
+          "oracle": "adjustments",
+          "not_empty": true,
+          "why": "ex_rights_between_prev_close_and_day"
+        }
+      ]
+    },
+    {
+      "id": "q16",
+      "title": "sh.600000 在 2020-01-07 的流通市值",
+      "group": "new_tools",
+      "prompt": "sh.600000 在 2020-01-07 的流通市值是多少？用流通 A 股计算，给出市值数值和单位（元或亿元）。",
+      "oracles": {
+        "bar": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        },
+        "capital": {
+          "request": {
+            "dataset": "market.capital_events",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "1990-01-01",
+              "end_date": "2020-01-07",
+              "as_of": "2020-01-07"
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "market_cap",
+          "oracles": [
+            "bar",
+            "capital"
+          ],
+          "scope": "float_a",
+          "as_of": "2020-01-07"
+        }
+      ],
+      "requires_tools": [
+        "get_market_cap"
+      ]
+    },
+    {
+      "id": "q17",
+      "title": "sh.600000 在 2020-01-07 的涨停价能否确定",
+      "group": "new_tools",
+      "prompt": "sh.600000 在 2020-01-07 的涨停价能否确定？如果能确定，给出涨停价；如果不能确定，说明原因。最后单独一行写\"结论：已确定\"或\"结论：无法确定\"。",
+      "oracles": {
+        "risk_status": {
+          "request": {
+            "dataset": "market.risk_warnings",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07",
+              "as_of": "2020-01-07"
+            },
+            "page_size": 10
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "unknown_status",
+          "oracle": "risk_status"
+        }
+      ],
+      "requires_tools": [
+        "get_tradability"
+      ]
+    },
+    {
+      "id": "q18",
+      "title": "sh.600000 在 2020-01-07 的市值（未给口径）",
+      "group": "new_tools",
+      "prompt": "sh.600000 在 2020-01-07 的市值是多少？",
+      "oracles": {},
+      "checks": [
+        {
+          "kind": "scope_stated"
+        }
+      ],
+      "requires_tools": [
+        "get_market_cap"
+      ]
     }
   ],
   "notes": [
@@ -594,6 +836,12 @@
     "A check reads the answer line by line (or sentence by sentence): every expected row must appear with all its fields in one line. Transposed tables fail on purpose and show up in missing_rows for a human to judge.",
     "q11-q12 (group screen) screen the whole market: the script reads the catalog members, then computes the expected set from batches of 100 entities with query_data; nothing is stored. They are listed apart in summary.groups and are not part of the section 9 average of 2 turns.",
     "q13 (group etf_name) compares the tools on ETF names (design Q9, names are not searchable yet). It passes in two recorded ways: the answer gives 510300 (outcome found_code) or says the tools cannot look an ETF up by name (outcome declared_unsupported).",
-    "A report keeps each question's expected values under `oracle`, so `--regrade` can grade the saved answers again without a model or the service."
+    "A report keeps each question's expected values under `oracle`, so `--regrade` can grade the saved answers again without a model or the service.",
+    "q14-q18 (group new_tools) cover the tradability, limit-price and market-cap tools of issue-433 §8.1 PR-C. Their expected values come from query_data only: the script may not call the tools under test, otherwise a wrong tool would grade itself correct. Limit prices are recomputed here from the raw previous close and the band (round_half_up to the tick, as src/research/price_limit.rs does); market cap is the raw close times the latest float_after on or before the day (integer shares, see src/sqlite_market/security.rs 'shares_unit'); q17 stores no price at all, it only asks whether the answer admits the status is unknown.",
+    "Why these days: 2020-01-07 is a plain main-board trading day for sh.600519/sh.600000, far from the GEM rule change and from any code migration, and the risk-warning table has no interval for sh.600000 then, which is the documented 'unknown status' case (D-82 Q4). 2020-08-25 is the first full session of the GEM 20% band (effective 2020-08-24), where the limit rule does not depend on the ST status, so the expected limit price is knowable. q15 also fetches market.adjustment_events for the window and is skipped (skipped: precondition_not_met) if an ex-rights event falls between the previous close and the day: the tool answers ex_rights_unverified there (D-81), so no price can be expected.",
+    "q14-q17 name the tools they need in `requires_tools`. When the service's tools/list does not offer one, the script records `status: skipped`, `skipped: tool_not_deployed` and runs the other questions unchanged (exit status and the summary's infrastructure_errors do not count it); when the tool is deployed but the chosen scope leaves it out, the reason is `tool_not_in_scope`. That keeps a run against a service without PR-B (preview.45 today) a normal run of the questions it can answer.",
+    "q14-q18 sit in their own group (new_tools), not in core: the top-level summary keeps the section 9 questions q01-q10 and its 2-turn average, and the baseline-vs-new token and turn comparison behind acceptance.min_token_reduction is computed over q01-q13 only. The new questions have no baseline counterpart (baseline has no tool for them, so they are skipped there as tool_not_in_scope) and are compared between runs of the same scope once PR-B is deployed; see summary.groups.new_tools.",
+    "q14-q17 have not been run against a live service: the tools are not deployed yet. The check functions are unit-tested with synthetic oracle rows only.",
+    "q18 asks for a market cap without naming a scope. It grades behaviour, not a value: the answer must name the 口径 it used (流通 A 股 / 公司总股本 / A 股总股本) or ask which one, because the three are different numbers and the A-share total is unknown for A+H companies (docs/data-catalog.md §3.3 deviation 4). No oracle is stored, so this question is not regraded from data."
   ]
 }

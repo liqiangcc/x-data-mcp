@@ -334,7 +334,7 @@ design.md「扩展契约」逐条核对：
 | 本 PR | 本设计（只改文档） | 无 |
 | PR-A research 层修复 | G2、G3、G4、G6、G7；G1（成本低，顺手）；共享加载；Q3 选 (a) 时加 `ex_rights_unverified`；每处加测试。三个函数无非测试调用方，导出不受影响；共享加载若动到 `universe::select`，要保证 `universe`（`sqlite_supply` 在用）输出不变，现有 `read_model_tests` 全过 | owner 批准本设计 |
 | PR-B 两个工具 | `Handler::Derived`、两个窄输入类型、响应拼装、G8 的登记检查、`known_at` 的显式错误；`RESEARCH_TOOLS`/`NAMES`；CI 预算和 `get_data_capabilities` 上限；`check_current_facts.py` 的工具数；`docs/mcp-tools.md`；更新两处会变错的注释（`research/mod.rs` 第 7 行「Nothing here is reachable from an MCP tool」，`sqlite_supply/m2.rs` 第 511 行「M2 does not derive limit prices」）；测试：与库函数逐项等价（沿用 PR-1 的做法）、fail-closed 各状态各一例（`sz.000631` 缺口、A+H 的 `a_share_total`、主板 `st_unknown`、创业板确定值）、1/10/100 只的耗时 | PR-A、#525 PR-2 |
-| PR-C 评测 | 在 `.devin/evals/read-tools-v1.json` 加「能不能买」「涨停价」「市值」几题，部署后在 vm2 复跑 | PR-B 部署 |
+| PR-C 评测 | 在 `.devin/evals/read-tools-v1.json` 加「能不能买」「涨停价」「市值」「状态未知」几题（q14–q18，题已写，**还没对线上跑过**）：期望值全部由 `query_data` 在运行时取，涨停价在脚本里按 `round_half_up(前收 × (10000±band_bp) / 10000)` 重算，市值用不复权收盘 × `float_after`，`unknown` 题只查回答是否承认未知；题目用 `requires_tools` 声明依赖，工具没部署时标 `skipped: tool_not_deployed`，不算模型失败，退出码不变。等 PR-B 部署后在 vm2 复跑 | PR-B 部署 |
 
 `capability_revision` 升级随读取工具系列的最后一个 PR（`docs/mcp-tools.md`）。本系列晚于 PR-2，所以由 PR-B 承担，日更 Skill 的钉值同提交改（#525 §8）。
 
