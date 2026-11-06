@@ -475,7 +475,7 @@ mod export_files {
             &std::fs::read(outcome.directory.join("manifest.json")).unwrap(),
         )
         .unwrap();
-        assert_eq!(manifest["schema"], "x-data-mcp.research-snapshot.v4");
+        assert_eq!(manifest["schema"], "x-data-mcp.research-snapshot.v5");
 
         let columns = |file: &str| -> Vec<String> {
             manifest["files"]

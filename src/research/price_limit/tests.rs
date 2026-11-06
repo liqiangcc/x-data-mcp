@@ -17,6 +17,7 @@ use crate::market_data::{
     Adjustment, AdjustmentEvidence, CalendarBatch, CalendarInputDates, CoverageStatus,
     EvidenceValue, Period, UnitCurrencyEvidence,
 };
+use crate::research::context::ResearchContext;
 use crate::security_master::assembly::Assembly;
 use crate::security_master::{
     DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
@@ -342,6 +343,8 @@ impl Fixture {
             // status is `unknown`, which is what the D-44 rule book must not
             // read as non-ST (item 3 of the A-7 write-path task).
             ("sz.300003", (0..10).collect(), 7_600),
+            // D-46: `sz.300114` migrated to `sz.302132` (ChiNext).
+            ("sz.302132", (0..10).collect(), 7_700),
             ("sh.688002", (0..10).collect(), 9_100),
             ("sh.600519", (0..10).collect(), 8_000),
             ("sh.688001", (0..10).collect(), 9_000),
@@ -390,6 +393,7 @@ impl Fixture {
             lifecycle(Exchange::Sz, "300001", days[0], 0),
             lifecycle(Exchange::Sz, "300002", days[9], 0),
             lifecycle(Exchange::Sz, "300003", days[0], 0),
+            lifecycle(Exchange::Sz, "302132", days[0], 0),
             lifecycle(Exchange::Sh, "688002", days[0], 0),
             lifecycle(Exchange::Sh, "600519", days[0], 0),
             lifecycle(Exchange::Sh, "688001", days[0], 0),
@@ -421,6 +425,7 @@ impl Fixture {
             ("sz", "000006", "other_risk_warning"),
             ("sz", "300001", "normal"),
             ("sz", "300002", "normal"),
+            ("sz", "302132", "normal"),
             ("sh", "600519", "normal"),
             ("sh", "688001", "delisting_risk_warning"),
         ] {
@@ -807,6 +812,82 @@ fn the_gem_board_uses_its_own_rule() {
     assert_eq!(report.state, PriceLimitState::Known);
     assert_eq!(report.board, Some(Board::Gem));
     assert_eq!(report.band_bp, Some(2_000));
+}
+
+/// G6: `302` is the ChiNext prefix `sz.300114` migrated to (D-46). It must be
+/// classified by the same rule row as `300`/`301`, not `board_unsupported`.
+#[test]
+fn the_302_prefix_is_the_gem_board() {
+    assert_eq!(Board::of_entity("sz.302132"), Some(Board::Gem));
+    for (entity, board) in [
+        ("sz.300114", Some(Board::Gem)),
+        ("sz.301569", Some(Board::Gem)),
+        ("sz.302132", Some(Board::Gem)),
+        ("sz.000001", Some(Board::Main)),
+        ("sz.003816", Some(Board::Main)),
+        ("sh.600519", Some(Board::Main)),
+        ("sh.605599", Some(Board::Main)),
+        ("sh.688001", Some(Board::Star)),
+        ("sh.689009", Some(Board::Star)),
+        // Not A-share segments this derivation classifies: B shares, the
+        // other 30x/ 303+ codes, BSE.
+        ("sz.200002", None),
+        ("sz.303000", None),
+        ("sh.900901", None),
+        ("bj.830799", None),
+    ] {
+        assert_eq!(Board::of_entity(entity), board, "{entity}");
+    }
+    let fixture = Fixture::new();
+    let report = ask(&fixture.open(), "sz.302132", days()[9]);
+    assert_eq!(report.board, Some(Board::Gem));
+    assert_eq!(report.state, PriceLimitState::Known);
+    assert_eq!(report.rule_id.as_deref(), Some("sz-gem-normal"));
+    assert_eq!(report.band_bp, Some(2_000));
+    let gem = ask(&fixture.open(), "sz.300001", days()[9]);
+    assert_eq!(report.rule_id, gem.rule_id);
+}
+
+/// issue-433 §5.2: a shared context returns the same `limit-v1` report for
+/// every entity as the single-entity call, field by field.
+#[test]
+fn a_shared_context_answers_every_entity_like_the_single_entity_call() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let c = fixture.open();
+    let ctx = ResearchContext::new(&c);
+    let entities = [
+        "sz.000001",
+        "sz.000002",
+        "sz.000003",
+        "sz.000004",
+        "sz.000005",
+        "sz.000006",
+        "sz.300001",
+        "sz.300002",
+        "sz.300003",
+        "sz.302132",
+        "sh.688002",
+        "sh.600519",
+        "sh.688001",
+        "sz.999999",
+    ];
+    let mut compared = 0;
+    for known_at in [None, Some(days()[0])] {
+        for as_of in days().iter().chain([&day(2026, 7, 4), &day(2026, 8, 3)]) {
+            let temporal = Temporal {
+                as_of: *as_of,
+                known_at,
+            };
+            for entity in entities.iter().rev() {
+                let single = price_limit(&c, entity, temporal).unwrap();
+                let shared = price_limit_in(&ctx, entity, temporal).unwrap();
+                assert_eq!(single, shared, "{entity} {as_of} {known_at:?}");
+                compared += 1;
+            }
+        }
+    }
+    assert_eq!(compared, 2 * 12 * entities.len());
 }
 
 #[test]
