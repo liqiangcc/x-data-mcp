@@ -803,6 +803,37 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 - **旧快照可读**：schema 升版不改读取方约定——`scripts/export_smoke.py` 同时接受 v2/v3/v4/v5，v2 目录
   不要求 M3 文件、`universe_intervals` 按 5 列校验；`snapshot_id` 定义不变，但 schema 字符串在
   身份里，所以同一输入的 v2/v3/v4/v5 `snapshot_id` 不同、不会互相覆盖。
+- **保留与跨机校验（D-83，备忘录 T8，Refs #383 #549）**：单版本存储下，导出目录是复现回测输入的唯一记录
+  （除权会改写整段前复权历史，旧 `version_id` 之后读不到；重新导出得到的是库当前状态，`snapshot_id` 不同）。
+  规则如下，全部是人的规则，代码只提供只读列表：
+  - **不自动删除。** 没有定时清理、没有按龄或按数量淘汰，`export_research` 与发布脚本不删导出目录。
+  - **只有 owner 能删。** 删除是 owner 在机器上手动做的事；仓库不提供删除命令。
+  - **配额暂不设。** 体积或数量上限由 owner 日后另行裁决；在此之前磁盘紧张时找 owner，不要自行挑最旧的删。
+  - **不可替代。** 清单里任一来源 generation（`generations[]`）在 acquire 库里的状态是 `evidence_only`
+    （字节已退役，无法从官方文件重新派生）的导出，标为不可替代：它是那次回测输入的唯一副本。
+    generation 还是 `active`/`superseded` 的导出只是「暂时可替代」，因为 generation 保留最近两代
+    （D-65），退役后同一目录会变成不可替代；即使 generation 还在，重新导出也得不到同一个 `snapshot_id`，
+    除非库一字未变。退役 generation 时不拦截，列表工具是看这一点的地方。
+  - **`export_research --list-snapshots`**（只读，不提供删除；`--out` 默认 `/root/x-data-exports/`）：
+    对导出根目录下每个快照给出大小、创建时间（文件系统的出生时间，取不到时用修改时间，字段
+    `created_at_source` 说明；拷贝到别的机器后这个时间会变，不属于快照身份）、`schema`、每个来源 generation 的当前状态（`active`/`superseded`/
+    `evidence_only`，读 acquire 库的 `generations` 表；`--acquire-db` 指定，不给则取 `--db` 同级
+    `generations/acquire.sqlite`，部署布局里 `state/preview.sqlite` 与 `state/generations/` 正是这个关系）
+    和 `irreplaceable`。标准输出是 JSON，标准错误是文字摘要（`--quiet` 去掉文字）。
+    **如实标出问题而不是报干净**：没有 `manifest.json`、不是合法 JSON、目录名不等于 `snapshot_id`、
+    清单列出的文件缺失或大小不符、目录里有清单没列的文件，都是 `status: "damaged"` 并写原因；
+    acquire 库读不到、generation 不在库里、或库里同 id 的 manifest sha256 不同，状态是 `unknown`，
+    `irreplaceable` 为 `null`（不是 `false`）；根目录里的散文件、符号链接、崩溃遗留的 `.tmp-*`
+    列在 `unexpected_entries`。有任一项需要关注时退出码为 2，全部干净为 0。
+    列表只核对存在与大小，不读文件内容算哈希（每个快照数百 MB 到 GB）；字节核对用下一条。
+  - **跨机校验**：`scripts/export_smoke.py --snapshot-dir <目录>` 先核对字节，再读 Parquet。字节核对包括：
+    清单每个文件存在、大小等于 `files[].bytes`、sha256 等于 `files[].sha256`；用清单去掉
+    `snapshot_id`/`producer`/`files`/`limitations`/`export` 后的身份部分按 RFC 8785 重算 `snapshot_id`
+    （v2 到 v5 同一规则）并与清单、目录名比较；目录里没有清单没列的文件。任何一个字节不同都报错并非零退出。
+    `manifest.json` 本身不在 `files[].sha256` 里，脚本会打印它的 sha256，两台机器比较这个值，或用
+    `--manifest-sha256 <值>` 让脚本比较（`producer`/`limitations`/`export` 只有它能覆盖）。
+    这个校验不需要库、不需要网络、不需要 `export_research` 二进制，只要导出目录本身；
+    它比的是导出文件字节，不含回测引擎和参数。
 - **实测**：preview.36 部署后全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行，见
   [STATUS](STATUS.md)）；含 M2 文件的 v2 导出耗时没有回填。v3/v4 新增文件的体积与耗时没有在部署实例上
   测量（STATUS 注明本轮未重跑导出）；夹具层面 v3 不改变既有文件的编码。**默认导出的退市序列：代码已修复
