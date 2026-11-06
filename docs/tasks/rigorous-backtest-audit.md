@@ -355,7 +355,7 @@ Issue 正文的 AC 是「来源准入合同」，不是数据覆盖。D-58（202
 | T10 | **AC 文字改写（文档）** | 按附录 A 改 #391 的 AC-M2-5/11/12、#387 的 AC-V8-1/2/11/13、#383 的 AC-M1-10、#308 的 AC-C01、#509 的 AC-M3-2-1，并更新 Issue 复选框与阶段标签。只改 Issue/文档，不改代码 | 无 | S |
 | T11 | **#308 的 AC-T02 成文** | 写出同日公告、生效次日、盘中未知、更正公告的 point-in-time 规则，并各加一个测试。当前只有同日冲突 fail-closed。规则需 owner 确认（尤其「沪市生效日按公告日」在盘后公告时是否应推到次日） | owner 裁决 | S–M |
 | T12 | **修 `replay --verify-only` 的 `risk_warnings` drift** | STATUS 已记「修复待开发」：同一公告出现在多个查询页时，replay 与日更派生的页顺序不同，105 行沪市记录的 `source_document_sha256` 不同。让两条路径用同一个页序（例如按请求指纹 + 页号排序），加回归测试 | 无 | S |
-| T13 | **停牌进入 `replay --scope all`** | 当前 `all` 只含 5 个 scope，停牌需要单独跑，且曾报 `inputs_changed`。让停牌的重放输入摘要不依赖 listed-ever 首采的时间线，再纳入 `all` | T12 之后做更稳 | M |
+| T13 | **停牌进入 `replay --scope all`**（已实现，待部署后在 vm2 用 `replay --scope all --verify-only` 确认；结论是摘要不改，见 [来源库](../source-store.md) §4.2） | 当前 `all` 只含 5 个 scope，停牌需要单独跑，且曾报 `inputs_changed`。让停牌的重放输入摘要不依赖 listed-ever 首采的时间线，再纳入 `all` | T12 之后做更稳 | M |
 | T14 | **ETF 因子与成员的读面检查** | 确认 ETF 的 `market.adjustment_events`（cat1/cat11 事实行）经 `query_data` 可读，补一个测试；决定 ETF 名称搜索（D-75 的待办）与 ETF 年线/前复权是否排期（#509 PR-E，依 owner） | 无 | S（确认）/ M（前复权） |
 
 不建议现在做：**把派生结果物化进导出**（`price_limits.parquet`）。设计 §12.4 有意不物化，原因是同一 `version_id` 的文件不应随规则变化；T2 的读面加 T7 的算法版本已够用。

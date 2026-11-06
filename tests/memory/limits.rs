@@ -194,7 +194,7 @@ fn near_the_memory_limit_a_large_read_is_refused_not_slowed() {
 
 #[test]
 fn a_page_is_refused_when_its_working_set_does_not_fit() {
-    // Room for the build headroom, not for 5x a 1.8 MiB snapshot on top of
+    // Room for the build headroom, not for 4x a 1.8 MiB snapshot on top of
     // the resident size.
     let footprint = Arc::new(AtomicUsize::new(0));
     let probe = footprint.clone();
@@ -205,7 +205,7 @@ fn a_page_is_refused_when_its_working_set_does_not_fit() {
     );
     let h = connection(&limits);
     let cursor = first_page(&h);
-    footprint.store(150 * MIB - 5 * one + MIB, Ordering::SeqCst);
+    footprint.store(150 * MIB - 4 * one + MIB, Ordering::SeqCst);
     let out = handle_json(&h, &request(Some(&cursor), PAGE, 2)).unwrap();
     assert_eq!(error_code(&out), "memory_budget_exceeded", "{out}");
     // The cursor is still there once memory is available.

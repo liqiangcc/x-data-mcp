@@ -10,7 +10,23 @@
 //!
 //! Whole-dataset replace matches the other whole-market writers: the set is the
 //! complete answer for one generation, so an interval that disappeared from the
-//! source disappears from the table in the same commit. An empty set removes
+//! source disappears from the table in the same commit.
+//!
+//! ## Two subsets, one registration (D-76 Q1)
+//!
+//! The table holds two disjoint subsets that are replaced independently:
+//!
+//! - the SZ A-share rows (`source_kind <> 'exchange_snapshot'`), replaced from
+//!   the [`NameSet`] exactly as before, and
+//! - the ETF observed-name rows (`source_kind = 'exchange_snapshot'`), replaced
+//!   from an [`EtfNameSet`] only when the ETF source answered
+//!   ([`EtfPart::Replace`]). [`EtfPart::Keep`] leaves them as they are: a
+//!   failed, pending or absent ETF source never deletes a name, and an ETF
+//!   write never deletes or edits an A-share row.
+//!
+//! Both subsets sit under the one `security_names`/`a_share` registration (a
+//! second `dataset_key` of the same kind would make the reader refuse to
+//! choose), whose digest covers every stored row. An empty set removes
 //! the rows **and** the registration; the DDL forbids `record_count = 0`, and
 //! "never written" must remain distinguishable from "written empty". The
 //! adapter never admits an empty SZSE table (a whole-market snapshot with no
@@ -30,9 +46,10 @@ use crate::compact_market::{self, Digest, EvidenceKind};
 use crate::market_storage::Error;
 use crate::security_master::Exchange;
 use crate::security_master::names::{
-    self, ALGORITHM_VERSION, DATASET_KEY, DATASET_KIND, DIGEST_FORMAT, Error as NameError,
-    NameInterval, NameSet,
+    self, ALGORITHM_VERSION, DATASET_KEY, DATASET_KIND, DIGEST_FORMAT, ETF_ALGORITHM_VERSION,
+    Error as NameError, EtfNameSet, NameInterval, NameSet, NameSourceKind,
 };
+use std::collections::BTreeSet;
 
 fn name_error(error: NameError) -> Error {
     integrity(error.to_string())
@@ -48,9 +65,21 @@ fn sort_rows(rows: &mut [NameInterval]) {
     });
 }
 
-/// Replace the whole name-history dataset and register its version, in the
-/// caller's transaction. `None` means the set was empty and both the rows and
-/// the registration were removed.
+/// What the writer does with the ETF subset.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum EtfPart<'a> {
+    /// Leave the stored ETF rows as they are (ETF source failed, pending, or
+    /// not part of this write).
+    Keep,
+    /// The ETF source answered: replace the ETF subset with these rows.
+    Replace(&'a EtfNameSet),
+}
+
+/// Replace the A-share name dataset and register its version, in the caller's
+/// transaction. The ETF subset is kept. (Tests and fixtures; the daily item
+/// and replay go through [`commit_security_names`].) `None` means nothing is left to
+/// register: no A-share row and no kept ETF row.
+#[cfg(test)]
 pub(crate) fn replace_security_names(
     c: &Connection,
     set: &NameSet,
@@ -58,14 +87,60 @@ pub(crate) fn replace_security_names(
     task_id: &str,
     item_id: &str,
 ) -> Result<Option<DerivedVersionRow>, Error> {
+    replace_security_names_with(
+        c,
+        set,
+        EtfPart::Keep,
+        source_binding_digest,
+        task_id,
+        item_id,
+    )
+}
+
+/// [`replace_security_names`] with an explicit ETF subset decision.
+pub(crate) fn replace_security_names_with(
+    c: &Connection,
+    set: &NameSet,
+    etf: EtfPart<'_>,
+    source_binding_digest: Digest,
+    task_id: &str,
+    item_id: &str,
+) -> Result<Option<DerivedVersionRow>, Error> {
+    // The A-share path first and on its own: an `exchange_snapshot` row or a
+    // non-SZ row in the A-share set is refused here, whatever the ETF part is.
     names::validate_set(&set.rows).map_err(name_error)?;
 
+    let (etf_rows, etf_entities, etf_new): (Vec<NameInterval>, BTreeSet<_>, bool) = match etf {
+        EtfPart::Replace(etf) => (etf.rows.clone(), etf.entities.clone(), true),
+        EtfPart::Keep => {
+            let kept = stored_etf_rows(c)?;
+            let entities = kept
+                .iter()
+                .map(|row| (row.exchange, row.code.clone()))
+                .collect();
+            (kept, entities, false)
+        }
+    };
     let mut rows = set.rows.clone();
+    rows.extend(etf_rows.iter().cloned());
     sort_rows(&mut rows);
+    // One validation over the whole table, with the ETF entities declared:
+    // overlaps and duplicate keys across the two subsets are caught here.
+    names::validate_set_for(&rows, &etf_entities).map_err(name_error)?;
 
     let digest = names::dataset_digest(&rows);
-    c.execute("DELETE FROM security_name_history", [])
+    c.execute(
+        "DELETE FROM security_name_history WHERE source_kind <> ?1",
+        params![NameSourceKind::ExchangeSnapshot.as_str()],
+    )
+    .map_err(storage)?;
+    if etf_new {
+        c.execute(
+            "DELETE FROM security_name_history WHERE source_kind = ?1",
+            params![NameSourceKind::ExchangeSnapshot.as_str()],
+        )
         .map_err(storage)?;
+    }
     if rows.is_empty() {
         c.execute(
             "DELETE FROM derived_dataset_versions WHERE dataset_kind=?1 AND dataset_key=?2",
@@ -74,7 +149,7 @@ pub(crate) fn replace_security_names(
         .map_err(storage)?;
         return Ok(None);
     }
-
+    let etf_json = etf_evidence(&rows);
     let evidence = json!({
         "dataset": DATASET_KIND,
         "dataset_key": DATASET_KEY,
@@ -82,7 +157,9 @@ pub(crate) fn replace_security_names(
         "algorithm_version": ALGORITHM_VERSION,
         "content_digest": compact_market::digest_hex(&digest),
         "record_count": rows.len(),
-        "sz_rows": rows.iter().filter(|row| row.exchange == Exchange::Sz).count(),
+        "sz_rows": rows.iter().filter(|row| {
+            row.exchange == Exchange::Sz && row.source_kind != NameSourceKind::ExchangeSnapshot
+        }).count(),
         "interval_rows": rows.iter().filter(|row| row.certainty == names::NameCertainty::Interval).count(),
         "unbounded_rows": rows.iter().filter(|row| row.certainty == names::NameCertainty::Unbounded).count(),
         "observed_windows": set.observed_windows(),
@@ -126,10 +203,19 @@ pub(crate) fn replace_security_names(
         "absence_policy": "a not_observed coverage window is not a name; a missing \
             interval stays unknown and no current name is back-filled",
     });
+    // An A-share-only table registers exactly the evidence it always did; the
+    // ETF block exists only when ETF rows do.
+    let mut evidence = evidence;
+    if let (Some(etf), Some(object)) = (etf_json, evidence.as_object_mut()) {
+        object.insert("etf".into(), etf);
+    }
     let evidence_digest = evidence_store::put_evidence(c, EvidenceKind::Derived, &evidence)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    for row in &rows {
+    for row in rows
+        .iter()
+        .filter(|row| row.source_kind != NameSourceKind::ExchangeSnapshot || etf_new)
+    {
         c.execute(
             "INSERT INTO security_name_history(exchange,code,effective_from,effective_to,\
              name,certainty,known_at,source_kind,source_record_id,evidence_digest) \
@@ -202,6 +288,7 @@ pub(crate) fn replace_security_names(
 /// One whole-market name-history commit driven by `derived:security_names`.
 pub(crate) struct SecurityNameWrite<'a> {
     pub set: &'a NameSet,
+    pub etf: EtfPart<'a>,
     pub task_id: &'a str,
     pub item_id: &'a str,
     pub generation_id: &'a str,
@@ -225,7 +312,51 @@ pub(crate) fn commit_security_names(
         write.security_event_sha256,
         write.generation_evidence,
     )?;
-    replace_security_names(c, write.set, binding, write.task_id, write.item_id)
+    replace_security_names_with(
+        c,
+        write.set,
+        write.etf,
+        binding,
+        write.task_id,
+        write.item_id,
+    )
+}
+
+/// The ETF subset as the table holds it now.
+fn stored_etf_rows(c: &Connection) -> Result<Vec<NameInterval>, Error> {
+    super::security::read_security_names(c)?
+        .iter()
+        .filter(|row| row.source_kind == NameSourceKind::ExchangeSnapshot)
+        .map(super::security::SecurityNameRow::to_interval)
+        .collect()
+}
+
+/// Registration evidence of the ETF subset. A pure function of the rows, so a
+/// daily write and a replay of the same store register identical evidence.
+/// What only the daily item knows (the selected list, unresolved codes) goes
+/// on the item outcome instead.
+fn etf_evidence(rows: &[NameInterval]) -> Option<serde_json::Value> {
+    let etf: Vec<&NameInterval> = rows
+        .iter()
+        .filter(|row| row.source_kind == NameSourceKind::ExchangeSnapshot)
+        .collect();
+    if etf.is_empty() {
+        return None;
+    }
+    Some(json!({
+        "source_kind": NameSourceKind::ExchangeSnapshot.as_str(),
+        "algorithm_version": ETF_ALGORITHM_VERSION,
+        "basis": "fetch_time",
+        "rows": etf.len(),
+        "codes": etf.iter().map(|row| (row.exchange, row.code.as_str())).collect::<BTreeSet<_>>().len(),
+        "interval_rows": etf.iter().filter(|row| row.certainty == names::NameCertainty::Interval).count(),
+        "unbounded_rows": etf.iter().filter(|row| row.certainty == names::NameCertainty::Unbounded).count(),
+        "effective_from": "the first observation day of the name in the frozen ETF list \
+            snapshots, not the exchange's rename day; no row exists before a code's first \
+            observation and nothing is back-filled",
+        "known_at": "the Shanghai day the observing snapshot entered the source store",
+        "source_record_id": "<list source id>:<snapshot sha256> of the observing snapshot",
+    }))
 }
 
 /// All stored name rows, decoded by the read model's decoder (writer tests;

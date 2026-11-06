@@ -16,7 +16,7 @@ use serde_json::json;
 
 use super::replay::{
     COMPUTED_SUSPENSIONS_NO_DB, NOTHING_SELECTED, REBUILT_SUSPENSIONS, ReplayReport, ReplayRequest,
-    SUSPENSION_REPLAY_NOT_READY, Scope, replay, suspension_summary,
+    SCOPE_NOT_READY, SUSPENSION_REPLAY_NOT_READY, Scope, ScopeReport, replay, suspension_summary,
 };
 use crate::compact_market::{CompactBar, Digest, EvidenceKind, SourceBinding, VersionEvidence};
 use crate::exchange_source::request::{ExchangeRequest, PagingFormat, SSE_SOA_PARSER_VERSION};
@@ -582,4 +582,253 @@ fn an_empty_store_selects_nothing_and_never_opens_the_database() {
     assert_eq!(scope.status, "store_empty");
     assert_eq!(scope.rebuilt, NOTHING_SELECTED);
     assert!(!path.exists());
+}
+
+// --- `--scope all` includes suspensions (T13) ------------------------------
+
+fn all_request(fixture: &Fixture, verify_only: bool) -> ReplayRequest<'_> {
+    ReplayRequest::new(None, verify_only, Some(&fixture.path))
+}
+
+fn suspensions_scope(report: &ReplayReport) -> &ScopeReport {
+    let scope = report.scopes.last().unwrap();
+    assert_eq!(scope.scope, "suspensions", "suspensions must be in `all`");
+    scope
+}
+
+#[test]
+fn all_has_six_scopes_and_suspensions_is_one_of_them() {
+    let fixture = Fixture::new();
+    let report = replay(&fixture.store, &all_request(&fixture, false)).unwrap();
+    assert_eq!(report.scope, "all");
+    let names: Vec<&str> = report.scopes.iter().map(|scope| scope.scope).collect();
+    assert_eq!(
+        names,
+        [
+            "industry",
+            "exchange",
+            "generation_facts",
+            "risk_warnings",
+            "security_names",
+            "suspensions"
+        ]
+    );
+}
+
+#[test]
+fn all_rebuilds_suspensions_exactly_like_the_standalone_scope() {
+    let fixture = Fixture::new();
+    fixture.write_daily_set();
+    let daily_rows = suspensions::read_suspensions(&fixture.c).unwrap();
+    fixture.wipe_suspensions();
+
+    let all = replay(&fixture.store, &all_request(&fixture, false)).unwrap();
+    let in_all = suspensions_scope(&all).clone();
+    assert_eq!(in_all.status, "ok", "{all:?}");
+    assert_eq!(in_all.rebuilt, REBUILT_SUSPENSIONS);
+    assert_eq!(in_all.database, Some("match"));
+    assert_eq!(
+        suspensions::read_suspensions(&fixture.c).unwrap(),
+        daily_rows
+    );
+
+    fixture.wipe_suspensions();
+    let alone = report_for(&fixture, false);
+    let alone = &alone.scopes[0];
+    assert_eq!(in_all.summary, alone.summary);
+    assert_eq!(in_all.inputs_digest, alone.inputs_digest);
+    assert_eq!(in_all.inputs_match, alone.inputs_match);
+    assert_eq!(in_all.facts, alone.facts);
+    assert_eq!(in_all.confirmed_rows, alone.confirmed_rows);
+    assert_eq!(in_all.gap_rows, alone.gap_rows);
+    assert_eq!(in_all.missing_days, alone.missing_days);
+    assert_eq!(
+        suspensions::read_suspensions(&fixture.c).unwrap(),
+        daily_rows
+    );
+}
+
+#[test]
+fn all_verify_only_matches_and_agrees_with_the_standalone_verdict() {
+    let fixture = Fixture::new();
+    fixture.write_daily_set();
+
+    let all = replay(&fixture.store, &all_request(&fixture, true)).unwrap();
+    let in_all = suspensions_scope(&all);
+    assert_eq!(in_all.status, "ok", "{all:?}");
+    assert_eq!(in_all.database, Some("match"));
+    assert_eq!(in_all.inputs_match, Some(true));
+    let alone = report_for(&fixture, true);
+    assert_eq!(in_all.summary, alone.scopes[0].summary);
+    assert_eq!(in_all.database, alone.scopes[0].database);
+}
+
+/// The scenario behind the old `inputs_changed`: the raw bars grew after the
+/// dataset was written (the listed-ever first collection). The replay has to
+/// keep reporting that, in `all` as much as alone.
+#[test]
+fn all_verify_only_still_finds_real_drift_when_the_bars_change() {
+    let fixture = Fixture::new();
+    fixture.write_daily_set();
+    let before = report_for(&fixture, true).scopes[0].inputs_digest.clone();
+
+    // Drop one bar of 600680 on a day that is not a known suspension: the
+    // assembly now derives one more unresolved gap than the stored dataset has.
+    let removed = fixture
+        .c
+        .execute(
+            "DELETE FROM series_bars WHERE trade_day=?1 AND series_key IN \
+             (SELECT series_key FROM market_series WHERE entity='sh.600680')",
+            rusqlite::params![crate::compact_market::epoch_day(day(2008, 5, 20))],
+        )
+        .unwrap();
+    assert_eq!(removed, 1);
+
+    let all = replay(&fixture.store, &all_request(&fixture, true)).unwrap();
+    let in_all = suspensions_scope(&all);
+    assert_eq!(all.status, "drift", "{all:?}");
+    assert_eq!(in_all.status, "drift");
+    assert_eq!(in_all.database, Some("drift"));
+    assert_eq!(in_all.drift_cause, Some("inputs_changed"));
+    assert_eq!(in_all.inputs_match, Some(false));
+    assert_ne!(in_all.inputs_digest, before);
+    assert!(!in_all.drift.is_empty());
+    // verify-only wrote nothing.
+    assert_eq!(suspensions::read_suspensions(&fixture.c).unwrap().len(), 5);
+}
+
+#[test]
+fn all_verify_only_still_finds_changed_rows_with_unchanged_inputs() {
+    let fixture = Fixture::new();
+    fixture.write_daily_set();
+    fixture
+        .c
+        .execute(
+            "DELETE FROM suspension_intervals WHERE rowid IN \
+             (SELECT rowid FROM suspension_intervals LIMIT 1)",
+            [],
+        )
+        .unwrap();
+
+    let all = replay(&fixture.store, &all_request(&fixture, true)).unwrap();
+    let in_all = suspensions_scope(&all);
+    assert_eq!(all.status, "drift", "{all:?}");
+    assert_eq!(in_all.drift_cause, Some("rows_changed"));
+    assert_eq!(in_all.inputs_match, Some(true));
+}
+
+#[test]
+fn all_with_a_database_missing_the_master_is_not_ready_but_not_a_failure() {
+    let fixture = Fixture::new();
+    fixture
+        .c
+        .execute(
+            "DELETE FROM derived_dataset_versions WHERE dataset_kind=?1 AND dataset_key=?2",
+            rusqlite::params![
+                crate::security_master::assembly::DATASET_KIND,
+                crate::security_master::assembly::DATASET_KEY
+            ],
+        )
+        .unwrap();
+
+    let all = replay(&fixture.store, &all_request(&fixture, false)).unwrap();
+    let in_all = suspensions_scope(&all);
+    assert_eq!(in_all.status, SCOPE_NOT_READY, "{all:?}");
+    assert_eq!(in_all.rebuilt, "not_rebuilt");
+    assert!(
+        in_all
+            .not_ready_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("security_master"))
+    );
+    assert_eq!(
+        all.status, "ok",
+        "a writing `all` must not fail a fresh init"
+    );
+    assert!(all.problems.is_empty(), "{:?}", all.problems);
+    assert!(
+        suspensions::read_suspensions(&fixture.c)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn all_with_a_database_missing_the_calendar_is_not_ready_but_not_a_failure() {
+    let fixture = Fixture::new();
+    fixture.c.execute("DELETE FROM trading_days", []).unwrap();
+
+    let all = replay(&fixture.store, &all_request(&fixture, false)).unwrap();
+    let in_all = suspensions_scope(&all);
+    assert_eq!(in_all.status, SCOPE_NOT_READY, "{all:?}");
+    assert!(
+        in_all
+            .not_ready_reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("calendar"))
+    );
+    assert_eq!(all.status, "ok");
+    assert!(
+        suspensions::read_suspensions(&fixture.c)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A verifying run that compared nothing must not pass, so `verify`/`--verify-only`
+/// keep the stable failing code even inside `all`.
+#[test]
+fn all_verify_only_without_inputs_keeps_the_failing_code() {
+    let fixture = Fixture::new();
+    fixture.c.execute("DELETE FROM trading_days", []).unwrap();
+
+    // Index the exchange pages first (a writing `all`, as the deploy hook does),
+    // so the other scopes verify cleanly and only suspensions is left over.
+    let written = replay(&fixture.store, &all_request(&fixture, false)).unwrap();
+    assert_eq!(written.status, "ok", "{written:?}");
+
+    let all = replay(&fixture.store, &all_request(&fixture, true)).unwrap();
+    assert_eq!(suspensions_scope(&all).status, SCOPE_NOT_READY);
+    assert_eq!(all.status, SUSPENSION_REPLAY_NOT_READY, "{all:?}");
+    assert_eq!(all.problems[0].reason, SUSPENSION_REPLAY_NOT_READY);
+
+    let verified =
+        crate::source_store::replay::verify(&fixture.store, &all_request(&fixture, false)).unwrap();
+    assert_eq!(verified.status, SUSPENSION_REPLAY_NOT_READY);
+}
+
+#[test]
+fn the_standalone_scope_without_inputs_still_fails_closed() {
+    let fixture = Fixture::new();
+    fixture.c.execute("DELETE FROM trading_days", []).unwrap();
+    let report = report_for(&fixture, false);
+    assert_eq!(report.status, SUSPENSION_REPLAY_NOT_READY);
+    assert_eq!(report.scopes[0].status, SUSPENSION_REPLAY_NOT_READY);
+    assert!(report.scopes[0].not_ready_reason.is_none());
+}
+
+#[test]
+fn all_on_an_empty_store_is_store_empty_and_never_opens_the_database() {
+    let dir = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in("/dev/shm")
+        .unwrap();
+    let store = SourceStore::new(dir.path().join("store"));
+    let path = dir.path().join("absent.db");
+    let report = replay(&store, &ReplayRequest::new(None, false, Some(&path))).unwrap();
+    assert_eq!(report.status, "store_empty");
+    assert_eq!(report.scopes.len(), 6);
+    assert_eq!(report.scopes[5].status, "store_empty");
+    assert_eq!(report.scopes[5].rebuilt, NOTHING_SELECTED);
+    assert!(!path.exists());
+}
+
+#[test]
+fn all_without_a_database_only_counts_the_frozen_facts() {
+    let fixture = Fixture::new();
+    let report = replay(&fixture.store, &ReplayRequest::new(None, false, None)).unwrap();
+    let scope = suspensions_scope(&report);
+    assert_eq!(scope.status, "ok");
+    assert_eq!(scope.rebuilt, COMPUTED_SUSPENSIONS_NO_DB);
+    assert_eq!(scope.facts, Some(3));
 }

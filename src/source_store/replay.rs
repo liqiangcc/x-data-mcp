@@ -40,6 +40,12 @@
 //!   first write recorded instead of re-stamping it. A frozen table with no
 //!   A-share change row is `empty_name_set`: nothing is written, and "no data"
 //!   is never reported as "the empty table was rebuilt".
+//!   D-76 adds the ETF observed names to the same scope: they are rebuilt from the
+//!   `sse_etf_list`/`szse_etf_list` manifest lines alone (no clock, no refresh
+//!   run, no database input) through the scan and assembly the daily item uses,
+//!   so a replay writes the rows the item writes. A store with only one of the
+//!   two lists, or lists with no usable name, fails the whole scope; a store with
+//!   no ETF list leaves the stored ETF rows alone.
 //! - `suspensions` (XDM-138): the frozen A-3 suspension/resumption pages are
 //!   re-parsed into the admitted facts, then the whole dataset is assembled by
 //!   the **same** function the daily `derived:suspensions` item calls
@@ -51,19 +57,26 @@
 //!   with a database that has no master/calendar it fails closed with
 //!   `suspension_replay_not_ready` instead of writing an empty table. Rebuild
 //!   the master and calendar first (or simply run the daily item), then run
-//!   this scope. It is deliberately not part of `Scope::ALL`: a fresh-init
-//!   `--scope all` runs before the services exist and therefore cannot have
-//!   those inputs.
+//!   this scope. It is the last scope of `Scope::ALL`, with one rule for the
+//!   fresh-init case: inside `--scope all` the scope reports `not_ready` with
+//!   the missing input in `not_ready_reason`. A *writing* run (the deploy hook,
+//!   which runs before the services exist) writes nothing for it and does not
+//!   fail. A `--verify-only`/`verify` run, and `--scope suspensions` on its own,
+//!   still end as `suspension_replay_not_ready`: a verdict that compared
+//!   nothing must not pass.
 //!
 //! Determinism: two replays of one store with one parser version produce the
 //! same summary digest — the summary is sha256 over the canonical row lines
 //! (`security_names` adds its coverage windows to the row digest), so "clear
 //! the DB and replay" is checkable instead of asserted. `suspensions` is
 //! deterministic over **both** inputs: the same store plus the same database
-//! state gives the same digest, while a changed master/calendar legitimately
-//! changes it. The replay records that state's digest (`inputs_digest`) in the
-//! registration evidence, so `--verify-only` labels a database advance
-//! `inputs_changed` (not `rows_changed`) and never calls it store corruption.
+//! state gives the same digest, while a changed master/calendar/bar day
+//! legitimately changes it. The replay records that state's digest
+//! (`inputs_digest`) in the registration evidence, so `--verify-only` labels a
+//! database advance `inputs_changed` (not `rows_changed`) and never calls it
+//! store corruption. The digest only labels the cause: the verdict (`match` /
+//! `drift`) always comes from the rows, so a stored dataset that is older than
+//! the bars it should bracket is reported as `drift`, never hidden.
 //!
 //! Without a database the scopes only compute and report their summary, so a
 //! read never touches a database and never creates the store.
@@ -120,6 +133,10 @@ pub const COMPUTED_SUSPENSIONS_NO_DB: &str = "computed_no_db";
 /// Stable code of a `--db` replay whose database has no `security_master` or
 /// no trading calendar. It fails closed without writing an empty dataset.
 pub const SUSPENSION_REPLAY_NOT_READY: &str = "suspension_replay_not_ready";
+/// Scope status of `suspensions` inside a writing `--scope all` whose database
+/// has no `security_master`/calendar yet (fresh init). Nothing is written and
+/// the run is not failed; `not_ready_reason` names the missing input.
+pub const SCOPE_NOT_READY: &str = "not_ready";
 /// The scope had no matching manifest records: nothing was computed or written.
 /// It is never reported as `rebuilt` — "no data" is not "an empty table".
 pub const NOTHING_SELECTED: &str = "nothing_selected";
@@ -137,10 +154,11 @@ const SZSE_SHORT_NAME_SOURCE_ID: &str = "szse_short_name";
 const SSE_SUSPENSION_SOURCE_ID: &str = "sse_suspension";
 
 pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6), `generation_facts` \
-(M3 PR-8), `risk_warnings` (M3 PR-10) and `security_names` (M3 PR-12) rebuild their \
-tables from the store; `suspensions` (XDM-138) additionally needs the database's \
-security_master, trading calendar and bar days, so it is run explicitly after those \
-are rebuilt (`--scope all` leaves it out).";
+(M3 PR-8), `risk_warnings` (M3 PR-10) and `security_names` (M3 PR-12, plus the D-76 \
+ETF observed names) rebuild their tables from the store; `suspensions` (XDM-138) additionally needs the database's \
+security_master, trading calendar and bar days: a writing `--scope all` on a database \
+that does not have them yet (fresh init) reports it as `not_ready` and continues, \
+every other run fails closed with `suspension_replay_not_ready`.";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -154,17 +172,19 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// The scopes `--scope all` replays. `suspensions` is deliberately not in
-    /// this list: it derives from the database's `security_master`, calendar
-    /// and bar days, which a fresh-init `--scope all` (run before the services
-    /// start) does not have. Including it would make every fresh-init deployment
-    /// fail with `suspension_replay_not_ready` before those inputs can exist.
-    pub const ALL: [Scope; 5] = [
+    /// The scopes `--scope all` replays. `suspensions` derives from the
+    /// database's `security_master`, calendar and bar days, which a fresh-init
+    /// `--scope all` (run before the services start) does not have yet. A
+    /// writing `all` therefore reports it as [`SCOPE_NOT_READY`] instead of
+    /// failing the deployment (see `run`); no other scope reads those inputs,
+    /// so its position does not matter.
+    pub const ALL: [Scope; 6] = [
         Scope::Industry,
         Scope::Exchange,
         Scope::GenerationFacts,
         Scope::RiskWarnings,
         Scope::SecurityNames,
+        Scope::Suspensions,
     ];
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -217,9 +237,14 @@ impl Scope {
                         "sse_bulletin" | "szse_short_name"
                     )
             }
+            // The SZSE short-name table (A-share names) and the two ETF lists
+            // (observed ETF names, D-76): the scope reads all three.
             Self::SecurityNames => {
                 record.store_kind == super::StoreKind::HttpFetch
-                    && record.source_id == SZSE_SHORT_NAME_SOURCE_ID
+                    && matches!(
+                        record.source_id.as_str(),
+                        SZSE_SHORT_NAME_SOURCE_ID | "sse_etf_list" | "szse_etf_list"
+                    )
             }
             Self::Suspensions => {
                 record.store_kind == super::StoreKind::HttpFetch
@@ -319,6 +344,13 @@ pub struct ScopeReport {
     /// store reports the same value on any day.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_of: Option<String>,
+    /// ETF observed-name rows within `snapshots` (`security_names`); absent
+    /// when the store has no frozen ETF list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etf_rows: Option<usize>,
+    /// Which input is missing when `status` is [`SCOPE_NOT_READY`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_ready_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -449,8 +481,10 @@ fn run(
         let mut snapshot_count = None;
         let mut fact_count = None;
         let mut as_of = None;
+        let mut etf_rows = None;
         let mut counts = (None, None, None);
         let mut suspension_counts = (None, None, None, None, None);
+        let mut not_ready_reason = None;
         if *scope == Scope::Industry && status == "ok" {
             match rebuild_industry(store, request) {
                 Ok(outcome) => {
@@ -608,6 +642,7 @@ fn run(
                     database_verdict = outcome.database;
                     drift_keys = outcome.drift;
                     snapshot_count = outcome.rows;
+                    etf_rows = outcome.etf_rows;
                     as_of = outcome.as_of;
                     for issue in outcome.problems {
                         problems.push(issue);
@@ -650,11 +685,21 @@ fn run(
                         Some(outcome.deferred_beyond_calendar),
                         Some(outcome.skipped_no_trading_day),
                     );
-                    for issue in outcome.problems {
-                        problems.push(issue);
-                    }
-                    if outcome.status != "ok" {
+                    // A fresh-init deployment replays `all` before the services
+                    // (and so the master, calendar and bars) exist. Inside
+                    // `all` that is the scope status `not_ready`, not a
+                    // failure; the run status below decides whether it passes.
+                    if outcome.status == SUSPENSION_REPLAY_NOT_READY && request.scope.is_none() {
+                        status = SCOPE_NOT_READY;
+                        not_ready_reason =
+                            outcome.problems.first().map(|issue| issue.actual.clone());
+                    } else if outcome.status != "ok" {
                         status = outcome.status;
+                    }
+                    if status != SCOPE_NOT_READY || request.verify_only {
+                        for issue in outcome.problems {
+                            problems.push(issue);
+                        }
                     }
                 }
                 Err(error) => {
@@ -694,6 +739,8 @@ fn run(
             deferred_beyond_calendar: suspension_counts.3,
             skipped_no_trading_day: suspension_counts.4,
             as_of,
+            etf_rows,
+            not_ready_reason,
         });
     }
     let selected_all: Vec<&ManifestRecord> = records
@@ -706,13 +753,19 @@ fn run(
         "source_store_corrupt"
     } else if unknown_parser {
         "unknown_parser"
-    } else if let Some(failed) = scope_reports
-        .iter()
-        .find(|report| report.status != "ok" && report.status != "store_empty")
-    {
+    } else if let Some(failed) = scope_reports.iter().find(|report| {
+        !matches!(report.status, "ok" | "store_empty")
+            && !(report.status == SCOPE_NOT_READY && !request.verify_only)
+    }) {
         // A scope that failed its rebuild (or found drift) is the run status;
-        // reporting `ok` here would hide it behind the manifest digest.
-        failed.status
+        // reporting `ok` here would hide it behind the manifest digest. A
+        // `not_ready` scope only passes a writing run: a verifying run that
+        // compared nothing keeps the stable failing code.
+        if failed.status == SCOPE_NOT_READY {
+            SUSPENSION_REPLAY_NOT_READY
+        } else {
+            failed.status
+        }
     } else if scope_reports
         .iter()
         .any(|report| report.database == Some("drift"))
@@ -1526,11 +1579,29 @@ struct SecurityNamesOutcome {
     drift: Vec<String>,
     /// Rows of the rebuilt set; `None` when nothing was built.
     rows: Option<usize>,
+    /// ETF observed-name rows within `rows`; `None` when the store has no
+    /// frozen ETF list (the stored ETF rows are then left alone).
+    etf_rows: Option<usize>,
     as_of: Option<String>,
     problems: Vec<BlobProblem>,
 }
 
 impl SecurityNamesOutcome {
+    /// No SZSE short-name page is frozen: nothing was computed or written.
+    fn nothing_selected() -> Self {
+        Self {
+            status: "store_empty",
+            rebuilt: NOTHING_SELECTED,
+            summary: None,
+            database: None,
+            drift: Vec::new(),
+            rows: None,
+            etf_rows: None,
+            as_of: None,
+            problems: Vec::new(),
+        }
+    }
+
     /// A scope that built nothing because the frozen pages are not a complete
     /// whole-table fetch: the previous version stays readable and the report
     /// names the missing pages instead of rebuilding a shorter history.
@@ -1542,6 +1613,7 @@ impl SecurityNamesOutcome {
             database: None,
             drift: Vec::new(),
             rows: None,
+            etf_rows: None,
             as_of: None,
             problems: vec![BlobProblem {
                 sha256: String::new(),
@@ -1587,6 +1659,13 @@ fn rebuild_security_names(
         .copied()
         .filter(|record| record.source_id == SZSE_SHORT_NAME_SOURCE_ID)
         .collect();
+    if candidates.is_empty() {
+        // The A-share half has nothing to rebuild from. The ETF name rows are
+        // written together with the A-share rows (one whole-table dataset),
+        // never alone, so this is the same "nothing selected" a store without
+        // the table always reported.
+        return Ok(SecurityNamesOutcome::nothing_selected());
+    }
     // R4 ruling: the run record owns the identity of a whole-table page set;
     // the manifest alone can only offer "newest answer per page request".
     let candidates = match member_records(backend.as_ref(), SZSE_SHORT_NAME_SOURCE_ID, &candidates)
@@ -1611,7 +1690,21 @@ fn rebuild_security_names(
 
     let set = crate::official_security::security_names::replay(store, &pages)
         .map_err(|error| error.to_string())?;
-    let summary = names_summary(&set.rows, &set.coverage);
+    // D-76: the ETF observed names come from the manifest alone, through the
+    // same scan and assembly the daily item runs. A store with no frozen ETF
+    // list leaves the stored ETF rows alone; one with a broken or partial list
+    // fails the whole scope (nothing is written, 0 rows are never "rebuilt").
+    let etf = match crate::official_security::etf_list::replay_names(store)
+        .map_err(|error| format!("{}: {error}", error.code()))?
+    {
+        crate::official_security::etf_list::ReplayedNames::Pending => None,
+        crate::official_security::etf_list::ReplayedNames::Built(etf) => Some(etf),
+    };
+    let mut all_rows = set.rows.clone();
+    if let Some(etf) = &etf {
+        all_rows.extend(etf.rows.iter().cloned());
+    }
+    let summary = names_summary(&all_rows, &set.coverage);
     let as_of = set
         .coverage
         .iter()
@@ -1624,16 +1717,20 @@ fn rebuild_security_names(
         summary: Some(summary),
         database: None,
         drift: Vec::new(),
-        rows: Some(set.rows.len()),
+        rows: Some(all_rows.len()),
+        etf_rows: etf.as_ref().map(|etf| etf.rows.len()),
         as_of,
         problems: Vec::new(),
     };
     let Some(backend) = backend else {
         return Ok(outcome);
     };
+    // Without a frozen ETF list the stored ETF rows are not this scope's to
+    // judge: compare (and write) the A-share subset only.
+    let compare_etf = etf.is_some();
     if verify_only {
         let (stored_rows, stored_coverage) = stored_security_names(&backend)?;
-        let stored_rows = stored_intervals(&stored_rows)?;
+        let stored_rows = stored_intervals(&stored_rows, compare_etf)?;
         let stored_coverage = stored_coverage.unwrap_or_default();
         let stored_summary = names_summary(&stored_rows, &stored_coverage);
         if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
@@ -1642,7 +1739,7 @@ fn rebuild_security_names(
         }
         outcome.status = "drift";
         outcome.database = Some("drift");
-        outcome.drift = names_drift(&set.rows, &set.coverage, &stored_rows, &stored_coverage);
+        outcome.drift = names_drift(&all_rows, &set.coverage, &stored_rows, &stored_coverage);
         return Ok(outcome);
     }
 
@@ -1663,7 +1760,8 @@ fn rebuild_security_names(
         "replay": true,
         "scope": "security_names",
         "records": pages.len(),
-        "rows": set.rows.len(),
+        "rows": all_rows.len(),
+        "etf_rows": etf.as_ref().map(|etf| etf.rows.len()),
         "coverage_windows": set.coverage.len(),
         // The replayable bound of the SH/BJ `NOT_AVAILABLE` windows (the last
         // change day the frozen table proves), not the acquisition clock.
@@ -1671,6 +1769,10 @@ fn rebuild_security_names(
     });
     let write = crate::sqlite_market::security_names::SecurityNameWrite {
         set: &set,
+        etf: match &etf {
+            Some(etf) => crate::sqlite_market::security_names::EtfPart::Replace(etf),
+            None => crate::sqlite_market::security_names::EtfPart::Keep,
+        },
         task_id: "source_store_replay",
         item_id: "derived:security_names",
         generation_id: "source_store_replay",
@@ -1684,7 +1786,7 @@ fn rebuild_security_names(
         .map_err(|error| error.to_string())?;
     // A write only counts once it reads back as the computed rows and windows.
     let (stored_rows, stored_coverage) = stored_security_names(&backend)?;
-    let stored_rows = stored_intervals(&stored_rows)?;
+    let stored_rows = stored_intervals(&stored_rows, compare_etf)?;
     let stored_coverage = stored_coverage
         .ok_or_else(|| "the name-history registration has no coverage evidence".to_string())?;
     let stored_summary = names_summary(&stored_rows, &stored_coverage);
@@ -1695,7 +1797,7 @@ fn rebuild_security_names(
     }
     outcome.status = "drift";
     outcome.database = Some("drift");
-    outcome.drift = names_drift(&set.rows, &set.coverage, &stored_rows, &stored_coverage);
+    outcome.drift = names_drift(&all_rows, &set.coverage, &stored_rows, &stored_coverage);
     Ok(outcome)
 }
 
@@ -1720,30 +1822,19 @@ fn stored_security_names(
 }
 
 /// Decode the read model's rows back into the domain type so one canonical
-/// summary covers both sides of the comparison.
+/// summary covers both sides of the comparison. `with_etf=false` drops the ETF
+/// subset (`exchange_snapshot` rows), for a store with no frozen ETF list.
 fn stored_intervals(
     rows: &[crate::sqlite_market::security::SecurityNameRow],
+    with_etf: bool,
 ) -> Result<Vec<NameInterval>, String> {
     rows.iter()
-        .map(|row| {
-            let exchange = Exchange::parse(&row.exchange).ok_or_else(|| {
-                format!(
-                    "security_name_history exchange {:?} is unregistered",
-                    row.exchange
-                )
-            })?;
-            Ok(NameInterval {
-                exchange,
-                code: row.code.clone(),
-                effective_from: row.effective_from,
-                effective_to: row.effective_to,
-                name: row.name.clone(),
-                certainty: row.certainty,
-                known_at: row.known_at,
-                source_kind: row.source_kind,
-                source_record_id: row.source_record_id.clone(),
-            })
+        .filter(|row| {
+            with_etf
+                || row.source_kind
+                    != crate::security_master::names::NameSourceKind::ExchangeSnapshot
         })
+        .map(|row| row.to_interval().map_err(|error| error.to_string()))
         .collect()
 }
 
@@ -2029,6 +2120,39 @@ fn rebuild_suspensions(
     verify_only: bool,
     database: Option<&Path>,
 ) -> Result<SuspensionsOutcome, String> {
+    // Readiness comes before any page is parsed: a database without its
+    // inputs (fresh init) is `not_ready` whatever the frozen pages look like,
+    // so a deployment never fails on pages that could not be placed anyway.
+    let database = match database {
+        Some(path) => {
+            let backend = open_database(path)?;
+            let readiness = backend
+                .read(crate::sqlite_market::suspensions::read_inputs_if_ready)
+                .map_err(|error| format!("database_inputs: {error}"))?;
+            Some((backend, readiness))
+        }
+        None => None,
+    };
+    if let Some((_, readiness)) = &database {
+        use crate::sqlite_market::suspensions::SuspensionInputsReadiness as Readiness;
+        match readiness {
+            Readiness::Ready(_) => {}
+            Readiness::MissingMaster => {
+                return Ok(SuspensionsOutcome::not_ready(
+                    "no stored security_master; rebuild it (or run the daily item) before \
+                     replaying suspensions"
+                        .to_string(),
+                ));
+            }
+            Readiness::EmptyCalendar => {
+                return Ok(SuspensionsOutcome::not_ready(
+                    "the derived trading calendar is empty; rebuild it (or run the daily \
+                     item) before replaying suspensions"
+                        .to_string(),
+                ));
+            }
+        }
+    }
     let index =
         crate::exchange_source::rebuild(store, records).map_err(|error| error.to_string())?;
     if !index.problems.is_empty() {
@@ -2047,32 +2171,16 @@ fn rebuild_suspensions(
             .collect();
         return Ok(outcome);
     }
-    let Some(database) = database else {
+    let Some((backend, readiness)) = database else {
         let facts = crate::official_security::a3::reparse_interval_count(store, &index.rows)
             .map_err(|error| format!("{}: {error}", error.code()))?;
         return Ok(SuspensionsOutcome::computed(facts));
     };
-    let backend = open_database(database)?;
-    let readiness = backend
-        .read(crate::sqlite_market::suspensions::read_inputs_if_ready)
-        .map_err(|error| format!("database_inputs: {error}"))?;
-    let inputs = match readiness {
-        crate::sqlite_market::suspensions::SuspensionInputsReadiness::Ready(inputs) => *inputs,
-        crate::sqlite_market::suspensions::SuspensionInputsReadiness::MissingMaster => {
-            return Ok(SuspensionsOutcome::not_ready(
-                "no stored security_master; rebuild it (or run the daily item) before \
-                 replaying suspensions"
-                    .to_string(),
-            ));
-        }
-        crate::sqlite_market::suspensions::SuspensionInputsReadiness::EmptyCalendar => {
-            return Ok(SuspensionsOutcome::not_ready(
-                "the derived trading calendar is empty; rebuild it (or run the daily \
-                 item) before replaying suspensions"
-                    .to_string(),
-            ));
-        }
+    let crate::sqlite_market::suspensions::SuspensionInputsReadiness::Ready(inputs) = readiness
+    else {
+        unreachable!("the not-ready cases returned above");
     };
+    let inputs = *inputs;
     // `reparse` only uses the day for the admitted snapshot's `as_of`
     // evidence; facts come from the pages and their fingerprints. Use the
     // newest observed acquisition day so the replay never reads the clock.
