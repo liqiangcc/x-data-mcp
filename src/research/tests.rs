@@ -130,6 +130,7 @@ impl Fixture {
     /// The default fixture plus three ETF identities (M3-2 PR-D): a live ETF
     /// whose last bar is a zero-volume bar, a delisted ETF with a tail of
     /// zero bars, and a listed ETF without any `.day` member.
+    #[cfg(feature = "export")]
     fn with_etf() -> Self {
         Self::build(3, true, false)
     }
@@ -137,6 +138,7 @@ impl Fixture {
     /// The default fixture plus two delisted A shares that are **not** catalog
     /// members (`sh.600001`, `sz.000003`), each with a full set of per-entity
     /// rows, to prove the default selection does not drop them.
+    #[cfg(feature = "export")]
     fn with_delisted_off_catalog() -> Self {
         Self::build(3, false, true)
     }
@@ -1019,6 +1021,7 @@ impl Fixture {
     /// Give the 前复权 bars 6dp values whose low digits vary, so the size test
     /// measures a qfq file shaped like production instead of a run of small
     /// integers that compresses unrealistically well.
+    #[cfg(feature = "export")]
     fn scramble_forward_prices(&self) {
         let c = self.write();
         let keys: Vec<i64> = c
@@ -1975,6 +1978,7 @@ mod with_export {
     /// 10 B/row for each file; the fixed-width qfq columns alone are more than
     /// 40 B/row, so the estimate was below the physical floor.
     #[test]
+    #[cfg(feature = "export")]
     fn daily_parquet_bytes_per_row_match_the_measured_fixture() {
         let fixture = Fixture::with_days(4000);
         fixture.scramble_forward_prices();
@@ -2281,6 +2285,9 @@ mod with_export {
     }
 }
 
+#[cfg(feature = "export")]
 mod delisted;
+#[cfg(feature = "export")]
 mod etf;
+#[cfg(feature = "export")]
 mod producer;

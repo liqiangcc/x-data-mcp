@@ -973,6 +973,7 @@ fn day_in_range(day: NaiveDate, start: Option<NaiveDate>, end: Option<NaiveDate>
 
 /// The `security_master` intervals of `universe_intervals`/`security_master`
 /// (§12.4), ordered by row identity.
+#[cfg(feature = "export")]
 pub(crate) fn security_master_rows(
     c: &Connection,
     request: &ExportRequest,

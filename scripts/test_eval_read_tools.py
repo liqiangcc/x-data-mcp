@@ -135,14 +135,20 @@ class Configuration(unittest.TestCase):
     def setUp(self):
         self.config = ev.load_config()
 
-    def test_thirteen_questions_with_prompts_and_checks(self):
-        self.assertEqual([t["id"] for t in self.config["tasks"]], [f"q{i:02d}" for i in range(1, 14)])
+    def test_eighteen_questions_with_prompts_and_checks(self):
+        self.assertEqual([t["id"] for t in self.config["tasks"]], [f"q{i:02d}" for i in range(1, 19)])
         groups = {t["id"]: t["group"] for t in self.config["tasks"]}
         self.assertEqual({g for i, g in groups.items() if int(i[1:]) <= 10}, {"core"})
         self.assertEqual((groups["q11"], groups["q12"], groups["q13"]), ("screen", "screen", "etf_name"))
+        # The questions for the new tools keep their own group so the section 9
+        # core average and the baseline-vs-new comparison stay comparable.
+        self.assertEqual({groups[f"q{i}"] for i in range(14, 19)}, {"new_tools"})
+        self.assertEqual(sum(1 for g in groups.values() if g == "core"), 10)
         for task in self.config["tasks"]:
             self.assertTrue(task["prompt"] and task["checks"] and "oracles" in task, task["id"])
-            if task["id"] != "q13":
+            # q13 (an ETF name) and q18 (a scope the answer must state) are
+            # graded on the answer text, so they fetch no expected values.
+            if task["id"] not in ("q13", "q18"):
                 self.assertTrue(task["oracles"], task["id"])
 
     def test_oracles_only_use_query_data_requests_without_stored_data(self):
@@ -1003,7 +1009,7 @@ class CommandLine(unittest.TestCase):
             code = ev.main(["--scope", "new", "--socket", "/nonexistent", "--output", "/nonexistent/x.json", "--dry-run", "--today", "2026-11-05"])
         self.assertEqual(code, 0)
         lines = out.getvalue().splitlines()
-        self.assertEqual(len(lines), 13)
+        self.assertEqual(len(lines), 18)
         self.assertIn("mcp__x_data_mcp__get_daily_bars", lines[1])
         self.assertNotIn("bash", lines[1].replace("--no-builtin-tools", ""))
 
@@ -1017,7 +1023,7 @@ class CommandLine(unittest.TestCase):
                             "--today", "2026-11-05", "--mode", "codemode"])
         self.assertEqual(code, 0)
         lines = out.getvalue().splitlines()
-        self.assertEqual(len(lines), 13)
+        self.assertEqual(len(lines), 18)
         command = json.loads(lines[0].split(" ", 1)[1])
         self.assertEqual(command[command.index("--tools") + 1], "codemode")
         self.assertNotIn("--no-builtin-tools", command)
@@ -1038,6 +1044,480 @@ class CommandLine(unittest.TestCase):
     def test_unknown_scope_and_tasks_are_rejected(self):
         self.assertEqual(ev.main(["--scope", "nope", "--socket", "s", "--output", "o"]), 2)
         self.assertEqual(ev.main(["--scope", "new", "--socket", "s", "--output", "o", "--tasks", "q99"]), 2)
+
+
+# ---------------------------------------------------------------------------
+# The tradability / limit-price / market-cap questions (q14-q17)
+# ---------------------------------------------------------------------------
+
+Q14_ROWS = {"tradability": [{"date": "2020-01-07", "close": "1090.00"}], "suspension": []}
+Q15_ROWS = {"prev_bar": [{"date": "2020-08-24", "close": "50.50"}], "curr_bar": [{"date": "2020-08-25", "close": "55.00"}]}
+Q16_ROWS = {
+    "bar": [{"date": "2020-01-07", "close": "10.00"}],
+    "capital": [
+        {"effective_day": "2019-12-01", "float_after": 10_000_000, "total_after": 12_000_000},
+        {"effective_day": "2019-06-01", "float_after": 8_000_000, "total_after": 12_000_000},
+    ],
+}
+Q17_ROWS = {"risk_status": []}
+
+
+def task_of(task_id):
+    return next(task for task in ev.load_config()["tasks"] if task["id"] == task_id)
+
+
+class TradabilityCheck(unittest.TestCase):
+    def check(self, answer, rows=None):
+        return ev.check_tradability(answer, Q14_ROWS if rows is None else rows,
+                                    {"oracles": ["tradability", "suspension"]})
+
+    def test_a_bar_and_no_suspension_is_tradable(self):
+        result = self.check("有成交记录，没有停牌。\n结论：能买")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["expected"], "能买")
+
+    def test_a_confirmed_suspension_is_not_tradable(self):
+        rows = {"tradability": [], "suspension": [{"start_day": "2020-01-06", "end_day": "2020-01-08",
+                                                   "certainty": "confirmed"}]}
+        result = self.check("停牌。\n结论：不能买", rows)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["expected"], "不能买")
+
+    def test_an_unresolved_gap_does_not_count_as_suspended(self):
+        rows = {"tradability": [{"date": "2020-01-07"}],
+                "suspension": [{"start_day": "2020-01-07", "end_day": "2020-01-07", "certainty": "unresolved_gap"}]}
+        result = self.check("有成交。\n结论：能买", rows)
+        self.assertTrue(result["ok"])
+
+    def test_no_bar_and_no_suspension_cannot_be_judged(self):
+        result = self.check("结论：无法确定", {"tradability": [], "suspension": []})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["error"], "oracle_cannot_judge")
+
+    def test_wrong_conclusion_fails(self):
+        self.assertFalse(self.check("有成交。\n结论：不能买")["ok"])
+        self.assertFalse(self.check("有成交。")["ok"])  # no verdict line at all
+
+
+class LimitPriceCheck(unittest.TestCase):
+    check_spec = {"oracles": ["prev_bar", "curr_bar"], "band_bp": 2000, "min_tick_cents": 1}
+
+    def check(self, answer, rows=None, spec=None):
+        return ev.check_limit_price(answer, Q15_ROWS if rows is None else rows, spec or self.check_spec)
+
+    def test_gem_twenty_percent_band(self):
+        # 50.50 * 1.2 = 60.60 exactly
+        result = self.check("前收 50.50 元，涨停价 60.60 元")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["expected"], "60.60")
+
+    def test_main_board_ten_percent_and_half_up_rounding(self):
+        rows = {"prev_bar": [{"date": "2020-01-06", "close": "12.34"}], "curr_bar": [{"date": "2020-01-07", "close": "12.90"}]}
+        spec = {"oracles": ["prev_bar", "curr_bar"], "band_bp": 1000, "min_tick_cents": 1}
+        # 12.34 * 1.1 = 13.574 -> 13.57
+        result = self.check("涨停价 13.57", rows, spec)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["expected"], "13.57")
+        # One cent is the documented tolerance; two cents is a different price.
+        self.assertTrue(self.check("涨停价 13.58", rows, spec)["ok"])
+        self.assertFalse(self.check("涨停价 13.60", rows, spec)["ok"])
+
+    def test_the_previous_close_alone_is_not_the_answer(self):
+        # The number is in the answer, but it is the previous close, not the limit price.
+        self.assertFalse(self.check("前收盘价 50.50 元。")["ok"])
+
+    def test_that_days_close_alone_is_not_the_answer(self):
+        self.assertFalse(self.check("当日收盘 55.00 元。")["ok"])
+
+    def test_one_cent_tolerance_and_no_more(self):
+        self.assertTrue(self.check("60.61")["ok"])
+        self.assertFalse(self.check("60.62")["ok"])
+
+    def test_no_previous_close_is_reported(self):
+        result = self.check("无法计算", {"prev_bar": [], "curr_bar": []})
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["error"], "no_prev_close")
+
+
+class MarketCapCheck(unittest.TestCase):
+    check_spec = {"oracles": ["bar", "capital"], "scope": "float_a", "as_of": "2020-01-07"}
+
+    def check(self, answer, rows=None, spec=None):
+        return ev.check_market_cap(answer, Q16_ROWS if rows is None else rows, spec or self.check_spec)
+
+    def test_float_shares_times_close_in_yuan_and_in_yi(self):
+        # 10.00 * 10,000,000 = 100,000,000 yuan = 1 亿
+        self.assertTrue(self.check("流通市值 100000000 元")["ok"])
+        self.assertTrue(self.check("流通市值 1 亿元")["ok"])
+        self.assertFalse(self.check("流通市值 2 亿元")["ok"])
+
+    def test_the_latest_event_before_the_day_wins_even_when_unordered(self):
+        rows = {
+            "bar": [{"date": "2020-01-07", "close": "10.00"}],
+            "capital": [
+                {"effective_day": "2020-03-01", "float_after": 30_000_000, "total_after": 30_000_000},
+                {"effective_day": "2019-06-01", "float_after": 8_000_000, "total_after": 12_000_000},
+                {"effective_day": "2020-01-05", "float_after": 20_000_000, "total_after": 20_000_000},
+            ],
+        }
+        result = self.check("流通市值 2 亿元", rows)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["shares_day"], "2020-01-05")
+        self.assertEqual(result["detail"]["shares"], "20000000")
+
+    def test_events_after_the_day_are_ignored(self):
+        rows = {
+            "bar": [{"date": "2020-01-07", "close": "10.00"}],
+            "capital": [{"effective_day": "2020-02-01", "float_after": 30_000_000, "total_after": 30_000_000}],
+        }
+        result = self.check("流通市值 3 亿元", rows)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["error"], "no_shares_data")
+
+    def test_company_total_uses_total_after(self):
+        spec = {"oracles": ["bar", "capital"], "scope": "company_total", "as_of": "2020-01-07"}
+        # 12,000,000 * 10.00 = 120,000,000 = 1.2 亿
+        result = self.check("公司总市值 1.2 亿元", spec=spec)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["scope"], "company_total")
+
+    def test_no_close_price_is_reported(self):
+        result = self.check("无数据", {"bar": [], "capital": []})
+        self.assertEqual(result["detail"]["error"], "no_close_price")
+
+
+class UnknownStatusCheck(unittest.TestCase):
+    def test_no_status_rows_means_the_answer_must_admit_it(self):
+        result = ev.check_unknown_status("没有 ST 区间记录。\n结论：无法确定", [], {"oracle": "risk_status"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["expected"], "无法确定")
+
+    def test_guessing_a_settled_answer_fails(self):
+        result = ev.check_unknown_status("应该是正常。\n结论：已确定", [], {"oracle": "risk_status"})
+        self.assertFalse(result["ok"])
+
+    def test_a_recorded_status_is_settled(self):
+        rows = [{"normalized_status": "other_risk_warning"}]
+        result = ev.check_unknown_status("处于风险警示。\n结论：已确定", rows, {"oracle": "risk_status"})
+        self.assertTrue(result["ok"])
+
+
+class NewQuestionsEndToEnd(unittest.TestCase):
+    """The real evaluation file, graded through ``evaluate_answer``."""
+
+    def grade(self, task_id, answer, rows):
+        return ev.evaluate_answer(task_of(task_id), answer, rows, TODAY)
+
+    def test_q14(self):
+        self.assertTrue(all(c["ok"] for c in self.grade("q14", "有成交，未停牌。\n结论：能买", Q14_ROWS)))
+        self.assertFalse(all(c["ok"] for c in self.grade("q14", "有成交，未停牌。\n结论：不能买", Q14_ROWS)))
+
+    def test_q15(self):
+        self.assertTrue(all(c["ok"] for c in self.grade("q15", "涨停价 60.60 元", Q15_ROWS)))
+        self.assertFalse(all(c["ok"] for c in self.grade("q15", "涨停价 55.55 元", Q15_ROWS)))
+
+    def test_q16(self):
+        self.assertTrue(all(c["ok"] for c in self.grade("q16", "流通市值 1 亿元", Q16_ROWS)))
+        self.assertFalse(all(c["ok"] for c in self.grade("q16", "流通市值 3 亿元", Q16_ROWS)))
+
+    def test_q17(self):
+        self.assertTrue(all(c["ok"] for c in self.grade("q17", "无 ST 记录。\n结论：无法确定", Q17_ROWS)))
+        self.assertFalse(all(c["ok"] for c in self.grade("q17", "正常。\n结论：已确定", Q17_ROWS)))
+
+    def test_the_checks_name_the_oracles_the_question_fetches(self):
+        config = ev.load_config()
+        for task in config["tasks"]:
+            for check in task["checks"]:
+                names = check["oracles"] if "oracles" in check else [check["oracle"]] if "oracle" in check else []
+                self.assertTrue(set(names) <= set(task["oracles"]), task["id"])
+
+    def test_a_check_whose_oracle_is_missing_fails_loudly(self):
+        with self.assertRaises(ev.EvalError):
+            ev.evaluate_answer(task_of("q14"), "结论：能买", {"tradability": []}, TODAY)
+        with self.assertRaises(ev.EvalError):
+            ev.evaluate_answer(task_of("q17"), "结论：无法确定", {}, TODAY)
+
+
+class ScopeStatedCheck(unittest.TestCase):
+    """q18: a market-cap answer must name its 口径 or ask which one."""
+
+    def check(self, answer):
+        return ev.check_scope_stated(answer, {"kind": "scope_stated"})
+
+    def test_naming_the_float_scope_passes(self):
+        result = self.check("流通市值约 3000 亿元。")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["detail"]["scopes_named"], ["float_a"])
+
+    def test_naming_the_company_total_passes(self):
+        result = self.check("按公司总股本算，总市值约 3200 亿元。")
+        self.assertTrue(result["ok"])
+        self.assertIn("company_total", result["detail"]["scopes_named"])
+
+    def test_asking_which_scope_passes(self):
+        result = self.check("请问要哪一种口径：流通 A 股还是公司总股本？")
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["detail"]["asks_which_scope"])
+
+    def test_a_bare_number_fails(self):
+        result = self.check("市值是 3000 亿元。")
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["detail"]["scopes_named"], [])
+
+    def test_the_question_is_graded_end_to_end(self):
+        task = task_of("q18")
+        self.assertTrue(all(c["ok"] for c in ev.evaluate_answer(task, "流通市值 3000 亿元", {}, TODAY)))
+        self.assertFalse(all(c["ok"] for c in ev.evaluate_answer(task, "市值 3000 亿元", {}, TODAY)))
+
+
+class NewQuestionsRegrade(unittest.TestCase):
+    def report(self, task_id, answer, oracle):
+        return {
+            "eval": "e", "scope": "new", "today": "2026-11-05", "finished_at": "f",
+            "tasks": [{
+                "id": task_id, "title": "t", "status": "ok", "correct": False, "answer": answer,
+                "oracle": oracle, "checks": [],
+                "turns": 2, "tokens": {k: 1 for k in ("input", "output", "cache_read", "cache_write", "total")},
+                "tool_calls": 1, "tool_errors": 0, "tool_result_bytes": 3, "duration_s": 1.0,
+            }],
+        }
+
+    def test_a_saved_answer_is_graded_again_from_the_saved_oracle(self):
+        cases = [
+            ("q14", "有成交，未停牌。\n结论：能买", Q14_ROWS),
+            ("q15", "涨停价 60.60 元", Q15_ROWS),
+            ("q16", "流通市值 1 亿元", Q16_ROWS),
+            ("q17", "无 ST 记录。\n结论：无法确定", Q17_ROWS),
+        ]
+        for task_id, answer, rows in cases:
+            new, notes = ev.regrade_report(self.report(task_id, answer, rows), ev.load_config())
+            item = new["tasks"][0]
+            self.assertEqual(item["regrade"], "regraded", task_id)
+            self.assertTrue(item["correct"], task_id)
+            self.assertEqual(notes, [], task_id)
+
+
+class SkipWhenToolIsMissing(unittest.TestCase):
+    def ctx(self, offered, scope=("get_data_capabilities", "query_data", "get_tradability", "get_market_cap")):
+        return {"offered_tools": set(offered), "scope_tools": set(scope)}
+
+    def test_a_tool_the_service_does_not_offer_is_a_skip_not_a_failure(self):
+        task = task_of("q14")
+        reason = ev.skip_reason(task, self.ctx({"query_data"}))
+        self.assertEqual(reason["status"], "skipped")
+        self.assertEqual(reason["skipped"], "tool_not_deployed")
+        self.assertEqual(reason["missing_tools"], ["get_tradability"])
+
+    def test_a_tool_outside_the_scope_is_a_skip_of_its_own(self):
+        task = task_of("q16")
+        reason = ev.skip_reason(task, self.ctx({"query_data", "get_market_cap"}, scope=("query_data",)))
+        self.assertEqual(reason["skipped"], "tool_not_in_scope")
+
+    def test_a_question_without_requirements_always_runs(self):
+        self.assertIsNone(ev.skip_reason(task_of("q01"), self.ctx(set())))
+
+    def test_skipped_questions_do_not_count_as_infrastructure_errors(self):
+        skipped = {"id": "q14", "group": "core", "status": "skipped", "correct": None,
+                   "skipped": "tool_not_deployed", "missing_tools": ["get_tradability"]}
+        summary = ev.summarize([skipped])
+        self.assertEqual(summary["infrastructure_errors"], 0)
+        self.assertEqual(summary["skipped"], 1)
+        self.assertEqual(summary["ran"], 0)
+        self.assertIn("tool_not_deployed", summary["wrong_reason"]["q14"])
+
+    def test_run_task_returns_the_skip_without_calling_the_model(self):
+        task = task_of("q14")
+        ctx = {"config": ev.load_config(), "today": TODAY, "offered_tools": set(), "scope_tools": set(),
+               "client": None, "runner": None, "workdir": None, "timeout": 1}
+        report = ev.run_task(task, ctx)
+        self.assertEqual(report["status"], "skipped")
+        self.assertNotIn("tokens", report)
+
+
+class DeployedButOutOfScopeRun(unittest.TestCase):
+    """A full ``--scope baseline`` run on the new file: q14-q17 skip, nothing else changes."""
+
+    def test_baseline_run_skips_the_new_questions(self):
+        config = ev.load_config()
+        baseline = set(config["scopes"]["baseline"])
+        # Everything baseline offers, plus the two new tools (deployed), minus nothing.
+        offered = baseline | {"get_tradability", "get_market_cap"}
+        reports = []
+        for task in config["tasks"]:
+            reason = ev.skip_reason(task, {"offered_tools": offered, "scope_tools": baseline})
+            reports.append(reason and {"id": task["id"], "group": task.get("group", "core"), **reason})
+        skipped = [r["id"] for r in reports if r]
+        self.assertEqual(skipped, ["q14", "q15", "q16", "q17", "q18"])
+        self.assertEqual([r["skipped"] for r in reports if r], ["tool_not_in_scope"] * 5)
+
+
+class PreconditionSkipsTheQuestion(unittest.TestCase):
+    """q15 cannot expect a limit price on a day with an ex-rights event (D-81)."""
+
+    def test_an_ex_rights_event_skips_before_the_model_runs(self):
+        task = task_of("q15")
+        rows = dict(Q15_ROWS, adjustments=[{"effective_day": "2020-08-25", "category": 1}])
+        result = ev.unmet_precondition(task, rows)
+        self.assertEqual(result["status"], "skipped")
+        self.assertEqual(result["skipped"], "precondition_not_met")
+        self.assertEqual(result["rows_seen"], 1)
+        self.assertEqual(result["precondition"]["oracle"], "adjustments")
+
+    def test_no_event_lets_the_question_run(self):
+        self.assertIsNone(ev.unmet_precondition(task_of("q15"), dict(Q15_ROWS, adjustments=[])))
+
+    def test_a_question_without_preconditions_always_runs(self):
+        self.assertIsNone(ev.unmet_precondition(task_of("q14"), Q14_ROWS))
+
+    def test_run_task_skips_and_keeps_the_oracle_without_running_the_model(self):
+        task = task_of("q15")
+        rows = {
+            "prev_bar": Q15_ROWS["prev_bar"],
+            "curr_bar": Q15_ROWS["curr_bar"],
+            "adjustments": [{"effective_day": "2020-08-25", "category": 1}],
+        }
+
+        class Client:
+            """Answers every oracle request with the rows of its dataset."""
+
+            def __init__(self):
+                self.requests = []
+
+            def call(self, tool, request):
+                self.requests.append(request)
+                name = {"market.daily": "prev_bar", "market.adjustment_events": "adjustments"}[request["dataset"]]
+                if name == "prev_bar" and request["filter"]["start_date"] == "2020-08-25":
+                    name = "curr_bar"
+                # A v2 "table" envelope: row_count plus one grid per column.
+                picked = rows[name]
+                columns = {field: [row.get(field) for row in picked] for field in picked[0]} if picked else {}
+                return {"layout": "table", "row_count": len(picked), "columns": columns}
+
+        def runner(*_args, **_kwargs):
+            raise AssertionError("the model must not run for a skipped question")
+
+        ctx = {
+            "config": ev.load_config(), "today": TODAY, "timeout": 1,
+            "offered_tools": {"get_tradability"}, "scope_tools": {"get_tradability"},
+            "client": Client(), "runner": runner, "workdir": None,
+        }
+        report = ev.run_task(task, ctx)
+        self.assertEqual(report["status"], "skipped")
+        self.assertEqual(report["skipped"], "precondition_not_met")
+        self.assertEqual(report["oracle"]["adjustments"], rows["adjustments"])
+        self.assertNotIn("tokens", report)
+
+    def test_a_skipped_question_is_not_an_infrastructure_error(self):
+        item = {"id": "q15", "group": "core", "status": "skipped", "correct": None,
+                "skipped": "precondition_not_met", "missing_tools": []}
+        summary = ev.summarize([item])
+        self.assertEqual((summary["infrastructure_errors"], summary["skipped"]), (0, 1))
+
+    def test_a_skip_if_naming_an_unknown_oracle_is_rejected(self):
+        config = ev.load_config()
+        task = dict(config["tasks"][-1], skip_if=[{"oracle": "nope", "not_empty": True}])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "eval.json")
+            path.write_text(json.dumps(dict(config, tasks=[task])), encoding="utf-8")
+            with self.assertRaises(ev.EvalError):
+                ev.load_config(path)
+
+
+SERVICE_WITHOUT_THE_NEW_TOOLS = r"""
+import json, sys
+TOOLS = %s
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    if method == "initialize":
+        result = {"protocolVersion": "2025-06-18", "capabilities": {}, "serverInfo": {"name": "x-data-mcp"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": name} for name in TOOLS]}
+    else:
+        result = {"content": [{"type": "text", "text": json.dumps({"layout": "table", "row_count": 0})}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+"""
+
+
+class PreflightWithMissingTools(unittest.TestCase):
+    """A service without PR-B still runs the questions it can answer."""
+
+    def run_main(self, tools, tmp, tasks):
+        """Run ``main`` against a fake service: `--mcp-connect` is python and
+        `--socket` is the script, exactly how the real client is started."""
+        script = Path(tmp, "server.py")
+        script.write_text(SERVICE_WITHOUT_THE_NEW_TOOLS % json.dumps(tools), encoding="utf-8")
+        output = Path(tmp, "report.json")
+        code = ev.main([
+            "--scope", "new", "--socket", str(script), "--output", str(output),
+            "--tasks", tasks, "--today", "2026-11-05", "--timeout", "1",
+            "--mcp-connect", sys.executable, "--pi", "true",
+        ])
+        return code, json.loads(output.read_text(encoding="utf-8")) if output.exists() else None
+
+    def test_missing_new_tools_skip_their_questions_and_keep_exit_0(self):
+        config = ev.load_config()
+        deployed = [t for t in config["scopes"]["new"] if t not in ("get_tradability", "get_market_cap")]
+        with tempfile.TemporaryDirectory() as tmp:
+            code, report = self.run_main(deployed, tmp, "q14,q15,q16,q17,q18")
+        self.assertEqual(code, 0)
+        statuses = {task["id"]: (task["status"], task.get("skipped")) for task in report["tasks"]}
+        self.assertEqual(set(statuses.values()), {("skipped", "tool_not_deployed")})
+        self.assertEqual(report["summary"]["infrastructure_errors"], 0)
+        # The new questions have their own group, so the core summary is untouched.
+        self.assertEqual(report["summary"]["skipped"], 0)
+        self.assertEqual(report["summary"]["groups"]["new_tools"]["skipped"], 5)
+        self.assertEqual(report["summary"]["groups"]["new_tools"]["ran"], 0)
+        self.assertEqual(report["scope_tools_missing"], ["get_market_cap", "get_tradability"])
+        self.assertNotIn(ev.pi_tool_name("x-data-mcp", "get_tradability"), report["scope_tools"])
+
+    def test_a_missing_tool_no_question_needs_is_still_exit_2(self):
+        config = ev.load_config()
+        deployed = [t for t in config["scopes"]["new"] if t not in ("get_tradability", "get_market_cap", "find_securities")]
+        with tempfile.TemporaryDirectory() as tmp:
+            code, report = self.run_main(deployed, tmp, "q01")
+        self.assertEqual(code, 2)
+        self.assertIsNone(report)
+
+
+class ConfigurationForNewQuestions(unittest.TestCase):
+    def test_the_new_questions_declare_the_tools_they_need(self):
+        config = ev.load_config()
+        wanted = {task["id"]: task.get("requires_tools") for task in config["tasks"] if task["id"] >= "q14"}
+        self.assertEqual(wanted, {
+            "q14": ["get_tradability"],
+            "q15": ["get_tradability"],
+            "q16": ["get_market_cap"],
+            "q17": ["get_tradability"],
+            "q18": ["get_market_cap"],
+        })
+
+    def test_the_new_tools_are_in_the_new_scopes_only(self):
+        config = ev.load_config()
+        self.assertNotIn("get_tradability", config["scopes"]["baseline"])
+        for scope in ("new", "new-no-query"):
+            self.assertIn("get_tradability", config["scopes"][scope])
+            self.assertIn("get_market_cap", config["scopes"][scope])
+
+    def test_a_required_tool_no_scope_lists_is_rejected(self):
+        config = ev.load_config()
+        broken = dict(config, tasks=[dict(config["tasks"][-1], requires_tools=["no_such_tool"])])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "eval.json")
+            path.write_text(json.dumps(broken), encoding="utf-8")
+            with self.assertRaises(ev.EvalError):
+                ev.load_config(path)
+
+    def test_an_unknown_check_kind_is_rejected(self):
+        config = ev.load_config()
+        task = dict(config["tasks"][-1], checks=[{"kind": "nope", "oracle": "risk_status"}])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "eval.json")
+            path.write_text(json.dumps(dict(config, tasks=[task])), encoding="utf-8")
+            with self.assertRaises(ev.EvalError):
+                ev.load_config(path)
 
 
 if __name__ == "__main__":
