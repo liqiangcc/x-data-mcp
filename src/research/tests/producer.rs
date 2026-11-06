@@ -5,6 +5,7 @@
 //! layout that `v4` shared with the shorter preview.42/43 layout.
 
 use super::*;
+#[cfg(feature = "export")]
 use crate::research::manifest;
 
 #[cfg(feature = "export")]
@@ -25,6 +26,7 @@ fn labels() -> serde_json::Value {
 }
 
 #[test]
+#[cfg(feature = "export")]
 fn the_schema_string_is_v5() {
     assert_eq!(manifest::SCHEMA, "x-data-mcp.research-snapshot.v5");
 }
