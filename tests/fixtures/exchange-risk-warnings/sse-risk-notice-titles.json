@@ -1,0 +1,37 @@
+{
+  "provenance": {
+    "report": "docs/tasks/gp29-compare-20261106.md §7",
+    "forensics_run": "vm2-126, 2026-11-06 09:07-09:55 (Shanghai), read-only",
+    "frozen_pages": "source store `sse_bulletin` pages of the preview database (4,641 documents, 2004Q1-2026Q4)",
+    "statement": "14 SSE announcements, all filed 2014-12, whose titles state that a risk of delisting-risk-warning and suspension-of-listing EXISTS. GP29 has no 2/3 event near any of them, i.e. no warning was implemented. Before parser v7 they classified as Implement(DelistingRiskWarning); 7 of them left an open interval that has been read as delisting risk warning for about 2,889 trading days."
+  },
+  "codes": [
+    "600076",
+    "600146",
+    "600193",
+    "600301",
+    "600315",
+    "600368",
+    "600403",
+    "600421",
+    "600469",
+    "600610",
+    "600656",
+    "600671",
+    "600822",
+    "600966"
+  ],
+  "open_interval_codes_after_v6": [
+    "600076",
+    "600315",
+    "600368",
+    "600469",
+    "600656",
+    "600822",
+    "600966"
+  ],
+  "titles": [
+    "存在被实施退市风险警示及暂停上市风险的提示公告",
+    "存在被实施退市风险警示及暂停上市风险的提示性公告"
+  ]
+}
