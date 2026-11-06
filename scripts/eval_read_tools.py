@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Read-tool evaluation: the ten questions of docs/tasks/issue-525-read-tools.md §9.
+"""Read-tool evaluation: the questions of .devin/evals/read-tools-v1.json
+(issue-525 §9, plus the tradability, limit-price and market-cap questions of
+issue-433 §8.1 PR-C).
 
 Every question runs in a fresh ``pi --mode json -p --no-session`` process that
 sees only the MCP tools of the chosen scope (no bash, no file tools). The
@@ -69,13 +71,27 @@ model's own calls, which are all ``codemode`` calls. The question also has a
   inner calls are not counted, so non-zero means the counts are lower bounds.
 
 Scopes (``.devin/evals/read-tools-v1.json``): ``baseline`` is the five current
-research tools; ``new`` adds the ten new ones; ``new-no-query`` is ``new``
-without ``query_data``.
+research tools; ``new`` adds the ten new ones plus ``get_tradability`` and
+``get_market_cap``; ``new-no-query`` is ``new`` without ``query_data``.
+
+Questions that need a tool the run cannot offer are skipped, not failed: a
+question names what it needs in ``requires_tools``. When the service's
+``tools/list`` does not offer one (the tools of issue-433 PR-C are not deployed
+yet), the question is recorded with ``status: skipped`` and
+``skipped: tool_not_deployed``; when the chosen scope leaves it out
+(``baseline`` has no research tools), the reason is ``tool_not_in_scope``. A
+question may also carry ``skip_if`` for a day the oracle itself cannot use (an
+ex-rights event between the previous close and the day makes the price-limit
+tool answer ``ex_rights_unverified``); it is then ``skipped:
+precondition_not_met`` with the expected values kept in the report. Skipped
+questions run no model, do not count in ``summary.infrastructure_errors`` and do
+not change the exit status; ``summary.skipped`` counts them.
 
 Exit status: 0 when every question ran and was checked (a wrong answer is a
-measurement, not a failure), 1 when any question hit an infrastructure
-problem (pi failed, timeout, oracle query failed), 2 for bad arguments or a
-failed pre-flight (a scope tool the service does not offer).
+measurement, not a failure) or was skipped, 1 when any question hit an
+infrastructure problem (pi failed, timeout, oracle query failed), 2 for bad
+arguments or a failed pre-flight (a scope tool the service does not offer and
+no question asks for it in ``requires_tools``).
 """
 from __future__ import annotations
 
@@ -92,7 +108,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -125,6 +141,12 @@ OUT_OF_SCOPE_TOOLS = frozenset(
     }
 )
 ORACLE_TOOLS = frozenset({"query_data"})
+# Check kinds `evaluate_answer` understands. Listed here so a typo in the
+# evaluation file fails at load time instead of at grading time.
+KNOWN_CHECK_KINDS = frozenset(
+    {"answer_text", "oracle_values", "verdict", "screen", "unknown_status",
+     "tradability", "limit_price", "market_cap", "scope_stated"}
+)
 CST = dt.timezone(dt.timedelta(hours=8))  # Asia/Shanghai has no daylight saving time
 ERROR_TEXT_LIMIT = 300
 MODES = ("direct", "codemode")
@@ -149,10 +171,23 @@ def load_config(path: Path = DEFAULT_CONFIG) -> dict:
     ids = [task["id"] for task in config["tasks"]]
     if len(ids) != len(set(ids)):
         raise EvalError("duplicate task ids")
+    known_tools = {tool for tools in config["scopes"].values() for tool in tools}
     for task in config["tasks"]:
-        for oracle_name in {check["oracle"] for check in task["checks"] if "oracle" in check}:
-            if oracle_name not in task["oracles"]:
-                raise EvalError(f"{task['id']}: check names unknown oracle {oracle_name!r}")
+        for check in task["checks"]:
+            if check["kind"] not in KNOWN_CHECK_KINDS:
+                raise EvalError(f"{task['id']}: unknown check kind {check['kind']!r}")
+            # Single-oracle checks name `oracle`, multi-oracle ones `oracles`;
+            # every name must be fetched by the question's own `oracles` block.
+            names = check["oracles"] if "oracles" in check else [check["oracle"]] if "oracle" in check else []
+            for oracle_name in names:
+                if oracle_name not in task["oracles"]:
+                    raise EvalError(f"{task['id']}: check names unknown oracle {oracle_name!r}")
+        for rule in task.get("skip_if", []):
+            if rule.get("oracle") not in task["oracles"]:
+                raise EvalError(f"{task['id']}: skip_if names unknown oracle {rule.get('oracle')!r}")
+        for tool in task.get("requires_tools", []):
+            if tool not in known_tools:
+                raise EvalError(f"{task['id']}: requires tool {tool!r} that no scope lists")
     return config
 
 
@@ -640,6 +675,10 @@ _NUMBER = re.compile(r"(?<![A-Za-z0-9_.])-?\d[\d,]*(?:\.\d+)?(?:\s*(?:万亿|亿
 _SEGMENT_SPLIT = re.compile(r"[\n。；;]")
 _LIST_ITEM = re.compile(r"\s*(?:[-*•]|\d+[.)、])\s")
 _VERDICT = re.compile(r"结论\s*[:：]\s*\**\s*(是|否|无法确定)")
+# The verdict lines the new questions ask for; kept apart from `_VERDICT` so the
+# existing questions keep matching exactly the same text.
+_TRADABILITY_VERDICT = re.compile(r"结论\s*[:：]\s*\**\s*(能买|不能买|无法确定)")
+_KNOWN_VERDICT = re.compile(r"结论\s*[:：]\s*\**\s*(已确定|无法确定)")
 
 
 def extract_dates(text: str) -> tuple[list[tuple], str]:
@@ -916,21 +955,42 @@ def dates_in(text: str) -> set[dt.date]:
     return out
 
 
-
 def check_tradability(answer: str, oracle_rows_dict: dict[str, list[dict]], check: dict) -> dict:
-    """Can the stock be traded? Check if there's a bar and no suspension."""
+    """Did the stock trade on that day?
+
+    The oracle decides from `query_data` alone: a raw bar for the day means the
+    stock traded; a `confirmed` suspension interval covering the day means it
+    did not. `unresolved_gap` rows only say "no bar, reason unknown"
+    (`src/security_master.rs:460-462`, AC-M2-8), so a day with neither a bar nor
+    a confirmed interval cannot be judged here and the check fails closed with
+    `oracle_cannot_judge` instead of guessing. The question set only uses days
+    the oracle can judge.
+    """
     oracle_names = check["oracles"]
     bar_rows = oracle_rows_dict.get(oracle_names[0], [])
     suspension_rows = oracle_rows_dict.get(oracle_names[1], []) if len(oracle_names) > 1 else []
-    
-    has_bar = len(bar_rows) > 0
-    suspended = len(suspension_rows) > 0
-    
-    expected = "能买" if has_bar and not suspended else "不能买" if not has_bar or suspended else "无法确定"
-    
-    matches = re.findall(r"结论\s*[:：]\s*\**\s*(能买|不能买|无法确定)", answer)
+
+    has_bar = bool(bar_rows)
+    confirmed = [row for row in suspension_rows if row.get("certainty") == "confirmed"]
+    gaps = [row for row in suspension_rows if row.get("certainty") != "confirmed"]
+
+    if confirmed:
+        expected = "不能买"
+    elif has_bar:
+        expected = "能买"
+    else:
+        return {
+            "kind": "tradability",
+            "ok": False,
+            "detail": {
+                "error": "oracle_cannot_judge",
+                "has_bar": has_bar,
+                "unresolved_gap_rows": len(gaps),
+            },
+        }
+
+    matches = _TRADABILITY_VERDICT.findall(answer)
     got = matches[-1] if matches else None
-    
     return {
         "kind": "tradability",
         "ok": got == expected,
@@ -938,175 +998,228 @@ def check_tradability(answer: str, oracle_rows_dict: dict[str, list[dict]], chec
             "expected": expected,
             "got": got,
             "has_bar": has_bar,
-            "suspended": suspended,
+            "confirmed_suspensions": len(confirmed),
+            "unresolved_gap_rows": len(gaps),
         },
     }
 
 
 def check_limit_price(answer: str, oracle_rows_dict: dict[str, list[dict]], check: dict) -> dict:
-    """Check the limit-up price computed from prev close and band."""
-    from decimal import Decimal, ROUND_HALF_UP
-    
+    """The limit-up price computed here from the previous close and the band.
+
+    Same rule as `src/research/price_limit.rs`: `round_half_up(prev_close *
+    (10000 + band_bp) / 10000)` to the minimum tick. Prices are yuan (2dp) in
+    `market.daily`; a number in the answer counts when it is within one cent of
+    the expected limit price. Numbers within one cent of the previous close or
+    of that day's close are not accepted: the question asks for the limit
+    price, so repeating a close price is a wrong answer even when the band is
+    small enough for the values to be near each other.
+    """
     oracle_names = check["oracles"]
     prev_rows = oracle_rows_dict.get(oracle_names[0], [])
     curr_rows = oracle_rows_dict.get(oracle_names[1], [])
-    
+
     if not prev_rows or "close" not in prev_rows[0]:
         return {
             "kind": "limit_price",
             "ok": False,
             "detail": {"error": "no_prev_close", "expected": None, "got": None},
         }
-    
+
     prev_close = Decimal(str(prev_rows[0]["close"]))
     band_bp = Decimal(str(check["band_bp"]))
-    min_tick_cents = Decimal(str(check["min_tick_cents"]))
-    
-    # Compute limit-up: round_half_up(prev_close * (10000 + band_bp) / 10000)
-    limit_up_raw = prev_close * (Decimal("10000") + band_bp) / Decimal("10000")
-    limit_up = limit_up_raw.quantize(min_tick_cents / 100, rounding=ROUND_HALF_UP)
-    
-    # Extract numbers from answer
-    numbers = extract_numbers(answer)
-    # Match with tolerance (limit_up is in yuan, numbers might be in cents)
-    expected_cents = int(limit_up * 100)
-    got_match = any(
-        abs(int(n * 100) - expected_cents) <= 1
-        for n in numbers
-        if n > 0
+    tick = Decimal(str(check["min_tick_cents"])) / 100
+    limit_up = (prev_close * (Decimal("10000") + band_bp) / Decimal("10000")).quantize(
+        tick, rounding=ROUND_HALF_UP
     )
-    
+
+    not_the_answer = {prev_close}
+    if curr_rows and curr_rows[0].get("close") is not None:
+        not_the_answer.add(Decimal(str(curr_rows[0]["close"])))
+
+    numbers = extract_numbers(answer)
+    matched = [
+        n for n in numbers
+        if n > 0
+        and abs(n - limit_up) <= tick
+        and all(abs(n - other) > tick for other in not_the_answer)
+    ]
     return {
         "kind": "limit_price",
-        "ok": got_match,
+        "ok": bool(matched),
         "detail": {
-            "expected": float(limit_up),
-            "prev_close": float(prev_close),
+            "expected": str(limit_up),
+            "prev_close": str(prev_close),
             "band_bp": int(band_bp),
-            "numbers_in_answer": sorted([float(n) for n in numbers if n > 0])[:10],
+            "matched_numbers": [str(n) for n in matched],
+            "numbers_in_answer": sorted(str(n) for n in numbers if n > 0)[:10],
         },
     }
 
 
 def check_market_cap(answer: str, oracle_rows_dict: dict[str, list[dict]], check: dict) -> dict:
-    """Check market cap computed from close price and shares."""
-    from decimal import Decimal
-    
+    """Market cap from the raw close and the latest capital event on or before
+    the day.
+
+    Units: `market.daily.close` is yuan (`docs/data-catalog.md` §3.2), and
+    `capital_events.float_after`/`total_after` are integer shares — the source
+    stores 万股 at 2dp and the writer multiplies by 10,000
+    (`src/sqlite_market/security.rs`, `shares_unit`). The oracle picks the row
+    with the greatest `effective_day` <= `as_of` itself and never relies on the
+    order `query_data` returns. Tolerance: 1% relative, because the answer may
+    round a 12-digit yuan figure or restate it in 亿元; both are accepted and
+    the unit used is recorded.
+    """
     oracle_names = check["oracles"]
     bar_rows = oracle_rows_dict.get(oracle_names[0], [])
     capital_rows = oracle_rows_dict.get(oracle_names[1], [])
-    
-    if not bar_rows or "close" not in bar_rows[0]:
+
+    if not bar_rows or bar_rows[0].get("close") is None:
         return {
             "kind": "market_cap",
             "ok": False,
             "detail": {"error": "no_close_price", "expected": None},
         }
-    
+    as_of = dt.date.fromisoformat(check["as_of"])
     close_price = Decimal(str(bar_rows[0]["close"]))
-    
-    # Find the latest capital event (should be sorted by effective_day desc or asc)
+
     scope = check["scope"]
-    shares = None
+    field_name = {"float_a": "float_after", "company_total": "total_after",
+                  "a_share_total": "total_after"}[scope]
+    usable = []
     for row in capital_rows:
-        if scope == "float_a" and "float_after" in row:
-            shares = Decimal(str(row["float_after"]))
-            break
-        elif scope in ["a_share_total", "company_total"] and "total_after" in row:
-            shares = Decimal(str(row["total_after"]))
-            break
-    
-    if shares is None:
+        if row.get("effective_day") is None or row.get(field_name) is None:
+            continue
+        if dt.date.fromisoformat(row["effective_day"]) <= as_of:
+            usable.append(row)
+    if not usable:
         return {
             "kind": "market_cap",
             "ok": False,
-            "detail": {"error": "no_shares_data", "expected": None, "scope": scope},
+            "detail": {"error": "no_shares_data", "scope": scope, "as_of": as_of.isoformat()},
         }
-    
-    # Market cap in yuan (close_price is yuan, shares is number of shares)
-    market_cap_yuan = close_price * shares
-    market_cap_yi = market_cap_yuan / Decimal("100000000")  # 亿
-    
+    latest = max(usable, key=lambda row: row["effective_day"])
+    shares = Decimal(str(latest[field_name]))
+
+    market_cap = close_price * shares  # yuan
+    in_yi = market_cap / Decimal("100000000")
     numbers = extract_numbers(answer)
-    # Match either yuan or yi yuan
-    got_match = any(
-        abs(n - market_cap_yuan) / market_cap_yuan < Decimal("0.01")
-        or abs(n - market_cap_yi) / market_cap_yi < Decimal("0.01")
-        for n in numbers
+    matched = [
+        n for n in numbers
         if n > 0
-    )
-    
+        and ((market_cap > 0 and abs(n - market_cap) / market_cap <= Decimal("0.01"))
+             or (in_yi > 0 and abs(n - in_yi) / in_yi <= Decimal("0.01")))
+    ]
     return {
         "kind": "market_cap",
-        "ok": got_match,
+        "ok": bool(matched),
         "detail": {
-            "expected_yuan": float(market_cap_yuan),
-            "expected_yi": float(market_cap_yi),
-            "close_price": float(close_price),
-            "shares": float(shares),
+            "expected_yuan": str(market_cap),
+            "expected_yi": str(in_yi.quantize(Decimal("0.0001"))),
+            "close_price": str(close_price),
+            "shares": str(shares),
+            "shares_day": latest["effective_day"],
             "scope": scope,
-            "numbers_in_answer": sorted([float(n) for n in numbers if n > 0])[:10],
+            "as_of": as_of.isoformat(),
+            "matched_numbers": [str(n) for n in matched],
+            "numbers_in_answer": sorted(str(n) for n in numbers if n > 0)[:10],
         },
     }
 
 
 def check_unknown_status(answer: str, oracle_rows: list[dict], check: dict) -> dict:
-    """Check if answer admits uncertainty when status is unknown."""
-    has_status = len(oracle_rows) > 0 and any(
-        row.get("normalized_status") not in [None, ""] for row in oracle_rows
-    )
-    
-    # Look for uncertainty indicators
-    uncertainty_patterns = [
-        r"无法确定",
-        r"不确定",
-        r"不能确定",
-        r"未知",
-        r"unknown",
-        r"结论\s*[:：]\s*\**\s*无法确定"
-    ]
-    admits_uncertainty = any(re.search(pat, answer, re.IGNORECASE) for pat in uncertainty_patterns)
-    
-    # If status is unknown (no rows), answer should admit uncertainty
-    expected = "无法确定" if not has_status else "已确定"
-    matches = re.findall(r"结论\s*[:：]\s*\**\s*(已确定|无法确定)", answer)
-    got = matches[-1] if matches else ("无法确定" if admits_uncertainty else None)
-    
+    """A day the data cannot settle: the answer must say so.
+
+    The oracle only counts rows with a status: `market.risk_warnings` never
+    writes `normal` (`docs/data-catalog.md` §1.4.2 row 9), so no row for the day
+    means the status is `unknown`, and a model that answers "已确定" there is
+    guessing. The oracle stores no expected price: the question is whether the
+    answer admits the uncertainty.
+    """
+    statuses = {row.get("normalized_status") for row in oracle_rows} - {None, ""}
+    settled = bool(statuses)
+    matches = _KNOWN_VERDICT.findall(answer)
+    got = matches[-1] if matches else None
+    expected = "已确定" if settled else "无法确定"
     return {
         "kind": "unknown_status",
         "ok": got == expected,
         "detail": {
             "expected": expected,
             "got": got,
-            "has_status_data": has_status,
-            "admits_uncertainty": admits_uncertainty,
+            "oracle_statuses": sorted(str(status) for status in statuses),
         },
     }
+
+
+# Market-cap scopes as the answers phrase them. `float_a` is the only scope
+# that needs no caveat; the other two must be named because the company total
+# includes B/H shares and the A-share total is `unknown` for A+H companies
+# (`docs/data-catalog.md` §3.3 deviation 4).
+_SCOPE_WORDS = {
+    "float_a": re.compile(r"流通(?:市值|股本|A\s*股)"),
+    "company_total": re.compile(r"公司总(?:市值|股本)"),
+    "a_share_total": re.compile(r"A\s*股总(?:市值|股本)"),
+}
+_ASKS_BACK = re.compile(r"(?:请问|需要确认|请确认|哪一个|哪一种|哪个口径|是指哪)")
+
+
+def check_scope_stated(answer: str, check: dict) -> dict:
+    """A market-cap question that does not name a scope: the answer must pick one
+    out loud or ask which one, never give a bare number.
+
+    No oracle is involved: the question grades whether the answer states its
+    口径 (or asks), not the value.
+    """
+    named = sorted(scope for scope, pattern in _SCOPE_WORDS.items() if pattern.search(answer))
+    asks = bool(_ASKS_BACK.search(answer))
+    return {
+        "kind": "scope_stated",
+        "ok": bool(named) or asks,
+        "detail": {"scopes_named": named, "asks_which_scope": asks},
+    }
+
+
+# Check kinds that read more than one oracle (``check["oracles"]``) and are
+# graded from all of them at once.
+MULTI_ORACLE_CHECKS = {
+    "tradability": check_tradability,
+    "limit_price": check_limit_price,
+    "market_cap": check_market_cap,
+}
+# Check kinds that read one oracle (``check["oracle"]``).
+SINGLE_ORACLE_CHECKS = {
+    "verdict": check_verdict,
+    "screen": check_screen,
+    "unknown_status": check_unknown_status,
+}
 
 
 def evaluate_answer(task: dict, answer: str, oracle_rows: dict[str, list[dict]], today: dt.date) -> list[dict]:
     allowed = {today} | dates_in(task["prompt"])
     results = []
     for check in task["checks"]:
-        if check["kind"] == "answer_text":
+        kind = check["kind"]
+        if kind == "answer_text":
             results.append(check_answer_text(answer, check))
-            continue
-        # New check kinds that need multiple oracles
-        if check["kind"] in ("tradability", "limit_price", "market_cap"):
-            results.append(globals()[f"check_{check['kind']}"](answer, oracle_rows, check))
-            continue
-        # Single-oracle checks
-        rows = oracle_rows[check["oracle"]]
-        if check["kind"] == "oracle_values":
-            results.append(check_oracle_values(answer, rows, check, allowed))
-        elif check["kind"] == "verdict":
-            results.append(check_verdict(answer, rows, check))
-        elif check["kind"] == "screen":
-            results.append(check_screen(answer, rows, check))
-        elif check["kind"] == "unknown_status":
-            results.append(check_unknown_status(answer, rows, check))
+        elif kind == "scope_stated":
+            results.append(check_scope_stated(answer, check))
+        elif kind in MULTI_ORACLE_CHECKS:
+            missing = [name for name in check["oracles"] if name not in oracle_rows]
+            if missing:
+                raise EvalError(f"{task['id']}: check {kind!r} needs oracles {missing} that the report does not hold")
+            results.append(MULTI_ORACLE_CHECKS[kind](answer, oracle_rows, check))
         else:
-            raise EvalError(f"unknown check kind {check['kind']!r}")
+            name = check["oracle"]
+            if name not in oracle_rows:
+                raise EvalError(f"{task['id']}: check {kind!r} needs oracle {name!r} that the report does not hold")
+            rows = oracle_rows[name]
+            if kind == "oracle_values":
+                results.append(check_oracle_values(answer, rows, check, allowed))
+            elif kind in SINGLE_ORACLE_CHECKS:
+                results.append(SINGLE_ORACLE_CHECKS[kind](answer, rows, check))
+            else:
+                raise EvalError(f"unknown check kind {kind!r}")
     return results
 
 
@@ -1132,6 +1245,54 @@ def run_pi(command: list[str], cwd: str, timeout: float) -> tuple[int | None, st
         return None, out or "", err or "", time.monotonic() - started
 
 
+def skip_reason(task: dict, ctx: dict) -> dict | None:
+    """Why this question cannot run against this scope and service, if it cannot.
+
+    A question may name the tools it needs (``requires_tools``). Two cases are
+    recorded apart and never count as a model failure:
+
+    - ``tool_not_deployed``: the service's ``tools/list`` does not offer the
+      tool, so the question waits for the deployment that adds it.
+    - ``tool_not_in_scope``: the service offers it but the chosen scope leaves
+      it out (``baseline`` has no research tools), so the run would measure the
+      wrong thing.
+    """
+    required = task.get("requires_tools") or []
+    if not required:
+        return None
+    offered = ctx.get("offered_tools") or set()
+    scope_tools = ctx.get("scope_tools") or set()
+    not_deployed = [tool for tool in required if tool not in offered]
+    if not_deployed:
+        return {"status": "skipped", "skipped": "tool_not_deployed", "missing_tools": not_deployed}
+    out_of_scope = [tool for tool in required if tool not in scope_tools]
+    if out_of_scope:
+        return {"status": "skipped", "skipped": "tool_not_in_scope", "missing_tools": out_of_scope}
+    return None
+
+
+def unmet_precondition(task: dict, oracle_rows: dict[str, list[dict]]) -> dict | None:
+    """A day the oracle itself cannot use, decided before the model runs.
+
+    ``skip_if`` names an oracle and says what makes the question unusable, for
+    example an ex-rights event between the previous close and the day: the
+    price-limit tool fails closed with ``ex_rights_unverified`` there (D-81), so
+    a limit price cannot be expected from it. Such a question is recorded as
+    ``skipped: precondition_not_met`` with the rule that fired, never as a
+    wrong answer, and the expected values are kept for inspection.
+    """
+    for rule in task.get("skip_if", []):
+        rows = oracle_rows.get(rule["oracle"], [])
+        if rule.get("not_empty") and rows:
+            return {
+                "status": "skipped",
+                "skipped": "precondition_not_met",
+                "precondition": rule,
+                "rows_seen": len(rows),
+            }
+    return None
+
+
 def run_task(task: dict, ctx: dict) -> dict:
     """Run one question. ``ctx`` carries config, scope, client, runner, today."""
     today = ctx["today"]
@@ -1139,6 +1300,10 @@ def run_task(task: dict, ctx: dict) -> dict:
         "id": task["id"], "title": task["title"], "group": task.get("group", "core"),
         "status": "ok", "correct": None,
     }
+    skip = skip_reason(task, ctx)
+    if skip:
+        report.update(skip)
+        return report
     try:
         oracle_rows = {
             name: read_oracle(ctx["client"], spec, today) for name, spec in task["oracles"].items()
@@ -1147,6 +1312,10 @@ def run_task(task: dict, ctx: dict) -> dict:
         report.update(status="oracle_error", error=str(error))
         return report
     report["oracle"] = oracle_rows  # expected values, so the answer can be graded again later
+    unmet = unmet_precondition(task, oracle_rows)
+    if unmet:
+        report.update(unmet)
+        return report
     system_prompt = ctx["config"]["system_prompt"].replace("{today}", today.isoformat())
     mode = ctx.get("mode", "direct")
     command = build_pi_command(
@@ -1195,6 +1364,9 @@ def wrong_reason(task: dict) -> str:
     """One line on why a question is not correct; empty when it is."""
     if task.get("correct") is True:
         return ""
+    if task.get("status") == "skipped":
+        tools = ", ".join(task.get("missing_tools", []))
+        return f"not run: {task.get('skipped')} ({tools})"
     if task.get("correct") is None:
         return f"not graded: {task['status']}" + (f" ({task['error']})" if task.get("error") else "")
     reasons = []
@@ -1223,6 +1395,26 @@ def wrong_reason(task: dict) -> str:
                 parts.append("first codes differ or are out of order")
         elif kind == "answer_text":
             parts.append("neither the code nor an honest 'cannot look up'")
+        elif kind == "tradability":
+            parts.append(f"verdict {detail.get('got')!r}, expected {detail.get('expected')!r}"
+                         + (f" ({detail['error']})" if detail.get("error") else ""))
+        elif kind == "limit_price":
+            parts.append(
+                f"limit price {detail.get('expected')} not given"
+                + (f" ({detail['error']})" if detail.get("error") else
+                   f", numbers in answer: {detail.get('numbers_in_answer')}")
+            )
+        elif kind == "market_cap":
+            parts.append(
+                f"market cap {detail.get('expected_yuan')} yuan / {detail.get('expected_yi')} yi not given"
+                + (f" ({detail['error']})" if detail.get("error") else
+                   f", numbers in answer: {detail.get('numbers_in_answer')}")
+            )
+        elif kind == "unknown_status":
+            parts.append(f"verdict {detail.get('got')!r}, expected {detail.get('expected')!r}")
+        elif kind == "scope_stated":
+            parts.append("no 口径 named and no question asked; scopes seen: "
+                         + (",".join(detail.get("scopes_named") or []) or "none"))
         reasons.append("; ".join(parts) or f"{kind} check failed")
     return " | ".join(reasons) or "incorrect"
 
@@ -1241,6 +1433,7 @@ def summarize_group(ran: list[dict], tasks: list[dict]) -> dict:
         **extra,
         "tasks": len(tasks),
         "ran": count,
+        "skipped": sum(1 for task in tasks if task.get("status") == "skipped"),
         "correct": sum(1 for task in tasks if task.get("correct") is True),
         "incorrect": sum(1 for task in tasks if task.get("correct") is False),
         "unverified": sum(1 for task in tasks if task.get("correct") is None),
@@ -1264,7 +1457,9 @@ def summarize(tasks: list[dict]) -> dict:
 
     core = [task for task in tasks if group_of(task) == "core"]
     summary = summarize_group([task for task in core if "tokens" in task], core)
-    summary["infrastructure_errors"] = sum(1 for task in tasks if task["status"] not in ("ok", "no_answer"))
+    summary["infrastructure_errors"] = sum(
+        1 for task in tasks if task["status"] not in ("ok", "no_answer", "skipped")
+    )
     summary["groups"] = {
         name: summarize_group([t for t in tasks if group_of(t) == name and "tokens" in t],
                               [t for t in tasks if group_of(t) == name])
@@ -1284,6 +1479,7 @@ def run_eval(config: dict, scope: str, ctx: dict, only: list[str] | None = None)
         "mode": ctx.get("mode", "direct"),
         "scope": scope,
         "scope_tools": ctx["allowed"],
+        "scope_tools_missing": sorted(ctx.get("scope_missing", ())),
         "model_requested": ctx.get("model"),
         "thinking": ctx.get("thinking"),
         "models_seen": models,
@@ -1413,10 +1609,31 @@ def main(argv=None) -> int:
     try:
         client = McpClient([args.mcp_connect, args.socket])
         offered = set(client.list_tools())
-        missing = sorted(set(config["scopes"][args.scope]) - offered)
-        if missing:
-            print(f"the service at {args.socket} does not offer scope tools: {missing}", file=sys.stderr)
+        scope_tools = list(config["scopes"][args.scope])
+        missing = sorted(set(scope_tools) - offered)
+        # A missing tool that some question names in `requires_tools` is not a
+        # configuration error: those questions are skipped (tool_not_deployed)
+        # and the rest of the run keeps its usual meaning. A missing tool that
+        # no question needs means the scope does not match the service.
+        needed = {
+            tool
+            for task in config["tasks"]
+            if not only or task["id"] in only
+            for tool in task.get("requires_tools", [])
+        }
+        fatal = [tool for tool in missing if tool not in needed]
+        if fatal:
+            print(f"the service at {args.socket} does not offer scope tools: {fatal}", file=sys.stderr)
             return 2
+        if missing:
+            print(
+                f"the service at {args.socket} does not offer {missing}; "
+                "questions that need them are skipped (tool_not_deployed)",
+                file=sys.stderr,
+            )
+        # pi must only be given tools the service actually offers: a declared
+        # tool that does not exist would look like a scope violation.
+        allowed = [pi_tool_name(server, tool) for tool in scope_tools if tool in offered]
         with tempfile.TemporaryDirectory(prefix="eval-read-tools-") as workdir:
             (Path(workdir) / ".pi").mkdir()
             (Path(workdir) / ".pi" / "mcp.json").write_text(
@@ -1426,7 +1643,8 @@ def main(argv=None) -> int:
                 "config": config, "pi": args.pi, "allowed": allowed, "model": args.model,
                 "thinking": args.thinking, "today": today, "timeout": args.timeout,
                 "client": client, "runner": run_pi, "workdir": workdir, "events_dir": args.events_dir,
-                "mode": args.mode,
+                "mode": args.mode, "scope_tools": set(scope_tools), "offered_tools": offered,
+                "scope_missing": missing,
             }
             report = run_eval(config, args.scope, ctx, only)
     except (EvalError, OSError) as error:
@@ -1437,9 +1655,11 @@ def main(argv=None) -> int:
             client.close()
     Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     summary = report["summary"]
+    skipped = summary.get("skipped", 0)
     print(
-        f"{args.scope}/{args.mode}: {summary['correct']}/{summary['tasks']} core correct, "
-        f"avg turns {summary['avg_turns']}, tokens {summary['tokens']['total']}, "
+        f"{args.scope}/{args.mode}: {summary['correct']}/{summary['tasks']} core correct"
+        + (f" ({skipped} skipped)" if skipped else "")
+        + f", avg turns {summary['avg_turns']}, tokens {summary['tokens']['total']}, "
         f"tool errors {summary['tool_errors']}; report {args.output}"
     )
     return 1 if summary["infrastructure_errors"] else 0
