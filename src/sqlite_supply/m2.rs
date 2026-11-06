@@ -315,6 +315,13 @@ fn security_names(
     let as_of = report.as_of;
     let selected: BTreeSet<String> = plan.entities.iter().map(Security::symbol).collect();
     for row in security::read_security_names(c)? {
+        // D-76: ETF observed names (`exchange_snapshot`) are written by PR-2
+        // but have no read surface yet. PR-3 owns it, together with the
+        // `limitations` text that says what their `effective_from` means; until
+        // then this reader answers exactly what it answered before.
+        if row.source_kind == crate::security_master::names::NameSourceKind::ExchangeSnapshot {
+            continue;
+        }
         let entity = entity(&format!("{}.{}", row.exchange, row.code))?;
         if !selected.contains(&entity.symbol())
             || !access.allows(Dataset::SecurityNames, Some(&entity))

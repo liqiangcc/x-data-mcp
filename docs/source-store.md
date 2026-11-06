@@ -160,6 +160,22 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 的同一写入器：一个事务里整表替换 `security_name_history`、登记
 `derived_dataset_versions`、绑定 generation。
 
+**ETF 观测名称行（D-76 Q1，`etf-name-search` PR-2）。** 同一个 scope 还从清单里的
+`sse_etf_list`、`szse_etf_list` 快照重建 ETF 名称行（`source_kind='exchange_snapshot'`）。表里有两个互不相交
+的子集：A 股行（`source_kind <> 'exchange_snapshot'`）和 ETF 行，写入时各自替换，共用同一条
+`security_names`/`a_share` 登记。ETF 部分是**只依赖清单**的纯函数（`etf_list::replay_names`）：
+不读时钟、不读库、不读 refresh run，与日更 item 共用同一个扫描和同一个装配函数
+（`etf_list` 的 `assemble_names`），所以同一个来源库上两条路径的行逐行相同
+（`live_and_replay_etf_name_rows_are_identical`）。
+
+- `--scope all` 包含它：只依赖清单，fresh init 之后现行 ETF 名称立即可用。
+- 报告多一个 `etf_rows`（`snapshots` 含 ETF 行）；`--verify-only` 的摘要和 `drift` 列表包含 ETF 行。
+- 清单里没有任何 ETF 名单：ETF 部分不动，已写入的 ETF 行保留，`--verify-only` 只比 A 股子集。
+- 只有一份名单、SZSE 名单行数低于下界、名单一个可用名称都没有（`etf_names_empty`）：整个 scope
+  fail-closed，`security_names_rebuild_failed`，**A 股行也不写**，不把半个市场当作重建结果。
+- 清单里没有 `szse_short_name` 记录：与以前一样是 `store_empty` / `nothing_selected`，不碰库。
+- SSE 内容回到旧值（A→B→A）不追加清单行，链停在 B；replay 与日更都写这条链，不补段。
+
 覆盖窗口（`coverage`）是登记证据的一部分，所以它必须由字节算出，不能由
 **当天日期**算出：深/沪/北三档里沪、北是 `NOT_AVAILABLE` 的未观测窗口，如果把
 它的 `to` 写成写入当天，同一份冻结字节每重放一次就产生新的证据摘要。现在写入端

@@ -41,8 +41,8 @@ ETF 身份来源在来源库注册，不新增 MCP 工具：
 
 | `source_id` | 请求 | 用途 | parser |
 |---|---|---|---|
-| `sse_etf_list` | SSE `commonSoaQuery.do?sqlId=FUND_LIST` | 沪市 ETF 身份 + `listingDate` + `subClass` + `INDEX_CODE`（`etf-list-v2` 另解析 `secNameFull`，尚无读面） | `etf-list-v2` |
-| `szse_etf_list` | SZSE `ShowReport?SHOWTYPE=xlsx&CATALOGID=1945` | 深市 ETF 身份（上市日取 `base.dbf SSDATE`；`etf-list-v2` 另解析证券简称，尚无读面） | `etf-list-v2` |
+| `sse_etf_list` | SSE `commonSoaQuery.do?sqlId=FUND_LIST` | 沪市 ETF 身份 + `listingDate` + `subClass` + `INDEX_CODE` | `etf-list-v1`（已部署）；`etf-list-v2`（代码面，未部署，见下） |
+| `szse_etf_list` | SZSE `ShowReport?SHOWTYPE=xlsx&CATALOGID=1945` | 深市 ETF 身份（上市日取 `base.dbf SSDATE`） | `etf-list-v1`（已部署）；`etf-list-v2`（代码面，未部署，见下） |
 | `sse_fund_delist_ann` | SSE `commonQuery.do?sqlId=COMMON_PL_JJXX_JJGG_L&TITLE=终止上市` | 沪市退市 ETF 公告索引（按季分段，分页无效） | `etf-delist-ann-v1` |
 | `szse_etf_notice_ann` | SZSE `announcement/annList`（POST，`channelCode=etf_notice_disc`） | 深市退市 ETF 公告索引（`pageSize=50`、`announceCount` 为总数） | `etf-delist-ann-v1` |
 | `etf_delist_pdf` | 人工确认的终止上市公告 PDF | D-72 精确退市日原文证据 | `pdf-v1`（只冻结，不解析） |
@@ -51,7 +51,15 @@ ETF 身份来源在来源库注册，不新增 MCP 工具：
 `ebs` 只是报价锚，不是身份来源（D-70 Q1）。两个来源的冻结字节、`exchange_source_snapshots`
 索引行与 `replay --scope exchange` 语义沿用 M3 §6/§9.4；`parser_version` 在快照清单里仍是
 envelope 解析器（`exchange-sse-page-v2` / `exchange-szse-xlsx-v1`），业务解析器版本
-`etf-list-v2` 记录在 `derived:security_master` 的 item evidence。
+`etf-list-v1`（已部署的 preview.45 写的就是它）记录在 `derived:security_master` 的 item evidence。
+
+**代码面（未部署）：`etf-list-v2`。** 代码里的业务解析版本已是 `etf-list-v2`：多读名称（SSE
+`secNameFull`、SZSE 证券简称），身份行不变，`security_master` 的内容摘要和版本号不变；只有
+item 证据里 `etf_source.current.parser_version` 的值从 `etf-list-v1` 变成 `etf-list-v2`，已落库
+的 item 结果仍写着当时的真实版本 `etf-list-v1`。`derived:security_names` 另写 ETF 观测名称行
+（`security_name_history`，`source_kind='exchange_snapshot'`，D-76，无 schema 变化），
+`source_store replay --scope security_names` 同步重建这些行；两者都没有读面，随 v11 契约生效。
+v11 契约文档由读面 PR（PR-3）或读取工具 PR-2 负责，先合并的那个写入本节的生效说明。
 
 ### 1.3 写入语义
 

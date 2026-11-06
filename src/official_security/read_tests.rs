@@ -1154,6 +1154,7 @@ fn write_names(scenario: &Scenario, set: &crate::security_master::names::NameSet
         .market
         .commit_security_names(&crate::sqlite_market::security_names::SecurityNameWrite {
             set,
+            etf: crate::sqlite_market::security_names::EtfPart::Keep,
             task_id: "task-known-at",
             item_id: "derived:security_names",
             generation_id: "gen-known-at",
@@ -1702,4 +1703,553 @@ fn a_snapshot_without_a_usable_name_does_not_break_the_chain() {
         admitted.names_behind_current().is_empty(),
         "a missing current name is not a disagreement"
     );
+}
+
+// ------------------------------------- ETF name rows: write and replay ---
+
+use crate::security_master::names::{NameInterval, NameSourceKind};
+
+/// Freeze one round of both lists, the way a refresh run does, and record the
+/// runs that confirm them.
+fn freeze_etf_round(
+    scenario: &Scenario,
+    fetched_at: &str,
+    sse: &[(&str, &str)],
+    szse: &[(&str, &str)],
+    generated_at: &str,
+) {
+    let day = &fetched_at[..10];
+    freeze(
+        scenario,
+        &plan_of(etf_list::ListKind::Sse),
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(sse),
+        fetched_at,
+    );
+    freeze(
+        scenario,
+        &plan_of(etf_list::ListKind::Szse),
+        1,
+        None,
+        "",
+        "",
+        &szse_named_book(szse, generated_at),
+        fetched_at,
+    );
+    for source in [SourceId::SseEtfList, SourceId::SzseEtfList] {
+        record_test_refresh_run(&scenario.market, source, day, &format!("{day}T03:00:00Z"));
+    }
+}
+
+fn live_names(scenario: &Scenario, today: NaiveDate) -> etf_list::AdmittedNames {
+    etf_list::read(&scenario.store, &scenario.market, today)
+        .unwrap()
+        .names_run()
+        .unwrap()
+}
+
+fn replayed_names(scenario: &Scenario) -> crate::security_master::names::EtfNameSet {
+    match etf_list::replay_names(&scenario.store).unwrap() {
+        etf_list::ReplayedNames::Built(set) => set,
+        etf_list::ReplayedNames::Pending => panic!("the store has frozen lists"),
+    }
+}
+
+fn row_of<'a>(rows: &'a [NameInterval], exchange: Exchange, code: &str) -> Vec<&'a NameInterval> {
+    rows.iter()
+        .filter(|row| row.exchange == exchange && row.code == code)
+        .collect()
+}
+
+/// Three rounds with a rename and a return on SZSE, a rename on SSE, a code
+/// that leaves the SSE list, and a code that never had a name.
+fn three_rounds(scenario: &Scenario) {
+    freeze_etf_round(
+        scenario,
+        "2026-11-05T02:00:00Z",
+        &[
+            ("510300", "沪深300ETF华泰柏瑞"),
+            ("510310", "沪深300ETF易方达"),
+            ("510320", ""),
+        ],
+        &[("159915", "创业板ETF易方达")],
+        "2026-11-05T00:10:00Z",
+    );
+    freeze_etf_round(
+        scenario,
+        "2026-11-06T02:00:00Z",
+        &[
+            ("510300", "沪深300ETF"),
+            ("510310", "沪深300ETF易方达"),
+            ("510320", ""),
+        ],
+        &[("159915", "创业板ETF")],
+        "2026-11-06T00:10:00Z",
+    );
+    freeze_etf_round(
+        scenario,
+        "2026-11-09T02:00:00Z",
+        &[("510300", "沪深300ETF"), ("510320", "")],
+        &[("159915", "创业板ETF易方达")],
+        "2026-11-09T00:10:00Z",
+    );
+}
+
+/// D-76 Q1: the interval starts at the first observation, a new name is a new
+/// interval, and nothing exists before the first observation.
+#[test]
+fn etf_names_become_observed_intervals_with_the_snapshot_as_provenance() {
+    let scenario = Scenario::new();
+    three_rounds(&scenario);
+    let run = live_names(&scenario, day(2026, 11, 10));
+    let rows = &run.set.rows;
+
+    let sse = row_of(rows, Exchange::Sh, "510300");
+    assert_eq!(sse.len(), 2);
+    assert_eq!(sse[0].name, "沪深300ETF华泰柏瑞");
+    assert_eq!(sse[0].effective_from, day(2026, 11, 5));
+    assert_eq!(sse[0].effective_to, Some(day(2026, 11, 6)));
+    assert_eq!(sse[1].name, "沪深300ETF");
+    assert_eq!(sse[1].effective_to, None);
+
+    let szse = row_of(rows, Exchange::Sz, "159915");
+    assert_eq!(
+        szse.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        ["创业板ETF易方达", "创业板ETF", "创业板ETF易方达"],
+        "a return to the earlier name is its own interval"
+    );
+
+    // 510310 left the SSE list on 2026-11-09: its name closes there.
+    let gone = row_of(rows, Exchange::Sh, "510310");
+    assert_eq!(gone.len(), 1);
+    assert_eq!(gone[0].effective_to, Some(day(2026, 11, 9)));
+    assert_eq!(
+        gone[0].certainty,
+        crate::security_master::names::NameCertainty::Interval
+    );
+
+    // A code that never had a name has no row, and is listed as such.
+    assert!(row_of(rows, Exchange::Sh, "510320").is_empty());
+    assert_eq!(run.evidence["codes_without_name"]["count"], 1);
+    assert_eq!(
+        run.evidence["codes_without_name"]["samples"],
+        serde_json::json!(["sh.510320"])
+    );
+
+    for row in rows {
+        assert_eq!(row.source_kind, NameSourceKind::ExchangeSnapshot);
+        assert!(
+            row.effective_from >= day(2026, 11, 5),
+            "no row before the first snapshot"
+        );
+        let record = row.source_record_id.as_deref().unwrap();
+        assert!(
+            record.starts_with("sse_etf_list:") || record.starts_with("szse_etf_list:"),
+            "{record}"
+        );
+        assert_eq!(record.len(), record.find(':').unwrap() + 1 + 64);
+        assert!(row.known_at.unwrap() >= row.effective_from);
+    }
+    assert_eq!(run.evidence["basis"], "fetch_time");
+}
+
+/// The ETF subset is a function of the frozen manifest, so the daily item and
+/// `replay` write the same rows row for row.
+#[test]
+fn live_and_replay_etf_name_rows_are_identical() {
+    let scenario = Scenario::new();
+    three_rounds(&scenario);
+    let live = live_names(&scenario, day(2026, 11, 10)).set;
+    let replay = replayed_names(&scenario);
+    assert!(!live.rows.is_empty());
+    assert_eq!(live.rows, replay.rows);
+    assert_eq!(live.entities, replay.entities);
+
+    // And through the writer: the stored bytes of the two paths agree.
+    let other = Scenario::new();
+    let a_share = crate::security_master::names::NameSet {
+        rows: Vec::new(),
+        coverage: Vec::new(),
+        pending_sources: Vec::new(),
+    };
+    for (target, set) in [(&scenario, &live), (&other, &replay)] {
+        target
+            .market
+            .commit_security_names(&crate::sqlite_market::security_names::SecurityNameWrite {
+                set: &a_share,
+                etf: crate::sqlite_market::security_names::EtfPart::Replace(set),
+                task_id: "t",
+                item_id: "derived:security_names",
+                generation_id: "g",
+                generation_manifest_sha256: &"11".repeat(32),
+                member_sha256: &"22".repeat(32),
+                security_event_sha256: &"33".repeat(32),
+                generation_evidence: &serde_json::json!({"generation_id": "g"}),
+            })
+            .unwrap();
+    }
+    assert_eq!(stored_names(&scenario), stored_names(&other));
+    assert_eq!(
+        scenario
+            .market
+            .read(|c| crate::sqlite_market::derived::read_version(c, "security_names", "a_share"))
+            .unwrap()
+            .unwrap()
+            .content_digest,
+        other
+            .market
+            .read(|c| crate::sqlite_market::derived::read_version(c, "security_names", "a_share"))
+            .unwrap()
+            .unwrap()
+            .content_digest,
+    );
+}
+
+/// Same frozen set, same day or a later day: the rows do not move.
+#[test]
+fn rerunning_the_etf_names_is_idempotent_and_does_not_read_the_clock() {
+    let scenario = Scenario::new();
+    three_rounds(&scenario);
+    let first = live_names(&scenario, day(2026, 11, 10)).set;
+    let again = live_names(&scenario, day(2026, 11, 10)).set;
+    let later = live_names(&scenario, day(2026, 11, 12)).set;
+    assert_eq!(first, again);
+    assert_eq!(first, later);
+}
+
+/// The A→B→A branch (PR-1 left it here): SSE content returns to A with no new
+/// manifest line. The rows are the chain (they end at B). The item evidence
+/// carries the count and the first samples so the read surface can say it.
+#[test]
+fn an_sse_return_to_earlier_content_writes_the_chain_and_reports_the_codes() {
+    let scenario = Scenario::new();
+    let a = "沪深300ETF华泰柏瑞";
+    let b = "沪深300ETF";
+    let others: Vec<(String, String)> = (0..12)
+        .map(|i| (format!("5104{i:02}"), format!("样本ETF{i}")))
+        .collect();
+    let mk = |first: &str| -> Vec<(String, String)> {
+        let mut rows = vec![("510300".to_string(), first.to_string())];
+        rows.extend(others.clone());
+        rows
+    };
+    fn as_refs(rows: &[(String, String)]) -> Vec<(&str, &str)> {
+        rows.iter().map(|(c, n)| (c.as_str(), n.as_str())).collect()
+    }
+    let (rows_a, rows_b) = (mk(a), mk(b));
+    let szse = [("159915", "创业板ETF易方达")];
+    freeze_etf_round(
+        &scenario,
+        "2026-11-05T02:00:00Z",
+        &as_refs(&rows_a),
+        &szse,
+        "2026-11-05T00:10:00Z",
+    );
+    freeze_etf_round(
+        &scenario,
+        "2026-11-06T02:00:00Z",
+        &as_refs(&rows_b),
+        &szse,
+        "2026-11-06T00:10:00Z",
+    );
+    // Day 3 the exchange publishes A again; byte-identical to day 1, so the
+    // store adds no SSE line. The run selects A's snapshot.
+    let lines = scenario.manifest_lines();
+    freeze(
+        &scenario,
+        &plan_of(etf_list::ListKind::Sse),
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(&as_refs(&rows_a)),
+        "2026-11-07T02:00:00Z",
+    );
+    assert_eq!(
+        scenario.manifest_lines(),
+        lines,
+        "the repeat adds no SSE line"
+    );
+    freeze(
+        &scenario,
+        &plan_of(etf_list::ListKind::Szse),
+        1,
+        None,
+        "",
+        "",
+        &szse_named_book(&szse, "2026-11-07T00:10:00Z"),
+        "2026-11-07T02:00:00Z",
+    );
+    let body_a = sse_named_body(&as_refs(&rows_a));
+    super::record_test_refresh_run_selecting(
+        &scenario.market,
+        SourceId::SseEtfList,
+        Some(&crate::hash::sha256(&body_a)),
+        "2026-11-07",
+        "2026-11-07T03:00:00Z",
+    );
+    record_test_refresh_run(
+        &scenario.market,
+        SourceId::SzseEtfList,
+        "2026-11-07",
+        "2026-11-07T03:00:00Z",
+    );
+
+    let run = live_names(&scenario, day(2026, 11, 8));
+    let sse = row_of(&run.set.rows, Exchange::Sh, "510300");
+    assert_eq!(
+        sse.iter().map(|row| row.name.as_str()).collect::<Vec<_>>(),
+        [a, b],
+        "the rows are the chain; no third segment is invented"
+    );
+    assert_eq!(sse[1].effective_to, None, "the last name stays open");
+
+    let behind = &run.evidence["names_behind_current"];
+    assert_eq!(behind["count"], 1);
+    assert_eq!(behind["samples"], serde_json::json!(["sh.510300"]));
+    assert!(run.evidence["limitations"].as_array().unwrap().len() >= 3);
+
+    // Replay has no run record and produces the same rows.
+    assert_eq!(replayed_names(&scenario).rows, run.set.rows);
+}
+
+/// The sample list is bounded however many codes are behind.
+#[test]
+fn unresolved_code_samples_are_capped() {
+    let keys: Vec<(Exchange, String)> = (0..25)
+        .map(|i| (Exchange::Sh, format!("5{i:05}")))
+        .collect();
+    let value = etf_list::sample_keys_for_test(&keys);
+    assert_eq!(value["count"], 25);
+    assert_eq!(
+        value["samples"].as_array().unwrap().len(),
+        etf_list::EVIDENCE_SAMPLE_LIMIT
+    );
+}
+
+/// Only some of the sources are there.
+#[test]
+fn partial_sources_fail_closed_and_an_unfrozen_store_is_pending() {
+    // No list at all: the branch is pending, nothing is claimed.
+    let empty = Scenario::new();
+    assert!(matches!(
+        etf_list::replay_names(&empty.store).unwrap(),
+        etf_list::ReplayedNames::Pending
+    ));
+
+    // Only the SSE list: replay refuses instead of writing half the market.
+    let sse_only = Scenario::new();
+    freeze(
+        &sse_only,
+        &plan_of(etf_list::ListKind::Sse),
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(&[("510300", "沪深300ETF")]),
+        "2026-11-05T02:00:00Z",
+    );
+    let error = etf_list::replay_names(&sse_only.store).unwrap_err();
+    assert_eq!(error.code(), "snapshot_incomplete");
+
+    // Only the SZSE list: same.
+    let szse_only = Scenario::new();
+    freeze(
+        &szse_only,
+        &plan_of(etf_list::ListKind::Szse),
+        1,
+        None,
+        "",
+        "",
+        &szse_named_book(&[("159915", "创业板ETF")], "2026-11-05T00:10:00Z"),
+        "2026-11-05T02:00:00Z",
+    );
+    assert_eq!(
+        etf_list::replay_names(&szse_only.store).unwrap_err().code(),
+        "snapshot_incomplete"
+    );
+
+    // The daily item with a missing refresh run is the shared read path's error.
+    let unconfirmed = Scenario::new();
+    freeze(
+        &unconfirmed,
+        &plan_of(etf_list::ListKind::Sse),
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(&[("510300", "沪深300ETF")]),
+        "2026-11-05T02:00:00Z",
+    );
+    assert!(etf_list::read(&unconfirmed.store, &unconfirmed.market, day(2026, 11, 6)).is_err());
+}
+
+/// Lists that carry identity but not one usable name must not turn into "0
+/// name rows replace the stored names".
+#[test]
+fn lists_without_any_usable_name_fail_closed_on_both_paths() {
+    let scenario = Scenario::new();
+    freeze_etf_round(
+        &scenario,
+        "2026-11-05T02:00:00Z",
+        &[("510300", ""), ("510310", "")],
+        &[],
+        "2026-11-05T00:10:00Z",
+    );
+    // The SZSE filler rows are named, so blank them by using a header without
+    // the name column.
+    let nameless = Scenario::new();
+    freeze(
+        &nameless,
+        &plan_of(etf_list::ListKind::Sse),
+        1,
+        None,
+        "",
+        "",
+        &sse_named_body(&[("510300", ""), ("510310", "")]),
+        "2026-11-05T02:00:00Z",
+    );
+    let rows: Vec<Vec<String>> = (0..etf_list::SZSE_MIN_ROWS)
+        .map(|index| vec![format!("16{index:04}"), "合成基金".to_string()])
+        .collect();
+    freeze(
+        &nameless,
+        &plan_of(etf_list::ListKind::Szse),
+        1,
+        None,
+        "",
+        "",
+        &super::test_szse_xlsx(&["证券代码", "基金管理人"], &rows, "2026-11-05T00:10:00Z"),
+        "2026-11-05T02:00:00Z",
+    );
+    for source in [SourceId::SseEtfList, SourceId::SzseEtfList] {
+        record_test_refresh_run(
+            &nameless.market,
+            source,
+            "2026-11-05",
+            "2026-11-05T03:00:00Z",
+        );
+    }
+    assert_eq!(
+        etf_list::replay_names(&nameless.store).unwrap_err().code(),
+        "etf_names_empty"
+    );
+    let live = etf_list::read(&nameless.store, &nameless.market, day(2026, 11, 6))
+        .unwrap()
+        .names_run()
+        .unwrap_err();
+    assert_eq!(live.code(), "etf_names_empty");
+    drop(scenario);
+}
+
+/// A snapshot stored late on a UTC day is the next day in Shanghai: `known_at`
+/// follows the Shanghai day, `effective_from` the observation day.
+#[test]
+fn etf_name_known_at_is_the_shanghai_day_of_the_snapshot() {
+    let scenario = Scenario::new();
+    freeze_etf_round(
+        &scenario,
+        "2026-11-05T18:30:00Z",
+        &[("510300", "沪深300ETF")],
+        &[("159915", "创业板ETF")],
+        "2026-11-05T00:10:00Z",
+    );
+    let run = live_names(&scenario, day(2026, 11, 7));
+    let row = &row_of(&run.set.rows, Exchange::Sh, "510300")[0];
+    assert_eq!(row.effective_from, day(2026, 11, 5));
+    assert_eq!(row.known_at, Some(day(2026, 11, 6)));
+}
+
+/// The item's ETF branch: lists answer -> rows replace; lists fail -> the
+/// stored rows are kept, the A-share write is unaffected and the item reports
+/// the failure; no source store -> pending.
+#[test]
+fn the_item_branch_keeps_stored_etf_rows_when_the_lists_fail_or_are_pending() {
+    use crate::data_supply::derived::etf_name_branch;
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let scenario = Scenario::new();
+    three_rounds(&scenario);
+    let _policy = scenario.policy();
+
+    // Answered.
+    let ok = etf_name_branch(&scenario.market, day(2026, 11, 10), Policy::Required);
+    let set = ok.set.expect("the lists answered");
+    assert!(ok.failure.is_none() && ok.pending.is_none());
+    assert_eq!(ok.evidence["status"], "ok");
+    let a_share = crate::security_master::names::NameSet {
+        rows: Vec::new(),
+        coverage: Vec::new(),
+        pending_sources: Vec::new(),
+    };
+    let write = |etf: crate::sqlite_market::security_names::EtfPart<'_>, a: &_| {
+        scenario
+            .market
+            .commit_security_names(&crate::sqlite_market::security_names::SecurityNameWrite {
+                set: a,
+                etf,
+                task_id: "t",
+                item_id: "derived:security_names",
+                generation_id: "g",
+                generation_manifest_sha256: &"11".repeat(32),
+                member_sha256: &"22".repeat(32),
+                security_event_sha256: &"33".repeat(32),
+                generation_evidence: &serde_json::json!({"generation_id": "g"}),
+            })
+            .unwrap();
+    };
+    write(
+        crate::sqlite_market::security_names::EtfPart::Replace(&set),
+        &a_share,
+    );
+    let stored_before = stored_names(&scenario);
+    assert_eq!(stored_before.len(), set.rows.len());
+
+    // Overdue (the confirmation is older than H): the shared read path fails.
+    let overdue = etf_name_branch(&scenario.market, day(2027, 3, 1), Policy::Required);
+    assert!(overdue.set.is_none());
+    let (code, _) = overdue.failure.expect("an overdue set is a failure");
+    assert_eq!(code, "source_refresh_overdue");
+    assert_eq!(overdue.evidence["status"], "failed");
+    assert_eq!(overdue.evidence["stored_etf_rows"], "kept");
+    // The writer given `Keep` leaves every ETF row in place and still writes
+    // the A-share set.
+    let a_share_row = NameInterval {
+        exchange: Exchange::Sz,
+        code: "000004".into(),
+        effective_from: day(2001, 3, 7),
+        effective_to: None,
+        name: "深安达".into(),
+        certainty: crate::security_master::names::NameCertainty::Unbounded,
+        known_at: Some(day(2026, 11, 1)),
+        source_kind: NameSourceKind::SzseNameHistory,
+        source_record_id: Some("a".into()),
+    };
+    let with_a_share = crate::security_master::names::NameSet {
+        rows: vec![a_share_row],
+        ..a_share
+    };
+    write(
+        crate::sqlite_market::security_names::EtfPart::Keep,
+        &with_a_share,
+    );
+    let after = stored_names(&scenario);
+    assert_eq!(after.len(), stored_before.len() + 1);
+    let etf_after: Vec<_> = after
+        .iter()
+        .filter(|row| row.source_kind == NameSourceKind::ExchangeSnapshot)
+        .cloned()
+        .collect();
+    assert_eq!(etf_after, stored_before);
+
+    // No source store configured: pending, nothing claimed.
+    drop(_policy);
+    let pending = etf_name_branch(&scenario.market, day(2026, 11, 10), Policy::Optional);
+    assert!(pending.set.is_none() && pending.failure.is_none());
+    assert_eq!(pending.pending.expect("pending").dataset, "security_names");
+    assert_eq!(pending.evidence["status"], "pending");
 }
