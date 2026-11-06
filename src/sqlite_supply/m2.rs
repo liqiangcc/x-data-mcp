@@ -623,11 +623,13 @@ fn risk_warning_description(
     let (_, canonical) = evidence_store::read_evidence(c, &registration.evidence_digest)?;
     let evidence: serde_json::Value = serde_json::from_str(&canonical)
         .map_err(|error| Error::Integrity(format!("risk_warnings evidence: {error}")))?;
+    // Keys are those `replace_risk_warnings` writes into the registered
+    // evidence (pinned by `registered_evidence_has_the_keys_the_reader_uses`).
     let count = |key: &str| evidence[key].as_u64();
     let mut parts = Vec::new();
     if let (Some(sz), Some(sh)) = (count("sz_rows"), count("sh_rows")) {
         parts.push(format!(
-            "{sz} SZ name-history row(s) and {sh} SH announcement-event row(s)"
+            "{sz} SZ and {sh} SH stored ST interval row(s) (SH intervals are built from announcement events)"
         ));
     }
     if let (Some(observed), Some(not_observed)) =

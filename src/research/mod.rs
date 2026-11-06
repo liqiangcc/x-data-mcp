@@ -566,8 +566,9 @@ pub const DAILY_COLUMNS: &[&str] = &[
     "amount",
     "r7_raw",
     "volume_quantum",
-    // v4 (M3-2 PR-D): appended, so a reader that addresses columns by position
-    // still finds the eleven v3 columns where it expects them.
+    // M3-2 PR-D (preview.44+, `v4` strings from then on, `v5` from the schema
+    // bump): appended, so a reader that addresses columns by position still
+    // finds the eleven columns preview.42/43 wrote where it expects them.
     "instrument_class",
     "no_trade",
 ];
@@ -683,9 +684,11 @@ pub const PRICE_LIMIT_RULES_COLUMNS: &[&str] = &[
 /// so the file cannot be used to collapse an unproven rename. `v4` (XDM-157)
 /// adds `derived[].verified_through` and the two whole-table dataset identities
 /// (`security_names`/`risk_warnings`) to the manifest. The ETF delivery (M3-2
-/// PR-D, still `v4`: no `v4` snapshot has been deployed) appends
-/// `instrument_class`/`no_trade` to both daily files and
-/// `instrument_class`/`last_trade_date`/`delisting_date` to this file.
+/// PR-D, preview.44+) appends `instrument_class`/`no_trade` to both daily
+/// files and `instrument_class`/`last_trade_date`/`delisting_date` to this
+/// file. It first shipped under the `v4` string, which preview.42/43 had
+/// already used for the shorter layout; `v5` names this layout (see
+/// `manifest::SCHEMA`).
 pub const UNIVERSE_INTERVALS_COLUMNS: &[&str] = &[
     "entity",
     "canonical_entity",
@@ -1118,6 +1121,12 @@ pub const LIMITATIONS: &[&str] = &[
      appear in security_master, and in universe_intervals when a listing date is \
      known), and delisted ETFs are present only as far as their series were \
      collected, so the ETF history carries survivor bias (D-70 Q2, D-72)",
+    "the default stock selection is the catalog head ∪ every SH/SZ A share in \
+     security_master ∪ every published stock daily series, so delisted A shares \
+     that left the catalog are exported (coverage.delisted_series counts them); \
+     catalog.member_count still counts catalog members only. A pinned \
+     --catalog-version exports exactly that stored catalog and is survivor-biased \
+     by construction; an explicit --entities list exports exactly the named codes",
     "no_trade is derived at export time as instrument_class=2 AND volume=0 AND \
      amount=0 (no stored column); it is NULL on stock rows, false on a traded \
      ETF bar and true on a zero-volume bar. Such bars are kept exactly as stored. \

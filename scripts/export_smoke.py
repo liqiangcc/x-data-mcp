@@ -247,13 +247,18 @@ CONTRACT = {
 # before #446 PR-9 has no M3 files and the five-column universe file. v4
 # (XDM-157) adds `derived[].verified_through` (optional, only when a complete
 # refresh run proves it) and the security-names/risk-warning registrations. The
-# ETF delivery (M3-2 PR-D) is part of v4 too: the two daily files and the
-# universe file gain the trailing columns in `V4_ADDED`, so a v2/v3 directory
-# is checked against the shorter contract it was written with.
+# ETF delivery (M3-2 PR-D) appended the trailing columns in `V4_ADDED` to the
+# two daily files and the universe file. It shipped under the `v4` string that
+# preview.42/43 had already used for the shorter layout, so a `v4` directory has
+# one of two layouts and only `files[].columns` says which (`etf_layout`). `v5`
+# names the ETF layout, so it never needs that look; it also carries
+# `producer`. A v2/v3 directory, and a v4 one without ETF columns, is checked
+# against the shorter contract it was written with.
 SCHEMAS = {
     "x-data-mcp.research-snapshot.v2": 2,
     "x-data-mcp.research-snapshot.v3": 3,
     "x-data-mcp.research-snapshot.v4": 4,
+    "x-data-mcp.research-snapshot.v5": 5,
 }
 V3_ONLY_FILES = ("industry_assignments.parquet", "code_migrations.parquet")
 V2_UNIVERSE_COLUMNS = ("entity", "member_from", "member_to", "basis", "flags")
@@ -266,6 +271,29 @@ V4_ADDED = {
         "delisting_date",
     ),
 }
+
+
+def etf_layout(version: int, files: list[dict]) -> bool | None:
+    """Whether a snapshot's files use the ETF column layout (`V4_ADDED`).
+
+    v5 always does and v2/v3 never do. A v4 directory is either: the
+    preview.42/43 exporter wrote the short layout, preview.44/45 the long one
+    under the same string, so the manifest's own column lists decide. `None`
+    means the lists disagree with each other (some files long, some short),
+    which no exporter writes.
+    """
+    if version >= 5:
+        return True
+    if version < 4:
+        return False
+    seen = {
+        "instrument_class" in (entry.get("columns") or [])
+        for entry in files
+        if entry.get("path") in V4_ADDED
+    }
+    if len(seen) == 2:
+        return None
+    return seen == {True}
 
 
 def contract_for(name: str, version: int) -> dict[str, pa.DataType] | None:
@@ -467,6 +495,31 @@ def check_etf_rows(directory: pathlib.Path) -> None:
         connection.close()
 
 
+def check_producer(manifest: dict) -> None:
+    """v5 `producer`: the writing binary and its derivation labels (recorded,
+    not part of `snapshot_id`)."""
+    producer = manifest.get("producer")
+    check(isinstance(producer, dict), "v5 manifest has no producer block")
+    if not isinstance(producer, dict):
+        return
+    sha = producer.get("git_sha")
+    check(
+        isinstance(sha, str)
+        and (sha == "unknown" or (len(sha) == 40 and all(c in "0123456789abcdef" for c in sha))),
+        f"producer.git_sha {sha!r} is not a 40-hex git SHA (or 'unknown')",
+    )
+    algorithms = producer.get("algorithms")
+    check(
+        isinstance(algorithms, dict)
+        and {"price_limit", "market_cap"} <= set(algorithms)
+        and all(isinstance(v, str) and v for v in algorithms.values()),
+        f"producer.algorithms {algorithms!r} must name at least price_limit and market_cap",
+    )
+    # `algorithms` (identity) and `producer` (record) are different blocks.
+    check("git_sha" not in (manifest.get("algorithms") or {}), "git_sha leaked into the identity")
+    print(f"ok   producer: git_sha {sha}, {len(algorithms or {})} derivation labels")
+
+
 def check_snapshot(directory: pathlib.Path) -> None:
     manifest_path = directory / "manifest.json"
     check(manifest_path.is_file(), f"{directory}: manifest.json is missing")
@@ -495,13 +548,23 @@ def check_snapshot(directory: pathlib.Path) -> None:
             (name in listed) == (version >= 3),
             f"{name}: listed={name in listed} for schema v{version}",
         )
+    layout = etf_layout(version, files)
+    check(
+        layout is not None,
+        "v4 manifest mixes the ETF column layout with the short one across files",
+    )
+    if layout is None:
+        return
+    # The contract version the columns follow: a v4 directory without the ETF
+    # columns is the preview.42/43 layout, which is the v3 one.
+    columns_version = version if layout else min(version, 3)
     for entry in files:
         name = entry["path"]
         path = directory / name
         check(path.is_file(), f"{name}: listed in the manifest but missing")
         if not path.is_file():
             continue
-        expected = contract_for(name, version)
+        expected = contract_for(name, columns_version)
         if expected is None:
             check(False, f"{name}: no type contract in this script for schema v{version}")
             continue
@@ -534,7 +597,11 @@ def check_snapshot(directory: pathlib.Path) -> None:
         )
         print(f"ok   derived {entry.get('dataset')}: verified_through {day}")
 
-    if version >= 4:
+    if version >= 5:
+        check_producer(manifest)
+    elif "producer" in manifest:
+        check(False, f"schema v{version} must not carry a producer block")
+    if layout:
         check_etf_rows(directory)
 
     # The owner decision (#381 option 1, D-34): the column exists in the
@@ -577,6 +644,20 @@ def self_check() -> None:
             after == before + list(added),
             f"{name}: v4 columns are not the v3 ones plus {list(added)}",
         )
+        check(
+            list(contract_for(name, 5)) == after,
+            f"{name}: v5 columns are not the ETF layout",
+        )
+    # One `v4` string, two layouts: the manifest's column lists decide; `v5`
+    # and `v2`/`v3` never need to look.
+    short = [{"path": "daily_raw.parquet", "columns": ["entity"]}]
+    long = [{"path": "daily_raw.parquet", "columns": ["entity", "instrument_class"]}]
+    mixed = short + [{"path": "daily_qfq.parquet", "columns": ["instrument_class"]}]
+    check(etf_layout(4, short) is False, "v4 short layout not recognised")
+    check(etf_layout(4, long) is True, "v4 ETF layout not recognised")
+    check(etf_layout(4, mixed) is None, "v4 mixed layout not rejected")
+    check(etf_layout(5, short) is True, "v5 is the ETF layout whatever it lists")
+    check(etf_layout(3, long) is False, "v3 has no ETF layout")
 
     for name, expected in CONTRACT.items():
         with tempfile.TemporaryDirectory() as tmp:
