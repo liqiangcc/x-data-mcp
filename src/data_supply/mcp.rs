@@ -451,7 +451,7 @@ impl DataApi {
                 .collect()
         });
         encode(Capabilities {
-            capability_revision: "generic-data-v10".into(),
+            capability_revision: "generic-data-v11".into(),
             items,
             series,
             max_batch_entities: 100,
@@ -1451,6 +1451,7 @@ impl ToolHandler for DataApi {
                     | "get_trading_calendar"
                     | "get_price_limit_rules"
                     | "get_security_state"
+                    | "get_security_history"
                     | "get_security_events"
                     | "list_data_versions"
                     | "get_data_availability"

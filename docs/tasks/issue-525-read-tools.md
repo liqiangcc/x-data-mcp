@@ -110,7 +110,7 @@ pi 查 2 只标的的最新两天行情用了 5 轮。提示里要求它先弄�
  "start_date":"2020-01-01","end_date":"2026-11-05","known_at?":"","page_size?":100,"cursor?":""}
 ```
 语义：返回与日期范围有重叠的全部区间。
-实现：不是薄封装。读取路径要增加一种不应用 `as_of` 的模式（`m2.rs` 的行准入，`TemporalPlan.as_of` 变为可选），`known_at` 照旧先应用。单独一个 PR。
+实现：不是薄封装。读取路径增加了一种不应用 `as_of` 的模式（内部 `Filter::History`，`TemporalPlan.as_of` 变为可选；`interval_hits`、`suspension_hits` 的 `as_of` 为 `None` 时只做窗口重叠测试），`known_at` 照旧先应用。`query_data` 不能构造这个模式，其响应由改动前记录的 golden 答案保证不变。单独一个 PR（PR-2，已实现），契约见 [generic-data-v11](../contracts/generic-data-v11.md)。
 
 ### 4.8 `get_security_events`：这段时间发生了什么
 ```json
@@ -266,7 +266,7 @@ VM1-20 做过一版（响应顶层 `texts`，被移出的键改名 `*_parts`，�
 |---|---|---|
 | 准备 | 基线评测（不改代码）已完成，见 §13；XDM-14 耗时分解另排 | 无（D-78：owner 2026-11-05 说先不管生产，先进行开发） |
 | PR-1 | 9 个薄封装、错误提示、`limitations`、`shanghai_today`、CI 预算、v11 契约草案 | owner 批准本设计 |
-| PR-2 | `get_security_history` 的读取模式 | PR-1 |
+| PR-2 | `get_security_history` 的读取模式、`tools/list` 去掉读 schema 根上的 `$schema`/`title`、`capability_revision` 升 `generic-data-v11` 和 v11 契约 | PR-1 |
 | PR-3 | 发布 preview.46、部署、Skill 钉值、复跑评测 | PR-1、PR-2 |
 | 后续 | 可交易性、涨跌停、市值的只读工具（D-78，O6） | PR-2 |
 | 暂不做 | `screen_market` | 出现不能写脚本的客户端需求时再提（D-78，#295） |

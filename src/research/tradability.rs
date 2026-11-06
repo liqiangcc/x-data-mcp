@@ -18,6 +18,12 @@
 //! AC-M2-8: `sz000631` between 2006-04-28 and 2009-06-04 has no bars and no
 //! announcement, so the answer is `unknown` + `data_gap`, not `suspended`.
 //!
+//! Missing evidence about the *question* is `unknown` too, never a negative
+//! (issue-433 G1–G4): a main-table row hidden by the `known_at` filter
+//! (`known_at_unavailable`), a date after the last calendar day
+//! (`beyond_calendar`), an ETF or index (`not_a_share`) and a code the main
+//! table does not contain (`not_in_master`).
+//!
 //! PR-4 reads `suspension_intervals`; deriving the `unresolved_gap` rows and
 //! writing `confirmed` rows is PR-6 (§16). A missing calendar is `unknown`
 //! rather than `false`: the calendar is derived data, and "we never derived it"
@@ -27,11 +33,17 @@ use chrono::NaiveDate;
 use rusqlite::Connection;
 
 use super::Error;
+use super::context::ResearchContext;
 use super::member_state::{MemberState, Membership, NotMemberReason};
 use super::temporal::{Temporal, TemporalReport};
-use super::universe::{UniverseRequest, member_state_report};
+use super::universe::{UniverseRequest, member_state_report_in};
 use crate::security_master::{SuspensionCertainty, SuspensionInterval, SuspensionReason};
-use crate::sqlite_market::{calendar, security, series};
+use crate::sqlite_market::series;
+use crate::trading_calendar::DayStatus;
+
+/// The algorithm label of this derivation (BR-M2-10). It changes whenever a
+/// verdict for the same inputs could change.
+pub const ALGORITHM_VERSION: &str = "tradability-v1";
 
 /// `derived_dataset_versions.dataset_kind` name of the suspension facts.
 pub const DATASET_SUSPENSIONS: &str = "suspensions";
@@ -69,6 +81,15 @@ pub enum TradabilityReason {
     DataGap,
     NoBar,
     CalendarMissing,
+    /// The main-table row exists but the `known_at` filter hides it (G1).
+    KnownAtUnavailable,
+    /// `as_of` is after the last calendar day; the calendar does not predict
+    /// (G2).
+    BeyondCalendar,
+    /// An ETF, index or other non-A-share instrument (G3).
+    NotAShare,
+    /// The code is not in the main table at all (G4).
+    NotInMaster,
 }
 
 impl TradabilityReason {
@@ -82,6 +103,10 @@ impl TradabilityReason {
             Self::DataGap => "data_gap",
             Self::NoBar => "no_bar",
             Self::CalendarMissing => "calendar_missing",
+            Self::KnownAtUnavailable => "known_at_unavailable",
+            Self::BeyondCalendar => "beyond_calendar",
+            Self::NotAShare => "not_a_share",
+            Self::NotInMaster => "not_in_master",
         }
     }
 }
@@ -123,6 +148,9 @@ pub struct TradabilityReport {
     pub suspension: Option<SuspensionRef>,
     /// Whether a 不复权 bar exists on `as_of`.
     pub has_bar: bool,
+    /// [`ALGORITHM_VERSION`]; with the input dataset versions it reproduces
+    /// the answer.
+    pub algorithm_version: &'static str,
     pub temporal: TemporalReport,
 }
 
@@ -142,20 +170,34 @@ pub fn tradability(
     entity: &str,
     temporal: Temporal,
 ) -> Result<TradabilityReport, Error> {
+    tradability_in(&ResearchContext::new(c), entity, temporal)
+}
+
+/// [`tradability`] over a shared [`ResearchContext`]: the same answer for the
+/// same entity, with the whole-table reads done once for all entities.
+pub fn tradability_in(
+    ctx: &ResearchContext<'_>,
+    entity: &str,
+    temporal: Temporal,
+) -> Result<TradabilityReport, Error> {
+    let c = ctx.connection();
     let request = UniverseRequest {
         temporal,
         strict: false,
     };
-    let (member, mut report) = member_state_report(c, entity, &request)?;
+    let (member, mut report) = member_state_report_in(ctx, entity, &request)?;
     let Some(member) = member else {
         return Ok(TradabilityReport {
             entity: entity.into(),
             as_of: temporal.as_of,
             known_at: temporal.known_at,
-            state: Tradability::NotTradable(TradabilityReason::NotListed),
+            // The main table is not a closed world: a new listing is absent
+            // until the next derivation, so absence is not "not listed".
+            state: Tradability::Unknown(TradabilityReason::NotInMaster),
             member: None,
             suspension: None,
             has_bar: false,
+            algorithm_version: ALGORITHM_VERSION,
             temporal: report,
         });
     };
@@ -163,6 +205,16 @@ pub fn tradability(
         Membership::In(_) => None,
         Membership::Out(NotMemberReason::AfterDelisting) => {
             Some(Tradability::NotTradable(TradabilityReason::Delisted))
+        }
+        // The row exists but this information set cannot see it. That is a
+        // missing input, not an unlisted security.
+        Membership::Out(NotMemberReason::ExcludedByKnownAt) => {
+            Some(Tradability::Unknown(TradabilityReason::KnownAtUnavailable))
+        }
+        // This derivation covers A shares only; an ETF or index is listed but
+        // outside its scope.
+        Membership::Out(NotMemberReason::NotAShare) => {
+            Some(Tradability::Unknown(TradabilityReason::NotAShare))
         }
         // A code whose interval ended for another reason (a migration, a code
         // reuse boundary) is not listed *as this code* on that day; that is
@@ -178,12 +230,13 @@ pub fn tradability(
             member: Some(member),
             suspension: None,
             has_bar: false,
+            algorithm_version: ALGORITHM_VERSION,
             temporal: report,
         });
     }
 
     // Step 2: the calendar. "No calendar" is unknown, not a non-trading day.
-    let Some(calendar) = calendar::read_calendar(c).map_err(Error::from)? else {
+    let Some(calendar) = ctx.calendar()? else {
         return Ok(finish(
             entity,
             temporal,
@@ -194,26 +247,54 @@ pub fn tradability(
             report,
         ));
     };
-    if !calendar.contains(temporal.as_of) {
-        return Ok(finish(
-            entity,
-            temporal,
-            member,
-            Tradability::NotTradable(TradabilityReason::NonTradingDay),
-            None,
-            false,
-            report,
-        ));
+    match calendar.day_status(temporal.as_of) {
+        Some(DayStatus::InCalendar) => {}
+        // Provably a non-trading day: inside the covered span, absent.
+        Some(DayStatus::NonTrading) => {
+            return Ok(finish(
+                entity,
+                temporal,
+                member,
+                Tradability::NotTradable(TradabilityReason::NonTradingDay),
+                None,
+                false,
+                report,
+            ));
+        }
+        // After the last input bar the calendar says nothing (G2).
+        Some(DayStatus::BeyondCalendar) => {
+            return Ok(finish(
+                entity,
+                temporal,
+                member,
+                Tradability::Unknown(TradabilityReason::BeyondCalendar),
+                None,
+                false,
+                report,
+            ));
+        }
+        // An empty calendar is never stored; treat it as no calendar.
+        None => {
+            return Ok(finish(
+                entity,
+                temporal,
+                member,
+                Tradability::Unknown(TradabilityReason::CalendarMissing),
+                None,
+                false,
+                report,
+            ));
+        }
     }
 
     // Steps 3/4: the stored suspension rows. A `confirmed` row is an event; an
     // `unresolved_gap` row is derived and can only produce `unknown`.
-    let intervals = security::read_suspension_intervals(c).map_err(Error::from)?;
     let mut confirmed: Option<&SuspensionInterval> = None;
     let mut gap: Option<&SuspensionInterval> = None;
-    for interval in intervals
-        .iter()
-        .filter(|row| row.entity() == entity && row.covers(temporal.as_of))
+    for interval in ctx
+        .suspensions()?
+        .of(entity)
+        .filter(|row| row.covers(temporal.as_of))
     {
         if !report.observe(DATASET_SUSPENSIONS, interval.known_at) {
             continue;
@@ -285,6 +366,7 @@ fn finish(
         member: Some(member),
         suspension,
         has_bar,
+        algorithm_version: ALGORITHM_VERSION,
         temporal: temporal_report,
     }
 }
