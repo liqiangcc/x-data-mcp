@@ -51,19 +51,26 @@
 //!   with a database that has no master/calendar it fails closed with
 //!   `suspension_replay_not_ready` instead of writing an empty table. Rebuild
 //!   the master and calendar first (or simply run the daily item), then run
-//!   this scope. It is deliberately not part of `Scope::ALL`: a fresh-init
-//!   `--scope all` runs before the services exist and therefore cannot have
-//!   those inputs.
+//!   this scope. It is the last scope of `Scope::ALL`, with one rule for the
+//!   fresh-init case: inside `--scope all` the scope reports `not_ready` with
+//!   the missing input in `not_ready_reason`. A *writing* run (the deploy hook,
+//!   which runs before the services exist) writes nothing for it and does not
+//!   fail. A `--verify-only`/`verify` run, and `--scope suspensions` on its own,
+//!   still end as `suspension_replay_not_ready`: a verdict that compared
+//!   nothing must not pass.
 //!
 //! Determinism: two replays of one store with one parser version produce the
 //! same summary digest — the summary is sha256 over the canonical row lines
 //! (`security_names` adds its coverage windows to the row digest), so "clear
 //! the DB and replay" is checkable instead of asserted. `suspensions` is
 //! deterministic over **both** inputs: the same store plus the same database
-//! state gives the same digest, while a changed master/calendar legitimately
-//! changes it. The replay records that state's digest (`inputs_digest`) in the
-//! registration evidence, so `--verify-only` labels a database advance
-//! `inputs_changed` (not `rows_changed`) and never calls it store corruption.
+//! state gives the same digest, while a changed master/calendar/bar day
+//! legitimately changes it. The replay records that state's digest
+//! (`inputs_digest`) in the registration evidence, so `--verify-only` labels a
+//! database advance `inputs_changed` (not `rows_changed`) and never calls it
+//! store corruption. The digest only labels the cause: the verdict (`match` /
+//! `drift`) always comes from the rows, so a stored dataset that is older than
+//! the bars it should bracket is reported as `drift`, never hidden.
 //!
 //! Without a database the scopes only compute and report their summary, so a
 //! read never touches a database and never creates the store.
@@ -120,6 +127,10 @@ pub const COMPUTED_SUSPENSIONS_NO_DB: &str = "computed_no_db";
 /// Stable code of a `--db` replay whose database has no `security_master` or
 /// no trading calendar. It fails closed without writing an empty dataset.
 pub const SUSPENSION_REPLAY_NOT_READY: &str = "suspension_replay_not_ready";
+/// Scope status of `suspensions` inside a writing `--scope all` whose database
+/// has no `security_master`/calendar yet (fresh init). Nothing is written and
+/// the run is not failed; `not_ready_reason` names the missing input.
+pub const SCOPE_NOT_READY: &str = "not_ready";
 /// The scope had no matching manifest records: nothing was computed or written.
 /// It is never reported as `rebuilt` — "no data" is not "an empty table".
 pub const NOTHING_SELECTED: &str = "nothing_selected";
@@ -139,8 +150,9 @@ const SSE_SUSPENSION_SOURCE_ID: &str = "sse_suspension";
 pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6), `generation_facts` \
 (M3 PR-8), `risk_warnings` (M3 PR-10) and `security_names` (M3 PR-12) rebuild their \
 tables from the store; `suspensions` (XDM-138) additionally needs the database's \
-security_master, trading calendar and bar days, so it is run explicitly after those \
-are rebuilt (`--scope all` leaves it out).";
+security_master, trading calendar and bar days: a writing `--scope all` on a database \
+that does not have them yet (fresh init) reports it as `not_ready` and continues, \
+every other run fails closed with `suspension_replay_not_ready`.";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -154,17 +166,19 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// The scopes `--scope all` replays. `suspensions` is deliberately not in
-    /// this list: it derives from the database's `security_master`, calendar
-    /// and bar days, which a fresh-init `--scope all` (run before the services
-    /// start) does not have. Including it would make every fresh-init deployment
-    /// fail with `suspension_replay_not_ready` before those inputs can exist.
-    pub const ALL: [Scope; 5] = [
+    /// The scopes `--scope all` replays. `suspensions` derives from the
+    /// database's `security_master`, calendar and bar days, which a fresh-init
+    /// `--scope all` (run before the services start) does not have yet. A
+    /// writing `all` therefore reports it as [`SCOPE_NOT_READY`] instead of
+    /// failing the deployment (see `run`); no other scope reads those inputs,
+    /// so its position does not matter.
+    pub const ALL: [Scope; 6] = [
         Scope::Industry,
         Scope::Exchange,
         Scope::GenerationFacts,
         Scope::RiskWarnings,
         Scope::SecurityNames,
+        Scope::Suspensions,
     ];
 
     pub fn parse(value: &str) -> Option<Self> {
@@ -319,6 +333,9 @@ pub struct ScopeReport {
     /// store reports the same value on any day.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_of: Option<String>,
+    /// Which input is missing when `status` is [`SCOPE_NOT_READY`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_ready_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -451,6 +468,7 @@ fn run(
         let mut as_of = None;
         let mut counts = (None, None, None);
         let mut suspension_counts = (None, None, None, None, None);
+        let mut not_ready_reason = None;
         if *scope == Scope::Industry && status == "ok" {
             match rebuild_industry(store, request) {
                 Ok(outcome) => {
@@ -650,11 +668,21 @@ fn run(
                         Some(outcome.deferred_beyond_calendar),
                         Some(outcome.skipped_no_trading_day),
                     );
-                    for issue in outcome.problems {
-                        problems.push(issue);
-                    }
-                    if outcome.status != "ok" {
+                    // A fresh-init deployment replays `all` before the services
+                    // (and so the master, calendar and bars) exist. Inside
+                    // `all` that is the scope status `not_ready`, not a
+                    // failure; the run status below decides whether it passes.
+                    if outcome.status == SUSPENSION_REPLAY_NOT_READY && request.scope.is_none() {
+                        status = SCOPE_NOT_READY;
+                        not_ready_reason =
+                            outcome.problems.first().map(|issue| issue.actual.clone());
+                    } else if outcome.status != "ok" {
                         status = outcome.status;
+                    }
+                    if status != SCOPE_NOT_READY || request.verify_only {
+                        for issue in outcome.problems {
+                            problems.push(issue);
+                        }
                     }
                 }
                 Err(error) => {
@@ -694,6 +722,7 @@ fn run(
             deferred_beyond_calendar: suspension_counts.3,
             skipped_no_trading_day: suspension_counts.4,
             as_of,
+            not_ready_reason,
         });
     }
     let selected_all: Vec<&ManifestRecord> = records
@@ -706,13 +735,19 @@ fn run(
         "source_store_corrupt"
     } else if unknown_parser {
         "unknown_parser"
-    } else if let Some(failed) = scope_reports
-        .iter()
-        .find(|report| report.status != "ok" && report.status != "store_empty")
-    {
+    } else if let Some(failed) = scope_reports.iter().find(|report| {
+        !matches!(report.status, "ok" | "store_empty")
+            && !(report.status == SCOPE_NOT_READY && !request.verify_only)
+    }) {
         // A scope that failed its rebuild (or found drift) is the run status;
-        // reporting `ok` here would hide it behind the manifest digest.
-        failed.status
+        // reporting `ok` here would hide it behind the manifest digest. A
+        // `not_ready` scope only passes a writing run: a verifying run that
+        // compared nothing keeps the stable failing code.
+        if failed.status == SCOPE_NOT_READY {
+            SUSPENSION_REPLAY_NOT_READY
+        } else {
+            failed.status
+        }
     } else if scope_reports
         .iter()
         .any(|report| report.database == Some("drift"))
@@ -2029,6 +2064,39 @@ fn rebuild_suspensions(
     verify_only: bool,
     database: Option<&Path>,
 ) -> Result<SuspensionsOutcome, String> {
+    // Readiness comes before any page is parsed: a database without its
+    // inputs (fresh init) is `not_ready` whatever the frozen pages look like,
+    // so a deployment never fails on pages that could not be placed anyway.
+    let database = match database {
+        Some(path) => {
+            let backend = open_database(path)?;
+            let readiness = backend
+                .read(crate::sqlite_market::suspensions::read_inputs_if_ready)
+                .map_err(|error| format!("database_inputs: {error}"))?;
+            Some((backend, readiness))
+        }
+        None => None,
+    };
+    if let Some((_, readiness)) = &database {
+        use crate::sqlite_market::suspensions::SuspensionInputsReadiness as Readiness;
+        match readiness {
+            Readiness::Ready(_) => {}
+            Readiness::MissingMaster => {
+                return Ok(SuspensionsOutcome::not_ready(
+                    "no stored security_master; rebuild it (or run the daily item) before \
+                     replaying suspensions"
+                        .to_string(),
+                ));
+            }
+            Readiness::EmptyCalendar => {
+                return Ok(SuspensionsOutcome::not_ready(
+                    "the derived trading calendar is empty; rebuild it (or run the daily \
+                     item) before replaying suspensions"
+                        .to_string(),
+                ));
+            }
+        }
+    }
     let index =
         crate::exchange_source::rebuild(store, records).map_err(|error| error.to_string())?;
     if !index.problems.is_empty() {
@@ -2047,32 +2115,16 @@ fn rebuild_suspensions(
             .collect();
         return Ok(outcome);
     }
-    let Some(database) = database else {
+    let Some((backend, readiness)) = database else {
         let facts = crate::official_security::a3::reparse_interval_count(store, &index.rows)
             .map_err(|error| format!("{}: {error}", error.code()))?;
         return Ok(SuspensionsOutcome::computed(facts));
     };
-    let backend = open_database(database)?;
-    let readiness = backend
-        .read(crate::sqlite_market::suspensions::read_inputs_if_ready)
-        .map_err(|error| format!("database_inputs: {error}"))?;
-    let inputs = match readiness {
-        crate::sqlite_market::suspensions::SuspensionInputsReadiness::Ready(inputs) => *inputs,
-        crate::sqlite_market::suspensions::SuspensionInputsReadiness::MissingMaster => {
-            return Ok(SuspensionsOutcome::not_ready(
-                "no stored security_master; rebuild it (or run the daily item) before \
-                 replaying suspensions"
-                    .to_string(),
-            ));
-        }
-        crate::sqlite_market::suspensions::SuspensionInputsReadiness::EmptyCalendar => {
-            return Ok(SuspensionsOutcome::not_ready(
-                "the derived trading calendar is empty; rebuild it (or run the daily \
-                 item) before replaying suspensions"
-                    .to_string(),
-            ));
-        }
+    let crate::sqlite_market::suspensions::SuspensionInputsReadiness::Ready(inputs) = readiness
+    else {
+        unreachable!("the not-ready cases returned above");
     };
+    let inputs = *inputs;
     // `reparse` only uses the day for the admitted snapshot's `as_of`
     // evidence; facts come from the pages and their fingerprints. Use the
     // newest observed acquisition day so the replay never reads the clock.
