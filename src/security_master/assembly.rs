@@ -48,7 +48,9 @@ pub const DATASET_KEY: &str = "a_share";
 /// `SHA256("security-master-v1" ‖ rows ‖ migrations)`.
 pub const DIGEST_FORMAT: &str = "security-master-v1";
 /// Derivation label stored in `algorithm_version`.
-pub const ALGORITHM_VERSION: &str = "security-master-assembly-v1";
+/// v2 (D-80): an ETF row opens on its listing day instead of its first
+/// observation day, so the same inputs now give different rows.
+pub const ALGORITHM_VERSION: &str = "security-master-assembly-v2";
 
 /// A source branch that has no admitted snapshot. It is a value, not an error:
 /// the assembly still writes the TDX facts and records the branch so a run can
