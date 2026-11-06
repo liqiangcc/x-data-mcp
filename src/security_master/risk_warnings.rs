@@ -42,7 +42,11 @@ pub const DIGEST_FORMAT: &str = "sha256-risk-warning-intervals-v1";
 /// and every other code is assembled as before. Datasets with no conflict
 /// assemble to the same rows under `v1` and `v2`, so the content digest (and
 /// the `version_id` derived from it) does not move when only the label does.
-pub const ALGORITHM_VERSION: &str = "risk-warnings-v2";
+/// `v3` (D-81 GP29 §7): the title classifier now rejects "存在被实施..."
+/// forward-looking risk notices instead of misclassifying them as
+/// implementations. This affects 14 SH announcements in 2014-12, all 7 codes
+/// that had open intervals from those dates will have them closed.
+pub const ALGORITHM_VERSION: &str = "risk-warnings-v3";
 
 /// `raw_status_code` of the row an SH implementation and revocation on one
 /// effective day collapse to.

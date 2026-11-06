@@ -103,7 +103,7 @@ use std::sync::Arc;
 /// whose `known_at` is set on purpose. v4 → v5: title classification follows
 /// D-68 (a revocation handing over to another warning is `Implement(B)`;
 /// forecasts, pre-audit notes and third-party opinions are not events).
-pub const PARSER_VERSION: &str = "risk-warnings-v6";
+pub const PARSER_VERSION: &str = "risk-warnings-v7";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -1327,7 +1327,9 @@ fn classify_title(title: &str) -> Option<(RiskWarningAction, Option<RiskStatus>)
         return None;
     }
     // An application, a proposal, a forecast, or a pre-audit note is not an
-    // event. D-58 admits implementation/revocation, not intent (D-68).
+    // event. D-58 admits implementation/revocation, not intent (D-68). A title
+    // about the existence of a risk ("存在被实施...的提示公告") is also
+    // forward-looking and not an actual implementation event (D-81 GP29 §7).
     if [
         "申请",
         "拟",
@@ -1337,6 +1339,7 @@ fn classify_title(title: &str) -> Option<(RiskWarningAction, Option<RiskStatus>)
         "预审计",
         "将消除",
         "争取",
+        "存在",
     ]
     .iter()
     .any(|word| title.contains(word))
@@ -1919,6 +1922,12 @@ mod tests {
     fn proposals_are_not_events() {
         assert!(classify_title("关于申请撤销公司股票其他风险警示的公告").is_none());
         assert!(classify_title("关于公司股票可能被实施退市风险警示的提示性公告").is_none());
+        // D-81 GP29 §7: "存在被实施...的提示公告" is a forward-looking risk
+        // notice, not an actual implementation. 14 rows (all 2014-12) were
+        // misclassified before this exclusion was added.
+        assert!(classify_title("存在被实施退市风险警示及暂停上市风险的提示公告").is_none());
+        assert!(classify_title("存在被实施退市风险警示及暂停上市风险的提示性公告").is_none());
+        // A real implementation without "存在" is still admitted.
         assert_eq!(
             classify_title("关于公司股票被实施其他风险警示的公告"),
             Some((

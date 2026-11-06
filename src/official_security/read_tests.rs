@@ -1146,7 +1146,7 @@ fn a_same_day_conflict_isolates_its_code_and_replay_writes_the_same_rows() {
         evidence["same_day_conflicts"]["sample"][0]["day"],
         "2024-05-06"
     );
-    assert_eq!(evidence["parser_version"], "risk-warnings-v6");
+    assert_eq!(evidence["parser_version"], "risk-warnings-v7");
 
     let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
     commit_daily(&scenario, &admitted.set);
