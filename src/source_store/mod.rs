@@ -736,6 +736,11 @@ pub fn validate_sha256(value: &str) -> Result<(), StoreError> {
 pub fn known_parser_version(value: &str) -> bool {
     matches!(value, TDXHY_PARSER_VERSION | INCON_PARSER_VERSION)
         || crate::exchange_source::PagingFormat::from_parser_version(value).is_some()
+        // D-72 one-off imports (PR-4's `delisted_etf_names` scope selects
+        // these records). The PDF is never parsed in production; the CSV is
+        // parsed by `etf_delisting::parse_extraction_csv`, whose version is
+        // checked by the consumer. Both are replayable as frozen bytes.
+        || matches!(value, "pdf-v1" | "etf-delist-extract-v1")
 }
 
 fn keys(records: &[ManifestRecord]) -> BTreeSet<RegistrationKey> {
@@ -820,6 +825,8 @@ impl Drop for PolicyEnv {
     }
 }
 
+#[cfg(test)]
+mod delisted_etf_names_replay_tests;
 #[cfg(test)]
 mod suspensions_replay_tests;
 #[cfg(test)]

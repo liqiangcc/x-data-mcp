@@ -180,6 +180,28 @@ impl MarketBackend {
         }
     }
 
+    /// Replace only the ETF (`exchange_snapshot`) subset of the name history
+    /// (PR-4 explicit replay scope). The A-share rows and their registration
+    /// evidence are preserved.
+    pub(crate) fn commit_etf_names_only(
+        &self,
+        etf: &crate::security_master::names::EtfNameSet,
+    ) -> Result<Option<super::derived::DerivedVersionRow>, Error> {
+        match self {
+            Self::Compact(m) => m.write(|c| {
+                super::security_names::replace_etf_names_only(
+                    c,
+                    etf,
+                    "source_store_replay",
+                    "derived:security_names",
+                )
+            }),
+            Self::Legacy(_) => Err(Error::Invalid(
+                "security_name_history requires the compact market schema".into(),
+            )),
+        }
+    }
+
     /// Replace the derived risk-warning dataset (issue-308 / #446 PR-10).
     /// The `derived:risk_warnings` item drives this.
     pub(crate) fn commit_risk_warnings(

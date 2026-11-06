@@ -31,6 +31,8 @@ use crate::security_master::{
 
 pub mod a1a2;
 pub mod a3;
+#[cfg(test)]
+mod etf_delisted_names_tests;
 pub mod etf_delisting;
 pub mod etf_list;
 pub mod risk_warnings;

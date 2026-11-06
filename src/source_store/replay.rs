@@ -133,6 +133,10 @@ pub const COMPUTED_SUSPENSIONS_NO_DB: &str = "computed_no_db";
 /// Stable code of a `--db` replay whose database has no `security_master` or
 /// no trading calendar. It fails closed without writing an empty dataset.
 pub const SUSPENSION_REPLAY_NOT_READY: &str = "suspension_replay_not_ready";
+/// Stable code of a `delisted_etf_names` replay whose database has no stored
+/// ETF `security_master` row (or no database at all). It fails closed without
+/// replacing the ETF name subset with an empty set.
+pub const DELISTED_ETF_NAMES_NOT_READY: &str = "delisted_etf_names_not_ready";
 /// Scope status of `suspensions` inside a writing `--scope all` whose database
 /// has no `security_master`/calendar yet (fresh init). Nothing is written and
 /// the run is not failed; `not_ready_reason` names the missing input.
@@ -158,7 +162,10 @@ pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6), `generation_
 ETF observed names) rebuild their tables from the store; `suspensions` (XDM-138) additionally needs the database's \
 security_master, trading calendar and bar days: a writing `--scope all` on a database \
 that does not have them yet (fresh init) reports it as `not_ready` and continues, \
-every other run fails closed with `suspension_replay_not_ready`.";
+every other run fails closed with `suspension_replay_not_ready`. \
+`delisted_etf_names` (PR-4) is explicit only: it needs the database's delisted ETF \
+security_master rows and fails closed with `delisted_etf_names_not_ready` when they \
+are absent, so it is never part of `--scope all`.";
 
 /// One replay domain (§9.4.2 table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -169,6 +176,10 @@ pub enum Scope {
     RiskWarnings,
     SecurityNames,
     Suspensions,
+    /// PR-4: names of delisted ETFs. Explicit only: it depends on the
+    /// database's `security_master`, which a fresh-init `--scope all` does
+    /// not have yet.
+    DelistedEtfNames,
 }
 
 impl Scope {
@@ -195,6 +206,7 @@ impl Scope {
             "risk_warnings" => Some(Self::RiskWarnings),
             "security_names" => Some(Self::SecurityNames),
             "suspensions" => Some(Self::Suspensions),
+            "delisted_etf_names" => Some(Self::DelistedEtfNames),
             _ => None,
         }
     }
@@ -207,6 +219,7 @@ impl Scope {
             Self::RiskWarnings => "risk_warnings",
             Self::SecurityNames => "security_names",
             Self::Suspensions => "suspensions",
+            Self::DelistedEtfNames => "delisted_etf_names",
         }
     }
 
@@ -250,6 +263,18 @@ impl Scope {
                 record.store_kind == super::StoreKind::HttpFetch
                     && record.source_id == SSE_SUSPENSION_SOURCE_ID
             }
+            // PR-4: the two admitted announcement indexes (the SZSE
+            // `secName` source) and the operator-imported D-72 extraction
+            // batch (the SSE `short_name` source). Their existence is what
+            // this scope replays; the delisted *entities* come from the
+            // database's security_master, never from a manifest line.
+            Self::DelistedEtfNames => matches!(
+                record.source_id.as_str(),
+                "sse_fund_delist_ann"
+                    | "szse_etf_notice_ann"
+                    | "etf_delist_extract"
+                    | "etf_delist_pdf"
+            ),
         }
     }
 }
@@ -351,6 +376,11 @@ pub struct ScopeReport {
     /// Which input is missing when `status` is [`SCOPE_NOT_READY`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_ready_reason: Option<String>,
+    /// PR-4: the delisted ETF name branch's own evidence (targets, rows and
+    /// the reasons it wrote no row). Only the `delisted_etf_names` scope sets
+    /// it, so other scopes' reports stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delisted_etf_names: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -464,14 +494,17 @@ fn run(
         } else {
             "ok"
         };
-        let mut rebuilt =
-            if matches!(*scope, Scope::SecurityNames | Scope::Suspensions) && selected.is_empty() {
-                // "No matching record" is not "rebuilt": the fresh-init table is
-                // left untouched and the status stays `store_empty`.
-                NOTHING_SELECTED
-            } else {
-                SKELETON_REBUILT
-            };
+        let mut rebuilt = if matches!(
+            *scope,
+            Scope::SecurityNames | Scope::Suspensions | Scope::DelistedEtfNames
+        ) && selected.is_empty()
+        {
+            // "No matching record" is not "rebuilt": the fresh-init table is
+            // left untouched and the status stays `store_empty`.
+            NOTHING_SELECTED
+        } else {
+            SKELETON_REBUILT
+        };
         let mut summary = None;
         let mut database_verdict = None;
         let mut drift_keys = Vec::new();
@@ -485,6 +518,7 @@ fn run(
         let mut counts = (None, None, None);
         let mut suspension_counts = (None, None, None, None, None);
         let mut not_ready_reason = None;
+        let mut delisted_etf_names = None;
         if *scope == Scope::Industry && status == "ok" {
             match rebuild_industry(store, request) {
                 Ok(outcome) => {
@@ -715,6 +749,45 @@ fn run(
                 }
             }
         }
+        if *scope == Scope::DelistedEtfNames && status == "ok" {
+            match rebuild_delisted_etf_names(
+                store,
+                &selected,
+                request.verify_only,
+                request.database,
+            ) {
+                Ok(outcome) => {
+                    rebuilt = outcome.rebuilt;
+                    summary = outcome.summary;
+                    database_verdict = outcome.database;
+                    drift_keys = outcome.drift;
+                    snapshot_count = outcome.rows;
+                    delisted_etf_names = outcome.evidence;
+                    let previous_etf = etf_rows;
+                    etf_rows = outcome.delisted_rows.or(previous_etf);
+                    status = outcome.status;
+                    if outcome.status == DELISTED_ETF_NAMES_NOT_READY {
+                        not_ready_reason =
+                            outcome.problems.first().map(|issue| issue.actual.clone());
+                    }
+                    for issue in outcome.problems {
+                        problems.push(issue);
+                    }
+                }
+                Err(error) => {
+                    status = "delisted_etf_names_rebuild_failed";
+                    problems.push(BlobProblem {
+                        sha256: String::new(),
+                        source_id: "etf_delist_extract".to_string(),
+                        reason: "delisted_etf_names_rebuild_failed",
+                        expected: "a readable announcement index, extraction batch and \
+                                   security_master"
+                            .to_string(),
+                        actual: error,
+                    });
+                }
+            }
+        }
         scope_reports.push(ScopeReport {
             scope: scope.name(),
             status,
@@ -741,6 +814,7 @@ fn run(
             as_of,
             etf_rows,
             not_ready_reason,
+            delisted_etf_names,
         });
     }
     let selected_all: Vec<&ManifestRecord> = records
@@ -2110,6 +2184,174 @@ fn replay_generation_binding(
         event_sha: crate::compact_market::digest_hex(&binding.security_event_sha256),
         evidence,
     })
+}
+
+/// PR-4: the outcome of the explicit `delisted_etf_names` replay scope.
+struct DelistedEtfNamesOutcome {
+    status: &'static str,
+    rebuilt: &'static str,
+    summary: Option<String>,
+    database: Option<&'static str>,
+    drift: Vec<String>,
+    rows: Option<usize>,
+    delisted_rows: Option<usize>,
+    evidence: Option<serde_json::Value>,
+    problems: Vec<BlobProblem>,
+}
+
+impl DelistedEtfNamesOutcome {
+    fn not_ready(detail: String) -> Self {
+        Self {
+            status: DELISTED_ETF_NAMES_NOT_READY,
+            rebuilt: REBUILT_NOT_READY,
+            summary: None,
+            database: None,
+            drift: Vec::new(),
+            rows: None,
+            delisted_rows: None,
+            evidence: None,
+            problems: vec![BlobProblem {
+                sha256: String::new(),
+                source_id: "security_master".to_string(),
+                reason: DELISTED_ETF_NAMES_NOT_READY,
+                expected: "a database whose security_master contains the delisted ETF \
+                           (instrument_class=2, effective_to NOT NULL) rows; run the daily \
+                           derived:security_master item first"
+                    .to_string(),
+                actual: detail,
+            }],
+        }
+    }
+}
+
+/// Rebuild the ETF name subset with the 128 delisted ETFs' names (PR-4,
+/// D-76 Q4/Q5). This is an **explicit** scope, deliberately absent from
+/// [`Scope::ALL`]: it depends on the database's `security_master` to know
+/// which ETFs are delisted and when their identity intervals end, exactly as
+/// `suspensions` depends on the master/calendar/bar days. A fresh-init
+/// `--scope all` therefore never runs it.
+///
+/// Readiness is checked before any page is parsed. Without a database, or with
+/// one that has no class-2 master row, the scope fails closed with
+/// [`DELISTED_ETF_NAMES_NOT_READY`] and writes nothing: replacing the ETF
+/// subset with zero rows would erase the current ETF names. `--verify-only`
+/// compares the recomputed ETF subset with the stored one; a write replaces
+/// only `exchange_snapshot` rows through
+/// [`crate::sqlite_market::security_names::replace_etf_names_only`], leaving
+/// the A-share rows and their registration evidence alone.
+fn rebuild_delisted_etf_names(
+    store: &SourceStore,
+    records: &[&ManifestRecord],
+    verify_only: bool,
+    database: Option<&Path>,
+) -> Result<DelistedEtfNamesOutcome, String> {
+    let Some(database) = database else {
+        return Ok(DelistedEtfNamesOutcome::not_ready(
+            "no --db was given: this scope needs security_master to know which ETFs are \
+             delisted"
+                .to_string(),
+        ));
+    };
+    let backend = open_database(database)?;
+    if !crate::official_security::etf_delisting::delisted_names_ready(&backend)
+        .map_err(|error| format!("{}: {error}", error.code()))?
+    {
+        return Ok(DelistedEtfNamesOutcome::not_ready(
+            "the database has no class-2 security_master row; rebuild the main table \
+             (derived:security_master) before replaying delisted ETF names"
+                .to_string(),
+        ));
+    }
+    let stored_all = backend
+        .read(crate::sqlite_market::security::read_security_names)
+        .map_err(|error| format!("stored names: {error}"))?;
+    let stored_etf = stored_intervals(&stored_all, true)?;
+    let list_rows: Vec<crate::security_master::names::NameInterval> = stored_etf
+        .iter()
+        .filter(|row| {
+            row.source_kind == names::NameSourceKind::ExchangeSnapshot
+                && row.source_record_id.as_deref().is_some_and(|id| {
+                    id.starts_with("sse_etf_list:") || id.starts_with("szse_etf_list:")
+                })
+        })
+        .cloned()
+        .collect();
+    // The current ETF names come from the frozen lists through the very same
+    // manifest-only function `security_names` replay uses. When the store has
+    // no frozen ETF list this scope must not delete the list-derived names
+    // already in the database: keep those rows as the current half (only the
+    // announcement-derived rows are this scope's to rebuild).
+    let current = match crate::official_security::etf_list::replay_names(store)
+        .map_err(|error| format!("{}: {error}", error.code()))?
+    {
+        crate::official_security::etf_list::ReplayedNames::Built(set) => set,
+        crate::official_security::etf_list::ReplayedNames::Pending => {
+            crate::security_master::names::EtfNameSet {
+                entities: list_rows
+                    .iter()
+                    .map(|row| (row.exchange, row.code.clone()))
+                    .collect(),
+                rows: list_rows,
+            }
+        }
+    };
+    let (_, mut delisted) =
+        crate::official_security::etf_delisting::delisted_names_from_store(store, &backend)
+            .map_err(|error| format!("{}: {error}", error.code()))?;
+    let set = crate::official_security::etf_delisting::merge_delisted_names(current, &mut delisted)
+        .map_err(|error| format!("name_validation_failed: {error}"))?;
+    let coverage = registered_coverage(&backend, names::DATASET_KIND, names::DATASET_KEY)
+        .map_err(|error| format!("coverage: {error}"))?
+        .map(|(windows, _)| windows)
+        .unwrap_or_default();
+    let a_share = stored_intervals(&stored_all, false)?;
+    let mut all_rows = a_share.clone();
+    all_rows.extend(set.rows.iter().cloned());
+    let summary = names_summary(&all_rows, &coverage);
+    let mut outcome = DelistedEtfNamesOutcome {
+        status: "ok",
+        rebuilt: COMPUTED_SECURITY_NAMES_NO_DB,
+        summary: Some(summary.clone()),
+        database: None,
+        drift: Vec::new(),
+        rows: Some(all_rows.len()),
+        delisted_rows: Some(delisted.evidence.named),
+        evidence: Some({
+            let mut value = delisted.evidence.as_value();
+            if let Some(object) = value.as_object_mut() {
+                object.insert("selected_records".into(), serde_json::json!(records.len()));
+            }
+            value
+        }),
+        problems: Vec::new(),
+    };
+    if verify_only {
+        let stored = stored_intervals(&stored_all, true)?;
+        let stored_summary = names_summary(&stored, &coverage);
+        if stored_summary == summary {
+            outcome.database = Some("match");
+        } else {
+            outcome.status = "drift";
+            outcome.database = Some("drift");
+            outcome.drift = names_drift(&all_rows, &coverage, &stored, &coverage);
+        }
+        return Ok(outcome);
+    }
+    backend
+        .commit_etf_names_only(&set)
+        .map_err(|error| format!("etf_name_write_failed: {error}"))?;
+    let stored = stored_intervals(
+        &backend
+            .read(crate::sqlite_market::security::read_security_names)
+            .map_err(|error| format!("stored names: {error}"))?,
+        true,
+    )?;
+    if names_summary(&stored, &coverage) != summary {
+        return Err("the ETF name subset did not read back as computed".to_string());
+    }
+    outcome.rebuilt = REBUILT_SECURITY_NAMES;
+    outcome.database = Some("match");
+    Ok(outcome)
 }
 
 /// Rebuild `suspension_intervals` from the frozen A-3 pages plus the database's

@@ -113,6 +113,11 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 登记（整表替换，走日更 item 的同一写入器）；`suspensions`（XDM-138）可重放
 停牌数据集，但它是**条件可重放**：装配还依赖该库的主表、交易日历和 bar_days，
 详见 §4.2。
+`delisted_etf_names`（PR-4）是**显式 scope，不在 `--scope all` 里**：它从
+`security_master` 读出退市 ETF 与 `effective_to`，从两个公告索引和 D-72 提取 CSV
+拼出退市名称，只替换 `security_name_history` 的 `exchange_snapshot` 子集；无 `--db`
+或库里没有 class-2 主表行时 fail-closed 报 `delisted_etf_names_not_ready`，写 0 行。
+详见 [ETF 名称设计](tasks/etf-name-search.md) §9。
 `rebuilt` 取值：
 `nothing_selected`（该 scope 在清单里没有匹配记录，什么都没算、没写）、
 `skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）、
@@ -229,6 +234,23 @@ reason 码 `empty_name_set`），不写库、上一版仍可读。
 
 `--scope suspensions` 的 `--db` 写入仍需服务停止（重放取数据库租约），与其它写库
 scope 相同。
+
+### 4.2.1 `delisted_etf_names`：显式、依赖主表
+
+只选 `source_id` 为 `sse_fund_delist_ann`、`szse_etf_notice_ann`、
+`etf_delist_extract`、`etf_delist_pdf` 的冻结记录。它与 `suspensions` 一样依赖库内
+输入（哪些 ETF 已退市、区间何时结束），但**故意不进 `--scope all`**：fresh-init
+时主表还不存在，让 `all` 带上它只会多一个必然 `not_ready` 的 scope。
+
+- 无 `--db`，或库里没有 `instrument_class=2` 的 `security_master` 行 →
+  `delisted_etf_names_not_ready`（退出 1），不写表、不删既有 ETF 名称行。
+- 有库且主表就绪 → 与日更 `derived:security_names` 用同一个
+  `assemble_delisted_etf_names` / `merge_delisted_names`，只替换
+  `source_kind='exchange_snapshot'` 的行；A 股名称行与登记证据里的 coverage /
+  pending 字段不变。
+- `--verify-only` 比较重算的整张名称表与库里已存的行，返回 `match` / `drift`。
+- 报告的 `delisted_etf_names` 对象给出 `targets`、`rows`、`no_name`、
+  `empty_interval`、`identity_notice_mismatch`、`overlap_skipped` 等计数。
 
 ### 4.3 `register-generation-member`：遗留代补登记
 
