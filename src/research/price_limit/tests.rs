@@ -501,6 +501,51 @@ impl Fixture {
         c
     }
 
+    /// Store one factor event through the production replace path. Category 1
+    /// is an A-share ex-rights/ex-dividend fact (`c` = cash, allot price,
+    /// bonus, allot ratio); category 11 is an ETF share conversion.
+    fn add_event(&self, entity: &str, when: NaiveDate, category: u8, c: [f32; 4]) {
+        let mut c_dec = [rust_decimal::Decimal::ZERO; 4];
+        for (slot, value) in c_dec.iter_mut().zip(c) {
+            *slot = value.to_string().parse().unwrap();
+        }
+        let precision = if category == 1 {
+            crate::market_data::FactorPrecision::Stock2dp
+        } else {
+            crate::market_data::FactorPrecision::EtfF32Shortest
+        };
+        let basis_status = if category == 1 {
+            crate::market_data::FactorBasisStatus::Verified
+        } else {
+            crate::market_data::FactorBasisStatus::Pending
+        };
+        let set = crate::market_data::AdjustmentEventSet {
+            entity: entity.into(),
+            events: vec![crate::market_data::AdjustmentEvent {
+                ordinal: 0,
+                effective_day: when,
+                category,
+                c_bits: c.map(f32::to_bits),
+                factors: c_dec,
+                known_at: None,
+                basis_status,
+            }],
+            excluded: 0,
+            precision,
+        };
+        let mut conn = self.open();
+        let tx = conn.transaction().unwrap();
+        crate::sqlite_market::derived::replace_adjustment_events(
+            &tx,
+            &set,
+            self.binding,
+            "task-factor",
+            "item-factor",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
     fn write_rules(&self, book: &RuleBook) {
         let c = self.open();
         replace_trading_rules(
@@ -667,7 +712,7 @@ fn a_seasoned_main_board_uses_the_rule_row_and_the_last_bar() {
     assert_eq!(report.prev_close_units, Some(1_008));
     assert_eq!(report.limit_up_units, Some(1_109));
     assert_eq!(report.limit_down_units, Some(907));
-    assert_eq!(report.algorithm_version, ALGORITHM_VERSION);
+    assert_eq!(report.algorithm_version, READ_ALGORITHM_VERSION);
     assert!(report.rules_version.is_some());
 }
 
@@ -848,12 +893,133 @@ fn the_302_prefix_is_the_gem_board() {
     assert_eq!(report.rule_id, gem.rule_id);
 }
 
+const CASH_AND_BONUS: [f32; 4] = [3.5, 0.0, 3.0, 0.0];
+const CASH_ONLY: [f32; 4] = [2.0, 0.0, 0.0, 0.0];
+
+/// D-81 (issue-433 G5): the base is the last unadjusted close, which is not
+/// the exchange's reference price on an ex-rights day, so the answer is
+/// `unknown`, not a wrong `known`.
+#[test]
+fn an_ex_rights_day_is_unknown_with_the_base_still_reported() {
+    let fixture = Fixture::new();
+    fixture.add_event("sz.000001", days()[9], 1, CASH_AND_BONUS);
+    let report = ask(&fixture.open(), "sz.000001", days()[9]);
+    assert_eq!(report.state, PriceLimitState::Unknown);
+    assert_eq!(report.reason, Some(PriceLimitReason::ExRightsUnverified));
+    assert_eq!(report.reason_code(), "ex_rights_unverified");
+    assert_eq!(report.limit_up_units, None);
+    assert_eq!(report.limit_down_units, None);
+    // The evidence the guard looked at stays visible.
+    assert_eq!(report.prev_close_units, Some(1_008));
+    assert_eq!(report.prev_close_day, Some(days()[8]));
+    assert_eq!(report.rule_id.as_deref(), Some("sz-main-normal-v2"));
+    assert_eq!(report.algorithm_version, READ_ALGORITHM_VERSION);
+}
+
+#[test]
+fn the_day_after_the_ex_rights_day_is_known_again() {
+    let fixture = Fixture::new();
+    // The event is effective on days[8]; days[9]'s previous bar is days[8]
+    // itself, which already trades ex-rights.
+    fixture.add_event("sz.000001", days()[8], 1, CASH_AND_BONUS);
+    let c = fixture.open();
+    let ex_day = ask(&c, "sz.000001", days()[8]);
+    assert_eq!(ex_day.reason, Some(PriceLimitReason::ExRightsUnverified));
+    let next = ask(&c, "sz.000001", days()[9]);
+    assert_eq!(next.state, PriceLimitState::Known);
+    assert_eq!(next.prev_close_day, Some(days()[8]));
+    assert_eq!(next.limit_up_units, Some(1_109));
+    assert_eq!(next.limit_down_units, Some(907));
+}
+
+#[test]
+fn an_event_before_the_previous_close_day_does_not_matter() {
+    let fixture = Fixture::new();
+    fixture.add_event("sz.000001", days()[3], 1, CASH_AND_BONUS);
+    let report = ask(&fixture.open(), "sz.000001", days()[9]);
+    assert_eq!(report.state, PriceLimitState::Known);
+    assert_eq!(report.limit_up_units, Some(1_109));
+}
+
+#[test]
+fn an_event_after_as_of_does_not_matter() {
+    let fixture = Fixture::new();
+    fixture.add_event("sz.000001", days()[9], 1, CASH_AND_BONUS);
+    let report = ask(&fixture.open(), "sz.000001", days()[8]);
+    assert_eq!(report.state, PriceLimitState::Known);
+}
+
+#[test]
+fn a_pure_cash_dividend_counts() {
+    let fixture = Fixture::new();
+    fixture.add_event("sz.000001", days()[9], 1, CASH_ONLY);
+    let report = ask(&fixture.open(), "sz.000001", days()[9]);
+    assert_eq!(report.state, PriceLimitState::Unknown);
+    assert_eq!(report.reason, Some(PriceLimitReason::ExRightsUnverified));
+}
+
+#[test]
+fn a_category_11_etf_conversion_does_not_count() {
+    let fixture = Fixture::new();
+    fixture.add_event("sz.000001", days()[9], 11, [2.0, 0.0, 0.0, 0.0]);
+    let report = ask(&fixture.open(), "sz.000001", days()[9]);
+    assert_eq!(report.state, PriceLimitState::Known);
+    assert_eq!(report.limit_up_units, Some(1_109));
+}
+
+#[test]
+fn another_entitys_event_does_not_count() {
+    let fixture = Fixture::new();
+    fixture.add_event("sz.000003", days()[9], 1, CASH_AND_BONUS);
+    let c = fixture.open();
+    assert_eq!(
+        ask(&c, "sz.000001", days()[9]).state,
+        PriceLimitState::Known
+    );
+    assert_eq!(
+        ask(&c, "sz.000003", days()[9]).reason,
+        Some(PriceLimitReason::ExRightsUnverified)
+    );
+}
+
+/// An entity with no event keeps exactly the `limit-v1` numbers.
+#[test]
+fn an_entity_without_events_is_unchanged() {
+    let fixture = Fixture::new();
+    let c = fixture.open();
+    let before = ask(&c, "sz.000001", days()[9]);
+    fixture.add_event("sz.000003", days()[9], 1, CASH_AND_BONUS);
+    let after = ask(&fixture.open(), "sz.000001", days()[9]);
+    assert_eq!(before, after);
+    assert_eq!(after.limit_up_units, Some(1_109));
+    assert_eq!(after.limit_down_units, Some(907));
+}
+
+/// `band_side=none` needs no previous close and no event: it stays
+/// `unbounded` on an ex-rights day, with or without an earlier bar.
+#[test]
+fn an_unbounded_rule_ignores_ex_rights_events() {
+    let fixture = Fixture::new();
+    // sz.000004's only bar is its listing day, so there is no previous close.
+    fixture.add_event("sz.000004", days()[9], 1, CASH_AND_BONUS);
+    let report = ask(&fixture.open(), "sz.000004", days()[9]);
+    assert_eq!(report.state, PriceLimitState::Unbounded);
+    assert_eq!(report.reason_code(), "unbounded");
+    assert_eq!(report.prev_close_units, None);
+}
+
 /// issue-433 §5.2: a shared context returns the same `limit-v1` report for
 /// every entity as the single-entity call, field by field.
 #[test]
 fn a_shared_context_answers_every_entity_like_the_single_entity_call() {
     let fixture = Fixture::new();
     fixture.write_rules(&real_book());
+    // Ex-rights days and an ETF conversion, so the guard is compared too.
+    fixture.add_event("sz.000001", days()[5], 1, CASH_AND_BONUS);
+    fixture.add_event("sz.000003", days()[9], 1, CASH_ONLY);
+    fixture.add_event("sz.000004", days()[9], 1, CASH_ONLY);
+    fixture.add_event("sz.300001", days()[8], 1, CASH_AND_BONUS);
+    fixture.add_event("sz.000005", days()[9], 11, [2.0, 0.0, 0.0, 0.0]);
     let c = fixture.open();
     let ctx = ResearchContext::new(&c);
     let entities = [
@@ -888,6 +1054,18 @@ fn a_shared_context_answers_every_entity_like_the_single_entity_call() {
         }
     }
     assert_eq!(compared, 2 * 12 * entities.len());
+
+    // The guard fired somewhere in the compared set (not vacuous).
+    let fired = days().iter().any(|as_of| {
+        ["sz.000001", "sz.000003", "sz.300001"]
+            .iter()
+            .any(|entity| {
+                let temporal = Temporal::effective_only(*as_of);
+                let shared = price_limit_in(&ctx, entity, temporal).unwrap();
+                shared.reason == Some(PriceLimitReason::ExRightsUnverified)
+            })
+    });
+    assert!(fired);
 }
 
 #[test]
