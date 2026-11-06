@@ -1,0 +1,896 @@
+{
+  "contract_version": "v1",
+  "dataset": "market.daily",
+  "limitations": [
+    "fixed version selection is not a shared source acquisition time",
+    "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+  ],
+  "next_cursor": "<varies>",
+  "page_complete": false,
+  "query_time": "<varies>",
+  "records": [
+    {
+      "amount": "1259251.20",
+      "close": "10.20",
+      "date": "2026-11-05",
+      "entity": {
+        "code": "600000",
+        "exchange": "sh"
+      },
+      "first_trading_date": null,
+      "high": "10.50",
+      "kind": "market",
+      "last_trading_date": null,
+      "low": "9.90",
+      "open": "10.01",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b349c40",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b349c40"
+      },
+      "volume": "123456",
+      "year_unfinished": null
+    },
+    {
+      "amount": "1259251.20",
+      "close": "10.20",
+      "date": "2026-11-05",
+      "entity": {
+        "code": "600002",
+        "exchange": "sh"
+      },
+      "first_trading_date": null,
+      "high": "10.50",
+      "kind": "market",
+      "last_trading_date": null,
+      "low": "9.90",
+      "open": "10.01",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600002",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b34da1e",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b34da1e"
+      },
+      "volume": "123456",
+      "year_unfinished": null
+    },
+    {
+      "amount": "1259251.20",
+      "close": "10.20",
+      "date": "2026-11-05",
+      "entity": {
+        "code": "600004",
+        "exchange": "sh"
+      },
+      "first_trading_date": null,
+      "high": "10.50",
+      "kind": "market",
+      "last_trading_date": null,
+      "low": "9.90",
+      "open": "10.01",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600004",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3517fc",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3517fc"
+      },
+      "volume": "123456",
+      "year_unfinished": null
+    },
+    {
+      "amount": "1259251.20",
+      "close": "10.20",
+      "date": "2026-11-05",
+      "entity": {
+        "code": "600006",
+        "exchange": "sh"
+      },
+      "first_trading_date": null,
+      "high": "10.50",
+      "kind": "market",
+      "last_trading_date": null,
+      "low": "9.90",
+      "open": "10.01",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3555da",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3555da"
+      },
+      "volume": "123456",
+      "year_unfinished": null
+    },
+    {
+      "amount": "1259251.20",
+      "close": "10.20",
+      "date": "2026-11-05",
+      "entity": {
+        "code": "600008",
+        "exchange": "sh"
+      },
+      "first_trading_date": null,
+      "high": "10.50",
+      "kind": "market",
+      "last_trading_date": null,
+      "low": "9.90",
+      "open": "10.01",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600008",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3593b8",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3593b8"
+      },
+      "volume": "123456",
+      "year_unfinished": null
+    }
+  ],
+  "selection_complete": true,
+  "snapshot_id": "<varies>",
+  "version_manifest": [
+    {
+      "entity": {
+        "code": "600000",
+        "exchange": "sh"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600000",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600000",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b349c40",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b349c40"
+      }
+    },
+    {
+      "entity": {
+        "code": "600002",
+        "exchange": "sh"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600002",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600002",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b34da1e",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b34da1e"
+      }
+    },
+    {
+      "entity": {
+        "code": "600004",
+        "exchange": "sh"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600004",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600004",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3517fc",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3517fc"
+      }
+    },
+    {
+      "entity": {
+        "code": "600006",
+        "exchange": "sh"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600006",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600006",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3555da",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3555da"
+      }
+    },
+    {
+      "entity": {
+        "code": "600008",
+        "exchange": "sh"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600008",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600008",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3593b8",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3593b8"
+      }
+    },
+    {
+      "entity": {
+        "code": "600010",
+        "exchange": "sh"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600010",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600010",
+          "exchange": "sh"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b35d196",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b35d196"
+      }
+    },
+    {
+      "entity": {
+        "code": "600001",
+        "exchange": "sz"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600001",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600001",
+          "exchange": "sz"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b34bb2f",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b34bb2f"
+      }
+    },
+    {
+      "entity": {
+        "code": "600003",
+        "exchange": "sz"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600003",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600003",
+          "exchange": "sz"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b34f90d",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b34f90d"
+      }
+    },
+    {
+      "entity": {
+        "code": "600005",
+        "exchange": "sz"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600005",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600005",
+          "exchange": "sz"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3536eb",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3536eb"
+      }
+    },
+    {
+      "entity": {
+        "code": "600007",
+        "exchange": "sz"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600007",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600007",
+          "exchange": "sz"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b3574c9",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b3574c9"
+      }
+    },
+    {
+      "entity": {
+        "code": "600009",
+        "exchange": "sz"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600009",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600009",
+          "exchange": "sz"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b35b2a7",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b35b2a7"
+      }
+    },
+    {
+      "entity": {
+        "code": "600011",
+        "exchange": "sz"
+      },
+      "metadata": {
+        "adjustment": {
+          "field": "price_adjustment",
+          "reason": "fabricated fixture evidence, no real source behind this text",
+          "status": "known",
+          "value": "fabricated"
+        },
+        "coverage_reason": "fabricated coverage for 600011",
+        "coverage_status": "complete",
+        "lineage": null,
+        "published_at": "2026-11-05T08:00:00Z",
+        "source": "fabricated",
+        "units": [
+          {
+            "field": "price_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "price_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "volume_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_currency",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          },
+          {
+            "field": "amount_unit",
+            "reason": "fabricated fixture evidence, no real source behind this text",
+            "status": "known",
+            "value": "fabricated"
+          }
+        ]
+      },
+      "status": "present",
+      "version_ref": {
+        "contract_version": "v1",
+        "dataset": "market.daily",
+        "entity": {
+          "code": "600011",
+          "exchange": "sz"
+        },
+        "integrity_sha256": "000000000000000000000000000000000000000000000000000000011b35f085",
+        "version_id": "daily-000000000000000000000000000000000000000000000000000000011b35f085"
+      }
+    }
+  ]
+}

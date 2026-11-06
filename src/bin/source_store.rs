@@ -27,13 +27,16 @@
 //! scope replaces the retirement gate's fact index, M3 PR-10's `risk_warnings`
 //! scope replaces `risk_warning_intervals` and M3 PR-12's `security_names`
 //! scope replaces `security_name_history` (with its `derived_dataset_versions`
-//! registration), each in one transaction; `--verify-only` compares the
+//! registration; since D-76 that includes the ETF observed-name rows rebuilt
+//! from the frozen ETF lists), each in one transaction; `--verify-only` compares the
 //! recomputed summary with the stored rows instead of writing. XDM-138's
 //! `suspensions` scope additionally reads the database's `security_master`,
 //! trading calendar and bar days, assembles the dataset with the daily item's
 //! own function and fails closed with `suspension_replay_not_ready` when those
-//! inputs are absent; it is run explicitly after they exist (not by
-//! `--scope all`). `register-generation-member` (XDM-150) is the retroactive
+//! inputs are absent. `--scope all` includes it: a writing `all` on a database
+//! that does not have those inputs yet (fresh init) reports the scope as
+//! `not_ready` and still exits 0; `--verify-only`, `verify` and
+//! `--scope suspensions` keep the failing status. `register-generation-member` (XDM-150) is the retroactive
 //! evidence repair for a generation acquired before the source store existed:
 //! it reads that generation's `tdxhy.cfg`/`incon.dat` out of the installed
 //! directory and registers them under `generation:<manifest sha>`, which is

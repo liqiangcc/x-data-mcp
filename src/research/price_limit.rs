@@ -1,5 +1,5 @@
 //! `price_limits(entity, as_of)` — the `limit-v1` derivation (issue-391 §8,
-//! AC-M2-9/AC-M2-10).
+//! AC-M2-9/AC-M2-10), read-time label [`READ_ALGORITHM_VERSION`].
 //!
 //! Layer position (separation points 2/4/6):
 //!
@@ -8,7 +8,7 @@
 //!   this file; changing a rule is a data change (AC-M2-10).
 //! - The **inputs** are parsed facts: the 不复权 last bar before `as_of`, the
 //!   listing date and the risk status from the read model. The derived answer
-//!   is never stored; it carries `algorithm_version='limit-v1'` and the rule's
+//!   is never stored; it carries [`READ_ALGORITHM_VERSION`] and the rule's
 //!   `basis_ref`.
 //! - Every missing input propagates as `unknown` with a distinct reason. A
 //!   missing rule is not "10%", a missing ST interval is not "normal", and an
@@ -26,6 +26,17 @@
 //! rules, R9) and the result is aligned to the rule's minimum tick. The
 //! previous close is the last **bar** before `as_of`, not the previous
 //! calendar day, so a suspension uses the pre-suspension close.
+//!
+//! **Ex-rights days (D-81, issue-433 G5).** That base is the last *unadjusted*
+//! close, which is the exchange's reference price only when nothing happened
+//! in between. When the entity has a category-1 `adjustment_events` row with
+//! `prev_day < effective_day <= as_of`, the exchange's reference price is the
+//! ex-rights price and this derivation does not compute it, so the answer is
+//! `unknown` + `ex_rights_unverified` instead of a wrong `known`. The check
+//! runs after the rule lookup and only on the path that needs a previous
+//! close: a rule with `band_side='none'` stays `unbounded` and never reads a
+//! previous close or an event. Category 11 (ETF share conversion) is not an
+//! ex-rights price event for this purpose.
 
 use std::collections::BTreeSet;
 
@@ -33,21 +44,35 @@ use chrono::NaiveDate;
 use rusqlite::Connection;
 
 use super::Error;
+use super::context::ResearchContext;
 use super::member_state::{Membership, NotMemberReason};
-use super::temporal::{DatasetTemporal, Temporal, TemporalReport};
-use super::universe::{UniverseRequest, member_state_report};
+use super::temporal::{Temporal, TemporalReport};
+use super::universe::{UniverseRequest, member_state_report_in};
 use crate::compact_market::canonical_entity;
 use crate::market_data::{Adjustment, Period};
 use crate::security_master::{Exchange, RiskStatus};
-use crate::sqlite_market::{calendar, derived, rules, series};
+use crate::sqlite_market::{derived, series};
 use crate::trading_calendar::TradingCalendar;
 use crate::trading_rules::{
-    ALGORITHM_VERSION, BandSide, BasisStatus, DATASET_KEY, DATASET_KIND, ListingPhase, MinTickRule,
-    PriceLimitRule, Rounding, RuleBoard, RuleBook, RuleLookup, RuleMarket, StatusClass,
+    BandSide, BasisStatus, DATASET_KIND, ListingPhase, MinTickRule, PriceLimitRule, Rounding,
+    RuleBoard, RuleBook, RuleLookup, RuleMarket, StatusClass,
 };
 
 /// `derived_dataset_versions.dataset_kind` this read model consumes.
 pub const DATASET_PRICE_LIMIT_RULES: &str = DATASET_KIND;
+
+/// Label of the read-time derivation, carried by [`PriceLimitReport`] and the
+/// export `producer` block.
+///
+/// This is deliberately not [`crate::trading_rules::ALGORITHM_VERSION`] (`limit-v1`): that constant
+/// is stored in the registered `price_limit_rules` dataset
+/// (`derived_dataset_versions.algorithm_version`, part of the dataset
+/// evidence), so changing it would re-register the rule dataset although no
+/// rule row changed. The rule dataset keeps `limit-v1`; the read-time answer
+/// changed (ex-rights days are `unknown`), so it gets its own label. `limit-v2`
+/// is reserved for an algorithm that really computes the ex-rights reference
+/// price.
+pub const READ_ALGORITHM_VERSION: &str = "limit-v1+exr-guard1";
 
 /// The basis-point denominator. This is a scale, not an amplitude: every band
 /// comes from the rule row's `band_bp`.
@@ -73,7 +98,8 @@ impl Board {
             "600" | "601" | "603" | "605" => Self::Main,
             "688" | "689" => Self::Star,
             "000" | "001" | "002" | "003" => Self::Main,
-            "300" | "301" => Self::Gem,
+            // 302 is the ChiNext code `sz.300114` migrated to (`sz.302132`, D-46).
+            "300" | "301" | "302" => Self::Gem,
             _ => return None,
         })
     }
@@ -144,6 +170,7 @@ pub enum PriceLimitReason {
     BoardUnsupported,
     NoSeries,
     NoPrevClose,
+    ExRightsUnverified,
     InvalidRule,
 }
 
@@ -166,6 +193,7 @@ impl PriceLimitReason {
             Self::BoardUnsupported => "board_unsupported",
             Self::NoSeries => "no_series",
             Self::NoPrevClose => "no_prev_close",
+            Self::ExRightsUnverified => "ex_rights_unverified",
             Self::InvalidRule => "invalid_rule",
         }
     }
@@ -271,7 +299,7 @@ impl PriceLimitReport {
             min_tick_units: None,
             tick_price_scale: None,
             candidates: Vec::new(),
-            algorithm_version: ALGORITHM_VERSION,
+            algorithm_version: READ_ALGORITHM_VERSION,
             rules_version: None,
             temporal: report,
         }
@@ -284,31 +312,35 @@ pub fn price_limit(
     entity: &str,
     temporal: Temporal,
 ) -> Result<PriceLimitReport, Error> {
+    price_limit_in(&ResearchContext::new(c), entity, temporal)
+}
+
+/// [`price_limit`] over a shared [`ResearchContext`]: the same answer for the
+/// same entity, with the whole-table reads done once for all entities.
+pub fn price_limit_in(
+    ctx: &ResearchContext<'_>,
+    entity: &str,
+    temporal: Temporal,
+) -> Result<PriceLimitReport, Error> {
+    let c = ctx.connection();
     canonical_entity(entity)
         .map_err(|_| Error::Invalid(format!("non-canonical entity {entity}")))?;
     let request = UniverseRequest {
         temporal,
         strict: false,
     };
-    let (member, mut temporal_report) = member_state_report(c, entity, &request)?;
+    let (member, mut temporal_report) = member_state_report_in(ctx, entity, &request)?;
 
-    // Rules are loaded once per query so the price row and the tick row come
+    // Rules are loaded once per context so the price row and the tick row come
     // from the same dataset version. The dataset has no `known_at` column, so
     // it is reported with coverage `none` instead of pretending it was bounded
     // by the information-set filter.
-    let book = rules::read_trading_rules(c)?;
-    let rule_rows = book.price_limits.len() + book.min_ticks.len();
-    temporal_report.datasets.insert(
-        DATASET_PRICE_LIMIT_RULES,
-        DatasetTemporal {
-            rows: rule_rows,
-            rows_with_known_at: 0,
-            unknown_known_at_rows: rule_rows,
-            excluded_known_at_rows: 0,
-        },
-    );
-    let rules_version =
-        derived::read_version(c, DATASET_KIND, DATASET_KEY)?.map(|row| row.version_id);
+    let rules_input = ctx.rules()?;
+    let book = &rules_input.book;
+    temporal_report
+        .datasets
+        .insert(DATASET_PRICE_LIMIT_RULES, rules_input.temporal.clone());
+    let rules_version = rules_input.version.clone();
 
     let mut answer = PriceLimitReport::unknown(
         entity,
@@ -342,11 +374,11 @@ pub fn price_limit(
         return Ok(answer);
     };
 
-    let Some(calendar) = calendar::read_calendar(c)? else {
+    let Some(calendar) = ctx.calendar()? else {
         answer.reason = Some(PriceLimitReason::CalendarMissing);
         return Ok(answer);
     };
-    let phase_result = listing_phase(&calendar, listing, temporal.as_of);
+    let phase_result = listing_phase(calendar, listing, temporal.as_of);
     let phase = phase_result.ok();
     answer.listing_phase = phase;
 
@@ -384,7 +416,7 @@ pub fn price_limit(
         }
         Err(PriceLimitReason::StUnknown) => {
             let invariant = phase.and_then(|phase| {
-                invariant_band(&book, market, board.rule_board(), phase, temporal.as_of)
+                invariant_band(book, market, board.rule_board(), phase, temporal.as_of)
             });
             match invariant {
                 Some(rule) => {
@@ -394,7 +426,7 @@ pub fn price_limit(
                 None => {
                     answer.reason = Some(PriceLimitReason::StUnknown);
                     answer.candidates =
-                        candidates(&book, market, board.rule_board(), phase, temporal.as_of);
+                        candidates(book, market, board.rule_board(), phase, temporal.as_of);
                     return Ok(answer);
                 }
             }
@@ -452,6 +484,14 @@ pub fn price_limit(
     answer.prev_close_units = Some(prev_close);
     answer.prev_close_day = Some(prev_day);
     answer.price_scale = Some(price_scale);
+
+    // The base is the last unadjusted close. A category-1 event in
+    // `(prev_day, as_of]` means the exchange used an ex-rights reference
+    // price this derivation does not compute (D-81).
+    if derived::has_category1_event_between(c, entity, prev_day, temporal.as_of)? {
+        answer.reason = Some(PriceLimitReason::ExRightsUnverified);
+        return Ok(answer);
+    }
 
     let limits = match compute_limit(prev_close, price_scale, rule, tick) {
         Ok(limits) => limits,

@@ -32,6 +32,24 @@
 //! The current name is a different fact (the TDX snapshot M1 already serves);
 //! nothing here is used by any derivation — 涨跌停 and the universe never read
 //! a name.
+//!
+//! ## ETF names (D-76 Q1, `etf-name-search` §5.1)
+//!
+//! D-61 stays as written for A-shares: a current name is never turned into an
+//! interval. D-76 relaxes that **for ETFs only**, and only in one shape: the
+//! observed chain of [`assemble_etf_names`]. Its rows say "this name was on the
+//! exchange list at the first snapshot that showed it" and carry
+//! `source_kind='exchange_snapshot'`:
+//!
+//! - `effective_from` is the first observation day of the name
+//!   (`basis=fetch_time`), not the exchange's rename day. No row exists before
+//!   the first observation and nothing is back-filled.
+//! - `effective_to` is the next name's `effective_from`; the last name is
+//!   `unbounded`, or closed on the day the code left the list.
+//! - [`validate_set`] never admits an `exchange_snapshot` row (so an A-share
+//!   "current name as interval" is refused, as before). [`validate_set_for`]
+//!   admits one only for an entity the caller declares to be an ETF, so the
+//!   relaxation cannot be reached from an A-share path.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -194,6 +212,8 @@ pub enum Error {
     Code,
     #[error("a name row names a market without an admitted dated name source")]
     Market,
+    #[error("an ETF name chain is not strictly increasing in observation day")]
+    Chain,
 }
 
 /// Assemble SZ intervals from a dated short-name change chain.
@@ -296,6 +316,101 @@ fn interval_from_change(code: &str, change: &SzNameChange, name: String) -> Name
     }
 }
 
+/// Algorithm version of the ETF observed-name assembly.
+pub const ETF_ALGORITHM_VERSION: &str = "etf-names-v1";
+
+/// One observed name of an ETF code: the first snapshot that showed it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EtfNameStep {
+    /// First observation day of the name. Not the rename day.
+    pub observed_from: NaiveDate,
+    /// The Shanghai day the observing snapshot entered the source store.
+    pub known_at: NaiveDate,
+    pub name: String,
+    /// Names the frozen snapshot that decided this step.
+    pub source_record_id: String,
+}
+
+/// The observed names of one ETF code, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EtfNameChain {
+    pub exchange: Exchange,
+    pub code: String,
+    pub steps: Vec<EtfNameStep>,
+    /// The day after which the code is no longer on the exchange list, when the
+    /// frozen snapshots prove it. `None` leaves the last name open.
+    pub ended: Option<NaiveDate>,
+}
+
+/// ETF name rows plus the entities they are about.
+///
+/// `entities` lists every ETF the list sources know, including codes that
+/// produced no row, so a writer can tell an ETF row from an A-share one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EtfNameSet {
+    pub rows: Vec<NameInterval>,
+    pub entities: BTreeSet<(Exchange, String)>,
+}
+
+/// Assemble ETF observed-name intervals (D-76 Q1).
+///
+/// Pure function of the chains: no clock, no store. A chain with no step makes
+/// no row (an unnamed ETF is unknown, not empty). The first step opens the
+/// first interval; there is never a row before it.
+pub fn assemble_etf_names(chains: &[EtfNameChain]) -> Result<Vec<NameInterval>, Error> {
+    let mut rows = Vec::new();
+    for chain in chains {
+        check_code(&chain.code)?;
+        if chain.exchange == Exchange::Bj {
+            return Err(Error::Market);
+        }
+        let Some(last) = chain.steps.last() else {
+            continue;
+        };
+        if chain.ended.is_some_and(|end| end <= last.observed_from) {
+            return Err(Error::Range);
+        }
+        for pair in chain.steps.windows(2) {
+            if pair[1].observed_from <= pair[0].observed_from {
+                return Err(Error::Chain);
+            }
+        }
+        for (index, step) in chain.steps.iter().enumerate() {
+            let name = step.name.trim();
+            if name.is_empty() {
+                return Err(Error::Name);
+            }
+            let effective_to = match chain.steps.get(index + 1) {
+                Some(next) => Some(next.observed_from),
+                None => chain.ended,
+            };
+            rows.push(NameInterval {
+                exchange: chain.exchange,
+                code: chain.code.clone(),
+                effective_from: step.observed_from,
+                effective_to,
+                name: name.to_string(),
+                certainty: if effective_to.is_some() {
+                    NameCertainty::Interval
+                } else {
+                    NameCertainty::Unbounded
+                },
+                known_at: Some(step.known_at),
+                source_kind: NameSourceKind::ExchangeSnapshot,
+                source_record_id: Some(step.source_record_id.clone()),
+            });
+        }
+    }
+    rows.sort_by(|left, right| {
+        (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+            right.exchange,
+            right.code.as_str(),
+            right.effective_from,
+        ))
+    });
+    Ok(rows)
+}
+
 /// Normalise one quoted name: drop whitespace, then a leading XD/XR/DR marker.
 ///
 /// An empty name is a source defect, not a row: the stored `name` is NOT NULL
@@ -325,7 +440,24 @@ fn check_code(code: &str) -> Result<(), Error> {
 
 /// Validate a row set before it is stored. The DDL carries the range and
 /// vocabulary CHECKs; these are the invariants it cannot state.
+///
+/// This is the A-share path: no entity is an ETF here, so an
+/// `exchange_snapshot` row is refused ([`Error::Market`]).
 pub fn validate_set(rows: &[NameInterval]) -> Result<(), Error> {
+    validate_set_for(rows, &BTreeSet::new())
+}
+
+/// [`validate_set`] with the ETF entities the caller declares (D-76 Q1).
+///
+/// - A row of an ETF entity must be `exchange_snapshot` and may sit on SH or
+///   SZ.
+/// - An `exchange_snapshot` row of any other entity is refused: a current name
+///   shaped as an interval is exactly what D-61 forbids for A-shares.
+/// - Every other row goes through the same checks as before, unchanged: SZ only.
+pub fn validate_set_for(
+    rows: &[NameInterval],
+    etf_entities: &BTreeSet<(Exchange, String)>,
+) -> Result<(), Error> {
     let mut seen = BTreeSet::new();
     let mut sorted: Vec<&NameInterval> = rows.iter().collect();
     sorted.sort_by(|left, right| {
@@ -337,11 +469,21 @@ pub fn validate_set(rows: &[NameInterval]) -> Result<(), Error> {
     });
     for row in &sorted {
         check_code(&row.code)?;
-        // D-61 admits exactly one dated name source (SZ). A SH/BJ row, or a
-        // row inferred from a GP29 marker or a current-name snapshot, would be
-        // a dated interval the source does not prove: refuse it here rather
-        // than let a guessed start reach the table.
-        if row.exchange != Exchange::Sz {
+        let is_etf = etf_entities.contains(&(row.exchange, row.code.clone()));
+        if is_etf || row.source_kind == NameSourceKind::ExchangeSnapshot {
+            if !is_etf
+                || row.source_kind != NameSourceKind::ExchangeSnapshot
+                || row.exchange == Exchange::Bj
+                || row.known_at.is_none()
+                || row.source_record_id.is_none()
+            {
+                return Err(Error::Market);
+            }
+        } else if row.exchange != Exchange::Sz {
+            // D-61 admits exactly one dated name source (SZ). A SH/BJ row, or a
+            // row inferred from a GP29 marker or a current-name snapshot, would
+            // be a dated interval the source does not prove: refuse it here
+            // rather than let a guessed start reach the table.
             return Err(Error::Market);
         }
         if row.name.trim().is_empty() {
@@ -618,6 +760,261 @@ mod tests {
             },
         ];
         assert_eq!(validate_set(&rows), Err(Error::UnboundedNotLast));
+    }
+
+    // ------------------------------------------------ ETF names (D-76 Q1) ---
+
+    fn step(observed: NaiveDate, name: &str) -> EtfNameStep {
+        EtfNameStep {
+            observed_from: observed,
+            known_at: observed,
+            name: name.into(),
+            source_record_id: format!("sse_etf_list:{observed}-{name}"),
+        }
+    }
+
+    fn chain(
+        exchange: Exchange,
+        code: &str,
+        steps: Vec<EtfNameStep>,
+        ended: Option<NaiveDate>,
+    ) -> EtfNameChain {
+        EtfNameChain {
+            exchange,
+            code: code.into(),
+            steps,
+            ended,
+        }
+    }
+
+    fn etf(exchange: Exchange, code: &str) -> BTreeSet<(Exchange, String)> {
+        BTreeSet::from([(exchange, code.to_string())])
+    }
+
+    #[test]
+    fn an_etf_chain_opens_its_first_interval_on_the_first_observation_and_never_earlier() {
+        let rows = assemble_etf_names(&[chain(
+            Exchange::Sh,
+            "510300",
+            vec![
+                step(day(2026, 11, 5), "沪深300ETF华泰柏瑞"),
+                step(day(2026, 11, 9), "沪深300ETF"),
+            ],
+            None,
+        )])
+        .expect("a chain assembles");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].effective_from, day(2026, 11, 5));
+        assert_eq!(rows[0].effective_to, Some(day(2026, 11, 9)));
+        assert_eq!(rows[0].certainty, NameCertainty::Interval);
+        assert_eq!(rows[1].effective_from, day(2026, 11, 9));
+        assert_eq!(rows[1].effective_to, None);
+        assert_eq!(rows[1].certainty, NameCertainty::Unbounded);
+        for row in &rows {
+            assert_eq!(row.source_kind, NameSourceKind::ExchangeSnapshot);
+            assert_eq!(row.known_at, Some(row.effective_from));
+            assert!(row.source_record_id.is_some());
+        }
+        // No row before the first observation: nothing is back-filled.
+        assert!(
+            rows.iter()
+                .all(|row| row.effective_from >= day(2026, 11, 5))
+        );
+        validate_set_for(&rows, &etf(Exchange::Sh, "510300")).expect("the set validates");
+    }
+
+    #[test]
+    fn a_code_that_left_the_list_closes_its_last_name_on_the_day_it_was_missed() {
+        let rows = assemble_etf_names(&[chain(
+            Exchange::Sz,
+            "159915",
+            vec![step(day(2026, 11, 5), "创业板ETF易方达")],
+            Some(day(2026, 11, 12)),
+        )])
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].effective_to, Some(day(2026, 11, 12)));
+        assert_eq!(rows[0].certainty, NameCertainty::Interval);
+    }
+
+    #[test]
+    fn an_etf_without_a_name_step_makes_no_row_and_a_bad_chain_fails_closed() {
+        assert!(
+            assemble_etf_names(&[chain(Exchange::Sh, "510300", Vec::new(), None)])
+                .unwrap()
+                .is_empty()
+        );
+        let backwards = chain(
+            Exchange::Sh,
+            "510300",
+            vec![step(day(2026, 11, 9), "甲"), step(day(2026, 11, 5), "乙")],
+            None,
+        );
+        assert_eq!(assemble_etf_names(&[backwards]), Err(Error::Chain));
+        let ended_early = chain(
+            Exchange::Sh,
+            "510300",
+            vec![step(day(2026, 11, 9), "甲")],
+            Some(day(2026, 11, 9)),
+        );
+        assert_eq!(assemble_etf_names(&[ended_early]), Err(Error::Range));
+        let blank = chain(
+            Exchange::Sh,
+            "510300",
+            vec![step(day(2026, 11, 9), "  ")],
+            None,
+        );
+        assert_eq!(assemble_etf_names(&[blank]), Err(Error::Name));
+        let bj = chain(
+            Exchange::Bj,
+            "430001",
+            vec![step(day(2026, 11, 9), "甲")],
+            None,
+        );
+        assert_eq!(assemble_etf_names(&[bj]), Err(Error::Market));
+        let short_code = chain(
+            Exchange::Sh,
+            "5103",
+            vec![step(day(2026, 11, 9), "甲")],
+            None,
+        );
+        assert_eq!(assemble_etf_names(&[short_code]), Err(Error::Code));
+    }
+
+    /// The point of the whole relaxation being narrow: the A-share validator is
+    /// the one that always ran, and "a current name as an interval" is still
+    /// refused for an A-share however it is dressed.
+    #[test]
+    fn a_share_validation_still_refuses_a_current_name_as_an_interval() {
+        let current = |exchange: Exchange, code: &str, kind: NameSourceKind| NameInterval {
+            exchange,
+            code: code.into(),
+            effective_from: day(2026, 11, 5),
+            effective_to: None,
+            name: "平安银行".into(),
+            certainty: NameCertainty::Unbounded,
+            known_at: Some(day(2026, 11, 5)),
+            source_kind: kind,
+            source_record_id: Some("current".into()),
+        };
+        // SH A-share, any source kind: refused (no dated SH source).
+        for kind in [
+            NameSourceKind::ExchangeSnapshot,
+            NameSourceKind::SzseNameHistory,
+            NameSourceKind::Unknown,
+        ] {
+            assert_eq!(
+                validate_set(&[current(Exchange::Sh, "600000", kind)]),
+                Err(Error::Market),
+                "SH {kind:?}"
+            );
+        }
+        // SZ A-share carrying the ETF source kind: refused by the A-share path
+        // and by the ETF path (the code is not a declared ETF).
+        let sz_snapshot = current(Exchange::Sz, "000001", NameSourceKind::ExchangeSnapshot);
+        assert_eq!(
+            validate_set(std::slice::from_ref(&sz_snapshot)),
+            Err(Error::Market)
+        );
+        assert_eq!(
+            validate_set_for(
+                std::slice::from_ref(&sz_snapshot),
+                &etf(Exchange::Sz, "159915")
+            ),
+            Err(Error::Market)
+        );
+        // BJ stays refused everywhere.
+        assert_eq!(
+            validate_set_for(
+                &[current(
+                    Exchange::Bj,
+                    "430001",
+                    NameSourceKind::ExchangeSnapshot
+                )],
+                &etf(Exchange::Bj, "430001")
+            ),
+            Err(Error::Market)
+        );
+        // A genuine SZ A-share row validates exactly as before.
+        validate_set(&[current(
+            Exchange::Sz,
+            "000001",
+            NameSourceKind::SzseNameHistory,
+        )])
+        .expect("the SZ A-share path is unchanged");
+    }
+
+    #[test]
+    fn the_etf_validator_admits_only_declared_etfs_with_the_snapshot_kind() {
+        let row = |exchange: Exchange, code: &str, kind: NameSourceKind| NameInterval {
+            exchange,
+            code: code.into(),
+            effective_from: day(2026, 11, 5),
+            effective_to: None,
+            name: "沪深300ETF".into(),
+            certainty: NameCertainty::Unbounded,
+            known_at: Some(day(2026, 11, 5)),
+            source_kind: kind,
+            source_record_id: Some("sse_etf_list:abc".into()),
+        };
+        let sh = row(Exchange::Sh, "510300", NameSourceKind::ExchangeSnapshot);
+        // Declared ETF on SH: admitted.
+        validate_set_for(std::slice::from_ref(&sh), &etf(Exchange::Sh, "510300")).unwrap();
+        // The same row for a code nobody declared as ETF: refused.
+        assert_eq!(
+            validate_set_for(std::slice::from_ref(&sh), &BTreeSet::new()),
+            Err(Error::Market)
+        );
+        // A declared ETF with an A-share source kind: refused.
+        let wrong_kind = row(Exchange::Sh, "510300", NameSourceKind::SzseNameHistory);
+        assert_eq!(
+            validate_set_for(&[wrong_kind], &etf(Exchange::Sh, "510300")),
+            Err(Error::Market)
+        );
+        // An ETF row must be dated and cite its snapshot.
+        let mut undated = sh.clone();
+        undated.known_at = None;
+        assert_eq!(
+            validate_set_for(&[undated], &etf(Exchange::Sh, "510300")),
+            Err(Error::Market)
+        );
+        let mut uncited = sh;
+        uncited.source_record_id = None;
+        assert_eq!(
+            validate_set_for(&[uncited], &etf(Exchange::Sh, "510300")),
+            Err(Error::Market)
+        );
+    }
+
+    #[test]
+    fn etf_rows_keep_the_shared_interval_invariants() {
+        let rows = assemble_etf_names(&[chain(
+            Exchange::Sh,
+            "510300",
+            vec![step(day(2026, 11, 5), "甲"), step(day(2026, 11, 9), "乙")],
+            None,
+        )])
+        .unwrap();
+        let entities = etf(Exchange::Sh, "510300");
+        let mut overlapping = rows.clone();
+        overlapping[0].effective_to = Some(day(2026, 11, 20));
+        assert_eq!(
+            validate_set_for(&overlapping, &entities),
+            Err(Error::Overlap)
+        );
+        let mut duplicated = rows.clone();
+        duplicated.push(rows[0].clone());
+        assert_eq!(
+            validate_set_for(&duplicated, &entities),
+            Err(Error::Duplicate)
+        );
+        let mut unbounded_first = rows;
+        unbounded_first[0].effective_to = None;
+        unbounded_first[0].certainty = NameCertainty::Unbounded;
+        assert_eq!(
+            validate_set_for(&unbounded_first, &entities),
+            Err(Error::UnboundedNotLast)
+        );
     }
 
     #[test]

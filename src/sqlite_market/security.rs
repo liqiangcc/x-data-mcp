@@ -1070,6 +1070,31 @@ pub struct SecurityNameRow {
     pub source_record_id: Option<String>,
 }
 
+impl SecurityNameRow {
+    /// The domain interval this row stores. Fails closed on an exchange this
+    /// binary does not know instead of dropping the row.
+    pub(crate) fn to_interval(&self) -> Result<crate::security_master::names::NameInterval, Error> {
+        let exchange =
+            crate::security_master::Exchange::parse(&self.exchange).ok_or_else(|| {
+                integrity(format!(
+                    "security_name_history exchange {:?} is unregistered",
+                    self.exchange
+                ))
+            })?;
+        Ok(crate::security_master::names::NameInterval {
+            exchange,
+            code: self.code.clone(),
+            effective_from: self.effective_from,
+            effective_to: self.effective_to,
+            name: self.name.clone(),
+            certainty: self.certainty,
+            known_at: self.known_at,
+            source_kind: self.source_kind,
+            source_record_id: self.source_record_id.clone(),
+        })
+    }
+}
+
 /// All stored `security_name_history` rows, ordered by the row identity.
 pub(crate) fn read_security_names(c: &Connection) -> Result<Vec<SecurityNameRow>, Error> {
     let mut statement = c

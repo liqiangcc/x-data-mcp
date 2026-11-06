@@ -400,8 +400,19 @@ D-70 Q1 准入的两份 ETF 名录也走同一入口，不另起抓取链路：
 - 名称链 `Admitted::names`：每个代码一串 `(首次观测日, 名称)`，只由清单字节得出。SZSE 的
   xlsx 内嵌生成时间，同内容也换 sha，所以每次刷新都是一份快照；SSE 是确定性 JSON，
   内容回到旧值（A→B→A）时 `(sha256, source, origin)` 去重不追加清单行，链停在 B，而
-  选中的当前名单仍是 A。这一差异由 `Admitted::names_behind_current` 列出，解析层不补段：
-  可用的日期只有刷新 run 的 `verified_through`，它每次都变，补出来的链会随时钟变化。
+  选中的当前名单仍是 A。这一差异由 `Admitted::names_behind_current` 列出，解析层和写入层都不补段：
+  可用的日期只有刷新 run 的 `verified_through`，它每次都变，补出来的链会随时钟变化，replay 也没有
+  run 记录。写入器写链本身（末段是 B），item 证据 `etf_names.names_behind_current` 给出代码数量和
+  前 10 个样本。
+- ETF 名称行（`etf-name-search` PR-2，D-76 Q1）：`derived:security_names` 的 ETF 分支读同一份冻结
+  名单，把名称链写成 `security_name_history` 行：`source_kind='exchange_snapshot'`，
+  `effective_from` = 名称的**首次观测日**（`basis=fetch_time`，不是改名日），`effective_to` = 下一个
+  名称的起点，末段 `unbounded`，名单不再含该代码时在第一次缺失观测日闭合；`known_at` = 观测快照
+  入库的上海日期；`source_record_id` = `<sse_etf_list|szse_etf_list>:<快照 sha256>`。首次观测之前
+  没有行，也不用当前名称补。名称取不到的代码没有行，数量和样本写在 `codes_without_name`。
+  行由清单字节决定，不读时钟、不读当前名单、不读 run 记录，所以日更和 `replay` 逐行相同。
+  ETF 来源失败或 pending 时保留库内已有 ETF 行，A 股行照常写入；item 报部分失败。
+  详见 [来源库](source-store.md) §4.1。
 - 身份是**单调**的：读取时取所有已冻结名单快照的并集，首次出现定 `known_at`（成员有上市日时
   `effective_from` 取上市日，没有上市日时才取首次出现日，D-80）；
   较新快照移出的代码保留 class=2 行并以第一次缺失观测作 `effective_to`，

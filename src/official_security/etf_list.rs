@@ -97,6 +97,7 @@ use crate::exchange_source::{
     AcquisitionPlan, BasisStatus, BindError, PagingFormat, SnapshotBinding, SourceId,
 };
 use crate::security_master::assembly::{DATASET_KIND, MemberFact, PendingSource};
+use crate::security_master::names::{self, EtfNameChain, EtfNameSet, EtfNameStep};
 use crate::security_master::{Exchange, ListingSource, SecurityLifecycleFact};
 use crate::source_store::{Policy, SourceStore, StoreError, StoreKind};
 
@@ -201,8 +202,16 @@ pub struct EtfListRow {
 /// A name a code carried, with the first snapshot day that showed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NameObservation {
+    /// The first observation day (UTC day of `acquired_at`, the same basis as
+    /// the identity rows' `effective_from`).
     pub observed_from: NaiveDate,
+    /// The **Shanghai** day the snapshot that decided `observed_from` entered
+    /// the store (never earlier than `observed_from`).
+    pub known_at: NaiveDate,
     pub name: String,
+    /// sha256 of the snapshot that decided `observed_from`; the name row's
+    /// `source_record_id` cites it.
+    pub snapshot_sha256: String,
 }
 
 /// Why the adapter could not produce identity rows.
@@ -257,6 +266,13 @@ pub struct Admitted {
     /// A code that never showed a usable name has no entry. Evidence input for
     /// a later writer; no row or dataset uses it yet.
     pub names: BTreeMap<(Exchange, String), Vec<NameObservation>>,
+    /// `(exchange, code) → first observation after which the **newest frozen
+    /// snapshot of its source** no longer contained the code`. This is the
+    /// manifest's own view of membership, the one a replay has; it can differ
+    /// from the selected current list only when the exchange went back to
+    /// earlier content (see the module doc), and
+    /// [`Admitted::membership_behind_current`] names those codes.
+    pub name_ends: BTreeMap<(Exchange, String), NaiveDate>,
     /// One binding per `source_id`, sorted.
     pub bindings: Vec<SnapshotBinding>,
     /// `label → snapshot ids`, in acquisition order.
@@ -286,6 +302,29 @@ impl Admitted {
                     .map(|last| last.name.as_str());
                 (row.name.is_some() && row.name.as_deref() != tail).then_some(key)
             })
+            .collect()
+    }
+
+    /// Codes on the selected current list that the manifest's own scan has
+    /// already closed (absent from the newest frozen snapshot of their source).
+    /// Same cause as [`Admitted::names_behind_current`], seen from membership:
+    /// the name rows end at the first missing observation, the main table does
+    /// not. Reported, not repaired.
+    pub fn membership_behind_current(&self) -> Vec<(Exchange, String)> {
+        self.rows
+            .iter()
+            .map(|row| (row.exchange, row.code.clone()))
+            .filter(|key| self.name_ends.contains_key(key))
+            .collect()
+    }
+
+    /// Codes on the selected current list for which no snapshot ever showed a
+    /// usable name. They get no name row; this is how that is made visible.
+    pub fn codes_without_name(&self) -> Vec<(Exchange, String)> {
+        self.rows
+            .iter()
+            .map(|row| (row.exchange, row.code.clone()))
+            .filter(|key| !self.names.contains_key(key))
             .collect()
     }
 
@@ -434,6 +473,7 @@ pub fn read(
         history.push(entry.row.clone());
     }
     let names = scanned.names;
+    let name_ends = scanned.name_ends;
     // Defensive: the selected current rows are always part of the union even
     // if an older manifest line used a parser version this binary skips.
     for row in &rows {
@@ -485,6 +525,7 @@ pub fn read(
         first_seen,
         effective_to,
         names,
+        name_ends,
         bindings,
         snapshot_ids,
         freshness,
@@ -675,12 +716,23 @@ struct HistoryEntry {
 #[derive(Debug, Default)]
 struct HistoryScan {
     rows: BTreeMap<(Exchange, String), HistoryEntry>,
-    /// Name chains from the manifest alone; see [`name_chain`].
+    /// Name chains from the manifest alone; see [`NameChains`].
     names: BTreeMap<(Exchange, String), Vec<NameObservation>>,
+    /// `first_missing` of every code the manifest's newest snapshot of its
+    /// source no longer contains. The selected current list plays no part.
+    name_ends: BTreeMap<(Exchange, String), NaiveDate>,
+    /// Members of the newest frozen snapshot of each list: what a replay can
+    /// check without a refresh run.
+    newest: BTreeMap<&'static str, BTreeSet<(Exchange, String)>>,
 }
 
-/// One name seen in one frozen snapshot, with what orders it in time.
-type NameSample = (NaiveDate, String, String, String);
+/// One frozen list response to scan.
+struct Snapshot {
+    kind: ListKind,
+    day: NaiveDate,
+    acquired_at: String,
+    sha256: String,
+}
 
 type ObservationMap = BTreeMap<&'static str, BTreeMap<NaiveDate, BTreeSet<(Exchange, String)>>>;
 
@@ -693,11 +745,15 @@ type ObservationMap = BTreeMap<&'static str, BTreeMap<NaiveDate, BTreeSet<(Excha
 /// longer contains the code. It bounds the interval but is not called a
 /// delisting date: a list snapshot only proves membership, never the exact day
 /// a fund stopped being listed.
+///
+/// Snapshots are parsed in `(day, acquired_at, sha256)` order and the name
+/// chains grow as they go ([`NameChains`]): no snapshot's per-row
+/// `acquired_at` or `sha256` is kept, only each chain's own steps.
 fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
     let mut scan = HistoryScan::default();
     let mut observations: ObservationMap = BTreeMap::new();
     let mut parsed: BTreeSet<String> = BTreeSet::new();
-    let mut samples: BTreeMap<(Exchange, String), Vec<NameSample>> = BTreeMap::new();
+    let mut snapshots: Vec<Snapshot> = Vec::new();
     for record in store.records()? {
         if record.store_kind != StoreKind::HttpFetch {
             continue;
@@ -720,47 +776,58 @@ fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
         let Some(day) = observation_day(&record.acquired_at) else {
             continue;
         };
-        let bytes = store.read_verified(&record.sha256)?;
-        let rows = parse(kind, &bytes)?;
+        snapshots.push(Snapshot {
+            kind,
+            day,
+            acquired_at: record.acquired_at,
+            sha256: record.sha256,
+        });
+    }
+    snapshots.sort_by(|left, right| {
+        (left.day, &left.acquired_at, &left.sha256).cmp(&(
+            right.day,
+            &right.acquired_at,
+            &right.sha256,
+        ))
+    });
+    let mut chains = NameChains::default();
+    for snapshot in &snapshots {
+        let bytes = store.read_verified(&snapshot.sha256)?;
+        let rows = parse(snapshot.kind, &bytes)?;
         let members: BTreeSet<(Exchange, String)> = rows
             .iter()
             .map(|row| (row.exchange, row.code.clone()))
             .collect();
         observations
-            .entry(kind.label())
+            .entry(snapshot.kind.label())
             .or_default()
-            .insert(day, members);
+            .insert(snapshot.day, members);
+        let known_at = crate::calendar::shanghai_date_of(&snapshot.acquired_at)
+            .unwrap_or(snapshot.day)
+            .max(snapshot.day);
         for row in rows {
             let key = (row.exchange, row.code.clone());
             if let Some(name) = &row.name {
-                samples.entry(key.clone()).or_default().push((
-                    day,
-                    record.acquired_at.clone(),
-                    record.sha256.clone(),
-                    name.clone(),
-                ));
+                chains.push(&key, snapshot, known_at, name);
             }
             scan.rows
                 .entry(key)
                 .and_modify(|entry| {
-                    entry.first_seen = entry.first_seen.min(day);
-                    entry.last_seen = entry.last_seen.max(day);
+                    entry.first_seen = entry.first_seen.min(snapshot.day);
+                    entry.last_seen = entry.last_seen.max(snapshot.day);
                     if entry.row.listing_date.is_none() && row.listing_date.is_some() {
                         entry.row = row.clone();
                     }
                 })
                 .or_insert(HistoryEntry {
                     row,
-                    first_seen: day,
-                    last_seen: day,
+                    first_seen: snapshot.day,
+                    last_seen: snapshot.day,
                     first_missing: None,
                 });
         }
     }
-    scan.names = samples
-        .into_iter()
-        .map(|(key, samples)| (key, name_chain(samples)))
-        .collect();
+    scan.names = chains.finish();
     for entries in scan.rows.values_mut() {
         let source = match entries.row.exchange {
             Exchange::Sh => ListKind::Sse.label(),
@@ -779,37 +846,268 @@ fn scan_history(store: &SourceStore) -> Result<HistoryScan, EtfError> {
                 .map(|(day, _)| *day);
         }
     }
+    for (key, entry) in &scan.rows {
+        if let Some(day) = entry.first_missing {
+            scan.name_ends.insert(key.clone(), day);
+        }
+    }
+    scan.newest = observations
+        .into_iter()
+        .filter_map(|(source, mut by_day)| by_day.pop_last().map(|(_, members)| (source, members)))
+        .collect();
     Ok(scan)
 }
 
-/// The name chain of one code from its snapshots.
+/// Name chains built in snapshot order.
 ///
-/// Snapshots are ordered by `(day, acquired_at, sha256)`. Of several snapshots
-/// on one day the last one decides that day's name, because a writer keyed by
-/// `(code, first observed day)` can hold only one. A name equal to the
-/// previous segment's extends it instead of starting a new one, so the chain
-/// has no adjacent repeats. A snapshot with no usable name is never in
-/// `samples`: it neither ends nor starts a segment.
-fn name_chain(mut samples: Vec<NameSample>) -> Vec<NameObservation> {
-    samples.sort();
-    let mut by_day: Vec<(NaiveDate, String)> = Vec::new();
-    for (day, _, _, name) in samples {
-        match by_day.last_mut() {
-            Some((last_day, last_name)) if *last_day == day => *last_name = name,
-            _ => by_day.push((day, name)),
+/// Feed samples in `(day, acquired_at, sha256)` order. Of several snapshots on
+/// one day the last one decides that day's name, because a writer keyed by
+/// `(code, first observed day)` can hold only one. A name equal to the previous
+/// segment's extends it instead of starting a new one, so a chain has no
+/// adjacent repeats. A snapshot with no usable name is never pushed: it
+/// neither ends nor starts a segment.
+///
+/// A step cites the snapshot that created it: the first one that showed the
+/// name on its first day, or the later same-day one that changed the day's
+/// name back to it. Later snapshots with the same name do not touch it.
+#[derive(Debug, Default)]
+struct NameChains {
+    by_key: BTreeMap<(Exchange, String), Vec<NameObservation>>,
+}
+
+impl NameChains {
+    fn push(
+        &mut self,
+        key: &(Exchange, String),
+        snapshot: &Snapshot,
+        known_at: NaiveDate,
+        name: &str,
+    ) {
+        let chain = self.by_key.entry(key.clone()).or_default();
+        // A step born on this very day came from an earlier snapshot of the
+        // day; this snapshot is later in `(acquired_at, sha256)` order, so its
+        // name replaces that step's.
+        if chain
+            .last()
+            .is_some_and(|last| last.observed_from == snapshot.day)
+        {
+            if chain.last().is_some_and(|last| last.name == name) {
+                return;
+            }
+            chain.pop();
         }
-    }
-    let mut chain: Vec<NameObservation> = Vec::new();
-    for (observed_from, name) in by_day {
         if chain.last().is_some_and(|last| last.name == name) {
-            continue;
+            return;
         }
         chain.push(NameObservation {
-            observed_from,
-            name,
+            observed_from: snapshot.day,
+            known_at,
+            name: name.to_string(),
+            snapshot_sha256: snapshot.sha256.clone(),
         });
     }
-    chain
+
+    fn finish(self) -> BTreeMap<(Exchange, String), Vec<NameObservation>> {
+        self.by_key
+            .into_iter()
+            .filter(|(_, chain)| !chain.is_empty())
+            .collect()
+    }
+}
+
+/// `source_record_id` of a name step: the list and the snapshot that showed it.
+fn name_record_id(exchange: Exchange, sha256: &str) -> String {
+    let label = match exchange {
+        Exchange::Sh => ListKind::Sse.label(),
+        _ => ListKind::Szse.label(),
+    };
+    format!("{label}:{sha256}")
+}
+
+/// The one function both the daily item and `source_store replay` use to turn
+/// a manifest scan into ETF name rows. It reads no clock and no selected list.
+///
+/// `entities` is every code any frozen list showed (the ETF universe the
+/// writer validates against). Codes without a chain produce no row.
+fn assemble_names(
+    names: &BTreeMap<(Exchange, String), Vec<NameObservation>>,
+    name_ends: &BTreeMap<(Exchange, String), NaiveDate>,
+    entities: BTreeSet<(Exchange, String)>,
+) -> Result<EtfNameSet, names::Error> {
+    let chains: Vec<EtfNameChain> = names
+        .iter()
+        .map(|((exchange, code), steps)| EtfNameChain {
+            exchange: *exchange,
+            code: code.clone(),
+            steps: steps
+                .iter()
+                .map(|step| EtfNameStep {
+                    observed_from: step.observed_from,
+                    known_at: step.known_at,
+                    name: step.name.clone(),
+                    source_record_id: name_record_id(*exchange, &step.snapshot_sha256),
+                })
+                .collect(),
+            ended: name_ends.get(&(*exchange, code.clone())).copied(),
+        })
+        .collect();
+    let rows = names::assemble_etf_names(&chains)?;
+    names::validate_set_for(&rows, &entities)?;
+    Ok(EtfNameSet { rows, entities })
+}
+
+/// Lists that name nobody (a workbook that lost its name column, say) must not
+/// replace stored names with zero rows: 0 rows is not evidence.
+fn check_names_not_empty(set: &EtfNameSet) -> Result<(), EtfError> {
+    if set.rows.is_empty() {
+        return Err(EtfError::invalid(
+            "etf_names_empty",
+            "the frozen ETF lists carry no usable name; refusing to replace stored ETF \
+             names with zero rows",
+        ));
+    }
+    Ok(())
+}
+
+/// Samples kept in evidence for an unresolved-code list.
+pub const EVIDENCE_SAMPLE_LIMIT: usize = 10;
+
+fn sample_keys(keys: &[(Exchange, String)]) -> Value {
+    json!({
+        "count": keys.len(),
+        "samples": keys
+            .iter()
+            .take(EVIDENCE_SAMPLE_LIMIT)
+            .map(|(exchange, code)| entity(*exchange, code))
+            .collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn sample_keys_for_test(keys: &[(Exchange, String)]) -> Value {
+    sample_keys(keys)
+}
+
+/// ETF name rows for the daily item plus the evidence of what they leave open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmittedNames {
+    pub set: EtfNameSet,
+    /// Item evidence: row counts and the unresolved codes. Includes what only
+    /// the selected list can tell (`names_behind_current`), so it belongs to
+    /// the item outcome and never to the stored registration.
+    pub evidence: Value,
+}
+
+/// The names item's ETF answer: rows, or the reason the branch is pending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamesRun {
+    Admitted(Box<AdmittedNames>),
+    Pending(PendingSource),
+}
+
+/// `derived:security_names`' ETF branch: read the frozen lists like the main
+/// table item does, then assemble the observed-name rows.
+pub fn run_names(
+    market: &crate::sqlite_market::backend::MarketBackend,
+    today: NaiveDate,
+    policy: Policy,
+) -> Result<NamesRun, EtfError> {
+    Ok(match run_source(market, today, policy)? {
+        RunSource::Pending(mut pending) => {
+            pending.dataset = names::DATASET_KIND;
+            NamesRun::Pending(pending)
+        }
+        RunSource::Admitted(admitted) => NamesRun::Admitted(Box::new(admitted.names_run()?)),
+    })
+}
+
+impl Admitted {
+    /// The ETF name rows of this read (D-76 Q1) with their evidence.
+    pub fn names_run(&self) -> Result<AdmittedNames, EtfError> {
+        let entities: BTreeSet<(Exchange, String)> = self
+            .first_seen
+            .keys()
+            .cloned()
+            .chain(self.rows.iter().map(|row| (row.exchange, row.code.clone())))
+            .collect();
+        let set = assemble_names(&self.names, &self.name_ends, entities)
+            .map_err(|error| EtfError::invalid("source_invalid", error.to_string()))?;
+        check_names_not_empty(&set)?;
+        let behind = self.names_behind_current();
+        let without = self.codes_without_name();
+        let membership = self.membership_behind_current();
+        let evidence = json!({
+            "status": "ok",
+            "algorithm_version": names::ETF_ALGORITHM_VERSION,
+            "parser_version": PARSER_VERSION,
+            "basis": "fetch_time",
+            "rows": set.rows.len(),
+            "codes_with_rows": self.names.len(),
+            "codes_without_name": sample_keys(&without),
+            // The selected list says one name, the manifest chain ends at
+            // another (SSE A→B→A, see the module doc). The rows hold the
+            // chain; these codes' current name is NOT what the last row says.
+            "names_behind_current": sample_keys(&behind),
+            "membership_behind_current": sample_keys(&membership),
+            "source": self.evidence(),
+            "limitations": [
+                "effective_from is the first observation day of the name, not the rename day",
+                "no row exists before a code's first observation; nothing is back-filled",
+                "a return to earlier content on SSE adds no manifest line (A→B→A), so the \
+                 chain can end at the earlier name",
+            ],
+        });
+        Ok(AdmittedNames { set, evidence })
+    }
+}
+
+/// What `source_store replay` can say about ETF names from the manifest alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReplayedNames {
+    /// The store has no frozen ETF list at all: nothing to rebuild, and
+    /// nothing is claimed.
+    Pending,
+    Built(EtfNameSet),
+}
+
+/// Rebuild the ETF name rows from the frozen manifest only: no clock, no
+/// database, no refresh run. It is the same scan and the same
+/// [`assemble_names`] the daily item runs, so the rows are the ones the item
+/// writes for the same store.
+///
+/// Fail-closed: a store with only one of the two lists, a snapshot that does
+/// not parse, an empty list or an SZSE list below the shape floor is an error,
+/// never an empty or shorter set.
+pub fn replay_names(store: &SourceStore) -> Result<ReplayedNames, EtfError> {
+    let scan = scan_history(store)?;
+    if scan.rows.is_empty() && scan.newest.is_empty() {
+        return Ok(ReplayedNames::Pending);
+    }
+    for kind in [ListKind::Sse, ListKind::Szse] {
+        if !scan.newest.contains_key(kind.label()) {
+            return Err(EtfError::invalid(
+                "snapshot_incomplete",
+                format!("no frozen {} snapshot in the store", kind.label()),
+            ));
+        }
+    }
+    let szse = scan
+        .newest
+        .get(ListKind::Szse.label())
+        .map_or(0, BTreeSet::len);
+    if szse < SZSE_MIN_ROWS {
+        return Err(EtfError::invalid(
+            "etf_row_count_below_floor",
+            format!(
+                "newest SZSE ETF list has {szse} row(s), below the shape floor {SZSE_MIN_ROWS}"
+            ),
+        ));
+    }
+    let entities = scan.rows.keys().cloned().collect();
+    let set = assemble_names(&scan.names, &scan.name_ends, entities)
+        .map_err(|error| EtfError::invalid("source_invalid", error.to_string()))?;
+    check_names_not_empty(&set)?;
+    Ok(ReplayedNames::Built(set))
 }
 
 /// The source adapter's contribution to the main table: one source-agnostic

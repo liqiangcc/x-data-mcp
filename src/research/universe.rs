@@ -40,6 +40,7 @@ use chrono::NaiveDate;
 use rusqlite::Connection;
 
 use super::Error;
+use super::context::ResearchContext;
 use super::member_state::{MemberFlag, MemberState, Membership, MembershipBasis, NotMemberReason};
 use super::temporal::{Temporal, TemporalReport};
 use crate::security_master::assembly::{
@@ -469,7 +470,25 @@ pub(crate) fn member_state_report(
 ) -> Result<(Option<MemberState>, TemporalReport), Error> {
     crate::compact_market::canonical_entity(entity)
         .map_err(|_| Error::Invalid(format!("non-canonical entity {entity}")))?;
-    let selection = select(c, request, Some(entity))?;
+    pick_state(select(c, request, Some(entity))?, request)
+}
+
+/// [`member_state_report`] over a shared [`ResearchContext`]: the same answer,
+/// without re-reading the whole tables for every entity.
+pub(crate) fn member_state_report_in(
+    ctx: &ResearchContext<'_>,
+    entity: &str,
+    request: &UniverseRequest,
+) -> Result<(Option<MemberState>, TemporalReport), Error> {
+    crate::compact_market::canonical_entity(entity)
+        .map_err(|_| Error::Invalid(format!("non-canonical entity {entity}")))?;
+    pick_state(select_from(ctx.master()?, request, Some(entity))?, request)
+}
+
+fn pick_state(
+    selection: Selection,
+    request: &UniverseRequest,
+) -> Result<(Option<MemberState>, TemporalReport), Error> {
     let mut states = selection.states;
     let report = selection.temporal;
     if states.is_empty() {
@@ -493,21 +512,87 @@ pub(crate) fn select(
     request: &UniverseRequest,
     only: Option<&str>,
 ) -> Result<Selection, Error> {
-    let rows = security::read_security_master(c).map_err(Error::from)?;
-    let migrations = security::read_code_migrations(c).map_err(Error::from)?;
-    let spans = series::raw_daily_spans(c).map_err(Error::from)?;
-    let warnings = security::read_risk_warning_intervals(c).map_err(Error::from)?;
+    select_from(&SelectionInputs::load(c)?, request, only)
+}
 
+/// The four whole-table reads behind a selection, decoded once and indexed by
+/// entity. [`select_from`] only looks things up in memory, so one set of
+/// inputs can answer any number of entities (issue-433 §5.2) without
+/// changing a single verdict: the per-entity row order inside each index is
+/// the table order, which is what the `temporal` counts and the overlap
+/// checks depend on.
+pub(crate) struct SelectionInputs {
+    rows: Vec<SecurityLifecycleFact>,
+    migrations: Vec<CodeMigrationFact>,
+    spans: SpanIndex,
+    warnings: Vec<RiskWarningInterval>,
+    rows_by_entity: BTreeMap<String, Vec<usize>>,
+    warnings_by_entity: BTreeMap<String, Vec<usize>>,
+}
+
+impl SelectionInputs {
+    pub(crate) fn load(c: &Connection) -> Result<Self, Error> {
+        let rows = security::read_security_master(c).map_err(Error::from)?;
+        let migrations = security::read_code_migrations(c).map_err(Error::from)?;
+        let spans = series::raw_daily_spans(c).map_err(Error::from)?;
+        let warnings = security::read_risk_warning_intervals(c).map_err(Error::from)?;
+        let mut rows_by_entity: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, row) in rows.iter().enumerate() {
+            rows_by_entity.entry(row.entity()).or_default().push(index);
+        }
+        let mut warnings_by_entity: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for (index, warning) in warnings.iter().enumerate() {
+            warnings_by_entity
+                .entry(warning.entity())
+                .or_default()
+                .push(index);
+        }
+        Ok(Self {
+            rows,
+            migrations,
+            spans,
+            warnings,
+            rows_by_entity,
+            warnings_by_entity,
+        })
+    }
+
+    fn warnings_of<'a>(
+        &'a self,
+        entity: &str,
+    ) -> impl Iterator<Item = &'a RiskWarningInterval> + 'a {
+        self.warnings_by_entity
+            .get(entity)
+            .into_iter()
+            .flatten()
+            .map(|index| &self.warnings[*index])
+    }
+}
+
+/// [`select`] over already-loaded inputs.
+pub(crate) fn select_from(
+    inputs: &SelectionInputs,
+    request: &UniverseRequest,
+    only: Option<&str>,
+) -> Result<Selection, Error> {
+    let spans = &inputs.spans;
     let mut report = TemporalReport::new(request.temporal);
-    let admitted = admitted_migrations(&mut report, &migrations, only);
+    let admitted = admitted_migrations(&mut report, &inputs.migrations, only);
     let mut status_cache = StatusCache::new();
     let mut states = Vec::new();
 
-    for row in &rows {
+    let candidates: Vec<&SecurityLifecycleFact> = match only {
+        Some(only) => inputs
+            .rows_by_entity
+            .get(only)
+            .into_iter()
+            .flatten()
+            .map(|index| &inputs.rows[*index])
+            .collect(),
+        None => inputs.rows.iter().collect(),
+    };
+    for row in candidates {
         let entity = row.entity();
-        if only.is_some_and(|only| only != entity) {
-            continue;
-        }
         let has_series = spans.contains_key(&entity);
         if row.instrument_class != 0 {
             states.push(build_state(
@@ -529,12 +614,12 @@ pub(crate) fn select(
             ));
             continue;
         }
-        let membership = membership_of(row, request, &spans, &admitted);
+        let membership = membership_of(row, request, spans, &admitted);
         let status = if membership.is_member() {
             status_of(
                 &mut report,
                 &mut status_cache,
-                &warnings,
+                inputs,
                 &entity,
                 request.temporal,
             )?
@@ -773,7 +858,7 @@ fn admitted_migrations(
 fn status_of(
     report: &mut TemporalReport,
     cache: &mut StatusCache,
-    warnings: &[RiskWarningInterval],
+    inputs: &SelectionInputs,
     entity: &str,
     temporal: Temporal,
 ) -> Result<RiskStatus, Error> {
@@ -781,7 +866,7 @@ fn status_of(
         return Ok(*status);
     }
     let mut hit: Option<RiskStatus> = None;
-    for interval in warnings.iter().filter(|row| row.entity() == entity) {
+    for interval in inputs.warnings_of(entity) {
         if !report.observe(DATASET_RISK_WARNINGS, interval.known_at) {
             continue;
         }
