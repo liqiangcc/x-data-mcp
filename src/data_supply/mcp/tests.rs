@@ -4399,6 +4399,7 @@ fn seed_name_history(f: &Fixture) {
     f.backend
         .commit_security_names(&SecurityNameWrite {
             set: &set,
+            etf: crate::sqlite_market::security_names::EtfPart::Keep,
             task_id: "task-names",
             item_id: "derived:security_names",
             generation_id: "gen-names",
