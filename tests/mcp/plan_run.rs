@@ -2719,8 +2719,9 @@ impl x_data_mcp::market_update::runner::RangeProvider for ParallelUnchangedProvi
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_active.fetch_max(active, Ordering::SeqCst);
         // Small delay to increase likelihood of overlap, making the test more
-        // reliable without being fully timing-dependent.
-        std::thread::sleep(Duration::from_micros(500));
+        // reliable without being fully timing-dependent. 1ms is enough for thread
+        // scheduling overhead on any system that actually runs concurrently.
+        std::thread::sleep(Duration::from_millis(1));
         self.typed_calls.fetch_add(1, Ordering::SeqCst);
         self.active.fetch_sub(1, Ordering::SeqCst);
         Ok(Some(x_data_mcp::market_update::runner::TypedAcquisition {
