@@ -67,8 +67,10 @@
 //! - `instrument_class=2`, `issuer_key=fund code`, `issuer_resolution=issuer_key`.
 //! - `delisting_date=NULL`: the current lists only prove current membership, so
 //!   removal from a list is **not** a delisting day.
-//! - `effective_from` and `known_at` are the acquisition date of the first
-//!   frozen snapshot that contained the code (the snapshot's `fetched_at`).
+//! - `known_at` is the acquisition date of the first frozen snapshot that
+//!   contained the code (the snapshot's `fetched_at`). `effective_from` is the
+//!   listing day when the member has one, else that same acquisition date
+//!   (D-80, which revises D-70's "first appearance fixes `effective_from`").
 //! - The 128 `hsjday` members that are not on the current lists are **not**
 //!   written: only the exchange lists grant ETF identity.
 //!
@@ -684,7 +686,8 @@ type ObservationMap = BTreeMap<&'static str, BTreeMap<NaiveDate, BTreeSet<(Excha
 
 /// Scan every frozen list response, not only the selected page set. This is
 /// the monotonic identity input (PR-A2): a code that appeared in any snapshot
-/// stays in the union, and its first appearance fixes `effective_from`.
+/// stays in the union, and its first appearance fixes `known_at`
+/// (and `effective_from` when it has no listing day, D-80).
 ///
 /// `first_missing` is the first later observation of the same source that no
 /// longer contains the code. It bounds the interval but is not called a

@@ -402,7 +402,8 @@ D-70 Q1 准入的两份 ETF 名录也走同一入口，不另起抓取链路：
   内容回到旧值（A→B→A）时 `(sha256, source, origin)` 去重不追加清单行，链停在 B，而
   选中的当前名单仍是 A。这一差异由 `Admitted::names_behind_current` 列出，解析层不补段：
   可用的日期只有刷新 run 的 `verified_through`，它每次都变，补出来的链会随时钟变化。
-- 身份是**单调**的：读取时取所有已冻结名单快照的并集，首次出现定 `effective_from`；
+- 身份是**单调**的：读取时取所有已冻结名单快照的并集，首次出现定 `known_at`（成员有上市日时
+  `effective_from` 取上市日，没有上市日时才取首次出现日，D-80）；
   较新快照移出的代码保留 class=2 行并以第一次缺失观测作 `effective_to`，
   `sh_sz_etf_current` 不再包含它、`sh_sz_etf_listed_ever` 仍包含。
 

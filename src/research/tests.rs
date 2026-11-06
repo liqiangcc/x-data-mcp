@@ -44,6 +44,11 @@ const GEN2: &str = "gen-2";
 /// Delisted A shares that are not members of the fixture's catalog head
 /// ([`Fixture::with_delisted_off_catalog`]).
 const OFF_CATALOG_DELISTED: [&str; 2] = ["sh.600001", "sz.000003"];
+/// Listing days of the fixture's ETFs, years before the first observation day
+/// and before the first stored bar (D-80).
+const ETF_LISTED_510050: NaiveDate = NaiveDate::from_ymd_opt(2005, 2, 23).unwrap();
+const ETF_LISTED_159919: NaiveDate = NaiveDate::from_ymd_opt(2012, 5, 28).unwrap();
+const ETF_LISTED_513330: NaiveDate = NaiveDate::from_ymd_opt(2017, 12, 20).unwrap();
 const MANIFEST_SHA: &str = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
 const CREATED_AT: &str = "2026-10-26T00:00:00Z";
 
@@ -452,44 +457,50 @@ impl Fixture {
             DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
         };
         let window = days();
-        let row =
-            |exchange: Exchange, code: &str, delisting: Option<NaiveDate>| SecurityLifecycleFact {
-                exchange,
-                code: code.into(),
-                effective_from: window[0],
-                effective_to: delisting,
-                instrument_class: 2,
-                issuer_key: Some(code.into()),
-                issuer_resolution: IssuerResolution::IssuerKey,
-                listing_date: Some(window[0]),
-                listing_date_tdx: Some(window[0]),
-                listing_source: ListingSource::ExchangeList,
-                b_listing_date: None,
-                delisting_date: delisting,
-                delisting_date_tdx: None,
-                delisting_source: if delisting.is_some() {
-                    DelistingSource::ExchangeList
-                } else {
-                    DelistingSource::Unknown
-                },
-                delisting_reason_class: if delisting.is_some() {
-                    DelistingReason::Other
-                } else {
-                    DelistingReason::Unknown
-                },
-                arrangement_start: None,
-                arrangement_end: None,
-                listing_conflict: false,
-                delisting_conflict: false,
-                known_at: Some(window[0]),
-            };
+        // D-80: the interval opens at the listing day; the first observation
+        // day (the fixture's first day) is only `known_at`. The listing days
+        // are years before the bars, so a fixture that equates the two cannot
+        // hide an interval pushed back to the observation day.
+        let row = |exchange: Exchange,
+                   code: &str,
+                   listing: NaiveDate,
+                   delisting: Option<NaiveDate>| SecurityLifecycleFact {
+            exchange,
+            code: code.into(),
+            effective_from: listing,
+            effective_to: delisting,
+            instrument_class: 2,
+            issuer_key: Some(code.into()),
+            issuer_resolution: IssuerResolution::IssuerKey,
+            listing_date: Some(listing),
+            listing_date_tdx: Some(listing),
+            listing_source: ListingSource::ExchangeList,
+            b_listing_date: None,
+            delisting_date: delisting,
+            delisting_date_tdx: None,
+            delisting_source: if delisting.is_some() {
+                DelistingSource::ExchangeList
+            } else {
+                DelistingSource::Unknown
+            },
+            delisting_reason_class: if delisting.is_some() {
+                DelistingReason::Other
+            } else {
+                DelistingReason::Unknown
+            },
+            arrangement_start: None,
+            arrangement_end: None,
+            listing_conflict: false,
+            delisting_conflict: false,
+            known_at: Some(window[0]),
+        };
         vec![
-            row(Exchange::Sh, "510050", None),
+            row(Exchange::Sh, "510050", ETF_LISTED_510050, None),
             // Terminated on the last fixture day: the last traded bar is the
             // day before, so `last_trade_date < delisting_date` (D-72).
-            row(Exchange::Sz, "159919", Some(window[2])),
+            row(Exchange::Sz, "159919", ETF_LISTED_159919, Some(window[2])),
             // Listed, no `.day` member: identity without bars.
-            row(Exchange::Sh, "513330", None),
+            row(Exchange::Sh, "513330", ETF_LISTED_513330, None),
         ]
     }
 

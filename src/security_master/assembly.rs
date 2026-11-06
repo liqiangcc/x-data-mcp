@@ -132,6 +132,8 @@ pub struct MemberFact {
     pub exchange: Exchange,
     pub code: String,
     /// First acquisition date of a frozen snapshot that contained the code.
+    /// It is the evidence day behind `known_at`. It fixes `effective_from`
+    /// only when the member has no listing day (D-80, [`member_effective_from`]).
     pub first_seen: NaiveDate,
     /// The 知晓时间 of that first appearance.
     pub known_at: NaiveDate,
@@ -199,6 +201,9 @@ impl MemberRowError {
 /// A member is never given a delisting date: absence from a current list is
 /// not a delisting fact (§3.3), and a later source that proves one must carry
 /// its own delisting fact (PR-A2 and later).
+///
+/// D-80: `effective_from` is the listing day when the member has one, and
+/// `known_at` stays the first observation day ([`member_effective_from`]).
 pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, MemberRowError> {
     let mut merged: BTreeMap<(Exchange, String), MemberFact> = BTreeMap::new();
     for fact in facts {
@@ -286,7 +291,11 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
         rows.push(SecurityLifecycleFact {
             exchange,
             code: code.clone(),
-            effective_from: fact.first_seen,
+            effective_from: member_effective_from(
+                fact.first_seen,
+                fact.listing_date,
+                fact.effective_to,
+            ),
             effective_to: fact.effective_to,
             instrument_class: 2,
             issuer_key: Some(code),
@@ -322,6 +331,31 @@ pub fn member_rows(facts: &[MemberFact]) -> Result<Vec<SecurityLifecycleFact>, M
         ))
     });
     Ok(rows)
+}
+
+/// The `effective_from` of a class-2 (ETF) member row (D-80, which revises
+/// D-70's "first appearance fixes `effective_from`").
+///
+/// The listing day is when the fund exists, so it opens the interval; the first
+/// observation day is only when this database learned of it and stays in
+/// `known_at`. Without a listing day the first observation day is the only
+/// dated evidence, so the previous behaviour is kept. A listing day that is not
+/// before the interval's end is contradictory input: it would produce an empty
+/// interval (`effective_to <= effective_from`, rejected by the table), so the
+/// first observation day is kept for that row instead of failing the whole
+/// master write.
+///
+/// One function for the live item ([`member_rows`]) and the replay path
+/// (`sqlite_market::security::apply_etf_delisting`), so they cannot drift.
+pub fn member_effective_from(
+    first_seen: NaiveDate,
+    listing_date: Option<NaiveDate>,
+    effective_to: Option<NaiveDate>,
+) -> NaiveDate {
+    match listing_date {
+        Some(listing) if effective_to.is_none_or(|to| listing < to) => listing,
+        _ => first_seen,
+    }
 }
 
 /// The exchange-list adapter boundary (§16 PR-3): one function, no trait.

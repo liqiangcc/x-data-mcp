@@ -2455,6 +2455,92 @@ fn seed_security_master(f: &Fixture, rows: &[(&str, Option<NaiveDate>)]) {
     .unwrap();
 }
 
+/// D-80 through the public read face: an ETF listed in 2005 and first observed
+/// in 2026 is answered for a 2020 `as_of`, and a `known_at` before the first
+/// observation excludes the row and counts it.
+#[test]
+fn security_master_serves_an_etf_from_its_listing_day_and_known_at_still_filters() {
+    use crate::security_master::assembly::{Assembly, MemberFact, member_rows};
+    use crate::security_master::{DelistingReason, DelistingSource, Exchange, ListingSource};
+    let f = fixture();
+    let listed = NaiveDate::from_ymd_opt(2005, 2, 23).unwrap();
+    let observed = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+    let rows = member_rows(&[MemberFact {
+        exchange: Exchange::Sh,
+        code: "510050".into(),
+        first_seen: observed,
+        known_at: observed,
+        listing_date: Some(listed),
+        listing_source: ListingSource::ExchangeList,
+        listing_date_tdx: Some(listed),
+        effective_to: None,
+        delisting_date: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        announcement_date: None,
+        announcement_url: None,
+        extraction: None,
+    }])
+    .unwrap();
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        let generation = crate::sqlite_market::evidence_store::put_evidence(
+            c,
+            crate::compact_market::EvidenceKind::Generation,
+            &json!({"generation": "gen-etf"}),
+        )
+        .unwrap();
+        let binding = crate::sqlite_market::evidence_store::put_source_binding(
+            c,
+            &crate::compact_market::SourceBinding {
+                generation_id: "gen-etf".into(),
+                generation_manifest_sha256: [0x0b; 32],
+                day_member_sha256: [0x0c; 32],
+                security_event_sha256: [0x0e; 32],
+                evidence_digest: generation,
+            },
+        )
+        .unwrap();
+        crate::sqlite_market::security::replace_security_master(
+            c,
+            &Assembly {
+                rows,
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(observed),
+            },
+            binding,
+            "task-master",
+            "derived:security_master",
+        )
+    })
+    .unwrap();
+    let ask = |known_at: Option<&str>| {
+        let mut input = json!({
+            "securities": ["sh.510050"], "fact": "security_master", "as_of": "2020-06-30"
+        });
+        if let Some(day) = known_at {
+            input["known_at"] = json!(day);
+        }
+        f.api.call("get_security_state", input).unwrap()
+    };
+    let now = ask(None);
+    assert_eq!(now["row_count"], 1, "{now}");
+    // The record set is selected by `effective_from <= as_of`, so a row for
+    // 2020 means the interval opened before the first observation (2026).
+    assert_eq!(now["columns"]["known_at"], json!(["2026-11-05"]));
+    assert_eq!(now["columns"]["listing_date"], json!(["2005-02-23"]));
+    // Information set first: known by 2020 the row did not exist yet.
+    let early = ask(Some("2020-06-30"));
+    assert_eq!(early["row_count"], 0, "{early}");
+    let late = ask(Some("2026-11-05"));
+    assert_eq!(late["row_count"], 1, "{late}");
+}
+
 /// Seed `derived:security_names` the way the daily item does: one generation
 /// binding, then the whole-table replace. The read test goes through the public
 /// `query_data` handler, so the stored rows are exactly what a real run leaves.

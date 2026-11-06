@@ -756,7 +756,9 @@ fn etf_delisted_row(announcement: NaiveDate, delisting: NaiveDate) -> SecurityLi
     SecurityLifecycleFact {
         exchange: Exchange::Sh,
         code: "512390".into(),
-        effective_from: values.effective_from,
+        // D-80: the listing day (below) opens the interval; the
+        // announcement-derived day is only `known_at`.
+        effective_from: day(2010, 1, 1),
         effective_to: Some(values.effective_to),
         instrument_class: 2,
         issuer_key: Some("512390".into()),
@@ -813,6 +815,128 @@ fn replay_of_the_same_extraction_keeps_the_live_master_digest_unchanged() {
     assert_eq!(after.version_id, written.version_id);
 }
 
+/// No fresh init is needed for D-80: the daily item replaces the whole table,
+/// so a stored pre-D-80 ETF row (primary key at the observation day) is
+/// replaced by the same fund keyed at its listing day, with no key clash, and
+/// the A-share row beside it is byte-for-byte what it was.
+#[test]
+fn replacing_a_pre_d80_master_with_listing_day_rows_needs_no_migration() {
+    use crate::security_master::assembly::{self, Assembly, MemberFact, member_rows};
+
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let stock = fact(Exchange::Sh, "600000", day(1999, 11, 10), None);
+    let observed = day(2026, 11, 5);
+    let member = MemberFact {
+        exchange: Exchange::Sh,
+        code: "510050".into(),
+        first_seen: observed,
+        known_at: observed,
+        listing_date: Some(day(2005, 2, 23)),
+        listing_source: ListingSource::ExchangeList,
+        listing_date_tdx: Some(day(2005, 2, 23)),
+        effective_to: None,
+        delisting_date: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        announcement_date: None,
+        announcement_url: None,
+        extraction: None,
+    };
+    let new_etf = member_rows(&[member]).unwrap();
+    let mut old_etf = new_etf.clone();
+    old_etf[0].effective_from = observed; // what preview.45 stored
+    let assemble = |etf: &[SecurityLifecycleFact]| Assembly {
+        rows: std::iter::once(stock.clone())
+            .chain(etf.iter().cloned())
+            .collect(),
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: None,
+    };
+    let old = assemble(&old_etf);
+    let new = assemble(&new_etf);
+    let before = replace_security_master(&c, &old, binding, "t", "i").unwrap();
+    let after = replace_security_master(&c, &new, binding, "t", "i").unwrap();
+    let stored = read_security_master(&c).unwrap();
+    assert_eq!(stored.len(), 2);
+    let by_code = |code: &str| stored.iter().find(|row| row.code == code).unwrap();
+    assert_eq!(by_code("600000"), &stock, "the A-share row is unchanged");
+    assert_eq!(by_code("510050").effective_from, day(2005, 2, 23));
+    assert_eq!(by_code("510050").known_at, Some(observed));
+    assert_ne!(before.version_id, after.version_id);
+    assert_eq!(
+        after.content_digest,
+        assembly::assembly_digest(&new.rows, &[])
+    );
+    // The A-share rows alone hash the same in both versions.
+    assert_eq!(
+        assembly::assembly_digest(&old.rows[..1], &[]),
+        assembly::assembly_digest(&new.rows[..1], &[])
+    );
+}
+
+/// A row stored before D-80 starts at the first observation day. Replaying the
+/// extraction moves it to the listing day (and removes the old primary key),
+/// so the replayed table equals what the live item writes now.
+#[test]
+fn replay_moves_a_pre_d80_row_to_the_listing_day_and_matches_the_live_row() {
+    use crate::security_master::assembly::{self, Assembly};
+
+    let (_dir, _tasks, c) = db();
+    let binding = seed_binding(&c);
+    let announcement = day(2026, 1, 2);
+    let delisting = day(2026, 1, 10);
+    let live = etf_delisted_row(announcement, delisting);
+    let mut old = live.clone();
+    old.effective_from = day(2025, 11, 5);
+    old.known_at = Some(day(2025, 11, 5));
+    old.effective_to = None;
+    old.delisting_date = None;
+    old.delisting_source = DelistingSource::Unknown;
+    old.delisting_reason_class = DelistingReason::Unknown;
+    let before = Assembly {
+        rows: vec![old],
+        migrations: vec![],
+        conflicts: vec![],
+        pending_sources: vec![],
+        unresolved: vec![],
+        exchange_as_of: None,
+    };
+    replace_security_master(&c, &before, binding, "t", "i").unwrap();
+    let updates = vec![EtfDelistingDate {
+        exchange: Exchange::Sh,
+        code: "512390".into(),
+        announcement_date: announcement,
+        delisting_date: delisting,
+        doc_sha256: "cd".repeat(32),
+        extraction_sha256: "ef".repeat(32),
+    }];
+    assert_eq!(
+        apply_etf_delisting(&c, &updates, &json!({"synthetic": true})).unwrap(),
+        1
+    );
+    let stored = read_security_master(&c).unwrap();
+    assert_eq!(stored.len(), 1, "the pre-D-80 primary key is gone");
+    assert_eq!(stored[0].effective_from, day(2010, 1, 1));
+    assert_eq!(stored[0].known_at, Some(day(2025, 11, 5)));
+    assert_eq!(stored[0].effective_to, Some(delisting));
+    let after = derived::read_version(&c, assembly::DATASET_KIND, assembly::DATASET_KEY)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        after.content_digest,
+        assembly::assembly_digest(&stored, &[])
+    );
+    // A second replay is a no-op.
+    assert_eq!(
+        apply_etf_delisting(&c, &updates, &json!({"synthetic": true})).unwrap(),
+        0
+    );
+}
+
 #[test]
 fn replay_of_a_zero_lead_extraction_matches_the_live_row_and_digest() {
     use crate::security_master::assembly::{self, Assembly};
@@ -823,7 +947,6 @@ fn replay_of_a_zero_lead_extraction_matches_the_live_row_and_digest() {
     let delisting = day(2026, 1, 10);
     let live = etf_delisted_row(announcement, delisting);
     let mut old = live.clone();
-    old.effective_from = announcement;
     old.effective_to = None;
     old.delisting_date = None;
     old.delisting_source = DelistingSource::Unknown;
@@ -920,11 +1043,15 @@ fn replay_overrides_a_list_bound_with_the_exact_delisting_but_keeps_an_earlier_s
     let extraction_fact = etf_list_member(announcement, None, Some(announcement), Some(delisting));
 
     let without_extraction = member_rows(&[list_fact.clone(), announcement_fact]).unwrap();
-    assert_eq!(without_extraction[0].effective_from, list_first);
+    // D-80: the listing day (2010-01-01) opens the interval; the list's first
+    // observation stays in `known_at`.
+    assert_eq!(without_extraction[0].effective_from, day(2010, 1, 1));
+    assert_eq!(without_extraction[0].known_at, Some(list_first));
     assert_eq!(without_extraction[0].effective_to, Some(day(2026, 12, 2)));
 
     let with_extraction = member_rows(&[list_fact, extraction_fact]).unwrap();
-    assert_eq!(with_extraction[0].effective_from, list_first);
+    assert_eq!(with_extraction[0].effective_from, day(2010, 1, 1));
+    assert_eq!(with_extraction[0].known_at, Some(list_first));
     assert_eq!(
         with_extraction[0].effective_to,
         Some(delisting),
