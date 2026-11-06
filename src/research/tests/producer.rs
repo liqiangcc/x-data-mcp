@@ -62,7 +62,7 @@ fn the_dry_run_manifest_names_the_binary_and_the_derivation_labels() {
     // The literal labels, so a silent rename of a constant is a visible diff.
     assert_eq!(
         document["producer"]["algorithms"]["price_limit"],
-        "limit-v1+exr-guard1"
+        "limit-v2"
     );
     // The registered rule dataset keeps its own label.
     assert_eq!(crate::trading_rules::ALGORITHM_VERSION, "limit-v1");

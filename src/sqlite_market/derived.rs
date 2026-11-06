@@ -332,6 +332,84 @@ pub(crate) fn has_category1_event_between(
     .map_err(storage)
 }
 
+/// Read category-1 adjustment events for `entity` with `after < effective_day <= up_to`.
+/// Used by limit-v2 to compute the reference price on ex-rights days.
+pub(crate) fn read_adjustment_events_between(
+    c: &Connection,
+    entity: &str,
+    after: NaiveDate,
+    up_to: NaiveDate,
+) -> Result<Vec<AdjustmentEvent>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT ordinal,effective_day,category,c_bits_1,c_bits_2,c_bits_3,c_bits_4,\
+             c1,c2,c3,c4,known_at,basis_status FROM adjustment_events \
+             WHERE entity=?1 AND effective_day>?2 AND effective_day<=?3 AND category=1 \
+             ORDER BY ordinal",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(
+            params![
+                entity,
+                compact_market::epoch_day(after),
+                compact_market::epoch_day(up_to)
+            ],
+            |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, String>(7)?,
+                    r.get::<_, String>(8)?,
+                    r.get::<_, String>(9)?,
+                    r.get::<_, String>(10)?,
+                    r.get::<_, Option<String>>(11)?,
+                    r.get::<_, String>(12)?,
+                ))
+            },
+        )
+        .map_err(storage)?;
+    let mut events = Vec::new();
+    for row in rows {
+        let raw = row.map_err(storage)?;
+        let day = compact_market::epoch_date(raw.1).map_err(integrity)?;
+        let known_at = match raw.11 {
+            Some(text) => Some(
+                NaiveDate::parse_from_str(&text, "%Y-%m-%d")
+                    .map_err(|_| integrity("known_at is not a date"))?,
+            ),
+            None => None,
+        };
+        let mut factors = [rust_decimal::Decimal::ZERO; 4];
+        for (slot, text) in factors.iter_mut().zip([raw.7, raw.8, raw.9, raw.10]) {
+            *slot = text
+                .parse()
+                .map_err(|_| integrity("stored factor is not a decimal"))?;
+        }
+        events.push(AdjustmentEvent {
+            ordinal: raw.0,
+            effective_day: day,
+            category: u8::try_from(raw.2).map_err(|_| integrity("category out of range"))?,
+            c_bits: [
+                u32::try_from(raw.3).map_err(|_| integrity("c_bits_1 out of range"))?,
+                u32::try_from(raw.4).map_err(|_| integrity("c_bits_2 out of range"))?,
+                u32::try_from(raw.5).map_err(|_| integrity("c_bits_3 out of range"))?,
+                u32::try_from(raw.6).map_err(|_| integrity("c_bits_4 out of range"))?,
+            ],
+            factors,
+            known_at,
+            basis_status: FactorBasisStatus::parse(&raw.12)
+                .ok_or_else(|| integrity("stored factor basis_status is unregistered"))?,
+        });
+    }
+    Ok(events)
+}
+
 /// Replace one entity's whole factor set (§3.6 item 4: delete+insert, never an
 /// incremental patch) and refresh its version registration, inside the
 /// caller's transaction.
