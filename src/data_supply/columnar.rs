@@ -329,22 +329,6 @@ fn split_metadata(manifest: &[ManifestEntry]) -> (Map<String, Value>, Vec<Map<St
         }
         if values.windows(2).all(|pair| pair[0] == pair[1]) {
             shared.insert((*key).to_owned(), values[0].clone());
-        } else if let Some(common) = common_fields(key, &values) {
-            // An object that differs in some fields only: the fields every
-            // entry agrees on are written once, each row keeps the rest.
-            for (position, index) in present.iter().enumerate() {
-                let rest: Map<String, Value> = values[position]
-                    .as_object()
-                    .into_iter()
-                    .flatten()
-                    .filter(|(field, _)| !common.contains_key(*field))
-                    .map(|(field, value)| (field.clone(), value.clone()))
-                    .collect();
-                if !rest.is_empty() {
-                    overrides[*index].insert((*key).to_owned(), Value::Object(rest));
-                }
-            }
-            shared.insert((*key).to_owned(), Value::Object(common));
         } else {
             for (position, index) in present.iter().enumerate() {
                 if !values[position].is_null() {
@@ -354,31 +338,6 @@ fn split_metadata(manifest: &[ManifestEntry]) -> (Map<String, Value>, Vec<Map<St
         }
     }
     (shared, overrides)
-}
-
-/// Metadata keys whose value is an object that can differ in a few fields only
-/// (`adjustment.reason` states a per-entity event count while `field`,
-/// `status` and `value` are the same for everyone). A reader lays a row's
-/// object over the shared object of the same key, field by field.
-const OBJECT_KEYS: &[&str] = &["adjustment", "lineage", "index"];
-
-/// The fields every entry's object agrees on, for an object key whose every
-/// value is an object; `None` when there is nothing to share.
-fn common_fields(key: &str, values: &[Value]) -> Option<Map<String, Value>> {
-    if !OBJECT_KEYS.contains(&key) || !values.iter().all(Value::is_object) {
-        return None;
-    }
-    let common: Map<String, Value> = values[0]
-        .as_object()?
-        .iter()
-        .filter(|(field, value)| {
-            values[1..]
-                .iter()
-                .all(|other| other.get(field.as_str()) == Some(*value))
-        })
-        .map(|(field, value)| (field.clone(), value.clone()))
-        .collect();
-    (!common.is_empty()).then_some(common)
 }
 
 /// One `versions` row per manifest entry: the version list appears once and
