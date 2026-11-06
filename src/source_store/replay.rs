@@ -40,6 +40,12 @@
 //!   first write recorded instead of re-stamping it. A frozen table with no
 //!   A-share change row is `empty_name_set`: nothing is written, and "no data"
 //!   is never reported as "the empty table was rebuilt".
+//!   D-76 adds the ETF observed names to the same scope: they are rebuilt from the
+//!   `sse_etf_list`/`szse_etf_list` manifest lines alone (no clock, no refresh
+//!   run, no database input) through the scan and assembly the daily item uses,
+//!   so a replay writes the rows the item writes. A store with only one of the
+//!   two lists, or lists with no usable name, fails the whole scope; a store with
+//!   no ETF list leaves the stored ETF rows alone.
 //! - `suspensions` (XDM-138): the frozen A-3 suspension/resumption pages are
 //!   re-parsed into the admitted facts, then the whole dataset is assembled by
 //!   the **same** function the daily `derived:suspensions` item calls
@@ -148,8 +154,8 @@ const SZSE_SHORT_NAME_SOURCE_ID: &str = "szse_short_name";
 const SSE_SUSPENSION_SOURCE_ID: &str = "sse_suspension";
 
 pub const NOTE: &str = "`exchange` (M3 PR-2), `industry` (M3 PR-6), `generation_facts` \
-(M3 PR-8), `risk_warnings` (M3 PR-10) and `security_names` (M3 PR-12) rebuild their \
-tables from the store; `suspensions` (XDM-138) additionally needs the database's \
+(M3 PR-8), `risk_warnings` (M3 PR-10) and `security_names` (M3 PR-12, plus the D-76 \
+ETF observed names) rebuild their tables from the store; `suspensions` (XDM-138) additionally needs the database's \
 security_master, trading calendar and bar days: a writing `--scope all` on a database \
 that does not have them yet (fresh init) reports it as `not_ready` and continues, \
 every other run fails closed with `suspension_replay_not_ready`.";
@@ -231,9 +237,14 @@ impl Scope {
                         "sse_bulletin" | "szse_short_name"
                     )
             }
+            // The SZSE short-name table (A-share names) and the two ETF lists
+            // (observed ETF names, D-76): the scope reads all three.
             Self::SecurityNames => {
                 record.store_kind == super::StoreKind::HttpFetch
-                    && record.source_id == SZSE_SHORT_NAME_SOURCE_ID
+                    && matches!(
+                        record.source_id.as_str(),
+                        SZSE_SHORT_NAME_SOURCE_ID | "sse_etf_list" | "szse_etf_list"
+                    )
             }
             Self::Suspensions => {
                 record.store_kind == super::StoreKind::HttpFetch
@@ -333,6 +344,10 @@ pub struct ScopeReport {
     /// store reports the same value on any day.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_of: Option<String>,
+    /// ETF observed-name rows within `snapshots` (`security_names`); absent
+    /// when the store has no frozen ETF list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etf_rows: Option<usize>,
     /// Which input is missing when `status` is [`SCOPE_NOT_READY`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_ready_reason: Option<String>,
@@ -466,6 +481,7 @@ fn run(
         let mut snapshot_count = None;
         let mut fact_count = None;
         let mut as_of = None;
+        let mut etf_rows = None;
         let mut counts = (None, None, None);
         let mut suspension_counts = (None, None, None, None, None);
         let mut not_ready_reason = None;
@@ -626,6 +642,7 @@ fn run(
                     database_verdict = outcome.database;
                     drift_keys = outcome.drift;
                     snapshot_count = outcome.rows;
+                    etf_rows = outcome.etf_rows;
                     as_of = outcome.as_of;
                     for issue in outcome.problems {
                         problems.push(issue);
@@ -722,6 +739,7 @@ fn run(
             deferred_beyond_calendar: suspension_counts.3,
             skipped_no_trading_day: suspension_counts.4,
             as_of,
+            etf_rows,
             not_ready_reason,
         });
     }
@@ -1561,11 +1579,29 @@ struct SecurityNamesOutcome {
     drift: Vec<String>,
     /// Rows of the rebuilt set; `None` when nothing was built.
     rows: Option<usize>,
+    /// ETF observed-name rows within `rows`; `None` when the store has no
+    /// frozen ETF list (the stored ETF rows are then left alone).
+    etf_rows: Option<usize>,
     as_of: Option<String>,
     problems: Vec<BlobProblem>,
 }
 
 impl SecurityNamesOutcome {
+    /// No SZSE short-name page is frozen: nothing was computed or written.
+    fn nothing_selected() -> Self {
+        Self {
+            status: "store_empty",
+            rebuilt: NOTHING_SELECTED,
+            summary: None,
+            database: None,
+            drift: Vec::new(),
+            rows: None,
+            etf_rows: None,
+            as_of: None,
+            problems: Vec::new(),
+        }
+    }
+
     /// A scope that built nothing because the frozen pages are not a complete
     /// whole-table fetch: the previous version stays readable and the report
     /// names the missing pages instead of rebuilding a shorter history.
@@ -1577,6 +1613,7 @@ impl SecurityNamesOutcome {
             database: None,
             drift: Vec::new(),
             rows: None,
+            etf_rows: None,
             as_of: None,
             problems: vec![BlobProblem {
                 sha256: String::new(),
@@ -1622,6 +1659,13 @@ fn rebuild_security_names(
         .copied()
         .filter(|record| record.source_id == SZSE_SHORT_NAME_SOURCE_ID)
         .collect();
+    if candidates.is_empty() {
+        // The A-share half has nothing to rebuild from. The ETF name rows are
+        // written together with the A-share rows (one whole-table dataset),
+        // never alone, so this is the same "nothing selected" a store without
+        // the table always reported.
+        return Ok(SecurityNamesOutcome::nothing_selected());
+    }
     // R4 ruling: the run record owns the identity of a whole-table page set;
     // the manifest alone can only offer "newest answer per page request".
     let candidates = match member_records(backend.as_ref(), SZSE_SHORT_NAME_SOURCE_ID, &candidates)
@@ -1646,7 +1690,21 @@ fn rebuild_security_names(
 
     let set = crate::official_security::security_names::replay(store, &pages)
         .map_err(|error| error.to_string())?;
-    let summary = names_summary(&set.rows, &set.coverage);
+    // D-76: the ETF observed names come from the manifest alone, through the
+    // same scan and assembly the daily item runs. A store with no frozen ETF
+    // list leaves the stored ETF rows alone; one with a broken or partial list
+    // fails the whole scope (nothing is written, 0 rows are never "rebuilt").
+    let etf = match crate::official_security::etf_list::replay_names(store)
+        .map_err(|error| format!("{}: {error}", error.code()))?
+    {
+        crate::official_security::etf_list::ReplayedNames::Pending => None,
+        crate::official_security::etf_list::ReplayedNames::Built(etf) => Some(etf),
+    };
+    let mut all_rows = set.rows.clone();
+    if let Some(etf) = &etf {
+        all_rows.extend(etf.rows.iter().cloned());
+    }
+    let summary = names_summary(&all_rows, &set.coverage);
     let as_of = set
         .coverage
         .iter()
@@ -1659,16 +1717,20 @@ fn rebuild_security_names(
         summary: Some(summary),
         database: None,
         drift: Vec::new(),
-        rows: Some(set.rows.len()),
+        rows: Some(all_rows.len()),
+        etf_rows: etf.as_ref().map(|etf| etf.rows.len()),
         as_of,
         problems: Vec::new(),
     };
     let Some(backend) = backend else {
         return Ok(outcome);
     };
+    // Without a frozen ETF list the stored ETF rows are not this scope's to
+    // judge: compare (and write) the A-share subset only.
+    let compare_etf = etf.is_some();
     if verify_only {
         let (stored_rows, stored_coverage) = stored_security_names(&backend)?;
-        let stored_rows = stored_intervals(&stored_rows)?;
+        let stored_rows = stored_intervals(&stored_rows, compare_etf)?;
         let stored_coverage = stored_coverage.unwrap_or_default();
         let stored_summary = names_summary(&stored_rows, &stored_coverage);
         if outcome.summary.as_deref() == Some(stored_summary.as_str()) {
@@ -1677,7 +1739,7 @@ fn rebuild_security_names(
         }
         outcome.status = "drift";
         outcome.database = Some("drift");
-        outcome.drift = names_drift(&set.rows, &set.coverage, &stored_rows, &stored_coverage);
+        outcome.drift = names_drift(&all_rows, &set.coverage, &stored_rows, &stored_coverage);
         return Ok(outcome);
     }
 
@@ -1698,7 +1760,8 @@ fn rebuild_security_names(
         "replay": true,
         "scope": "security_names",
         "records": pages.len(),
-        "rows": set.rows.len(),
+        "rows": all_rows.len(),
+        "etf_rows": etf.as_ref().map(|etf| etf.rows.len()),
         "coverage_windows": set.coverage.len(),
         // The replayable bound of the SH/BJ `NOT_AVAILABLE` windows (the last
         // change day the frozen table proves), not the acquisition clock.
@@ -1706,6 +1769,10 @@ fn rebuild_security_names(
     });
     let write = crate::sqlite_market::security_names::SecurityNameWrite {
         set: &set,
+        etf: match &etf {
+            Some(etf) => crate::sqlite_market::security_names::EtfPart::Replace(etf),
+            None => crate::sqlite_market::security_names::EtfPart::Keep,
+        },
         task_id: "source_store_replay",
         item_id: "derived:security_names",
         generation_id: "source_store_replay",
@@ -1719,7 +1786,7 @@ fn rebuild_security_names(
         .map_err(|error| error.to_string())?;
     // A write only counts once it reads back as the computed rows and windows.
     let (stored_rows, stored_coverage) = stored_security_names(&backend)?;
-    let stored_rows = stored_intervals(&stored_rows)?;
+    let stored_rows = stored_intervals(&stored_rows, compare_etf)?;
     let stored_coverage = stored_coverage
         .ok_or_else(|| "the name-history registration has no coverage evidence".to_string())?;
     let stored_summary = names_summary(&stored_rows, &stored_coverage);
@@ -1730,7 +1797,7 @@ fn rebuild_security_names(
     }
     outcome.status = "drift";
     outcome.database = Some("drift");
-    outcome.drift = names_drift(&set.rows, &set.coverage, &stored_rows, &stored_coverage);
+    outcome.drift = names_drift(&all_rows, &set.coverage, &stored_rows, &stored_coverage);
     Ok(outcome)
 }
 
@@ -1755,30 +1822,19 @@ fn stored_security_names(
 }
 
 /// Decode the read model's rows back into the domain type so one canonical
-/// summary covers both sides of the comparison.
+/// summary covers both sides of the comparison. `with_etf=false` drops the ETF
+/// subset (`exchange_snapshot` rows), for a store with no frozen ETF list.
 fn stored_intervals(
     rows: &[crate::sqlite_market::security::SecurityNameRow],
+    with_etf: bool,
 ) -> Result<Vec<NameInterval>, String> {
     rows.iter()
-        .map(|row| {
-            let exchange = Exchange::parse(&row.exchange).ok_or_else(|| {
-                format!(
-                    "security_name_history exchange {:?} is unregistered",
-                    row.exchange
-                )
-            })?;
-            Ok(NameInterval {
-                exchange,
-                code: row.code.clone(),
-                effective_from: row.effective_from,
-                effective_to: row.effective_to,
-                name: row.name.clone(),
-                certainty: row.certainty,
-                known_at: row.known_at,
-                source_kind: row.source_kind,
-                source_record_id: row.source_record_id.clone(),
-            })
+        .filter(|row| {
+            with_etf
+                || row.source_kind
+                    != crate::security_master::names::NameSourceKind::ExchangeSnapshot
         })
+        .map(|row| row.to_interval().map_err(|error| error.to_string()))
         .collect()
 }
 

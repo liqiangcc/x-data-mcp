@@ -27,7 +27,8 @@
 //! scope replaces the retirement gate's fact index, M3 PR-10's `risk_warnings`
 //! scope replaces `risk_warning_intervals` and M3 PR-12's `security_names`
 //! scope replaces `security_name_history` (with its `derived_dataset_versions`
-//! registration), each in one transaction; `--verify-only` compares the
+//! registration; since D-76 that includes the ETF observed-name rows rebuilt
+//! from the frozen ETF lists), each in one transaction; `--verify-only` compares the
 //! recomputed summary with the stored rows instead of writing. XDM-138's
 //! `suspensions` scope additionally reads the database's `security_master`,
 //! trading calendar and bar days, assembles the dataset with the daily item's

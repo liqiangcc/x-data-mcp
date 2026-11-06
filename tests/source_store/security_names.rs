@@ -9,7 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-use x_data_mcp::exchange_source::request::SZSE_PARSER_VERSION;
+use x_data_mcp::exchange_source::request::{
+    SSE_PARSER_VERSION, SZSE_PARSER_VERSION, SZSE_XLSX_PARSER_VERSION,
+};
 use x_data_mcp::source_store::{Registration, SourceStore, StoreKind};
 use x_data_mcp::sqlite_tasks::SqliteTasks;
 
@@ -577,4 +579,310 @@ fn the_newest_answer_for_a_page_is_the_one_replayed() {
     assert_eq!(code, 0, "{verify}");
     assert_eq!(verify["scopes"][0]["database"], "match");
     assert_eq!(verify["scopes"][0]["snapshots"], 1);
+}
+
+// ------------------------------------------- ETF observed names (D-76) ---
+
+const SSE_ETF: &[u8] = include_bytes!("../fixtures/exchange-etf-list/sse_etf_list_synthetic.json");
+const SZSE_ETF: &[u8] =
+    include_bytes!("../fixtures/exchange-etf-list/szse_etf_list_synthetic.xlsx");
+const SSE_PARSER: &str = SSE_PARSER_VERSION;
+
+/// Freeze one ETF list response the way the refresh path registers it.
+fn frozen_etf(store: &SourceStore, source: &str, body: &[u8], parser: &str, at: &str) -> String {
+    let mut facts = Registration::new(source, StoreKind::HttpFetch, "etf-list-request", at);
+    facts.parser_version = Some(parser.to_string());
+    facts.basis_status = Some("approved_source".to_string());
+    store.register(body, &facts).unwrap().sha256
+}
+
+/// The synthetic SSE list with the name of `fundCode` replaced.
+fn sse_with_name(code: &str, name: &str) -> Vec<u8> {
+    let mut value: serde_json::Value = serde_json::from_slice(SSE_ETF).unwrap();
+    for row in value["pageHelp"]["data"].as_array_mut().unwrap() {
+        if row["fundCode"] == code {
+            row["secNameFull"] = name.into();
+        }
+    }
+    serde_json::to_vec(&value).unwrap()
+}
+
+fn store_with_names(dir: &Path, etf: bool) -> SourceStore {
+    let store = SourceStore::new(dir.join(if etf { "store-etf" } else { "store-plain" }));
+    frozen_short_name(&store, &fixture("szse-chain.json"), SZSE_PARSER_VERSION);
+    if etf {
+        frozen_etf(
+            &store,
+            "sse_etf_list",
+            SSE_ETF,
+            SSE_PARSER,
+            "2026-11-05T02:00:00Z",
+        );
+        frozen_etf(
+            &store,
+            "sse_etf_list",
+            &sse_with_name("510000", "改名后ETF"),
+            SSE_PARSER,
+            "2026-11-06T02:00:00Z",
+        );
+        frozen_etf(
+            &store,
+            "szse_etf_list",
+            SZSE_ETF,
+            SZSE_PARSER_VERSION_XLSX,
+            "2026-11-05T02:00:00Z",
+        );
+    }
+    store
+}
+
+const SZSE_PARSER_VERSION_XLSX: &str = SZSE_XLSX_PARSER_VERSION;
+
+/// `(exchange, code, from, to, name, certainty, known_at, kind, record)` of
+/// every stored name row.
+type StoredRow = (
+    String,
+    String,
+    i64,
+    Option<i64>,
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<String>,
+);
+
+fn stored(db: &Path, etf: bool) -> Vec<StoredRow> {
+    let connection = rusqlite::Connection::open(db).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT exchange,code,effective_from,effective_to,name,certainty,known_at,\
+             source_kind,source_record_id FROM security_name_history \
+             WHERE (source_kind='exchange_snapshot')=?1 ORDER BY exchange,code,effective_from",
+        )
+        .unwrap();
+    let rows = statement
+        .query_map([etf], |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+                r.get(6)?,
+                r.get(7)?,
+                r.get(8)?,
+            ))
+        })
+        .unwrap();
+    rows.map(|row| row.unwrap()).collect()
+}
+
+/// Fresh init: the empty database is rebuilt from the store alone, ETF rows
+/// included; `verify` matches; wipe and replay reproduces rows and evidence.
+#[test]
+fn replay_writes_the_etf_names_next_to_the_a_share_rows_and_reproduces_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = store_with_names(dir.path(), true);
+
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    let scope = &report["scopes"][0];
+    assert_eq!(scope["status"], "ok");
+    assert_eq!(scope["rebuilt"], "rebuilt");
+    assert_eq!(scope["database"], "match");
+    // 947 SSE codes (one renamed: two segments) + 770 SZSE codes + 3 A-share.
+    assert_eq!(scope["etf_rows"], 947 + 1 + 770);
+    assert_eq!(scope["snapshots"], 3 + 947 + 1 + 770);
+    assert_eq!(
+        registrations(&db),
+        1,
+        "one registration for the whole table"
+    );
+
+    let etf = stored(&db, true);
+    assert_eq!(etf.len(), 947 + 1 + 770);
+    let renamed: Vec<&StoredRow> = etf.iter().filter(|r| r.1 == "510000").collect();
+    assert_eq!(renamed.len(), 2);
+    assert_eq!(renamed[0].4, "合成ETF0000");
+    assert_eq!(renamed[1].4, "改名后ETF");
+    assert_eq!(
+        renamed[0].3,
+        Some(renamed[1].2),
+        "the old name ends where the new one starts"
+    );
+    assert_eq!(renamed[0].7, "exchange_snapshot");
+    assert!(
+        renamed[0]
+            .8
+            .as_deref()
+            .unwrap()
+            .starts_with("sse_etf_list:")
+    );
+    assert!(renamed[0].6.is_some(), "known_at is set");
+
+    let rows = stored(&db, false);
+    let digest = evidence_digest(&db);
+    let (code, verify) = cli(store.root(), Some(&db), "verify", "security_names");
+    assert_eq!(code, 0, "{verify}");
+    assert_eq!(verify["scopes"][0]["database"], "match");
+    assert_eq!(verify["scopes"][0]["etf_rows"], 947 + 1 + 770);
+
+    wipe(&db);
+    let (code, again) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{again}");
+    assert_eq!(again["scopes"][0]["database"], "match");
+    assert_eq!(
+        stored(&db, true),
+        etf,
+        "replay twice writes the same ETF rows"
+    );
+    assert_eq!(stored(&db, false), rows);
+    assert_eq!(evidence_digest(&db), digest);
+}
+
+/// The ETF branch does not change one A-share row: a store with and without
+/// the ETF lists rebuilds the same SZ A-share rows, byte for byte.
+#[test]
+fn the_a_share_rows_are_the_same_with_and_without_the_etf_lists() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("a")).unwrap();
+    std::fs::create_dir_all(dir.path().join("b")).unwrap();
+    let with = market_db(&dir.path().join("a"));
+    let without = market_db(&dir.path().join("b"));
+    let (code, _) = cli(
+        store_with_names(dir.path(), true).root(),
+        Some(&with),
+        "replay",
+        "security_names",
+    );
+    assert_eq!(code, 0);
+    let (code, _) = cli(
+        store_with_names(dir.path(), false).root(),
+        Some(&without),
+        "replay",
+        "security_names",
+    );
+    assert_eq!(code, 0);
+    assert_eq!(stored(&with, false), stored(&without, false));
+    assert_eq!(stored(&with, false).len(), 3);
+    assert!(stored(&without, true).is_empty());
+}
+
+/// `--verify-only` sees a changed ETF row as drift and does not write.
+#[test]
+fn verify_reports_drift_in_the_etf_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = store_with_names(dir.path(), true);
+    assert_eq!(
+        cli(store.root(), Some(&db), "replay", "security_names").0,
+        0
+    );
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    connection
+        .execute(
+            "UPDATE security_name_history SET name='被改动' \
+             WHERE source_kind='exchange_snapshot' AND code='159000'",
+            [],
+        )
+        .unwrap();
+    drop(connection);
+
+    let (code, verify) = cli(store.root(), Some(&db), "verify", "security_names");
+    assert_eq!(code, 1, "{verify}");
+    assert_eq!(verify["scopes"][0]["database"], "drift");
+    let drift = verify["scopes"][0]["drift"].to_string();
+    assert!(drift.contains("sz.159000"), "{drift}");
+    assert!(
+        stored(&db, true).iter().any(|r| r.4 == "被改动"),
+        "verify must not write"
+    );
+}
+
+/// Only one of the two lists is frozen: the scope fails closed and writes
+/// nothing, not even the A-share half, so a half market is never "rebuilt".
+#[test]
+fn a_store_with_only_one_etf_list_fails_closed_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("half"));
+    frozen_short_name(&store, &fixture("szse-chain.json"), SZSE_PARSER_VERSION);
+    frozen_etf(
+        &store,
+        "sse_etf_list",
+        SSE_ETF,
+        SSE_PARSER,
+        "2026-11-05T02:00:00Z",
+    );
+
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(
+        report["scopes"][0]["status"],
+        "security_names_rebuild_failed"
+    );
+    assert!(
+        report["problems"][0]["actual"]
+            .as_str()
+            .unwrap()
+            .contains("snapshot_incomplete"),
+        "{report}"
+    );
+    assert_eq!(name_rows(&db), 0);
+    assert_eq!(registrations(&db), 0);
+}
+
+/// A store with no ETF list leaves already-stored ETF rows alone (they came
+/// from the daily item or another store) and compares only the A-share rows.
+#[test]
+fn a_store_without_etf_lists_does_not_delete_stored_etf_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let full = store_with_names(dir.path(), true);
+    assert_eq!(cli(full.root(), Some(&db), "replay", "security_names").0, 0);
+    let etf_before = stored(&db, true);
+    assert!(!etf_before.is_empty());
+
+    let plain = store_with_names(dir.path(), false);
+    let (code, report) = cli(plain.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    assert_eq!(report["scopes"][0]["database"], "match");
+    assert!(report["scopes"][0].get("etf_rows").is_none());
+    assert_eq!(
+        stored(&db, true),
+        etf_before,
+        "no ETF list, no ETF deletion"
+    );
+    assert_eq!(stored(&db, false).len(), 3);
+}
+
+/// Frozen ETF lists but no SZSE short-name table: the scope selects nothing
+/// for the A-share half, exactly as a store without the table always did.
+#[test]
+fn etf_lists_alone_select_nothing_and_leave_the_table_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("etf-only"));
+    frozen_etf(
+        &store,
+        "sse_etf_list",
+        SSE_ETF,
+        SSE_PARSER,
+        "2026-11-05T02:00:00Z",
+    );
+    frozen_etf(
+        &store,
+        "szse_etf_list",
+        SZSE_ETF,
+        SZSE_PARSER_VERSION_XLSX,
+        "2026-11-05T02:00:00Z",
+    );
+    let (code, report) = cli(store.root(), Some(&db), "replay", "security_names");
+    assert_eq!(code, 0, "{report}");
+    assert_eq!(report["scopes"][0]["rebuilt"], "nothing_selected");
+    assert_eq!(name_rows(&db), 0);
+    assert_eq!(registrations(&db), 0);
 }

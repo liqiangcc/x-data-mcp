@@ -92,6 +92,7 @@ fn identity_rows_are_class_two_and_keep_the_two_listing_sources() {
         history: Vec::new(),
         effective_to: BTreeMap::new(),
         names: BTreeMap::new(),
+        name_ends: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -143,6 +144,7 @@ fn a_szse_code_without_a_tdx_ssdate_keeps_an_unknown_listing_day() {
         history: Vec::new(),
         effective_to: BTreeMap::new(),
         names: BTreeMap::new(),
+        name_ends: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -210,6 +212,7 @@ fn etf_rows_do_not_change_the_a_share_security_master_rows() {
         history: Vec::new(),
         effective_to: BTreeMap::new(),
         names: BTreeMap::new(),
+        name_ends: BTreeMap::new(),
         first_seen,
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -259,6 +262,7 @@ fn the_adapter_evidence_pins_the_business_parser_version() {
         history: Vec::new(),
         effective_to: BTreeMap::new(),
         names: BTreeMap::new(),
+        name_ends: BTreeMap::new(),
         first_seen: BTreeMap::new(),
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
@@ -508,6 +512,7 @@ fn adding_names_changes_no_identity_row() {
             history: Vec::new(),
             effective_to: BTreeMap::new(),
             names: BTreeMap::new(),
+            name_ends: BTreeMap::new(),
             first_seen,
             bindings: Vec::new(),
             snapshot_ids: BTreeMap::new(),
@@ -524,12 +529,46 @@ fn adding_names_changes_no_identity_row() {
 fn obs(y: i32, m: u32, d: u32, name: &str) -> NameObservation {
     NameObservation {
         observed_from: day(y, m, d),
+        known_at: day(y, m, d),
         name: name.into(),
+        snapshot_sha256: String::new(),
     }
 }
 
-fn sample(d: u32, acquired: &str, sha: &str, name: &str) -> NameSample {
-    (day(2026, 11, d), acquired.into(), sha.into(), name.into())
+/// `(day, acquired_at, sha, name)`, the shape the old per-row samples had.
+type Sample = (u32, &'static str, &'static str, &'static str);
+
+/// A chain built the way the scan builds it: snapshots in
+/// `(day, acquired_at, sha)` order, one push per snapshot. The result is
+/// compared on `(observed_from, name)` only, the part PR-1 pinned.
+fn name_chain(mut samples: Vec<Sample>) -> Vec<NameObservation> {
+    samples.sort();
+    let key = (Exchange::Sh, "510300".to_string());
+    let mut chains = NameChains::default();
+    for (d, acquired, sha, name) in samples {
+        let snapshot = Snapshot {
+            kind: ListKind::Sse,
+            day: day(2026, 11, d),
+            acquired_at: acquired.into(),
+            sha256: sha.into(),
+        };
+        chains.push(&key, &snapshot, day(2026, 11, d), name);
+    }
+    chains
+        .finish()
+        .remove(&key)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|mut step| {
+            step.known_at = step.observed_from;
+            step.snapshot_sha256 = String::new();
+            step
+        })
+        .collect()
+}
+
+fn sample(d: u32, acquired: &'static str, sha: &'static str, name: &'static str) -> Sample {
+    (d, acquired, sha, name)
 }
 
 #[test]
@@ -606,6 +645,7 @@ fn names_behind_current_lists_codes_where_the_selected_list_disagrees_with_the_c
             ),
             (key("510320"), vec![obs(2026, 11, 5, "旧ETF")]),
         ]),
+        name_ends: BTreeMap::new(),
         first_seen: BTreeMap::new(),
         bindings: Vec::new(),
         snapshot_ids: BTreeMap::new(),
