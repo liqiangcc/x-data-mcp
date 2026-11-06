@@ -103,7 +103,7 @@ use std::sync::Arc;
 /// whose `known_at` is set on purpose. v4 → v5: title classification follows
 /// D-68 (a revocation handing over to another warning is `Implement(B)`;
 /// forecasts, pre-audit notes and third-party opinions are not events).
-pub const PARSER_VERSION: &str = "risk-warnings-v5";
+pub const PARSER_VERSION: &str = "risk-warnings-v6";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -281,6 +281,9 @@ impl Admitted {
                 "max": self.sh_max_docs_per_bulletin,
             },
             "interval_rows": self.set.rows.len(),
+            // D-81 R5: a code the source contradicts itself on is written as
+            // `marker_only_unresolved` for that day and the rest is published.
+            "same_day_conflicts": self.set.same_day_conflict_evidence(),
             "observed_windows": self.set.observed_windows(),
             "not_observed_windows": self.set.not_observed_windows(),
             "coverage": self.set.coverage.iter().map(|window| json!({
@@ -636,7 +639,7 @@ impl ShState {
             let seen = self.docs_per_bulletin.entry(id.clone()).or_default();
             *seen = (*seen).max(*documents);
         }
-        self.events.admit(&page.events);
+        self.events.admit(&page.events, true)?;
         self.quarter_rows
             .entry(key)
             .and_modify(|count| *count += page.events.len())
@@ -1024,6 +1027,40 @@ fn sh_event_key(event: &RiskWarningStatusEvent) -> ShEventKey {
     (event.source_record_id.clone(), event.action, event.status)
 }
 
+/// The dates one event states: the day it takes effect and the day it was
+/// announced. Two sightings of one [`ShEventKey`] must agree on both.
+type ShEventDates = (NaiveDate, Option<String>);
+
+fn sh_event_dates(event: &RiskWarningStatusEvent) -> ShEventDates {
+    (event.day, event.announced_at.clone())
+}
+
+/// D-81 R4: the first phase does not replay corrections. A second sighting of
+/// one `(announcement id, event)` that states other dates than the first is a
+/// corrected announcement, and keeping the first date would silently drop the
+/// correction, so the set is refused instead.
+fn refuse_changed_dates(event: &RiskWarningStatusEvent, first: &ShEventDates) -> Result<(), Error> {
+    let now = sh_event_dates(event);
+    if &now == first {
+        return Ok(());
+    }
+    let show = |(day, announced): &ShEventDates| {
+        format!(
+            "effective {day}, announced {}",
+            announced.as_deref().unwrap_or("-")
+        )
+    };
+    Err(Error::invalid(format!(
+        "SSE announcement {} ({}) code {} is stated twice with different dates ({} then {}); \
+         corrections are not replayed in this phase (D-81 R4)",
+        event.source_record_id,
+        event.raw_status_code,
+        event.code,
+        show(first),
+        show(&now),
+    )))
+}
+
 /// The admitted SH events in first-seen order. The first page that states an
 /// event keeps it, and the event carries that page's snapshot id as its
 /// `source_document_sha256`, so the order pages are fed in decides which
@@ -1033,18 +1070,35 @@ fn sh_event_key(event: &RiskWarningStatusEvent) -> ShEventKey {
 struct EventSet {
     // De-duplication is by `(bulletin id, event)`, not by bulletin id alone: a
     // bulletin may carry more than one event document, and the same bulletin
-    // legitimately matches both title filters (XDM-151 §7).
-    seen: BTreeSet<ShEventKey>,
+    // legitimately matches both title filters (XDM-151 §7). The dates of the
+    // first sighting are kept so a later one that disagrees is refused (D-81
+    // R4) instead of being dropped.
+    seen: BTreeMap<ShEventKey, ShEventDates>,
     events: Vec<RiskWarningStatusEvent>,
 }
 
 impl EventSet {
-    fn admit(&mut self, events: &[RiskWarningStatusEvent]) {
+    /// `strict` is the daily item's rule: a repeat with other dates is refused.
+    /// Replay also holds the older `END_DATE` answers of a window, which the
+    /// daily item never reads; those only add what the newer answer does not
+    /// state, so they are admitted with `strict = false` and a repeat is
+    /// ignored exactly as before R4. Otherwise a date corrected between two
+    /// fetches would fail replay while the daily item succeeds.
+    fn admit(&mut self, events: &[RiskWarningStatusEvent], strict: bool) -> Result<(), Error> {
         for event in events {
-            if self.seen.insert(sh_event_key(event)) {
-                self.events.push(event.clone());
+            match self.seen.get(&sh_event_key(event)) {
+                Some(first) => {
+                    if strict {
+                        refuse_changed_dates(event, first)?;
+                    }
+                }
+                None => {
+                    self.seen.insert(sh_event_key(event), sh_event_dates(event));
+                    self.events.push(event.clone());
+                }
             }
         }
+        Ok(())
     }
 }
 
@@ -1071,6 +1125,12 @@ pub(crate) struct BulletinOrder {
 }
 
 impl BulletinOrder {
+    /// The title filter and window start: what the daily item reads one
+    /// `END_DATE` of.
+    fn window(&self) -> (usize, NaiveDate) {
+        (self.filter, self.start)
+    }
+
     /// The place of the page a request fingerprint names, `None` when the
     /// fingerprint is not one of this adapter's bulletin requests.
     pub(crate) fn from_fingerprint(fingerprint: &str) -> Option<Self> {
@@ -1100,6 +1160,27 @@ impl BulletinOrder {
     }
 }
 
+/// The snapshots of bulletin pages the daily item does not read: for one title
+/// filter and window start it reads only the newest `END_DATE` answer, so every
+/// page of an older end is superseded. `ordered` is `(snapshot id, request
+/// fingerprint)` in [`BulletinOrder`], which puts the newest end first.
+pub(crate) fn superseded_bulletins<'a>(
+    ordered: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> BTreeSet<String> {
+    let mut newest: BTreeMap<(usize, NaiveDate), std::cmp::Reverse<NaiveDate>> = BTreeMap::new();
+    let mut superseded = BTreeSet::new();
+    for (snapshot_id, fingerprint) in ordered {
+        let Some(order) = BulletinOrder::from_fingerprint(fingerprint) else {
+            continue;
+        };
+        let end = *newest.entry(order.window()).or_insert(order.end);
+        if end != order.end {
+            superseded.insert(snapshot_id.to_string());
+        }
+    }
+    superseded
+}
+
 /// Parse one SSE bulletin page document by document.
 ///
 /// `pageHelp.data` holds announcement **groups** in the real response
@@ -1115,7 +1196,11 @@ fn parse_sh_page(bytes: &[u8], snapshot_id: &str) -> Result<ShPage, Error> {
     let mut page = ShPage::default();
     // Within a page the same `(id, event)` is read once: both title filters
     // match the same bulletin in some years, and a frozen page can repeat a row.
-    let mut seen: BTreeSet<ShEventKey> = BTreeSet::new();
+    // Only an exact repeat (same event, same dates) collapses here. A repeat
+    // with other dates is kept so that [`EventSet::admit`] can refuse it when
+    // the page is one the daily item reads (D-81 R4); parsing alone must not
+    // fail on a page replay holds and the daily item does not.
+    let mut seen: BTreeSet<(ShEventKey, ShEventDates)> = BTreeSet::new();
     for group in groups {
         let Some(first) = group.first() else {
             return Err(Error::invalid(
@@ -1134,7 +1219,7 @@ fn parse_sh_page(bytes: &[u8], snapshot_id: &str) -> Result<ShPage, Error> {
                 page.ignored += 1;
                 continue;
             };
-            if seen.insert(sh_event_key(&event)) {
+            if seen.insert((sh_event_key(&event), sh_event_dates(&event))) {
                 page.events.push(event);
             }
         }
@@ -1476,6 +1561,7 @@ fn parse_day(text: &str, field: &str) -> Result<NaiveDate, Error> {
 pub fn replay(
     store: &SourceStore,
     pages: &[(&str, String, Vec<u8>)],
+    superseded: &BTreeSet<String>,
     gaps: &[(NaiveDate, NaiveDate)],
     coverage: Vec<CoverageWindow>,
 ) -> Result<RiskWarningSet, Error> {
@@ -1493,7 +1579,10 @@ pub fn replay(
                 sz_changes.append(&mut changes);
             }
             "sse_bulletin" => {
-                sh_events.admit(&parse_sh_page(bytes, snapshot_id)?.events);
+                sh_events.admit(
+                    &parse_sh_page(bytes, snapshot_id)?.events,
+                    !superseded.contains(snapshot_id),
+                )?;
             }
             _ => {}
         }
@@ -1966,6 +2055,109 @@ mod tests {
             classify_title("某公司关于取消股票特别处理的公告"),
             Some((RiskWarningAction::Revoke, None))
         );
+    }
+
+    fn page_of(rows: &[(&str, &str, &str, &str)]) -> Vec<u8> {
+        let data: Vec<_> = rows
+            .iter()
+            .map(|(id, code, title, day)| {
+                serde_json::json!({
+                    "ORG_BULLETIN_ID": id, "SECURITY_CODE": code, "TITLE": title,
+                    "SSEDATE": day, "URL": format!("/d/{id}.pdf"),
+                })
+            })
+            .collect();
+        serde_json::json!({"pageHelp": {"beginPage": 1, "pageNo": 1, "pageSize": 100,
+            "pageCount": 1, "total": data.len(), "data": data}})
+        .to_string()
+        .into_bytes()
+    }
+
+    const IMPLEMENT: &str = "示例关于公司股票被实施其他风险警示的公告";
+
+    /// D-81 R4: the same `(announcement id, event)` stated with another date is
+    /// a correction. The first date must not silently win.
+    #[test]
+    fn a_changed_date_for_one_announcement_event_is_refused() {
+        let first =
+            parse_sh_page(&page_of(&[("A1", "600001", IMPLEMENT, "2024-05-06")]), "p1").unwrap();
+        let corrected =
+            parse_sh_page(&page_of(&[("A1", "600001", IMPLEMENT, "2024-05-07")]), "p2").unwrap();
+        let mut set = EventSet::default();
+        set.admit(&first.events, true).unwrap();
+        let error = set.admit(&corrected.events, true).unwrap_err();
+        assert_eq!(error.code(), "source_invalid");
+        let text = error.to_string();
+        assert!(text.contains("A1") && text.contains("600001"), "{text}");
+        assert!(
+            text.contains("2024-05-06") && text.contains("2024-05-07"),
+            "{text}"
+        );
+        assert!(text.contains("D-81 R4"), "{text}");
+        assert_eq!(set.events.len(), 1, "nothing is admitted past the refusal");
+    }
+
+    /// An exact repeat (both title filters answer one announcement) is still
+    /// read once, and a different event of the same announcement is not a
+    /// repeat.
+    #[test]
+    fn an_exact_repeat_is_read_once_and_a_different_event_is_not_a_repeat() {
+        let page = page_of(&[("A1", "600001", IMPLEMENT, "2024-05-06")]);
+        let mut set = EventSet::default();
+        set.admit(&parse_sh_page(&page, "p1").unwrap().events, true)
+            .unwrap();
+        set.admit(&parse_sh_page(&page, "p2").unwrap().events, true)
+            .unwrap();
+        assert_eq!(set.events.len(), 1);
+        assert_eq!(
+            set.events[0].source_document_sha256, "p1",
+            "first page wins"
+        );
+        let revoke = page_of(&[(
+            "A1",
+            "600001",
+            "示例关于撤销其他风险警示的公告",
+            "2024-06-06",
+        )]);
+        set.admit(&parse_sh_page(&revoke, "p3").unwrap().events, true)
+            .unwrap();
+        assert_eq!(set.events.len(), 2);
+    }
+
+    /// Inside one page the same event with other dates is not collapsed by the
+    /// page parser, so the set sees it and refuses it.
+    #[test]
+    fn a_changed_date_inside_one_page_reaches_the_set() {
+        let page = page_of(&[
+            ("A1", "600001", IMPLEMENT, "2024-05-06"),
+            ("A1", "600001", IMPLEMENT, "2024-05-07"),
+        ]);
+        let parsed = parse_sh_page(&page, "p1").unwrap();
+        assert_eq!(parsed.events.len(), 2);
+        let mut set = EventSet::default();
+        assert!(set.admit(&parsed.events, true).is_err());
+    }
+
+    /// A page the daily item does not read (an older `END_DATE` answer of a
+    /// window) is admitted leniently, so replay cannot fail where the daily
+    /// item succeeds.
+    #[test]
+    fn a_superseded_page_does_not_trip_the_refusal() {
+        let newest = parse_sh_page(
+            &page_of(&[("A1", "600001", IMPLEMENT, "2024-05-07")]),
+            "new",
+        )
+        .unwrap();
+        let older = parse_sh_page(
+            &page_of(&[("A1", "600001", IMPLEMENT, "2024-05-06")]),
+            "old",
+        )
+        .unwrap();
+        let mut set = EventSet::default();
+        set.admit(&newest.events, true).unwrap();
+        set.admit(&older.events, false).unwrap();
+        assert_eq!(set.events.len(), 1);
+        assert_eq!(set.events[0].day, day(2024, 5, 7));
     }
 
     #[test]
