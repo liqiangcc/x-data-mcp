@@ -5,6 +5,8 @@ Refs [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)、[#509](https:/
 
 **状态（2026-11-05）**：§7 的 Q1–Q9 已由 owner 全部按推荐批准，记为 D-76。PR-0 取证已完成，结果回填在 §8，召回测量在 §8.1。下文 §0–§5 是批准前写的设计，其中 Q2 的字段取舍已按 §8.1 落定：SSE `name` 取 `secNameFull`，`fundAbbr` 不进 `name`。§5.1 里「SSE `fundAbbr`」作 `name` 的写法以 D-76 为准。
 
+**PR-3 读面（已实现，代码面未部署）**：`find_securities` 加可选 `kind`（`stock` 缺省、`etf`），按 §5.3 的 (b) 形态实现为 `market.security_names` 上的内部窄过滤 `Filter::FindEtf`，不放开 `universe_scope`。`research` 的 `tools/list` +103 B。契约见 [generic-data-v11](../contracts/generic-data-v11.md) §7，工具说明见 [mcp-tools](../mcp-tools.md)。与 §5.3 草案的差别：没有 `kind=all`，也没有 `include_delisted`，`kind=etf` 一次返回现行和退市，用 `status` 区分；返回列用 `name_observed_from` 表示最新名称的首次观测日；沿用 PR-2 的“不补段”，搜索只看最新名称。
+
 **证据分级**：「代码核对」= 本任务读了仓库代码和合成夹具；「既有实测」= 引自
 [M3-2 设计](issue-509-m3-2-etf.md) 2026-11-03 的真实字节取证，本任务没有复核；「推断」不是结论；
 「未验证」见 §8。本机不能访问生产来源库，所以**冻结字节里到底有什么，这里一律没有亲眼看过**。

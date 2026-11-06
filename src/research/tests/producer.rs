@@ -16,6 +16,7 @@ fn labels() -> serde_json::Value {
     json!({
         "price_limit": crate::research::price_limit::READ_ALGORITHM_VERSION,
         "market_cap": crate::research::market_cap::ALGORITHM_VERSION,
+        "tradability": crate::research::tradability::ALGORITHM_VERSION,
         "security_master": crate::security_master::assembly::ALGORITHM_VERSION,
         "security_names": crate::security_master::names::ALGORITHM_VERSION,
         "risk_warnings": crate::security_master::risk_warnings::ALGORITHM_VERSION,
@@ -26,6 +27,16 @@ fn labels() -> serde_json::Value {
 #[test]
 fn the_schema_string_is_v5() {
     assert_eq!(manifest::SCHEMA, "x-data-mcp.research-snapshot.v5");
+}
+
+// Not behind the `export` feature: `derivation_algorithms()` always compiles,
+// so the literal is checked in a default-feature build too.
+#[test]
+fn the_tradability_label_is_the_v1_literal() {
+    assert_eq!(
+        manifest::derivation_algorithms()["tradability"],
+        "tradability-v1"
+    );
 }
 
 #[cfg(feature = "export")]
@@ -51,7 +62,7 @@ fn the_dry_run_manifest_names_the_binary_and_the_derivation_labels() {
     // The literal labels, so a silent rename of a constant is a visible diff.
     assert_eq!(
         document["producer"]["algorithms"]["price_limit"],
-        "limit-v1+exr-guard1"
+        "limit-v2"
     );
     // The registered rule dataset keeps its own label.
     assert_eq!(crate::trading_rules::ALGORITHM_VERSION, "limit-v1");

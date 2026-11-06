@@ -42,6 +42,7 @@ serde_json_canonicalizer = "=0.3.2"
 # feature adds no C toolchain dependency. The writer lives in
 # `src/research/parquet.rs`.
 parquet = { version = "59.3.2", optional = true, default-features = false, features = ["snap"] }
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 # Validate generated wire schemas against real stdio results; no HTTP schema resolution.

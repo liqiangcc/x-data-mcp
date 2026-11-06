@@ -114,7 +114,13 @@ fn identity_rows_are_class_two_and_keep_the_two_listing_sources() {
     assert_eq!(identity.len(), 1_717);
     assert!(identity.iter().all(|row| row.instrument_class == 2));
     assert!(identity.iter().all(|row| row.delisting_date.is_none()));
-    assert!(identity.iter().all(|row| row.effective_from == first));
+    // D-80: every row here has a listing day, so it opens the interval; the
+    // first observation day stays in `known_at`.
+    assert!(
+        identity
+            .iter()
+            .all(|row| Some(row.effective_from) == row.listing_date)
+    );
     assert!(identity.iter().all(|row| row.known_at == Some(first)));
     let sh = identity
         .iter()
@@ -159,6 +165,11 @@ fn a_szse_code_without_a_tdx_ssdate_keeps_an_unknown_listing_day() {
     let identity = identity_rows(&admitted, &BTreeMap::new()).unwrap();
     assert_eq!(identity.len(), 2);
     assert!(identity.iter().all(|row| row.listing_date.is_none()));
+    // No listing day: the first observation day is the only dated evidence, so
+    // the previous behaviour stays (D-80).
+    assert!(identity.iter().all(
+        |row| row.effective_from == day(2026, 11, 3) && row.known_at == Some(day(2026, 11, 3))
+    ));
     assert!(
         identity
             .iter()

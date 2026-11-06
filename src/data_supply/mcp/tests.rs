@@ -2560,6 +2560,92 @@ fn seed_security_master(f: &Fixture, rows: &[(&str, Option<NaiveDate>)]) {
     .unwrap();
 }
 
+/// D-80 through the public read face: an ETF listed in 2005 and first observed
+/// in 2026 is answered for a 2020 `as_of`, and a `known_at` before the first
+/// observation excludes the row and counts it.
+#[test]
+fn security_master_serves_an_etf_from_its_listing_day_and_known_at_still_filters() {
+    use crate::security_master::assembly::{Assembly, MemberFact, member_rows};
+    use crate::security_master::{DelistingReason, DelistingSource, Exchange, ListingSource};
+    let f = fixture();
+    let listed = NaiveDate::from_ymd_opt(2005, 2, 23).unwrap();
+    let observed = NaiveDate::from_ymd_opt(2026, 11, 5).unwrap();
+    let rows = member_rows(&[MemberFact {
+        exchange: Exchange::Sh,
+        code: "510050".into(),
+        first_seen: observed,
+        known_at: observed,
+        listing_date: Some(listed),
+        listing_source: ListingSource::ExchangeList,
+        listing_date_tdx: Some(listed),
+        effective_to: None,
+        delisting_date: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        announcement_date: None,
+        announcement_url: None,
+        extraction: None,
+    }])
+    .unwrap();
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        let generation = crate::sqlite_market::evidence_store::put_evidence(
+            c,
+            crate::compact_market::EvidenceKind::Generation,
+            &json!({"generation": "gen-etf"}),
+        )
+        .unwrap();
+        let binding = crate::sqlite_market::evidence_store::put_source_binding(
+            c,
+            &crate::compact_market::SourceBinding {
+                generation_id: "gen-etf".into(),
+                generation_manifest_sha256: [0x0b; 32],
+                day_member_sha256: [0x0c; 32],
+                security_event_sha256: [0x0e; 32],
+                evidence_digest: generation,
+            },
+        )
+        .unwrap();
+        crate::sqlite_market::security::replace_security_master(
+            c,
+            &Assembly {
+                rows,
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(observed),
+            },
+            binding,
+            "task-master",
+            "derived:security_master",
+        )
+    })
+    .unwrap();
+    let ask = |known_at: Option<&str>| {
+        let mut input = json!({
+            "securities": ["sh.510050"], "fact": "security_master", "as_of": "2020-06-30"
+        });
+        if let Some(day) = known_at {
+            input["known_at"] = json!(day);
+        }
+        f.api.call("get_security_state", input).unwrap()
+    };
+    let now = ask(None);
+    assert_eq!(now["row_count"], 1, "{now}");
+    // The record set is selected by `effective_from <= as_of`, so a row for
+    // 2020 means the interval opened before the first observation (2026).
+    assert_eq!(now["columns"]["known_at"], json!(["2026-11-05"]));
+    assert_eq!(now["columns"]["listing_date"], json!(["2005-02-23"]));
+    // Information set first: known by 2020 the row did not exist yet.
+    let early = ask(Some("2020-06-30"));
+    assert_eq!(early["row_count"], 0, "{early}");
+    let late = ask(Some("2026-11-05"));
+    assert_eq!(late["row_count"], 1, "{late}");
+}
+
 /// Seed `derived:security_names` the way the daily item does: one generation
 /// binding, then the whole-table replace. The read test goes through the public
 /// `query_data` handler, so the stored rows are exactly what a real run leaves.
@@ -5169,4 +5255,411 @@ fn query_data_answers_match_the_recorded_golden_answers() {
     for (label, expected) in golden {
         assert_eq!(&answers[label], expected, "{label}");
     }
+}
+
+// ---- ETF PR-3: find_securities kind=etf ------------------------------------
+//
+// Invented fixture. Main table (class 2 unless noted):
+//   sh.510300 current   名称 "沪深300ETF华泰柏瑞" (first seen 2026-11-05)
+//   sz.159919 current   名称 "沪深300ETF嘉实"
+//   sh.510500 current   名称 "中证500ETF南方"; before 2026-11-08 "中证500指数ETF"
+//   sh.510050 delisted  no observed name (older than the first snapshot)
+//   sz.159901 current   name "ＥＴＦ深证１００" typed full-width on the list
+//   sh.600006 class 0   an A-share, never an ETF result
+
+fn seed_etf_fixture(f: &Fixture) {
+    use crate::security_master::Exchange;
+    use crate::security_master::names::{
+        EtfNameSet, NameCertainty, NameInterval, NameSet, NameSourceKind,
+    };
+    use crate::sqlite_market::security_names::{EtfPart, SecurityNameWrite};
+
+    seed_security_master(
+        f,
+        &[
+            ("sh.510300", None),
+            ("sz.159919", None),
+            ("sh.510500", None),
+            ("sh.510050", Some(day(2026, 10, 22))),
+            ("sz.159901", None),
+            ("sh.600006", None),
+        ],
+    );
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        c.execute(
+            "UPDATE security_master SET instrument_class=2 WHERE code <> '600006'",
+            [],
+        )
+        .map_err(|e| crate::market_storage::Error::Storage(e.to_string()))?;
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+    seed_security_names(f);
+
+    let row =
+        |exchange: Exchange, code: &str, from: NaiveDate, to: Option<NaiveDate>, name: &str| {
+            NameInterval {
+                exchange,
+                code: code.into(),
+                effective_from: from,
+                effective_to: to,
+                name: name.into(),
+                certainty: if to.is_some() {
+                    NameCertainty::Interval
+                } else {
+                    NameCertainty::Unbounded
+                },
+                known_at: Some(from),
+                source_kind: NameSourceKind::ExchangeSnapshot,
+                source_record_id: Some(format!("etf_list:{code}")),
+            }
+        };
+    let first = day(2026, 11, 5);
+    let etf = EtfNameSet {
+        rows: vec![
+            row(Exchange::Sh, "510300", first, None, "沪深300ETF华泰柏瑞"),
+            row(Exchange::Sz, "159919", first, None, "沪深300ETF嘉实"),
+            row(
+                Exchange::Sh,
+                "510500",
+                first,
+                Some(day(2026, 11, 8)),
+                "中证500指数ETF",
+            ),
+            row(
+                Exchange::Sh,
+                "510500",
+                day(2026, 11, 8),
+                None,
+                "中证500ETF南方",
+            ),
+            row(Exchange::Sz, "159901", first, None, "ＥＴＦ深证１００"),
+        ],
+        entities: [
+            (Exchange::Sh, "510300".to_string()),
+            (Exchange::Sz, "159919".to_string()),
+            (Exchange::Sh, "510500".to_string()),
+            (Exchange::Sh, "510050".to_string()),
+            (Exchange::Sz, "159901".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+    };
+    let a_share = NameSet {
+        rows: f
+            .backend
+            .read(crate::sqlite_market::security::read_security_names)
+            .unwrap()
+            .iter()
+            .map(|row| row.to_interval().unwrap())
+            .collect(),
+        coverage: Vec::new(),
+        pending_sources: Vec::new(),
+    };
+    f.backend
+        .commit_security_names(&SecurityNameWrite {
+            set: &a_share,
+            etf: EtfPart::Replace(&etf),
+            task_id: "task-names",
+            item_id: "derived:security_names",
+            generation_id: "gen-names",
+            generation_manifest_sha256: &"41".repeat(32),
+            member_sha256: &"42".repeat(32),
+            security_event_sha256: &"43".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-names"}),
+        })
+        .unwrap();
+}
+
+fn find_etf(f: &Fixture, input: Value) -> Value {
+    let mut input = input;
+    input["kind"] = json!("etf");
+    f.api.call("find_securities", input).unwrap()
+}
+
+fn etf_entities(answer: &Value) -> Vec<String> {
+    answer["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e.as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn find_etf_matches_names_across_width_case_and_whitespace() {
+    let f = fixture();
+    seed_etf_fixture(&f);
+    let both = vec!["sh.510300".to_owned(), "sz.159919".to_owned()];
+    for query in [
+        "沪深300ETF",
+        "300ETF",
+        "300etf",
+        "沪深３００ＥＴＦ",
+        "沪深 300 Etf",
+        "　沪深300　ETF ",
+        "沪深300ＥｔＦ",
+    ] {
+        let answer = find_etf(&f, json!({"query": query}));
+        assert_eq!(etf_entities(&answer), both, "{query:?}");
+    }
+    // The stored full-width name is found by its half-width spelling.
+    let wide = find_etf(&f, json!({"query": "etf深证100"}));
+    assert_eq!(etf_entities(&wide), ["sz.159901"]);
+    assert_eq!(wide["columns"]["name"], json!(["ＥＴＦ深证１００"]));
+    // A substring of one name only.
+    let one = find_etf(&f, json!({"query": "华泰"}));
+    assert_eq!(etf_entities(&one), ["sh.510300"]);
+}
+
+#[test]
+fn find_etf_returns_status_name_basis_and_observation_day() {
+    let f = fixture();
+    seed_etf_fixture(&f);
+    let all = find_etf(&f, json!({}));
+    assert_eq!(
+        etf_entities(&all),
+        [
+            "sh.510050",
+            "sh.510300",
+            "sh.510500",
+            "sz.159901",
+            "sz.159919"
+        ]
+    );
+    assert_eq!(all["layout"], "table");
+    assert_eq!(all["row_count"], 5);
+    let columns = &all["columns"];
+    assert_eq!(
+        columns["name"],
+        json!([
+            null,
+            "沪深300ETF华泰柏瑞",
+            "中证500ETF南方",
+            "ＥＴＦ深证１００",
+            "沪深300ETF嘉实"
+        ])
+    );
+    assert_eq!(
+        columns["name_basis"],
+        json!([
+            "unavailable",
+            "observed_from_first_snapshot",
+            "observed_from_first_snapshot",
+            "observed_from_first_snapshot",
+            "observed_from_first_snapshot"
+        ])
+    );
+    assert_eq!(
+        columns["status"],
+        json!(["delisted", "current", "current", "current", "current"])
+    );
+    assert_eq!(columns["instrument_class"], json!([2, 2, 2, 2, 2]));
+    // The latest name's own first observation, not the code's first.
+    assert_eq!(
+        columns["name_observed_from"],
+        json!([null, "2026-11-05", "2026-11-08", "2026-11-05", "2026-11-05"])
+    );
+    assert_eq!(columns["delisting_date"][0], "2026-10-22");
+    assert!(columns["delisting_date"][1].is_null());
+    // No A-share leaks in, and no empty-string name.
+    assert!(!etf_entities(&all).contains(&"sh.600006".to_owned()));
+    assert!(
+        columns["name"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|n| n.is_null() || !n.as_str().unwrap().is_empty())
+    );
+}
+
+#[test]
+fn find_etf_searches_the_latest_name_only_and_never_a_missing_one() {
+    let f = fixture();
+    seed_etf_fixture(&f);
+    // The earlier name of 510500 does not match; the later one does.
+    assert!(etf_entities(&find_etf(&f, json!({"query": "指数ETF"}))).is_empty());
+    assert_eq!(
+        etf_entities(&find_etf(&f, json!({"query": "500etf"}))),
+        ["sh.510500"]
+    );
+    // An ETF with no name is found by its code and by nothing else.
+    let by_code = find_etf(&f, json!({"code": "510050"}));
+    assert_eq!(etf_entities(&by_code), ["sh.510050"]);
+    assert_eq!(by_code["columns"]["name_basis"], json!(["unavailable"]));
+    assert!(by_code["columns"].get("name").is_none(), "{by_code}");
+    assert!(etf_entities(&find_etf(&f, json!({"query": "510050"}))).is_empty());
+    // Exchange short forms are outside the contract.
+    for query in ["华夏300", "广发500", "300ETF华夏"] {
+        assert!(etf_entities(&find_etf(&f, json!({"query": query}))).is_empty());
+    }
+    // A-share names are not searched.
+    assert!(etf_entities(&find_etf(&f, json!({"query": "新名"}))).is_empty());
+    // code and query combine as an intersection.
+    assert!(etf_entities(&find_etf(&f, json!({"code":"510300","query":"嘉实"}))).is_empty());
+    assert_eq!(
+        etf_entities(&find_etf(&f, json!({"code":"510300","query":"华泰"}))),
+        ["sh.510300"]
+    );
+}
+
+#[test]
+fn find_etf_says_what_its_names_do_and_do_not_cover() {
+    let f = fixture();
+    seed_etf_fixture(&f);
+    let answer = find_etf(&f, json!({"query": "沪深300"}));
+    let text = answer["limitations"].to_string();
+    for needle in [
+        "first list snapshot",
+        "华夏300",
+        "广发500",
+        "name_basis unavailable",
+        "delisted",
+    ] {
+        assert!(text.contains(needle), "{needle}: {text}");
+    }
+    // An empty result keeps the same limitations.
+    let none = find_etf(&f, json!({"query": "不存在"}));
+    assert_eq!(none["row_count"], 0);
+    assert!(none["limitations"].to_string().contains("华夏300"));
+}
+
+#[test]
+fn find_etf_before_any_write_is_absent_and_empty() {
+    let f = fixture();
+    let answer = find_etf(&f, json!({"query": "沪深300"}));
+    assert_eq!(answer["row_count"], 0);
+    assert!(
+        answer["limitations"]
+            .to_string()
+            .contains("no registered version")
+    );
+    assert!(
+        answer["versions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v["status"] == "absent")
+    );
+}
+
+#[test]
+fn find_etf_pages_and_binds_the_cursor_to_its_request() {
+    let f = fixture();
+    seed_etf_fixture(&f);
+    let mut seen = Vec::new();
+    let mut cursor: Option<Value> = None;
+    let mut pages = 0;
+    loop {
+        let mut input = json!({"page_size": 2});
+        if let Some(cursor) = &cursor {
+            input["cursor"] = cursor.clone();
+        }
+        let page = find_etf(&f, input);
+        pages += 1;
+        assert!(page["row_count"].as_u64().unwrap() <= 2);
+        seen.extend(etf_entities(&page));
+        // Each page keeps its columns aligned with its own rows.
+        assert_eq!(
+            page["columns"]["status"].as_array().unwrap().len() as u64,
+            page["row_count"].as_u64().unwrap()
+        );
+        if page["next_cursor"].is_null() {
+            break;
+        }
+        cursor = Some(page["next_cursor"].clone());
+    }
+    assert_eq!(pages, 3);
+    assert_eq!(
+        seen,
+        [
+            "sh.510050",
+            "sh.510300",
+            "sh.510500",
+            "sz.159901",
+            "sz.159919"
+        ]
+    );
+
+    // A cursor belongs to the request that issued it.
+    let first = find_etf(&f, json!({"page_size": 1}));
+    let token = first["next_cursor"].clone();
+    for other in [
+        f.api.call(
+            "find_securities",
+            json!({"page_size":1,"cursor":token.clone()}),
+        ),
+        f.api.call(
+            "find_securities",
+            json!({"kind":"etf","query":"沪深","page_size":1,"cursor":token}),
+        ),
+    ] {
+        assert_eq!(other.unwrap_err().code, "invalid_arguments");
+    }
+}
+
+#[test]
+fn find_securities_kind_defaults_to_stock_and_rejects_bad_input() {
+    let f = fixture();
+    publish_catalog(
+        &f,
+        "catalog-kind",
+        &[
+            ("600006", crate::catalog::Exchange::Shanghai),
+            ("000001", crate::catalog::Exchange::Shenzhen),
+        ],
+    );
+    let plain = f
+        .api
+        .call("find_securities", json!({"query":"600006"}))
+        .unwrap();
+    let stock = f
+        .api
+        .call("find_securities", json!({"query":"600006","kind":"stock"}))
+        .unwrap();
+    same_answer(&stock, &plain);
+    assert_eq!(stock["columns"], plain["columns"]);
+    assert_eq!(stock["limitations"], plain["limitations"]);
+
+    for (input, why) in [
+        (json!({"kind":"fund"}), "unknown kind"),
+        (json!({"kind":"ETF"}), "kind is lower case"),
+        (json!({"kind":"all"}), "all is not offered"),
+        (json!({"kind":""}), "empty kind"),
+        (json!({"kind":7}), "not a string"),
+        (json!({"kind":"etf","as_of":"2026-11-05"}), "extra field"),
+        (json!({"kind":"etf","include_delisted":true}), "extra field"),
+        (json!({"kind":"etf","fields":["name"]}), "extra field"),
+        (
+            json!({"kind":"etf","industry_code":"I1"}),
+            "ETF has no industry",
+        ),
+        (json!({"kind":"etf","query":"  　"}), "blank query"),
+    ] {
+        let error = f.api.call("find_securities", input.clone()).unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{why}: {input}");
+    }
+}
+
+#[test]
+fn query_data_cannot_reach_the_etf_name_filter() {
+    let f = fixture();
+    seed_etf_fixture(&f);
+    let error = f
+        .api
+        .call(
+            "query_data",
+            json!({
+                "dataset": "market.security_names",
+                "contract_version": "v2",
+                "selection": {"kind": "market"},
+                "filter": {"kind": "find_etf", "name_query": "沪深"},
+                "version": {"kind": "latest_per_entity"}
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
 }
