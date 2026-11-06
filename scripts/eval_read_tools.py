@@ -916,6 +916,174 @@ def dates_in(text: str) -> set[dt.date]:
     return out
 
 
+
+def check_tradability(answer: str, oracle_rows_dict: dict[str, list[dict]], check: dict) -> dict:
+    """Can the stock be traded? Check if there's a bar and no suspension."""
+    oracle_names = check["oracles"]
+    bar_rows = oracle_rows_dict.get(oracle_names[0], [])
+    suspension_rows = oracle_rows_dict.get(oracle_names[1], []) if len(oracle_names) > 1 else []
+    
+    has_bar = len(bar_rows) > 0
+    suspended = len(suspension_rows) > 0
+    
+    expected = "能买" if has_bar and not suspended else "不能买" if not has_bar or suspended else "无法确定"
+    
+    matches = re.findall(r"结论\s*[:：]\s*\**\s*(能买|不能买|无法确定)", answer)
+    got = matches[-1] if matches else None
+    
+    return {
+        "kind": "tradability",
+        "ok": got == expected,
+        "detail": {
+            "expected": expected,
+            "got": got,
+            "has_bar": has_bar,
+            "suspended": suspended,
+        },
+    }
+
+
+def check_limit_price(answer: str, oracle_rows_dict: dict[str, list[dict]], check: dict) -> dict:
+    """Check the limit-up price computed from prev close and band."""
+    from decimal import Decimal, ROUND_HALF_UP
+    
+    oracle_names = check["oracles"]
+    prev_rows = oracle_rows_dict.get(oracle_names[0], [])
+    curr_rows = oracle_rows_dict.get(oracle_names[1], [])
+    
+    if not prev_rows or "close" not in prev_rows[0]:
+        return {
+            "kind": "limit_price",
+            "ok": False,
+            "detail": {"error": "no_prev_close", "expected": None, "got": None},
+        }
+    
+    prev_close = Decimal(str(prev_rows[0]["close"]))
+    band_bp = Decimal(str(check["band_bp"]))
+    min_tick_cents = Decimal(str(check["min_tick_cents"]))
+    
+    # Compute limit-up: round_half_up(prev_close * (10000 + band_bp) / 10000)
+    limit_up_raw = prev_close * (Decimal("10000") + band_bp) / Decimal("10000")
+    limit_up = limit_up_raw.quantize(min_tick_cents / 100, rounding=ROUND_HALF_UP)
+    
+    # Extract numbers from answer
+    numbers = extract_numbers(answer)
+    # Match with tolerance (limit_up is in yuan, numbers might be in cents)
+    expected_cents = int(limit_up * 100)
+    got_match = any(
+        abs(int(n * 100) - expected_cents) <= 1
+        for n in numbers
+        if n > 0
+    )
+    
+    return {
+        "kind": "limit_price",
+        "ok": got_match,
+        "detail": {
+            "expected": float(limit_up),
+            "prev_close": float(prev_close),
+            "band_bp": int(band_bp),
+            "numbers_in_answer": sorted([float(n) for n in numbers if n > 0])[:10],
+        },
+    }
+
+
+def check_market_cap(answer: str, oracle_rows_dict: dict[str, list[dict]], check: dict) -> dict:
+    """Check market cap computed from close price and shares."""
+    from decimal import Decimal
+    
+    oracle_names = check["oracles"]
+    bar_rows = oracle_rows_dict.get(oracle_names[0], [])
+    capital_rows = oracle_rows_dict.get(oracle_names[1], [])
+    
+    if not bar_rows or "close" not in bar_rows[0]:
+        return {
+            "kind": "market_cap",
+            "ok": False,
+            "detail": {"error": "no_close_price", "expected": None},
+        }
+    
+    close_price = Decimal(str(bar_rows[0]["close"]))
+    
+    # Find the latest capital event (should be sorted by effective_day desc or asc)
+    scope = check["scope"]
+    shares = None
+    for row in capital_rows:
+        if scope == "float_a" and "float_after" in row:
+            shares = Decimal(str(row["float_after"]))
+            break
+        elif scope in ["a_share_total", "company_total"] and "total_after" in row:
+            shares = Decimal(str(row["total_after"]))
+            break
+    
+    if shares is None:
+        return {
+            "kind": "market_cap",
+            "ok": False,
+            "detail": {"error": "no_shares_data", "expected": None, "scope": scope},
+        }
+    
+    # Market cap in yuan (close_price is yuan, shares is number of shares)
+    market_cap_yuan = close_price * shares
+    market_cap_yi = market_cap_yuan / Decimal("100000000")  # 亿
+    
+    numbers = extract_numbers(answer)
+    # Match either yuan or yi yuan
+    got_match = any(
+        abs(n - market_cap_yuan) / market_cap_yuan < Decimal("0.01")
+        or abs(n - market_cap_yi) / market_cap_yi < Decimal("0.01")
+        for n in numbers
+        if n > 0
+    )
+    
+    return {
+        "kind": "market_cap",
+        "ok": got_match,
+        "detail": {
+            "expected_yuan": float(market_cap_yuan),
+            "expected_yi": float(market_cap_yi),
+            "close_price": float(close_price),
+            "shares": float(shares),
+            "scope": scope,
+            "numbers_in_answer": sorted([float(n) for n in numbers if n > 0])[:10],
+        },
+    }
+
+
+def check_unknown_status(answer: str, oracle_rows: list[dict], check: dict) -> dict:
+    """Check if answer admits uncertainty when status is unknown."""
+    has_status = len(oracle_rows) > 0 and any(
+        row.get("normalized_status") not in [None, ""] for row in oracle_rows
+    )
+    
+    # Look for uncertainty indicators
+    uncertainty_patterns = [
+        r"无法确定",
+        r"不确定",
+        r"不能确定",
+        r"未知",
+        r"unknown",
+        r"结论\s*[:：]\s*\**\s*无法确定"
+    ]
+    admits_uncertainty = any(re.search(pat, answer, re.IGNORECASE) for pat in uncertainty_patterns)
+    
+    # If status is unknown (no rows), answer should admit uncertainty
+    expected = "无法确定" if not has_status else "已确定"
+    matches = re.findall(r"结论\s*[:：]\s*\**\s*(已确定|无法确定)", answer)
+    got = matches[-1] if matches else ("无法确定" if admits_uncertainty else None)
+    
+    return {
+        "kind": "unknown_status",
+        "ok": got == expected,
+        "detail": {
+            "expected": expected,
+            "got": got,
+            "has_status_data": has_status,
+            "admits_uncertainty": admits_uncertainty,
+        },
+    }
+
+
 def evaluate_answer(task: dict, answer: str, oracle_rows: dict[str, list[dict]], today: dt.date) -> list[dict]:
     allowed = {today} | dates_in(task["prompt"])
     results = []
@@ -923,6 +1091,11 @@ def evaluate_answer(task: dict, answer: str, oracle_rows: dict[str, list[dict]],
         if check["kind"] == "answer_text":
             results.append(check_answer_text(answer, check))
             continue
+        # New check kinds that need multiple oracles
+        if check["kind"] in ("tradability", "limit_price", "market_cap"):
+            results.append(globals()[f"check_{check['kind']}"](answer, oracle_rows, check))
+            continue
+        # Single-oracle checks
         rows = oracle_rows[check["oracle"]]
         if check["kind"] == "oracle_values":
             results.append(check_oracle_values(answer, rows, check, allowed))
@@ -930,6 +1103,8 @@ def evaluate_answer(task: dict, answer: str, oracle_rows: dict[str, list[dict]],
             results.append(check_verdict(answer, rows, check))
         elif check["kind"] == "screen":
             results.append(check_screen(answer, rows, check))
+        elif check["kind"] == "unknown_status":
+            results.append(check_unknown_status(answer, rows, check))
         else:
             raise EvalError(f"unknown check kind {check['kind']!r}")
     return results

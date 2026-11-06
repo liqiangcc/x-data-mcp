@@ -27,7 +27,9 @@
       "get_security_history",
       "get_security_events",
       "get_trading_calendar",
-      "get_price_limit_rules"
+      "get_price_limit_rules",
+      "get_tradability",
+      "get_market_cap"
     ],
     "new-no-query": [
       "get_data_capabilities",
@@ -43,7 +45,9 @@
       "get_security_history",
       "get_security_events",
       "get_trading_calendar",
-      "get_price_limit_rules"
+      "get_price_limit_rules",
+      "get_tradability",
+      "get_market_cap"
     ]
   },
   "acceptance": {
@@ -584,6 +588,193 @@
             "(无法|不能|不支持|没有办法|查不到|查询不到|找不到|未能|没有找到|没能)[^。\\n]{0,30}(名称|简称|ETF|代码)",
             "(名称|简称|ETF)[^。\\n]{0,30}(无法|不能|不支持|查不到|查询不到|找不到|不在|没有)"
           ]
+        }
+      ]
+    },
+    {
+      "id": "q14",
+      "title": "sh.600519 在 2020-01-07 能否买入",
+      "group": "core",
+      "prompt": "sh.600519（贵州茅台）在 2020-01-07 能否买入？先简述依据，最后单独一行写\"结论：能买\"\"结论：不能买\"或\"结论：无法确定\"。",
+      "oracles": {
+        "tradability": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600519"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        },
+        "suspension": {
+          "request": {
+            "dataset": "market.suspensions",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600519"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07",
+              "as_of": "2020-01-07"
+            },
+            "page_size": 10
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "tradability",
+          "oracles": [
+            "tradability",
+            "suspension"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "q15",
+      "title": "sz.300750 在 2020-08-25 的涨停价",
+      "group": "core",
+      "prompt": "sz.300750 在 2020-08-25 的涨停价是多少？给出涨停价的数值。",
+      "oracles": {
+        "prev_bar": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.300750"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-08-24",
+              "end_date": "2020-08-24"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        },
+        "curr_bar": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sz.300750"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-08-25",
+              "end_date": "2020-08-25"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "limit_price",
+          "oracles": [
+            "prev_bar",
+            "curr_bar"
+          ],
+          "band_bp": 2000,
+          "min_tick_cents": 1
+        }
+      ]
+    },
+    {
+      "id": "q16",
+      "title": "sh.600000 在 2020-01-07 的流通市值",
+      "group": "core",
+      "prompt": "sh.600000 在 2020-01-07 的流通市值是多少？用流通 A 股计算，给出市值数值和单位（元或亿元）。",
+      "oracles": {
+        "bar": {
+          "request": {
+            "dataset": "market.daily",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07"
+            },
+            "adjustment": "raw",
+            "page_size": 10
+          }
+        },
+        "capital": {
+          "request": {
+            "dataset": "market.capital_events",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "1990-01-01",
+              "end_date": "2020-01-07",
+              "as_of": "2020-01-07"
+            },
+            "page_size": 100
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "market_cap",
+          "oracles": [
+            "bar",
+            "capital"
+          ],
+          "scope": "float_a"
+        }
+      ]
+    },
+    {
+      "id": "q17",
+      "title": "sh.600000 在 2020-01-07 的涨停价能否确定",
+      "group": "core",
+      "prompt": "sh.600000 在 2020-01-07 的涨停价能否确定？如果能确定，给出涨停价；如果不能确定，说明原因。最后单独一行写\"结论：已确定\"或\"结论：无法确定\"。",
+      "oracles": {
+        "risk_status": {
+          "request": {
+            "dataset": "market.risk_warnings",
+            "contract_version": "v2",
+            "selection": {
+              "kind": "single",
+              "entity": "sh.600000"
+            },
+            "filter": {
+              "kind": "daily",
+              "start_date": "2020-01-07",
+              "end_date": "2020-01-07",
+              "as_of": "2020-01-07"
+            },
+            "page_size": 10
+          }
+        }
+      },
+      "checks": [
+        {
+          "kind": "unknown_status",
+          "oracle": "risk_status"
         }
       ]
     }
