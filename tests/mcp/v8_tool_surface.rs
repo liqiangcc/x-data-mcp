@@ -73,6 +73,8 @@ fn entry_allowlists_cover_every_registered_tool_and_research_is_read_only() {
             "get_security_state",
             "get_security_history",
             "get_security_events",
+            "get_tradability",
+            "get_market_cap",
         ]
     );
     // Bidirectional closure: every research tool is registered, and no
@@ -330,8 +332,9 @@ fn capabilities_follow_the_entry_and_match_the_tools_list() {
         // D-75: 1,500 B for 5 tools; the seven narrow read tools add about
         // 700 B (measured 2,199 B for 12 tools). PR-1b adds two more tools
         // (measured 2,438 B for 14). PR-2 adds get_security_history (measured
-        // 2,559 B for 15), so the cap is 2,600.
-        serde_json::to_vec(&compact).unwrap().len() <= 2_600,
+        // 2,559 B for 15), so the cap is 2,600. D-82 PR-B adds get_tradability
+        // and get_market_cap (measured 2,790 B for 17), so the cap is 2,800.
+        serde_json::to_vec(&compact).unwrap().len() <= 2_800,
         "research compact catalog is {} B",
         serde_json::to_vec(&compact).unwrap().len()
     );
