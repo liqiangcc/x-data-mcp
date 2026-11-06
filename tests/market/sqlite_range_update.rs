@@ -2653,11 +2653,33 @@ fn two_fifty_day_append_growth_stays_bounded() {
             .unwrap();
         std::fs::metadata(path).unwrap().len()
     };
-    let mut sizes = vec![file_size(&path)];
+    // Wall-clock breakdown for the profile request (#296 review). These are
+    // diagnostics printed by the test, never asserted on: the assertions
+    // below stay purely about durable growth.
+    #[derive(Default)]
+    struct Phases {
+        accept_us: u128,
+        claim_us: u128,
+        item_transition_us: u128,
+        fixture_build_us: u128,
+        stage_us: u128,
+        prepare_us: u128,
+        commit_us: u128,
+        checkpoint_us: u128,
+        setup_us: u128,
+        iteration_us: u128,
+    }
+    let mut phases = Phases::default();
+    let mut sizes = vec![];
+    let loop_start = std::time::Instant::now();
+    let checkpoint_start = std::time::Instant::now();
+    sizes.push(file_size(&path));
+    phases.checkpoint_us += checkpoint_start.elapsed().as_micros();
     for day in 1..=days {
         let date = "2026-01-05".parse::<chrono::NaiveDate>().unwrap()
             + chrono::Duration::days(day as i64 - 1);
         // One update task per day carrying every symbol, as production does.
+        let setup_start = std::time::Instant::now();
         let ctl = TaskControl::new(
             db.tasks.clone(),
             "range-run".into(),
@@ -2679,6 +2701,8 @@ fn two_fifty_day_append_growth_stays_bounded() {
                 })
             })
             .collect();
+        phases.setup_us += setup_start.elapsed().as_micros();
+        let accept_start = std::time::Instant::now();
         let request = ctl
             .accept(
                 &format!("soak-day-{day}"),
@@ -2686,15 +2710,21 @@ fn two_fifty_day_append_growth_stays_bounded() {
                 json!({"items": items}),
             )
             .unwrap();
+        phases.accept_us += accept_start.elapsed().as_micros();
         let RequestOutcome::Task(task) = request.record.outcome else {
             panic!()
         };
+        let claim_start = std::time::Instant::now();
         let mut t = db
             .tasks
             .transition(&task.task.task_id, 0, "range-run", Change::Claim)
             .unwrap();
-        for item in &t.items.clone() {
+        phases.claim_us += claim_start.elapsed().as_micros();
+        let day_items = t.items.clone();
+        let items_start = std::time::Instant::now();
+        for item in &day_items {
             let item_id = item.spec.item_id.clone();
+            let trans_start = std::time::Instant::now();
             t = db
                 .tasks
                 .transition(
@@ -2704,9 +2734,11 @@ fn two_fifty_day_append_growth_stays_bounded() {
                     Change::StartItem(item_id),
                 )
                 .unwrap();
+            phases.item_transition_us += trans_start.elapsed().as_micros();
             let symbol = item.spec.target["symbol"].as_str().unwrap().to_owned();
             let head = heads.iter().position(|(s, _)| *s == symbol).unwrap();
             let head_raw = heads[head].1.clone();
+            let fixture_start = std::time::Instant::now();
             let bar = json!({
                 "date": date, "open": "10.0", "high": "11.0",
                 "low": "9.5", "close": "10.5", "volume": null, "amount": null,
@@ -2722,7 +2754,10 @@ fn two_fifty_day_append_growth_stays_bounded() {
             raw["validation"] =
                 json!({"record_count": count, "unique_record_count": count, "duplicate_count": 0});
             raw["integrity_sha256"] = json!(compat::legacy_digest(&raw).unwrap());
+            let stage_start = std::time::Instant::now();
             db.stage(&raw).unwrap();
+            let stage_us = stage_start.elapsed().as_micros();
+            phases.stage_us += stage_us;
             let mut batch: MarketDataBatch =
                 serde_json::from_value(head_raw["batch"].clone()).unwrap();
             batch.bars = vec![serde_json::from_value(bar).unwrap()];
@@ -2748,6 +2783,8 @@ fn two_fifty_day_append_growth_stays_bounded() {
                     complete_coverage_ref: "soak".into(),
                 },
             };
+            phases.fixture_build_us += fixture_start.elapsed().as_micros().saturating_sub(stage_us);
+            let prepare_start = std::time::Instant::now();
             let prepared = Publisher {
                 repository: db.clone(),
             }
@@ -2770,17 +2807,53 @@ fn two_fifty_day_append_growth_stays_bounded() {
                 None,
             )
             .unwrap();
+            phases.prepare_us += prepare_start.elapsed().as_micros();
             let Preparation::Ready(plan) = prepared else {
                 panic!("day {day} {symbol}: update not approved")
             };
+            let commit_start = std::time::Instant::now();
             db.commit_range(&plan).unwrap();
+            phases.commit_us += commit_start.elapsed().as_micros();
             heads[head].1 = raw;
             // commit_range decided item i and bumped the task revision;
             // refresh before starting the next item.
+            let read_task_start = std::time::Instant::now();
             t = db.tasks.read_task(&t.task.task_id).unwrap().unwrap();
+            phases.item_transition_us += read_task_start.elapsed().as_micros();
         }
+        phases.iteration_us += items_start.elapsed().as_micros();
+        let checkpoint_start = std::time::Instant::now();
         sizes.push(file_size(&path));
+        phases.checkpoint_us += checkpoint_start.elapsed().as_micros();
     }
+    let total_us: u128 = phases.accept_us
+        + phases.claim_us
+        + phases.item_transition_us
+        + phases.fixture_build_us
+        + phases.stage_us
+        + phases.prepare_us
+        + phases.commit_us
+        + phases.checkpoint_us
+        + phases.setup_us;
+    let sec = |us: u128| us as f64 / 1_000_000.0;
+    println!(
+        "{days}-day soak phases ({} symbols, {} item-days): accept={:.2}s claim={:.2}s item_transition={:.2}s fixture_build={:.2}s stage={:.2}s prepare={:.2}s commit={:.2}s checkpoint={:.2}s setup={:.2}s measured={:.2}s items_wall={:.2}s loop_wall={:.2}s unattributed={:.2}s",
+        symbols,
+        symbols * days,
+        sec(phases.accept_us),
+        sec(phases.claim_us),
+        sec(phases.item_transition_us),
+        sec(phases.fixture_build_us),
+        sec(phases.stage_us),
+        sec(phases.prepare_us),
+        sec(phases.commit_us),
+        sec(phases.checkpoint_us),
+        sec(phases.setup_us),
+        sec(total_us),
+        sec(phases.iteration_us),
+        sec(loop_start.elapsed().as_micros()),
+        sec(loop_start.elapsed().as_micros().saturating_sub(total_us))
+    );
     if std::env::var("SOAK_DUMP").is_ok() {
         let c = Connection::open(&path).unwrap();
         let mut q = c

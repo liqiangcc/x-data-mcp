@@ -5,6 +5,7 @@
 //! layout that `v4` shared with the shorter preview.42/43 layout.
 
 use super::*;
+#[cfg(feature = "export")]
 use crate::research::manifest;
 
 #[cfg(feature = "export")]
@@ -25,6 +26,7 @@ fn labels() -> serde_json::Value {
 }
 
 #[test]
+#[cfg(feature = "export")]
 fn the_schema_string_is_v5() {
     assert_eq!(manifest::SCHEMA, "x-data-mcp.research-snapshot.v5");
 }
@@ -62,7 +64,7 @@ fn the_dry_run_manifest_names_the_binary_and_the_derivation_labels() {
     // The literal labels, so a silent rename of a constant is a visible diff.
     assert_eq!(
         document["producer"]["algorithms"]["price_limit"],
-        "limit-v1+exr-guard1"
+        "limit-v2"
     );
     // The registered rule dataset keeps its own label.
     assert_eq!(crate::trading_rules::ALGORITHM_VERSION, "limit-v1");

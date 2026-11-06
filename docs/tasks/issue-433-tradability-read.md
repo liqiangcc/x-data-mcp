@@ -197,7 +197,7 @@
 | `unknown` | `listing_unknown`、`listing_phase_unknown` | 上市日未知，或上市日早于日历起点而无法数交易日 | `listing_date` 现为 0 个未知 |
 | `unknown` | `no_series`、`no_prev_close` | 没有不复权序列，或没有更早的 bar | 335 个退市代码没有行情（M3 之前），上市首日无前收（首日规则为 `none` 时不需要前收，返回 `unbounded`） |
 | `unknown` | `calendar_missing`、`non_trading_day`、`not_listed`、`not_a_share`、`board_unsupported` | 同 §3.1 的对应情形 | `board_unsupported`：不在 600/601/603/605/688/689/000–003/300/301 的代码，包括 `302`（G6）、北交所、B 股 |
-| `unknown` | `ex_rights_unverified`（新增，D-81 已实现） | 前收日与 `as_of` 之间（`(prev_day, as_of]`）有该实体的 category 1 事件，含纯派现 | G5。category 11（ETF 份额折算）不算。判定顺序在规则查找和最小变动单位之后、算价之前：规则是 `band_side=none` 时不读前收也不读事件，仍是 `unbounded`。结果仍带 `prev_close_*` 和规则字段，供核对。读时派生的标签改为 `limit-v1+exr-guard1`；`limit-v1` 继续是已登记规则数据集的标签；`limit-v2` 留给真正算除权参考价的算法。事件按实体走 `adjustment_events_entity_day` 索引，单只与共享上下文走同一路径 |
+| `unknown` | `ex_rights_unverified`（D-81 改 D-84） | 配股（C4>0）或参考价≤0 | G5。**limit-v2（D-84）已实现**：配股 `unknown`（公式准确率约61%）；2010-09-14 前用官方 r7_raw；其余用 gbbq::reference_price（OWNER_RISK_ACCEPTED）。读时派生标签 `limit-v2`；规则数据集标签仍是 `limit-v1`。category 11（ETF）不算 |
 
 ### 3.3 `get_market_cap` 的 `state` 和 `reason`
 
@@ -334,7 +334,7 @@ design.md「扩展契约」逐条核对：
 | 本 PR | 本设计（只改文档） | 无 |
 | PR-A research 层修复 | G2、G3、G4、G6、G7；G1（成本低，顺手）；共享加载；Q3 选 (a) 时加 `ex_rights_unverified`；每处加测试。三个函数无非测试调用方，导出不受影响；共享加载若动到 `universe::select`，要保证 `universe`（`sqlite_supply` 在用）输出不变，现有 `read_model_tests` 全过 | owner 批准本设计 |
 | PR-B 两个工具 | `Handler::Derived`、两个窄输入类型、响应拼装、G8 的登记检查、`known_at` 的显式错误；`RESEARCH_TOOLS`/`NAMES`；CI 预算和 `get_data_capabilities` 上限；`check_current_facts.py` 的工具数；`docs/mcp-tools.md`；更新两处会变错的注释（`research/mod.rs` 第 7 行「Nothing here is reachable from an MCP tool」，`sqlite_supply/m2.rs` 第 511 行「M2 does not derive limit prices」）；测试：与库函数逐项等价（沿用 PR-1 的做法）、fail-closed 各状态各一例（`sz.000631` 缺口、A+H 的 `a_share_total`、主板 `st_unknown`、创业板确定值）、1/10/100 只的耗时 | PR-A、#525 PR-2 |
-| PR-C 评测 | 在 `.devin/evals/read-tools-v1.json` 加「能不能买」「涨停价」「市值」几题，部署后在 vm2 复跑 | PR-B 部署 |
+| PR-C 评测 | 在 `.devin/evals/read-tools-v1.json` 加「能不能买」「涨停价」「市值」「状态未知」几题（q14–q18，题已写，**还没对线上跑过**）：期望值全部由 `query_data` 在运行时取，涨停价在脚本里按 `round_half_up(前收 × (10000±band_bp) / 10000)` 重算，市值用不复权收盘 × `float_after`，`unknown` 题只查回答是否承认未知；题目用 `requires_tools` 声明依赖，工具没部署时标 `skipped: tool_not_deployed`，不算模型失败，退出码不变。等 PR-B 部署后在 vm2 复跑 | PR-B 部署 |
 
 `capability_revision` 升级随读取工具系列的最后一个 PR（`docs/mcp-tools.md`）。本系列晚于 PR-2，所以由 PR-B 承担，日更 Skill 的钉值同提交改（#525 §8）。
 
@@ -348,7 +348,7 @@ AC 文字（§1.3）在 PR-B 通过后，由 owner 更新到 #391/#433，或随�
 |---|---|---|---|
 | Q1 | 工具形态 | A 三个；B 两个；C 一个（§2.1） | **B**：状态和涨跌停同参数，合并后「能不能买」1 次调用，省 542 B |
 | Q2 | `tools/list` 预算 | a 上调；b 去 `$schema`/`title`；c 移出 `query_data`；d 移出配套发现工具（§6） | **a**，b、c 留给评测后 |
-| Q3 | 除权日涨跌停（G5） | (a) 前收日与 `as_of` 之间有除权事件时返回 `unknown` + `ex_rights_unverified`，等 `limit-v2`；(b) 照现算法返回 `known`，只在 `limitations` 提醒；(c) 先做 `limit-v2`（审计 T4）再上工具 | **(a)**：fail-closed，影响的日子占比很小（推断：`adjustment_events` 59,361 行，`series_bars` 约 3,783 万行含全部口径，不复权日线约 1,670 万根，每个事件最多影响一个日子，约 0.35%）；(b) 把已知偏差写成已知值。(c) 要先取证 2010 年后的除权参考价口径，不应阻塞工具 |
+| Q3 | 除权日涨跌停（G5） | **已由 D-84 完成**（limit-v2）：配股 `unknown`；2010-09-14 前用官方 r7_raw（非哨兵/手标记时）；其余用 gbbq::reference_price（OWNER_RISK_ACCEPTED：证伪检验通过，越界 0.115%）。2010-09-14 后没有官方基准，只经过证伪检验 | 影响约 0.35% 的日子；配股仍 `unknown`（公式准确率约61%） |
 | Q4 | 主板涨跌停大多 `unknown`（闭世界证据，审计 T3） | (a) 工具照实返回；(b) 等 T3 再发涨跌停部分 | **(a)**：#433 第 5 项的目的就是让 fail-closed 在生产上可观测。T3 另决，决定后工具不用改，`unknown` 自动变成有值 |
 | Q5 | `known_at` | (a) 不收，显式报错；(b) 收，全部返回 `unknown`；(c) 等审计 T5 补了 A 股主表知晓时间再加 | **(a)**，T5 之后再按 (c) 加参数 |
 | Q6 | 批量上限和延迟门禁 | 上限：100（共享加载后）/ 10（不改）。门禁：不设 / 设一个 p95 | 上限 **100，先做共享加载**；门禁**不设**，先看 PR-B 的实测再定 |

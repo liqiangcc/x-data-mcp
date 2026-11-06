@@ -167,14 +167,16 @@ run 记录；四个同源日更 item 只读它冻结的快照。代码行为如�
   只取一次。读路径与获取路径共用同一套失败码（`page_size_ignored`/`truncated`/
   `unverified_zero`/`source_invalid`/`page_count_exceeds_bound`），存储缺口才是
   `snapshot_incomplete`/`source_snapshot_not_found`。
-- **run 语义（R2b）**：刷新**单飞**（已有 `running` run 时新开始被拒，
+- **run 语义（R2b、#582）**：刷新**单飞**（已有 `running` run 时新开始被拒，
   `refresh_already_running` 并回带 `details.run_id`；`tail` 与 `full` 互斥，检查与插入同一
-  写事务），`full` **异步**（立即返回 `{run_id, status:"running"}`，抓取在本进程后台线程，
-  用 `{status_of: run_id}` 查询；客户端断开不影响），进程停止留下的 `running` 行由下次
+  写事务），**两种 mode 都异步**（立即返回 `{run_id, status:"running"}`，抓取在本进程后台
+  线程，用 `{status_of: run_id}` 查询；客户端断开不影响），进程停止留下的 `running` 行由下次
   `data_service` 启动按 `owner_instance` 回收为 `failed`（`process_restarted`，不推进
   `verified_through`）。抓取过程 panic 由执行入口 `catch_unwind` 当场结题
   （`refresh_panicked`），单飞闸门立刻释放；只有进程退出留下的行才依赖下一次启动回收。
-- **预算与 G2**：`tail` 同步，典型 28 个计划请求；探针触发整表时上限 549 个。G2 因此按表
+  `tail` 在 #582 之前是同步调用：它跑在调用方唯一的连接线程上，探针触发整表时（146 + 375 页，
+  1 req/s 下约 13 分钟）把该连接上的后续调用全部堵住，客户端 60 s 超时后又拿不到 `run_id`。
+- **预算与 G2**：`tail` 典型 28 个计划请求；探针触发整表时上限 549 个。G2 因此按表
   计量（D-67）：未触发整表的 `tail` <300 s；触发后每张被触发的表（`szse_listing`、
   `szse_short_name`）各自 <600 s、run 总量不设门禁，读
   `source_refresh_run_sources.elapsed_ms`；`full` 按来源组计量（D-73）：原有 7 来源合计

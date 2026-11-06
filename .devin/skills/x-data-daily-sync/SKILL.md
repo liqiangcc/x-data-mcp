@@ -172,6 +172,11 @@ operator 若只用显式 `update_data` 把全部 head 发布到位、没有 `run
 2. 有界轮询 `get_acquisition_task(task_id)`：约 60s 一轮，总预算约 45 分钟（官方快照约 570MB，
    实测下载 20-40 分钟）。预算耗尽仍未到终态 → 停止，返回 `request_id`/`task_id`/`generation_id`
    并说明仍在进行，不无限等待。
+   - **拿到 `task_id` 后不得再调用 `acquire_generation`**，脚本超时或被中断也一样：task 在服务端继续运行，
+     只能用同一个 `task_id` 恢复轮询。换新 `request_id` 重新获取会多下载一份 generation。
+   - codemode 的脚本默认约 60 秒就结束。要么每段脚本只查一轮、下一轮另起脚本，要么在脚本第一行写
+     `// @options: {"timeout_ms": 600000}` 再循环。脚本结束不等于 task 失败，只有 `get_acquisition_task`
+     的 `failed` 才算失败。
 3. task `failed` → 停止，转述 `error`/`detail` 与 refs。
 4. `verify_generation(request_id=<新值>, generation_id)`：结果必须是 `consistency_verified`；`not_verified` / `conflict` / 其他 → 停止并报告。
 5. 先 `sync_status` 取当前 `active_generation_ref`；`activate_generation(request_id=<新值>, generation_id, expected_previous=<当前 active 或省略>`) 。拒绝/conflict → 停止，旧 active 不变。
@@ -216,8 +221,13 @@ v9 起同源的四个派生 item（`derived:security_master`、`derived:security
 顺序是 **`tail` → `plan`/`run_market_update` →（每周）`full`**。
 
 - 每次日更前（**必做，不可跳过**，plan 之前先完成）：`refresh_exchange_sources({"mode":"tail"})`（开窗 + 上一自然季度；整表类重读
-  整表，深市上市/简称先探页 1）。`tail` **同步返回** `RefreshReport`（无 task ref，不必轮询），
-  按其中的 `status`、`requests`、`failed_windows`、`unobserved_windows`、`revisions` 复核；
+  整表，深市上市/简称先探页 1）。`tail` **异步**（#582）：调用只校验并写 run 记录，立刻返回
+  `{"status":"running","run_id":…}`（带计划，计数为 0），抓取在本进程后台线程；用
+  `refresh_exchange_sources({"status_of":<run_id>})` 轮询到 `succeeded` 或 `failed` 再继续。
+  同步跑会在客户端 60 s 预算后超时（探针触发整表时最多 549 个请求、1 req/s 下约 13 分钟），
+  所以**不要**把它当成一次能拿回报告的调用，也不要重复发 `tail` 等它。终态后按 run 记录的
+  `status`、`requests`、`failed_windows`、`unobserved_windows`、`verified_through` 复核；
+  `status_of` 不回 per-source 行与 `revisions`（与 `full` 相同）。
   `dry_run:true` 只列计划、不发请求。
 - 每周一次：`refresh_exchange_sources({"mode":"full"})`（低峰，周末候选），放在当天
   `run_market_update` **终态之后**（或单独在低峰跑），不要插在 `tail` 与 plan/run 之间。

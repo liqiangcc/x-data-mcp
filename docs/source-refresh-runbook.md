@@ -42,7 +42,8 @@ unobserved_windows/`verified_through`/失败列表），不启动新 run；未�
 `source_refresh_run_sources.elapsed_ms` 之和：原有 7 来源合计 <60 min、ETF 4 来源合计
 <40 min，run 总量不设门禁（不要用 MCP 调用耗时：`full` 是异步的，调用只返回 `running`；
 也不再用 run 的 `finished_at − started_at` 计量 `full`）。
-`tail` 是同步调用，MCP 调用墙钟可作旁证，官方读数仍取 run 行。
+`tail` 也是异步调用（#582），所以 MCP 调用墙钟对它没有意义：官方读数取 run 行
+（`source_refresh_runs.finished_at − started_at`）。
 
 `status_of` 不返回 per-source 行，所以“每张被触发的表各自 <600 s”必须查库（下一节）。
 

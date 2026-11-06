@@ -436,6 +436,33 @@ fn task_write_probe(ctx: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::A
     }
     rusqlite::hooks::Authorization::Allow
 }
+
+/// Counts SQL `SELECT` statements compiled on the compact *reader*
+/// connection. Installed on the pooled reader via `MarketBackend::read`;
+/// it survives pool reuse, so a subsequent `plan_market_update` is counted
+/// without any timing measurement. This is the deterministic replacement for
+/// the old `plan_ms < 5_000` wall-clock gate: the 5s came in with the
+/// original v7 plan/run commit (3753775) and is not an SLO entry (SLO.md
+/// only gates the write-loop at 600s), so what it actually guards is the
+/// per-member read amplification of `resolve_daily_on` — an O(N²) regression
+/// there would turn a linear per-member probe count into a quadratic one.
+static PLAN_SELECTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+fn plan_select_probe(ctx: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization {
+    if matches!(ctx.action, rusqlite::hooks::AuthAction::Select) {
+        PLAN_SELECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    rusqlite::hooks::Authorization::Allow
+}
+type AuthorizerHook = fn(rusqlite::hooks::AuthContext<'_>) -> rusqlite::hooks::Authorization;
+fn install_plan_select_probe(backend: &MarketBackend) {
+    backend
+        .read(|c| {
+            c.authorizer(Some(plan_select_probe as AuthorizerHook))
+                .unwrap();
+            Ok::<_, x_data_mcp::market_storage::Error>(())
+        })
+        .unwrap();
+}
 struct EnvReset;
 impl EnvReset {
     fn install(manifest: &Path, root: &Path) -> Self {
@@ -2342,11 +2369,52 @@ fn seed_daily_heads_at(r: &Rig, symbols: &[String], epoch_days: &[i64]) {
 /// the batch collection commit — the same mechanism the series-commit suite
 /// seeds with — writes a real checkpoint version + head per member, then
 /// `plan_market_update` and `run_market_update` acceptance are measured for
-/// wall time and process VmHWM/VmRSS deltas. This is the scale at which the
-/// bulk acceptance path peaked ~950MB (TASK-DEVIN-PLANRUN-MEMORY).
+/// process VmHWM/VmRSS deltas. This is the scale at which the bulk
+/// acceptance path peaked ~950MB (TASK-DEVIN-PLANRUN-MEMORY).
+///
+/// The plan used to assert `plan_ms < 5_000`. That number came in with the
+/// original v7 plan/run commit (3753775, `git log -S 'plan took'`) and is
+/// NOT an SLO entry: [SLO.md](../../../docs/SLO.md) gates the
+/// `run_market_update` **write-loop** at 600s, never the plan read. What the
+/// 5s was actually guarding is the read amplification of `resolve_daily_on`
+/// — one bounded head/base probe per catalog member. On a loaded 2-vCPU
+/// host the same plan took 6–6.7s, so the wall clock was measuring the
+/// machine, not the algorithm. This test now counts the SQL `SELECT`
+/// statements the plan compiles at two scales and asserts linear growth:
+/// an O(N²) regression (e.g. re-scanning all heads per member) cannot pass.
 #[test]
 fn planrun_scales_to_market_wide_membership() {
     let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Small arm: the same seeding path, 25 members. Its SELECT count gives
+    // the fixed setup cost and the per-member slope inside this process,
+    // without any wall-clock measurement.
+    const SMALL_EXTRA: usize = 25;
+    let small = rig(&[("sh", "600006", day_u32(1))]);
+    let mut small_codes = vec!["600006".to_string()];
+    let mut small_extra = Vec::with_capacity(SMALL_EXTRA);
+    for i in 0..SMALL_EXTRA {
+        let code = format!("{:06}", 800_000 + i);
+        small_extra.push(format!("sh.{code}"));
+        small_codes.push(code);
+    }
+    SqliteCatalog::new(small.tasks.clone())
+        .publish_fixture(
+            "catalog-2",
+            catalog_fixture(
+                &small_codes.iter().map(String::as_str).collect::<Vec<_>>(),
+                &vec!["sh"; small_codes.len()],
+            ),
+            Some("catalog-1"),
+        )
+        .unwrap();
+    seed_daily_heads(&small, &small_extra);
+    install_plan_select_probe(&small.backend);
+    PLAN_SELECTS.store(0, std::sync::atomic::Ordering::Relaxed);
+    let small_view = plan(&small.api, "market.daily");
+    let small_selects = PLAN_SELECTS.load(std::sync::atomic::Ordering::Relaxed);
+    let small_members = small_codes.len();
+    assert_eq!(small_view["counts"]["eligible"], small_members as u64);
+
     let r = rig(&[("sh", "600006", day_u32(1))]);
     const EXTRA: usize = 5_200;
     let mut codes = vec!["600006".to_string()];
@@ -2372,21 +2440,42 @@ fn planrun_scales_to_market_wide_membership() {
     seed_daily_heads(&r, &extra);
 
     // 5,201 eligible members (head day 1 << pending day) + 0 absent.
+    // Count the plan's compiled SELECT statements on the large arm too.
+    install_plan_select_probe(&r.backend);
     let rss0 = vmrss_kb();
     let hwm0 = vmhwm_kb();
-    let t0 = std::time::Instant::now();
+    PLAN_SELECTS.store(0, std::sync::atomic::Ordering::Relaxed);
     let p = plan(&r.api, "market.daily");
-    let plan_ms = t0.elapsed().as_millis();
+    let large_selects = PLAN_SELECTS.load(std::sync::atomic::Ordering::Relaxed);
     let hwm_after_plan = vmhwm_kb();
     let plan_hwm_delta = hwm_after_plan.saturating_sub(hwm0);
-    let t1 = std::time::Instant::now();
     let accepted = run(&r.api, "market.daily", "req-scale", &p);
-    let run_ms = t1.elapsed().as_millis();
     let run_peak_delta = vmhwm_kb().saturating_sub(hwm_after_plan);
     eprintln!(
-        "plan-run scale: {} members; plan {plan_ms}ms peak +{plan_hwm_delta}kB; run-accept {run_ms}ms peak +{run_peak_delta}kB; rss {rss0}→{}kB",
+        "plan-run scale: {} members; plan SELECTs {large_selects} (small: {small_members} members, {small_selects} SELECTs); peak +{plan_hwm_delta}kB / run-accept +{run_peak_delta}kB; rss {rss0}→{}kB",
         symbols.len(),
         vmrss_kb()
+    );
+    // Deterministic scale assertion: SELECTs must be linear in members.
+    // The measured shape is ~10 SELECTs/member plus a fixed setup cost of
+    // <10; 32/member + 64 leaves ample headroom for added bounded probes
+    // while a quadratic scan (O(N²) = millions at 5.2k members) cannot pass.
+    assert!(
+        large_selects <= 32 * symbols.len() + 64,
+        "plan compiled {large_selects} SELECTs for {} members, exceeding the linear bound",
+        symbols.len()
+    );
+    assert!(
+        small_selects <= 32 * small_members + 64,
+        "small arm compiled {small_selects} SELECTs for {small_members} members"
+    );
+    // Growth ratio: large/small SELECTs must be close to large/small
+    // members (within 2x), i.e. the per-member cost does not grow with N.
+    let member_ratio = symbols.len() as f64 / small_members as f64;
+    let select_ratio = large_selects as f64 / small_selects.max(1) as f64;
+    assert!(
+        select_ratio <= member_ratio * 2.0,
+        "SELECT growth {select_ratio:.1}x exceeds 2x the member growth {member_ratio:.1}x (small {small_selects}, large {large_selects})"
     );
     assert_eq!(p["counts"]["eligible"], symbols.len() as u64);
     assert_eq!(accepted["reused"], false);
@@ -2400,8 +2489,6 @@ fn planrun_scales_to_market_wide_membership() {
         peak < 200 * 1024,
         "peak RSS delta {peak}kB exceeds the 200MB plan-run budget"
     );
-    assert!(plan_ms < 5_000, "plan took {plan_ms}ms > 5s");
-    assert!(run_ms < 10_000, "run acceptance took {run_ms}ms > 10s");
 
     let task_id = accepted["task_id"].as_str().unwrap().to_string();
     let item_ids: Vec<String> = r
@@ -2682,14 +2769,42 @@ impl x_data_mcp::market_update::runner::RangeProvider for UnchangedProvider {
 
 /// Forkable version of [`UnchangedProvider`] for the parallel-preparation
 /// test. A fork owns only cloneable counters, so the runner can share the
-/// provider table across preparation workers; the short sleep makes the
-/// overlap observable without relying on scheduler timing.
+/// provider table across preparation workers. The rendezvous is
+/// deterministic: the first *forked* worker to enter preparation blocks until
+/// a second forked worker enters (or a 30s timeout), so a serial
+/// implementation cannot pass by accident and a concurrent one need not win
+/// a scheduler race.
 #[derive(Clone)]
 struct ParallelUnchangedProvider {
     typed_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     max_active: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     forks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// Only true on providers handed to a worker by `fork()`; the caller
+    /// thread also prepares the first chunk sequentially, and must not join
+    /// the rendezvous (no other thread exists yet at that point).
+    forked: bool,
+    /// `entered` counts forked workers that reached preparation; the first
+    /// one waits on the condvar for `entered >= 2`.
+    rendezvous: std::sync::Arc<(std::sync::Mutex<usize>, std::sync::Condvar)>,
+    timed_out: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl ParallelUnchangedProvider {
+    /// Deadline for the second worker to arrive. A serial path hits this and
+    /// then fails the assertion with an explicit message instead of hanging.
+    const RENDEZVOUS_TIMEOUT: Duration = Duration::from_secs(30);
+
+    fn new() -> Self {
+        Self {
+            typed_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            forks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            forked: false,
+            rendezvous: std::sync::Arc::new((std::sync::Mutex::new(0), std::sync::Condvar::new())),
+            timed_out: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
 }
 impl x_data_mcp::market_update::runner::RangeProvider for ParallelUnchangedProvider {
     fn acquire(
@@ -2715,7 +2830,31 @@ impl x_data_mcp::market_update::runner::RangeProvider for ParallelUnchangedProvi
         use std::sync::atomic::Ordering;
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         self.max_active.fetch_max(active, Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(2));
+        if self.forked {
+            let (lock, cvar) = &*self.rendezvous;
+            let mut entered = lock.lock().unwrap();
+            *entered += 1;
+            cvar.notify_all();
+            if *entered == 1 {
+                // First worker: hold the preparation phase open until a
+                // second worker is in it too. No sleep and no timing
+                // assumption — either concurrency is real or this times out.
+                let deadline = Instant::now() + Self::RENDEZVOUS_TIMEOUT;
+                while *entered < 2 {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        self.timed_out.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    let (next, wait) = cvar.wait_timeout(entered, remaining).unwrap();
+                    entered = next;
+                    if *entered < 2 && wait.timed_out() && Instant::now() >= deadline {
+                        self.timed_out.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+        }
         self.typed_calls.fetch_add(1, Ordering::SeqCst);
         self.active.fetch_sub(1, Ordering::SeqCst);
         Ok(Some(x_data_mcp::market_update::runner::TypedAcquisition {
@@ -2736,7 +2875,9 @@ impl x_data_mcp::market_update::runner::RangeProvider for ParallelUnchangedProvi
         &self,
     ) -> Option<Box<dyn x_data_mcp::market_update::runner::RangeProvider + Send + '_>> {
         self.forks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Some(Box::new(self.clone()))
+        let mut worker = self.clone();
+        worker.forked = true;
+        Some(Box::new(worker))
     }
 }
 
@@ -3123,12 +3264,11 @@ fn run_items_parallel_prepares_chunks_concurrently() {
     let _env = PrepareWorkersEnv::set(None);
     let r = rig(&[("sh", "600006", day_u32(1))]);
     let (task_id, item_ids) = run_task_with_members(&r, 250);
-    let provider = ParallelUnchangedProvider {
-        typed_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        forks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-    };
+    // Deterministic rendezvous: the first forked worker waits (up to 30s)
+    // for a second forked worker to enter preparation. A serial path has no
+    // second worker, so it times out and fails the assertion below; a
+    // concurrent path releases both immediately. No sleep, no scheduler race.
+    let provider = ParallelUnchangedProvider::new();
     let runner = x_data_mcp::market_update::runner::RangeRunner {
         repository: r.backend.clone(),
         run_id: "run".into(),
@@ -3142,6 +3282,15 @@ fn run_items_parallel_prepares_chunks_concurrently() {
             .typed_calls
             .load(std::sync::atomic::Ordering::SeqCst),
         250
+    );
+    assert!(
+        !provider.timed_out.load(std::sync::atomic::Ordering::SeqCst),
+        "no second preparation worker entered within 30s: the path is serial"
+    );
+    let (entered, _) = &*provider.rendezvous;
+    assert!(
+        *entered.lock().unwrap() >= 2,
+        "at least two forked workers must reach preparation"
     );
     assert!(
         provider
@@ -3173,12 +3322,7 @@ fn run_items_parallel_worker_override_one_is_sequential() {
     let sequential = rig(&[("sh", "600006", day_u32(1))]);
     let (sequential_task, sequential_ids) = run_task_with_members(&sequential, 250);
     assert_eq!(item_ids, sequential_ids);
-    let provider = ParallelUnchangedProvider {
-        typed_calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        max_active: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        forks: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-    };
+    let provider = ParallelUnchangedProvider::new();
     let runner = x_data_mcp::market_update::runner::RangeRunner {
         repository: r.backend.clone(),
         run_id: "run".into(),

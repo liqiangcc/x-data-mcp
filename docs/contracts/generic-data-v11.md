@@ -111,6 +111,8 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 | `get_security_events` | 656 |
 | `get_trading_calendar` | 377 |
 | `get_price_limit_rules` | 350 |
+
+**涨跌停读时派生（limit-v2）**：规则数据集标签仍是 `limit-v1`；读时派生标签已升级为 `limit-v2`（D-84），实现除权日基准价算法。配股 `unknown`；2010-09-14 前用官方 r7_raw（非哨兵/手标记）；其余用 gbbq::reference_price（OWNER_RISK_ACCEPTED：证伪检验通过，越界 0.115%）。
 | **合计** | **6,461**（加 `kind` 前）→ **6,564** |
 
 每个工具描述不超过 240 B。`find_securities` 的描述为 193 B（测试按 240 B 检查）。
@@ -255,3 +257,42 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - **读路径**：内部过滤 `Filter::FindEtf { code, name_query }` 与 `Filter::History` 同一种做法，`serde(skip_deserializing)` 且 `schemars(skip)`，`query_data` 构造不了（`filter.kind=find_etf` 返回 `invalid_arguments`），也不改 `query_data` 的 schema。它只与 `market.security_names` + `selection.kind=market` 配对，其余组合在 `QueryPlan::new` 里报 `dataset/filter range mismatch`。搜索归一化是 `security_master::names::search_key`，增加了依赖 `unicode-normalization`（0.1，纯 Rust，带 `tinyvec`）。
 - **不变**：`market.security_names` 与 `get_security_state`/`get_security_history` 对 ETF 仍不返回 `exchange_snapshot` 行；`security_names.parquet` 不含 ETF（Q7）。
 - **未验证**：线上真实名单未测（代码面，未部署）；约 1.7 千行 ETF 的内存搜索耗时没有单独测量，每次调用读一遍主表和名称表（与 `market.security_master` 的读法相同）。
+
+## 8. `refresh_exchange_sources` 的 `tail` 改为异步（#582）
+
+**状态**：代码面（未部署）。相对 v10 只有一处行为变化，无新工具、无 schema 变化、无迁移。
+
+### 8.1 变化
+
+| 项 | v10 | v11（本 PR） |
+|---|---|---|
+| `{"mode":"tail"}` 的回包 | 同步跑完，返回终态 `RefreshReport`（`succeeded`/`failed`，带 `sources`、`revisions`、计数） | 只写 run 记录就返回 `{run_id, status:"running"}`：`finished_at` 缺省，计数为 0，`sources[]` 是计划（`planned_units`/`planned_windows`），`planned` 是请求单元 |
+| `{"mode":"full"}` | 已经是 `running` + 后台线程 | 不变 |
+| 结果怎么拿 | `tail` 直接从回包读 | `{"status_of":run_id}` 轮询到 `succeeded`/`failed`；回包是 run 行：`mode`/`status`/`scope`/起止时间/`requests`/`reused`/`changed`/`failed_windows`/`unobserved_windows`/`verified_through`/`failures` |
+| 单飞 | `tail`/`full` 互斥，`refresh_already_running` 回带 `details.run_id` | 不变 |
+| 失败 | 同步回包或 `Err` | run 记录 `failed`（含失败列表）；`refresh_panicked`、`refresh_start_failed`、`process_restarted` 语义不变 |
+| `dry_run` | 只列计划，不写 run | 不变 |
+
+**为什么**（[#582](https://github.com/liqiangcc/x-data-mcp/issues/582)，复现读数见该 Issue 的评论）：tail 的计划是 28 个请求（1.42 s/请求约 40 s），首次观测或页 1 变化触发两张整表时最多 549 个（1 req/s 下约 13 分钟）。它原先跑在 MCP 连接的请求线程里，而一个连接只有一个线程，所以该连接上后面的调用全部排队；客户端 60 s 预算一到就超时，且没有 `run_id` 可取回结果。本地 551 请求的复现里，非网络工作合计 **0.49 s**（来源库写入 366 ms、索引事务 24 ms、解析 13 ms、锁等待 ≈0），墙钟由交易所限速决定——同步调用无法缩短它，只能把等待从调用方拿走。
+
+### 8.2 兼容性
+
+- **回包形状不变，语义变了**：字段集仍是 v9 定义的 `RefreshReport`，`status` 早已有 `running`（v9 R2b 为 `full` 加的），所以旧客户端不会因为解析失败而崩；但**按 v10 读 `tail` 回包的客户端必须改成轮询**，否则会看到 `status="running"`、计数为 0。
+- **`status_of` 不回 `revisions` 与 per-source 行**：与 `full` 从 v9 起的现状一致——只有 run 行和失败列表是持久记录，per-source 计数在 `source_refresh_run_sources`（runbook 的查询），`revisions` 可从 run 成员表与快照索引重建。`tail` 因此不再把 revision 列表直接交给调用方。
+- **谁必须改**：`.devin/skills/x-data-daily-sync/SKILL.md` §3.0、`docs/daily-sync.md`「来源刷新」、`docs/generic-data-tools.md` 的工具表、`docs/exchange-source.md` 的 run 语义段、`docs/source-refresh-runbook.md` 的读数口径——本 PR 一并更新。
+- **门禁数字不变**：`tail` <300 s、触发整表每张 <600 s、`full` 按来源组 <60 min/<40 min（D-66/D-67/D-73）全部照旧；变的只是读数来源。`tail` 的 <300 s 从「同步调用时长」改为 run 记录的 `finished_at − started_at`（runbook 本来就把 run 行当官方读数，MCP 墙钟只是旁证）。`docs/SLO.md` 第 2 行的备注同步改了措辞。
+- **回滚**：回退二进制即可；schema 27 的 run 记录与 v10 相同，`running` 行的回收规则不变。
+
+### 8.3 `tools/list`
+
+只改 `refresh_exchange_sources` 的描述（说明两种 mode 都返回 `run_id` 并轮询），描述仍 ≤240 B。`ops` 入口实测 29,872 → **29,896 B**（+24 B），预算 **30,800 B 不变**；`research` 18,197 B、`maint` 13,195 B 不变。测量方式与 §3 相同（`tests/mcp/v8_tool_surface.rs` 的 `tools_list_stays_within_entry_budgets_without_output_schema`，`serde_json::to_vec(tools)`，代码版本为本 PR）。
+
+### 8.4 验证
+
+- `src/source_refresh/tests.rs`：`a_tail_returns_running_and_finishes_in_the_background`（回包是句柄、`status_of` 可查、单飞拒绝并回带 run id、终态计数来自 run 记录）、`a_failing_background_tail_reports_failed_without_a_verified_date`（失败 fail-closed、不推进 `verified_through`、闸门释放）。
+- `src/data_supply/mcp/tests.rs`：`a_read_tool_answers_while_a_refresh_run_is_in_flight`（假传输在第一个请求处用 Condvar 卡住，读到「已进入」后调 `get_data_capabilities`，断言 <5 s 且刷新仍在进行；释放后按 `run_id` 轮询到 `succeeded` 且计数 >0）。同步点是条件变量，不是 sleep。
+- 诊断：`exchange.fetch`/`exchange.freeze`/`exchange.parse`/`exchange.index_write` 四个 `stage_trace` span（`X_DATA_MCP_STAGE_TRACE=1` 才计时），用于以后按同一口径回答「耗时花在哪」。
+
+### 8.5 未覆盖
+
+生产机与生产库（本任务不访问线上）；「22 分钟」这个绝对值只能按生产实测的每请求成本换算；`status_of` 不补 `revisions`/per-source 行（与 `full` 一致，需要时查库）。
