@@ -177,9 +177,14 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - 首个简称行之前；
 - PT 前缀日（如 `PT凯地`，PT 与简称之间可能有空格）、「退」或「退市」结尾日（如 `国华退`、`*ST海润退市`）；
 - `*` 开头但没有 ST 的日子（如 `*金亚`、`*欣泰`，创业板 60 个 bar 日）；
-- 覆盖终点之后（`as_of` 晚于 `coverage[].to` 时）；
+- 覆盖终点之后（`as_of` 晚于 `coverage[].to` 时；见下「覆盖终点」）；
+- 主表（`security_master`）里查不到该代码，或该代码已退市：`normal` 不越过 `effective_to`/退市日；
 - 没有任何简称行的代码（13 个有行情但无简称历史的代码）；
 - **所有沪市和北交所**。
+
+简称匹配前先做 NFKC 规范化并去掉空白，所以全角 `＊ＳＴ`、`ＰＴ`、`＊` 和 `PT 凯 地` 都按对应规则处理；「退」只按结尾匹配（取证里 104 个名称全部以「退」或「退市」结尾），不匹配任意位置。
+
+**依赖主表**：`normal` 的区间终点取「简称覆盖终点」与「主表该 A 股区间终点（`security_master.effective_to`/`delisting_date`）」的较早者。`derived:security_master` 在 `derived:risk_warnings` 之前运行（`item_specs` 的 `DATASETS` 顺序），所以日更能读到本次运行刚写的主表。主表里没有该代码时不写 `normal`（fail-closed）。重放有 `--db` 时从库里读同一张主表、走同一个组装函数；没有 `--db`（`database: None`）时不写 `normal`，结果说明为「没有数据库，深市 `normal` 行未计算」。
 
 **版本与数据影响**：
 
@@ -189,7 +194,15 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - 读路径：`member_state` 读到 `normal`；`price_limit` 的 `status_class` 写 `Normal`，主板在无 ST 区间的日子从 `st_unknown` 变为确定的涨跌幅；`tradability` 不读风险状态。
 - 重放等价：重放与日更写入逐行相同（`known_at`、`source_record_id`、`source_document_sha256` 都取简称行的值，不随 run 记录变）。
 
-**已知偏差**（GP29 对照，2026-11-06 取证）：22/1,729 个深市事件是「历史/身份缺口」（#308 评论 C6），`known_at` 目前全是首次采集日，所以 `known_at` 过滤下这些 `normal` 行对更早的日子不可见。140 个带 ST 区间的已退市代码不在 GP29 包里，该部分无法验证。
+**覆盖终点**：`coverage[].to` 是简称表里**最新一次变更的日期**，不是快照日。所以最近几天通常仍是 `unknown`，要等下一次有代码改名才往前走。这是保守的（宁可 `unknown`），但使用者会看到「明明没有 ST 却未知」，所以读面 `limitations` 与本文都写明。
+
+**已知偏差**（GP29 对照，2026-11-06 取证）：
+
+- 22/1,729 个深市事件是「历史/身份缺口」（#308 评论 C6），`known_at` 目前全是首次采集日，所以 `known_at` 过滤下这些 `normal` 行对更早的日子不可见。
+- 5 个区间起点晚 1–2 个交易日。
+- 140 个带 ST 区间的已退市代码不在 GP29 包里，**这部分无法验证**——不能声称全部验证过。
+
+相关取证见 `docs/tasks/gp29-compare-20261106.md` §5、`docs/tasks/offline-measures-20261106.md` §3。
 
 ## 6. 未验证
 

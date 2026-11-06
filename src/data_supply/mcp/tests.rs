@@ -2879,6 +2879,12 @@ fn registered_risk_warnings_carry_no_pending_text_and_state_real_limits() {
         limitations.contains("sh: 1 window(s) between 2000-01-01 and 2003-12-31"),
         "{limitations}"
     );
+    // D-81: the absence wording is market-aware — SZ writes `normal` inside
+    // the short-name coverage, SH never infers it.
+    assert!(
+        limitations.contains("SZ also stores `normal` intervals"),
+        "{limitations}"
+    );
     assert!(limitations.contains("never `normal`"), "{limitations}");
 }
 

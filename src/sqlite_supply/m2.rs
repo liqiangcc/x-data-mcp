@@ -784,7 +784,7 @@ fn risk_warning_description(
         ));
     }
     let coverage_reason = format!(
-        "{}{}a day without a covering row is `unknown`, never `normal` (D-58)",
+        "{}{}a day without a covering row is `unknown` (SZ also stores `normal` inside the short-name coverage; SH never infers `normal`) (D-58, D-81)",
         parts.join("; "),
         if parts.is_empty() { "" } else { "; " }
     );
@@ -794,7 +794,7 @@ fn risk_warning_description(
          SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), \
          not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)"
             .to_owned(),
-        "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+        "a day without a covering row is `unknown`: SZ also stores `normal` intervals inside the short-name coverage where the name is not ST/PT/退, so an uncovered SZ day (before the first name row, after the coverage end, or after a same-day conflict) is `unknown`; for SH every day without a covering announcement is `unknown`, never `normal` (D-58, D-81)"
             .to_owned(),
     ];
     // Windows the writer could not observe (e.g. the SSE archive starts in
