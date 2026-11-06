@@ -130,6 +130,7 @@ impl Fixture {
     /// The default fixture plus three ETF identities (M3-2 PR-D): a live ETF
     /// whose last bar is a zero-volume bar, a delisted ETF with a tail of
     /// zero bars, and a listed ETF without any `.day` member.
+    #[cfg(feature = "export")]
     fn with_etf() -> Self {
         Self::build(3, true, false)
     }
@@ -137,6 +138,7 @@ impl Fixture {
     /// The default fixture plus two delisted A shares that are **not** catalog
     /// members (`sh.600001`, `sz.000003`), each with a full set of per-entity
     /// rows, to prove the default selection does not drop them.
+    #[cfg(feature = "export")]
     fn with_delisted_off_catalog() -> Self {
         Self::build(3, false, true)
     }

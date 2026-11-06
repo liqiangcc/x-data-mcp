@@ -1,11 +1,49 @@
 use x_data_mcp::acquire::fetch::TDX_FETCH_ENV;
 
+/// Binaries `scripts/smoke_release.py` invokes by name from `--bin-dir`.
+/// Everything else in `target/debug` (including a stale `export_research`
+/// left over from an earlier `--features export` build) must not be visible.
+const SMOKE_BINARIES: &[&str] = &[
+    "mcp_data",
+    "create_demo",
+    "data_service",
+    "mcp_connect",
+    "acquire_service",
+    "task_sqlite",
+];
+
+fn smoke_bin_dir(built: &std::path::Path, isolated: &std::path::Path, export: bool) {
+    std::fs::create_dir_all(isolated).unwrap();
+    let mut names: Vec<&str> = SMOKE_BINARIES.to_vec();
+    if export {
+        names.push("export_research");
+    }
+    for name in names {
+        let src = built.join(name);
+        let dst = isolated.join(name);
+        // Hard link keeps the exact bytes (the smoke hashes `mcp_data`) and
+        // avoids a second copy. Fall back to a copy for cross-device links.
+        if std::fs::hard_link(&src, &dst).is_err() {
+            std::fs::copy(&src, &dst).unwrap();
+        }
+    }
+    // No `manifest.json` next to this directory: `package_manifest_smoke`
+    // must stay off, so both builds have a fixed, known check count.
+    assert!(!isolated.parent().unwrap().join("manifest.json").exists());
+}
+
 #[test]
 fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
     let dir = tempfile::tempdir().unwrap();
-    let bin = std::path::Path::new(env!("CARGO_BIN_EXE_mcp_data"))
+    let built = std::path::Path::new(env!("CARGO_BIN_EXE_mcp_data"))
         .parent()
         .unwrap();
+    // A fresh directory containing ONLY the binaries this build should ship.
+    // A residual `export_research` in `target/debug` can therefore never be
+    // discovered and run by the smoke script.
+    let export = cfg!(feature = "export");
+    let bin = dir.path().join("bin");
+    smoke_bin_dir(built, &bin, export);
     let report = dir.path().join("report.json");
     let result = std::process::Command::new("python3")
         .arg(concat!(
@@ -13,7 +51,7 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
             "/scripts/smoke_release.py"
         ))
         .arg("--bin-dir")
-        .arg(bin)
+        .arg(&bin)
         .arg("--report")
         .arg(&report)
         // The smoke's `acquire_service` runs on the `Remote` source. Under
@@ -52,27 +90,24 @@ fn real_binary_release_smoke_exercises_the_explicit_fixture_flow() {
                 .any(|v| v == required)
         );
     }
-    // `cargo nextest --features export` also builds `export_research`, so the
-    // smoke's export section runs there; the default build skips it. Check if
-    // the binary actually exists in the bin directory rather than relying on
-    // cfg!(feature = "export"), which doesn't reflect residual binaries.
-    let mut expected_checks = 12;
-    let export_binary = bin.join(if cfg!(windows) {
-        "export_research.exe"
-    } else {
-        "export_research"
-    });
-    if export_binary.exists() {
-        expected_checks += 1;
-        assert!(
-            value["checks"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|v| v == "export_research_synthetic_snapshot_manifest_and_file_sha256")
-        );
-    }
-    assert_eq!(value["checks"].as_array().unwrap().len(), expected_checks);
+    // Fixed expectations for both builds: 12 checks without `export_research`,
+    // 13 with it. The isolated bin dir (not the state of `target/debug`)
+    // decides which section runs.
+    let expected_checks = if export { 13 } else { 12 };
+    assert_eq!(
+        value["checks"].as_array().unwrap().len(),
+        expected_checks,
+        "checks: {:?}",
+        value["checks"]
+    );
+    assert_eq!(
+        value["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v == "export_research_synthetic_snapshot_manifest_and_file_sha256"),
+        export
+    );
     assert!(
         value["checks"]
             .as_array()
