@@ -730,7 +730,7 @@ fn add_normal_intervals_sz(
     // Build name segments: periods where a specific name is active
     // and track which ones are plain (eligible for normal)
     #[derive(Debug, Clone)]
-    struct NameSegment<'a> {
+    struct NameSegment {
         start: NaiveDate,
         end: Option<NaiveDate>, // None = until next change or coverage end
         is_plain: bool,
@@ -743,7 +743,6 @@ fn add_normal_intervals_sz(
     let mut segments: Vec<NameSegment> = Vec::new();
     let first_day = changes.first().unwrap().day;
     let mut index = 0usize;
-    let mut had_conflict = false;
 
     while index < changes.len() {
         let day = changes[index].day;
@@ -761,7 +760,6 @@ fn add_normal_intervals_sz(
             {
                 last.end = Some(day);
             }
-            had_conflict = true;
             continue;
         }
 
