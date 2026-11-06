@@ -243,6 +243,12 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
   （无官方退市日，按 `unknown` 语义，不猜）、`issuer_key` 按基金代码建、`issuer_resolution=Unique`。
 - `effective_from` = 该成员第一次出现在已冻结名单快照的 `fetched_at`；`known_at` = 同一时间
   （快照事实的知晓时间；不早于入库时间，符合 M3 §13.2 第 3 条）。
+  > **已由 D-80（owner 2026-11-06）修订 `effective_from`**：有 `listing_date` 时 `effective_from` 取
+  > 上市日，`known_at` 仍是首次观察日；没有 `listing_date` 时保持上面的取值。原因：首次观察日
+  > 把成员区间起点顶后（vm2 preview.45 上 1,846 个 ETF 行有 1,845 行 `effective_from` 晚于
+  > `listing_date`，1,718 行是 2026-11-05），`universe_intervals` 的 ETF 成员在此日期之前基本为空。
+  > 上市日晚于区间终点时（矛盾输入）该行保持首次观察日，不让整张主表写入失败。取值由
+  > `assembly::member_effective_from` 一处给出，日更与 `source_store replay` 共用。
 - 名单移除 ≠ 退市：快照只证明"某日不在名单"，不证明退市日；`delisting_date` 保持 `NULL`，
   该成员保留 class=2 但不再出现在 `current` 成员集里（§4）。
 - 统计口径：`security_master` 行数会从 5,565 增加到约 5,565 + 1,717（若只入当前名单；退市未知的不入）。
@@ -297,9 +303,9 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
   - 落库：日更与 replay 共用 `delisted_row_values`；`effective_to=终止上市日`（排他上界，与 A 股
     一致）、`delisting_reason_class=other`。零提前量（公告日=终止上市日）时
     `effective_from=终止上市日-1`，保证区间非空且不改变退市上界。同一代码同时有名单历史事实
-    与提取事实时，`effective_from`/`known_at` 取最小值（起点不被往后挪）；有提取结果时精确终止
+    与提取事实时，首次观察日（`known_at`）取最小值（起点不被往后挪）；`effective_from` 在此之后按 D-80 取上市日；有提取结果时精确终止
     上市日覆盖名单的 `first_missing`，没有提取结果时才取名单边界的最小值。
-- **单调身份**：来源库里**所有已冻结的名单快照 + 退市公告取并集**，首次出现定 `effective_from`；
+- **单调身份**：来源库里**所有已冻结的名单快照 + 退市公告取并集**，首次出现定 `known_at`（无上市日时也定 `effective_from`，D-80 修订）；
   移出名单不删行。`sh_sz_etf_listed_ever` = 并集，`sh_sz_etf_current` = 最新快照成员。这样已采集的
   ETF 序列不会因为一次名单刷新失去主表行。
 - **公告日 ≠ 生效日**：`delisting_date` 只在 D-72 提取结果存在时写精确日；只有公告索引时
@@ -720,7 +726,7 @@ owner 2026-11-03 回复「按推荐批准」：Q1–Q12 全部按推荐值批准
 6. **128 只候选退市的官方身份/退市日**未取得（Q2）。
 7. **ETF 名称历史**：名单只给当前简称，历史简称没有日期化来源（与 S-6 同类问题，本批不做）。
 8. **ETF 规模/份额/净值**未纳入（`base.dbf` 有 `ZGB`/`TZMGJZ`，但未锚定到 ETF 口径）。
-9. **`fetch_time` 作为 `effective_from`** 的上界性：名单无 `last_modified`，只能取抓取时间（偏差同 M3 §5.2）。
+9. **`fetch_time` 作为 `effective_from`** 的上界性：名单无 `last_modified`，只能取抓取时间（偏差同 M3 §5.2）。D-80 起只对没有上市日的成员适用；有上市日的成员 `effective_from` 是上市日，抓取时间只在 `known_at`。
 10. **SLO 外推**（§11）全部为推断，未实测；未验证 ETF item 的 per-item 成本与 A 股是否相同。
 11. **导出 v4** 的兼容性未验证（只有设计取舍）。
 12. **沪市 ETF 逐日 OHLC** 只有单日官方锚（`prev_close`）+ 全历史量额一致性；沪所无历史日线接口

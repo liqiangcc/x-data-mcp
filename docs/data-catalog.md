@@ -549,6 +549,14 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 
 10. **ETF 数据面（M3-2 首期）**：
 
+    - **ETF 成员区间起点是上市日，不是首次观察日（D-80，代码面未部署）**：preview.45 的主表里
+      1,846 个 ETF 行有 1,845 行 `effective_from` 晚于 `listing_date`（1,718 行是 2026-11-05），
+      所以导出的 `universe_intervals` 在 2026-11-05 之前基本没有 ETF 成员。D-80 起有 `listing_date`
+      的 ETF 行 `effective_from` 取上市日，`known_at` 仍是首次观察日；没有 `listing_date` 的行保持首次
+      观察日。A 股行不变。带 `known_at=T` 的查询在 T 早于首次观察日时仍排除 ETF 行并计数（这类
+      查询对 ETF 仍不是「当时库里能看到什么」的完整重放）。7 只 `SSDATE` 晚于首根 bar 的 ETF
+      处理不变：不裁剪 bar，也不拿 bar 覆盖上市日。已部署的 preview.45 仍是旧取值，部署后第一次日更
+      的主表重写才生效。
     - **86 只现行 ETF 没有日线**：名单有、`hsjday` 无，全部在沪市 `sh526`（7）、`sh551`（12）、
       `sh589`（67）三个代码段；`hsjday` 在这三段各 0 个成员，同期 2026 年上市的 ETF 有 306 只，
       所以不是「新上市滞后」，而是源覆盖缺段（原因未验证）。主表照写、`market.daily` 读面按
@@ -787,10 +795,9 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
     历史上的 `v4` 歧义不会消失，只是不再新增。
   - **`producer` 块**（`v5` 新增，顶层，与 `algorithms` 并列）：`git_sha` 是写出该清单的二进制的
     `build.rs` 提交 SHA（无 git 检出时为 `"unknown"`）；`algorithms` 是该二进制携带的派生算法标签：
-    `price_limit`（读时派生标签 `limit-v1+exr-guard1`，D-81；已登记规则数据集 `price_limit_rules` 的 `algorithm_version` 仍是 `limit-v1`）、`market_cap`（`market-cap-v1`）、`security_master`、`security_names`、
+    `price_limit`（读时派生标签 `limit-v1+exr-guard1`，D-81；已登记规则数据集 `price_limit_rules` 的 `algorithm_version` 仍是 `limit-v1`）、`market_cap`（`market-cap-v1`）、`tradability`（`tradability-v1`）、`security_master`、`security_names`、
     `risk_warnings`、`suspensions`，取自代码常量。`market_cap` 不是导出文件：导出不含市值，
     它在读时由 `capital_events` 与不复权收盘价重算，标签是快照唯一能说明「用哪个公式」的地方。
-    可交易性读模型没有版本常量，不在其中。
   - **`snapshot_id` 不含 `producer`**（审计建议，设计没有相反规定）：§7.3 的身份是
     `{schema, request, catalog, generations, algorithms, series, derived}`，没有二进制版本，
     本次未改。理由：内容相同的快照不应因二进制不同而被拆开；已写入的派生数据集的算法版本

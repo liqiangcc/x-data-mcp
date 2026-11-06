@@ -30,6 +30,7 @@
 | 新错误码 `memory_budget_exceeded`（`isError`）：服务接近自身 cgroup 的 `memory.high` 时拒绝读取 | 可以重试或缩小查询；不是“没有数据”。游标不被消耗 | #547，[v8 §4](generic-data-v8.md) |
 | 游标池变成进程级：总 48 MiB、单连接 24 MiB 且 32 条，LRU 淘汰 | 约 5 个以上全市场读者同时翻页时，别的连接可能收到 `invalid/expired cursor`，要重新查询 | #547 |
 | `market.risk_warnings` 的 `coverage_reason` 文案，不再有过时的 `pending`/`#308` 文字 | 只是文本 | #539、#548 |
+| ETF 的 `security_master.effective_from`（D-80）：有 `listing_date` 的 class=2 行取上市日，`known_at` 仍是首次观察日；没有上市日的行不变。A 股行不变。schema 与列不变；主表 `algorithm_version` 升到 `security-master-assembly-v2`，导出 `producer` 随之变化 | `market.security_master`、`universe_intervals` 里 ETF 行的 `effective_from`/`member_from` 变早；`snapshot_id` 随之变；`known_at` 早于首次观察日的查询仍排除并计数。v10 是已部署快照，不改：v10 §1.1「这两个字段是身份观测/退市上界」按旧取值写 | [#509](https://github.com/liqiangcc/x-data-mcp/issues/509)，[M3-2 设计](../tasks/issue-509-m3-2-etf.md) §3.3 |
 
 x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不受前两行分页形状影响；错误以 `isError` 到达（2026-11-06 读 `liqiangcc/x` 确认）。
 
