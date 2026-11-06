@@ -92,6 +92,17 @@ pub const SECURITY_NAMES_FIELDS: &[&str] = &[
     "known_at",
     "source_kind",
 ];
+/// `find_securities kind=etf` (D-76): the columns of one ETF row. There is no
+/// `fields` argument on the tool, so the whole set is always returned.
+pub const FIND_ETF_FIELDS: &[&str] = &[
+    "name",
+    "name_basis",
+    "status",
+    "instrument_class",
+    "listing_date",
+    "delisting_date",
+    "name_observed_from",
+];
 pub const CAPITAL_EVENTS_FIELDS: &[&str] = &[
     "ordinal",
     "effective_day",
