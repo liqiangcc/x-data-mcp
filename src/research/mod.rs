@@ -4,7 +4,8 @@
 //! - **4 存储模型 ↔ 研究读模型**: this module is the read model. It reads the
 //!   storage layer's rows through [`read`] (its own row iterators for the bulk
 //!   scans, the storage read API for the identity rows) and exposes *datasets*,
-//!   not tables. Nothing here is reachable from an MCP tool (AC-M1-10).
+//!   not tables. `tradability`, `price_limit` and `market_cap` are callable
+//!   from MCP tools `get_tradability` and `get_market_cap` (D-82).
 //! - **5 核心用例 ↔ 入口适配**: [`plan`] is the pure read-only core the design
 //!   calls `research::build_snapshot` — it has no side effects and no I/O
 //!   beyond SQL reads. `src/bin/export_research.rs` is the M1 adapter: argument

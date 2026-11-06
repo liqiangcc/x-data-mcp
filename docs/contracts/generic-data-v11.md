@@ -296,3 +296,21 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 ### 8.5 未覆盖
 
 生产机与生产库（本任务不访问线上）；「22 分钟」这个绝对值只能按生产实测的每请求成本换算；`status_of` 不补 `revisions`/per-source 行（与 `full` 一致，需要时查库）。
+## 9. 派生只读工具（D-82 PR-B，代码面）
+
+`research` 入口新增 `get_tradability` 和 `get_market_cap`。状态：代码面（未部署）。
+
+| 工具 | 必填 | 可选 | 数据来源 |
+|---|---|---|---|
+| `get_tradability` | `securities`（1..100） | `as_of` | `security_master`, `suspensions`, `trading_calendar`, `risk_warning_intervals`, `series_bars`, `price_limit_rules` |
+| `get_market_cap` | `securities`（1..100）, `scope` | `as_of` | `capital_events`, `series_bars` |
+
+- 不接受 `known_at`：输入表缺少知晓时间列，传了返回 `invalid_arguments`，消息指向 `get_security_state`。
+- 不分页：每次调用读全部请求的实体（最多 100），响应没有 `cursor` 和 `page_complete`。
+- 响应 `layout=table`，列名与类型见设计文档；每个请求的实体一行，包括不在主表的代码和非 A 股代码。
+- `algorithm_versions` 字段列出算法版本（`tradability-v1`、`limit-v2`（`price_limit::READ_ALGORITHM_VERSION`）、`market-cap-v1`，直接取代码常量，不手写）。
+- `temporal` 有 `as_of`、`known_at: null`、`datasets_without_known_at`（列出实际用到的无知晓时间数据集）。
+- 复现：输入数据集版本（`inputs`）加 `algorithm_versions` 决定结果，无 `snapshot_id`。
+- 指数代码报 `invalid_arguments` 并指向 `get_index_bars`。
+
+详见 [issue-433-tradability-read](../tasks/issue-433-tradability-read.md) §2、§3、§4。

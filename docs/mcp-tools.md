@@ -373,3 +373,51 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `researc
 工具清单不变。字节数和测量方式见 [generic-data-v11](contracts/generic-data-v11.md) §3。
 
 本批未包含：`screen_market` 暂不做（D-78：能写脚本的 pi 用 codemode 筛选；#295 保持开放，出现不能写脚本的客户端需求时再提）。
+
+## 派生只读工具（代码面，未部署）
+
+D-82 / [#433](https://github.com/liqiangcc/x-data-mcp/issues/433) PR-B：`research` 入口新增 `get_tradability` 和 `get_market_cap`，薄封装 research 层的 `tradability`、`price_limit` 和 `market_cap` 函数。
+**状态：代码面（未部署）。** 随后续 preview 发布后才出现在 `tools/list`。
+代码的 `capability_revision` 已是 `generic-data-v11`（契约见 [generic-data-v11](contracts/generic-data-v11.md)），部署面仍是 v10。设计与裁决见 [issue-433-tradability-read](tasks/issue-433-tradability-read.md)。
+
+两个工具接受 `securities`（1..100）、可选 `as_of`（默认最近交易日），不接受 `known_at`（输入表无知晓时间），不分页。
+响应为 `layout=table`，每个请求的实体一行，包括不在主表、不是 A 股的代码（不静默丢行）；
+有 `inputs`（输入数据集版本）、`algorithm_versions`、`temporal`、`limitations`，没有 `snapshot_id` 和 `next_cursor`。
+复现靠输入版本加算法版本。
+
+### get_tradability
+
+返回每个 A 股在 `as_of` 的可交易状态和当日涨跌停价（若已知）。
+响应列：`state`（`tradable`/`not_tradable`/`unknown`）、`reason`（原因码）、`suspension`（停牌区间字符串或 null）、`flags`（预留）、
+`limit_state`（`known`/`unbounded`/`unknown`）、`limit_reason`、`limit_candidates`（候选规则，格式 `"500bp|1000bp"`）、`risk_status`、
+`limit_up`、`limit_down`、`prev_close`（前收盘，不复权）、`prev_close_day`、`rule_id`。
+
+- `unknown` 不写成可交易。
+- 指数代码报 `invalid_arguments` 并指向 `get_index_bars`。
+- 传了 `known_at` 时显式报错（A 股主表行、停牌、规则等无知晓时间），消息指向 `get_security_state`。
+- `algorithm_versions` 含 `tradability: "tradability-v1"` 和 `price_limit: "limit-v1"`。
+- `temporal` 有 `as_of` 和 `known_at: null`、`datasets_without_known_at`。
+
+示例：
+```json
+{"securities":["sz.000631","sh.600519"],"as_of":"2007-06-01"}
+```
+
+### get_market_cap
+
+返回每个 A 股在 `as_of` 的市值（指定口径）。
+输入必填 `scope`（`float_a`/`company_total`/`a_share_total`）。
+响应列：`state`（`known`/`unknown`）、`reason`、`market_cap`（元，两位小数字符串）、`close`（不复权收盘）、`shares`（股）、
+`share_event_day`、`share_event_category`、`chain_break_day`、`reconciliation`（恒 `not_available`）。
+
+- `a_share_total` 恒 `unknown`（历史 A 股总股本未被接纳）。
+- `company_total` 是 A+B+H 总股本，`limitations` 里写明。
+- `reconciliation` 恒 `not_available`，不暗示做过对账。
+- `algorithm_versions` 含 `market_cap: "market-cap-v1"`。
+
+示例：
+```json
+{"securities":["sz.000002","sh.600028"],"scope":"float_a","as_of":"2026-11-05"}
+```
+
+`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：待实测（17 个工具），CI 预算 19,600 B（owner 批准，D-82）。

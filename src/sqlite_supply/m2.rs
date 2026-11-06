@@ -701,7 +701,8 @@ fn price_limit_rules(
         Dataset::PriceLimitRules,
         None,
         registration.as_ref(),
-        "effective-dated rule rows (effective_to is exclusive); this dataset returns the rules, not derived limit prices",
+        "effective-dated rule rows (effective_to is exclusive); this dataset returns the rules. \
+         Per-entity limit prices are derived by get_tradability (D-82).",
     )?);
     if registration.is_none() {
         note_unregistered(result, Dataset::PriceLimitRules);
