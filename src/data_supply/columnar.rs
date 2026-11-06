@@ -49,14 +49,15 @@ pub const CATALOG_FIELDS: &[&str] = &[
     "industry_reason",
 ];
 pub const CATALOG_DEFAULT: &[&str] = &["name", "industry_code", "industry_name"];
-/// `market.adjustment_events`: the row key `effective_day` is implicit and
-/// `known_at` is never emitted (M1 stores NULL, v8 §4.6).
-pub const EVENT_FIELDS: &[&str] = &["category", "c1", "c2", "c3", "c4"];
+/// `market.adjustment_events`: `effective_day` is the row key and a column
+/// (v11; a `table` layout has no `dates` to carry it). `known_at` is never
+/// emitted (M1 stores NULL, v8 §4.6).
+pub const EVENT_FIELDS: &[&str] = &["effective_day", "category", "c1", "c2", "c3", "c4"];
 /// `market.calendar`: the row key is the only column (v8 §4.2).
 pub const CALENDAR_FIELDS: &[&str] = &["trade_day"];
-/// M2 parsed-fact column sets (issue-391 §12.4). The row key is implicit:
-/// `effective_from`/`effective_day`/`start_day`/`rule_id` depends on the
-/// dataset.
+/// M2 parsed-fact column sets (issue-391 §12.4). The row key
+/// (`effective_from`/`effective_day`/`start_day`/`rule_id`, depending on the
+/// dataset) is a column and is in the default set.
 pub const SECURITY_MASTER_FIELDS: &[&str] = &[
     "effective_from",
     "effective_to",
@@ -73,6 +74,7 @@ pub const SECURITY_MASTER_FIELDS: &[&str] = &[
     "flags",
 ];
 pub const SECURITY_MASTER_DEFAULT: &[&str] = &[
+    "effective_from",
     "instrument_class",
     "issuer_resolution",
     "listing_date",
@@ -487,6 +489,7 @@ fn market_cell(row: &Row, field: &str) -> Value {
 
 fn event_cell(row: &Row, field: &str) -> Value {
     let Row::AdjustmentEvent {
+        effective_day,
         category,
         c1,
         c2,
@@ -498,6 +501,7 @@ fn event_cell(row: &Row, field: &str) -> Value {
         return Value::Null;
     };
     match field {
+        "effective_day" => json!(effective_day.to_string()),
         "category" => json!(category),
         "c1" => json!(c1),
         "c2" => json!(c2),
