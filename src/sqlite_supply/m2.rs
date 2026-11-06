@@ -169,6 +169,9 @@ pub(super) fn query(
     access: &Access,
 ) -> Result<QuerySnapshot, Error> {
     let dataset = plan.args.dataset;
+    if let Filter::FindEtf { code, name_query } = &plan.args.filter {
+        return find_etf(c, access, code.as_deref(), name_query.as_deref());
+    }
     let Some(temporal) = plan.temporal else {
         return Err(invalid("M2 dataset without a resolved temporal plan"));
     };
@@ -373,6 +376,140 @@ fn security_names(
         check_budget(result)?;
     }
     Ok(())
+}
+
+/// `find_securities kind=etf` (D-76): ETFs of the main table with the latest
+/// name the exchange lists showed, searched by name or code.
+///
+/// An ETF is every class-2 SH/SZ row of `security_master`, current or not, so a
+/// delisted ETF is found by its code. `status` is `current` under the same
+/// predicate as the `sh_sz_etf_current` universe. The name is the code's last
+/// `exchange_snapshot` row in `security_name_history`; an ETF with none (a
+/// delisted one older than the first snapshot) has `name: null`,
+/// `name_basis: unavailable` and is never matched by name. Nothing here reads a
+/// clock or guesses a name from a code, a fund company or an A-share row.
+///
+/// `name_query` matches the key of [`names::search_key`] as a substring of the
+/// key of the latest name only (Q8). `code` is an exact six-digit match, the
+/// same as the stock path. Rows follow the entity order, so a cursor over
+/// them is stable.
+fn find_etf(
+    c: &Connection,
+    access: &Access,
+    code: Option<&str>,
+    name_query: Option<&str>,
+) -> Result<QuerySnapshot, Error> {
+    use crate::security_master::names::{self, NameSourceKind};
+
+    let mut result = QuerySnapshot {
+        manifest: vec![],
+        rows: vec![],
+        temporal: None,
+        limitations: vec![],
+    };
+    access.require(Dataset::SecurityMaster, None)?;
+    let key = name_query.map(names::search_key);
+    if key.as_deref() == Some("") {
+        return Err(invalid(
+            "query is empty once whitespace is removed; omit it to list ETFs",
+        ));
+    }
+    let master = registration(c, Dataset::SecurityMaster, None)?;
+    let registered = registration(c, Dataset::SecurityNames, None)?;
+    result.manifest.push(derived_or_absent(
+        c,
+        Dataset::SecurityMaster,
+        None,
+        master.as_ref(),
+        "ETF identity from the exchange lists and termination notices; the name is a separate fact",
+    )?);
+    result.manifest.push(derived_or_absent(
+        c,
+        Dataset::SecurityNames,
+        None,
+        registered.as_ref(),
+        "ETF names observed on the exchange lists from the first frozen snapshot that showed them",
+    )?);
+    result.limitations.extend(
+        [
+            "ETF name history starts at the first list snapshot that showed the name (name_observed_from), not at the exchange's rename day; nothing earlier is known",
+            "query matches the latest name only, ignoring case, full/half width and spaces; short forms such as 华夏300 or 广发500 are not found",
+            "name null with name_basis unavailable: no name was observed (a delisted ETF older than the first snapshot has none); find it by code",
+            "status delisted means the main table closed the ETF (left the exchange list or a termination notice); delisting_date is null when only the list removal is known",
+        ]
+        .map(String::from),
+    );
+    if master.is_none() {
+        note_unregistered(&mut result, Dataset::SecurityMaster);
+        return Ok(result);
+    }
+    if registered.is_none() {
+        note_unregistered(&mut result, Dataset::SecurityNames);
+    }
+
+    // The last (latest `effective_from`) row of each code; both reads are
+    // ordered by identity then `effective_from`, so a later insert wins.
+    let mut identity = BTreeMap::new();
+    for fact in security::read_security_master(c)? {
+        if fact.instrument_class == 2
+            && matches!(
+                fact.exchange,
+                crate::security_master::Exchange::Sh | crate::security_master::Exchange::Sz
+            )
+        {
+            identity.insert(fact.entity(), fact);
+        }
+    }
+    let mut latest_name = BTreeMap::new();
+    for row in security::read_security_names(c)? {
+        if row.source_kind == NameSourceKind::ExchangeSnapshot {
+            latest_name.insert(format!("{}.{}", row.exchange, row.code), row);
+        }
+    }
+    for (symbol, fact) in identity {
+        let entity = entity(&symbol)?;
+        if code.is_some_and(|code| code != entity.code)
+            || !access.allows(Dataset::SecurityMaster, Some(&entity))
+            || !access.allows(Dataset::SecurityNames, Some(&entity))
+        {
+            continue;
+        }
+        let name = latest_name.get(&symbol);
+        if let Some(key) = &key
+            && !name.is_some_and(|row| names::search_key(&row.name).contains(key.as_str()))
+        {
+            continue;
+        }
+        let current = crate::research::universe::is_current_etf(&fact);
+        result.rows.push(Row::Fact {
+            entity: Some(entity),
+            day: fact.effective_from,
+            cells: cells(vec![
+                (
+                    "name",
+                    name.map_or(FactValue::Null, |row| text(row.name.clone())),
+                ),
+                (
+                    "name_basis",
+                    text(if name.is_some() {
+                        "observed_from_first_snapshot"
+                    } else {
+                        "unavailable"
+                    }),
+                ),
+                ("status", text(if current { "current" } else { "delisted" })),
+                ("instrument_class", int(i64::from(fact.instrument_class))),
+                ("listing_date", date(fact.listing_date)),
+                ("delisting_date", date(fact.delisting_date)),
+                (
+                    "name_observed_from",
+                    date(name.map(|row| row.effective_from)),
+                ),
+            ]),
+        });
+        check_budget(&result)?;
+    }
+    Ok(result)
 }
 
 fn capital_events(

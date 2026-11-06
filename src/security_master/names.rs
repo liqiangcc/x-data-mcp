@@ -430,6 +430,23 @@ pub fn normalize_name(raw: &str) -> Result<String, Error> {
     Ok(compact)
 }
 
+/// The search key of a name or a name query (D-76 Q8): Unicode NFKC, then every
+/// whitespace character dropped, then lower-cased. Full-width letters and
+/// digits become ASCII, so `沪深３００ＥＴＦ`, `沪深 300 etf` and `沪深300ETF`
+/// share one key. A query matches a name when its key is a substring of the
+/// name's key. No pinyin, no fuzzy matching, and no expansion of the exchange's
+/// short spellings (`华夏300` is not a substring of `沪深300ETF华夏`).
+///
+/// Lower-casing stands in for full case folding: the two differ only for a few
+/// letters (`ß`) that do not occur in fund names.
+pub fn search_key(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization as _;
+    text.nfkc()
+        .filter(|ch| !ch.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn check_code(code: &str) -> Result<(), Error> {
     if code.len() == 6 && code.bytes().all(|byte| byte.is_ascii_digit()) {
         Ok(())
@@ -662,6 +679,18 @@ mod tests {
         assert_eq!(set.rows[0].name, "ST深安达");
         assert_eq!(set.rows[0].effective_from, day(1999, 4, 27));
         assert_eq!(set.rows[0].certainty, NameCertainty::Unbounded);
+    }
+
+    #[test]
+    fn search_key_folds_width_case_and_whitespace_only() {
+        assert_eq!(search_key("沪深 300 ETF"), "沪深300etf");
+        assert_eq!(search_key("　沪深３００ＥＴＦ\t"), "沪深300etf");
+        assert_eq!(search_key("沪深300etf"), search_key("沪深300ETF"));
+        // No pinyin, no short-form expansion, no marker stripping.
+        assert_ne!(search_key("hs300"), search_key("沪深300"));
+        assert!(!search_key("沪深300ETF华夏").contains(&search_key("华夏300")));
+        assert_eq!(search_key("XD银行"), "xd银行");
+        assert_eq!(search_key(" \u{a0}\u{3000}"), "");
     }
 
     #[test]
