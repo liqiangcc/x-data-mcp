@@ -3336,6 +3336,155 @@ fn universe_scope_is_rejected_where_the_design_says_so() {
     );
 }
 
+/// #582 AC: a refresh must not make other read tools wait. The refresh runs in
+/// a background thread of the service, so the caller's session thread is free
+/// the moment the run row exists.
+///
+/// The synchronisation point is deterministic: the fake transport blocks the
+/// run's first request on a condition variable, so "the refresh is in flight"
+/// is a state the test waited for, never a duration it guessed. While the run
+/// is held there, the read tool must answer — and the run must still be held
+/// after it answers, otherwise the measurement would prove nothing.
+#[test]
+fn a_read_tool_answers_while_a_refresh_run_is_in_flight() {
+    use crate::exchange_source::transport::with_helper_transport;
+    use crate::exchange_source::{HttpRequest, HttpResponse, Transport, TransportError};
+    use crate::source_store::{PolicyEnv, TEST_ENV_LOCK};
+    use std::sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use std::time::{Duration, Instant};
+
+    /// Serves one valid SSE listing page per request, but holds every request
+    /// until the test releases it.
+    struct HeldTransport {
+        entered: (Mutex<bool>, Condvar),
+        released: (Mutex<bool>, Condvar),
+        calls: AtomicUsize,
+    }
+
+    impl HeldTransport {
+        fn new() -> Self {
+            Self {
+                entered: (Mutex::new(false), Condvar::new()),
+                released: (Mutex::new(false), Condvar::new()),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        /// Block until the background run is inside its first request.
+        fn wait_entered(&self) {
+            let mut entered = self.entered.0.lock().unwrap();
+            while !*entered {
+                entered = self.entered.1.wait(entered).unwrap();
+            }
+        }
+
+        fn is_released(&self) -> bool {
+            *self.released.0.lock().unwrap()
+        }
+
+        fn release(&self) {
+            *self.released.0.lock().unwrap() = true;
+            self.released.1.notify_all();
+        }
+    }
+
+    impl Transport for HeldTransport {
+        fn get(&self, _request: &HttpRequest) -> Result<HttpResponse, TransportError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            *self.entered.0.lock().unwrap() = true;
+            self.entered.1.notify_all();
+            let mut released = self.released.0.lock().unwrap();
+            while !*released {
+                released = self.released.1.wait(released).unwrap();
+            }
+            Ok(HttpResponse {
+                status: 200,
+                etag: None,
+                last_modified: None,
+                // A one-page SSE listing envelope: `single_page_only` refuses a
+                // larger `pageCount`, and one row keeps the table non-empty.
+                body: br#"{"pageHelp":{"beginPage":1,"pageNo":1,"pageSize":2000,"pageCount":1,"total":1,"data":[{"SECURITY_CODE":"600000"}]}}"#
+                    .to_vec(),
+            })
+        }
+    }
+
+    let transport = Arc::new(HeldTransport::new());
+    let held = transport.clone();
+    let _env_lock = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let store = tempfile::tempdir().unwrap();
+    let _env = PolicyEnv::set(Some(store.path()), false);
+    let f = fixture();
+
+    with_helper_transport(transport, || {
+        let reply = f
+            .api
+            .call(
+                "refresh_exchange_sources",
+                json!({"mode": "tail", "sources": ["sse_listing"]}),
+            )
+            .unwrap();
+        // The reply is a handle, not the result: the run continues.
+        assert_eq!(reply["status"], json!("running"));
+        assert!(reply["finished_at"].is_null());
+        assert_eq!(reply["requests"], json!(0));
+        assert!(!reply["planned"].as_array().unwrap().is_empty());
+        let run_id = reply["run_id"].as_str().expect("a run id").to_string();
+
+        // Deterministic sync point: the run is inside its first request.
+        held.wait_entered();
+        assert!(!held.is_released(), "the run is held before the read");
+
+        let started = Instant::now();
+        let capabilities = f.api.call("get_data_capabilities", json!({})).unwrap();
+        let elapsed = started.elapsed();
+        assert!(
+            capabilities.is_object(),
+            "the read tool must answer while the refresh runs"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "a read tool waited {elapsed:?} behind a refresh run"
+        );
+        // Still in flight after the read: the run was never waiting on the read
+        // path, and the read was not served after the run finished.
+        assert!(!held.is_released(), "the refresh was still running");
+
+        held.release();
+
+        // AC: after the client's own budget expires, the run id still resolves
+        // to the terminal result.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let report = loop {
+            let report = f
+                .api
+                .call("refresh_exchange_sources", json!({"status_of": run_id}))
+                .unwrap();
+            if report["status"] != json!("running") {
+                break report;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "refresh run {run_id} never closed"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(report["status"], json!("succeeded"), "{report}");
+        assert!(report["finished_at"].is_string());
+        assert!(
+            report["requests"].as_u64().unwrap() > 0,
+            "the durable record carries the counters the reply could not"
+        );
+        assert!(
+            held.calls.load(Ordering::SeqCst) >= 2,
+            "acquire + page-1 guard"
+        );
+    });
+}
+
 #[test]
 fn refresh_status_of_is_a_read_and_rejects_combined_arguments() {
     let f = fixture();

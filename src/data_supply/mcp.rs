@@ -1084,7 +1084,7 @@ impl DataApi {
                 }
                 let command: crate::source_refresh::wire::RefreshRequest = decode(input)?;
                 let today = crate::calendar::shanghai_today();
-                // `status_of` is the read side of the asynchronous `full`: it
+                // `status_of` is the read side of an asynchronous run: it
                 // takes nothing else, so a poll can never accidentally start a
                 // second run or drop the mode it is polling.
                 if let Some(run_id) = command.status_of.as_deref() {
@@ -1099,7 +1099,7 @@ impl DataApi {
                             .map_err(refresh_error)?;
                     return encode(report);
                 }
-                let mode = command.mode.ok_or_else(|| {
+                command.mode.ok_or_else(|| {
                     ApiError::new(
                         "invalid_arguments",
                         "mode is required unless status_of is set",
@@ -1125,36 +1125,23 @@ impl DataApi {
                 // helper fails the call without leaving a `running` record.
                 let client = crate::exchange_source::Client::helper()
                     .map_err(|error| ApiError::new(error.code(), error.to_string()))?;
-                let report = match mode {
-                    // A tail costs 28 requests (a probe-triggered whole table is
-                    // the documented exception), so the optional wait is cheap
-                    // and the caller sees the result. Its upper bound is
-                    // `docs/contracts/generic-data-v10.md` §1.1.
-                    crate::source_refresh::wire::RefreshMode::Tail => crate::source_refresh::run(
-                        &store,
-                        &self.queries.repository.market,
-                        &client,
-                        today,
-                        &command,
-                        &self.observer.run_id,
-                    )
-                    .map_err(refresh_error)?,
-                    // A full is 1,941 requests (~46 min at 1 req/s): open the
-                    // run and return `running` now; the acquisition continues
-                    // on a background thread of this process and is visible
-                    // through `{status_of: run_id}`.
-                    crate::source_refresh::wire::RefreshMode::Full => {
-                        crate::source_refresh::start_full_in_background(
-                            store,
-                            self.queries.repository.market.clone(),
-                            client,
-                            today,
-                            command.clone(),
-                            &self.observer.run_id,
-                        )
-                        .map_err(refresh_error)?
-                    }
-                };
+                // #582: neither mode waits for the acquisition. A tail is 28
+                // requests (~40 s at 1.42 s/request) and a probe-triggered
+                // whole table adds up to 549 (~13 min at 1 req/s), while this
+                // call runs on the caller's single connection thread with a
+                // 60 s client budget: waiting here blocked every later call on
+                // that connection and lost the result on timeout. The run row
+                // is written before the reply, so `{status_of: run_id}` always
+                // finds it.
+                let report = crate::source_refresh::start_in_background(
+                    store,
+                    self.queries.repository.market.clone(),
+                    client,
+                    today,
+                    command.clone(),
+                    &self.observer.run_id,
+                )
+                .map_err(refresh_error)?;
                 encode(report)
             }
             Handler::Collection

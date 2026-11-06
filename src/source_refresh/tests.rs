@@ -35,6 +35,11 @@ struct State {
     bulletin_revision: u64,
     bulletin_zero: bool,
     delisting_pages: u32,
+    /// Pages of the two non-delisting SZSE tables. `1` is the shape every
+    /// other test uses; the #582 reproduction harness raises them to the
+    /// production page counts (146 listing, 375 short name).
+    listing_pages: u32,
+    short_pages: u32,
     fail_page_two: bool,
     bump_on_page_two: bool,
     bump_every_page_one: bool,
@@ -52,6 +57,8 @@ impl Default for State {
             bulletin_revision: 0,
             bulletin_zero: false,
             delisting_pages: 1,
+            listing_pages: 1,
+            short_pages: 1,
             fail_page_two: false,
             bump_on_page_two: false,
             bump_every_page_one: false,
@@ -120,6 +127,13 @@ impl RefreshFixture {
 
     fn set_delisting_pages(&self, pages: u32) {
         self.state.lock().unwrap().delisting_pages = pages;
+    }
+
+    /// Page counts of `szse_listing` and `szse_short_name` (#582 harness).
+    fn set_table_pages(&self, listing: u32, short: u32) {
+        let mut state = self.state.lock().unwrap();
+        state.listing_pages = listing;
+        state.short_pages = short;
     }
 
     fn fail_page_two(&self) {
@@ -229,7 +243,13 @@ impl RefreshFixture {
             "1110".to_string()
         };
         let mut state = self.state.lock().unwrap();
-        let page_count = if delisting { state.delisting_pages } else { 1 };
+        let page_count = if delisting {
+            state.delisting_pages
+        } else if short {
+            state.short_pages
+        } else {
+            state.listing_pages
+        };
         if page == 2 && state.bump_on_page_two && state.bumped.insert(key.clone()) {
             *state.versions.entry(key.clone()).or_insert(0) += 1;
         }
@@ -237,24 +257,51 @@ impl RefreshFixture {
             *state.versions.entry(key.clone()).or_insert(0) += 1;
         }
         let version = *state.versions.entry(key).or_insert(0);
-        let row_count = if delisting { page_count as u64 } else { 1 };
+        // A whole table's pages each carry `pagesize` rows and the metadata
+        // `recordcount` is the table total, which `validate_pages` checks
+        // against the sum of the page rows. One row per page is what the other
+        // tests use; the harness emits a page-sized page instead.
+        let rows_per_page = if delisting {
+            1
+        } else if page_count > 1 {
+            20
+        } else {
+            1
+        };
+        let row_count = if delisting {
+            page_count as u64
+        } else if page_count > 1 {
+            u64::from(page_count) * rows_per_page as u64
+        } else {
+            1
+        };
         let rows = if delisting {
             vec![serde_json::json!({
                 "zqdm": format!("00000{page}{version}"),
                 "zqjc": format!("listing-{page}-{version}")
             })]
         } else if short {
-            vec![serde_json::json!({
-                "zqdm": state.short_code.clone(),
-                "bgrq": state.short_day.clone(),
-                "bgqzqjc": state.short_before.clone(),
-                "bghzqjc": format!("{}-{version}", state.short_after)
-            })]
+            // Page 1 carries the row the probe parses; every page is distinct
+            // so a multi-page table never freezes the same bytes twice.
+            (0..rows_per_page)
+                .map(|row| {
+                    serde_json::json!({
+                        "zqdm": state.short_code.clone(),
+                        "bgrq": state.short_day.clone(),
+                        "bgqzqjc": state.short_before.clone(),
+                        "bghzqjc": format!("{}-{version}-{page}-{row}", state.short_after)
+                    })
+                })
+                .collect()
         } else {
-            vec![serde_json::json!({
-                "zqdm": format!("00000{version}"),
-                "zqjc": format!("listing-{version}")
-            })]
+            (0..rows_per_page)
+                .map(|row| {
+                    serde_json::json!({
+                        "zqdm": format!("00000{version}{page}{row}"),
+                        "zqjc": format!("listing-{version}-{page}-{row}")
+                    })
+                })
+                .collect()
         };
         let block = if short || delisting {
             serde_json::json!([{
@@ -412,7 +459,8 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         &[],
     );
     assert_eq!(first.status, RefreshStatus::Succeeded);
-    // A tail is synchronous: the reply is the finished run, not a handle.
+    // The in-process form returns the finished run; the MCP surface does not
+    // wait (#582) and is covered by the background tests below.
     assert!(first.finished_at.is_some());
     assert!(
         first.requests <= 32,
@@ -1046,7 +1094,7 @@ fn a_full_run_returns_running_and_finishes_in_the_background() {
     // Hold the first request so the background run is still `running` when the
     // single-flight guard and the reply are checked.
     fixture.pause();
-    let started = super::start_full_in_background(
+    let started = super::start_in_background(
         scenario.store(),
         backend.clone(),
         client(&fixture),
@@ -1106,7 +1154,7 @@ fn a_failing_background_full_reports_failed_without_a_verified_date() {
     let scenario = Scenario::new();
     let backend = scenario.open();
 
-    let started = super::start_full_in_background(
+    let started = super::start_in_background(
         scenario.store(),
         backend.clone(),
         client(&fixture),
@@ -1138,6 +1186,128 @@ fn a_failing_background_full_reports_failed_without_a_verified_date() {
     assert_eq!(row.status, "failed");
     assert!(row.finished_at.is_some());
     assert!(row.verified_through.is_none());
+}
+
+/// #582: `tail` no longer runs inside the caller's request thread. The call
+/// returns the open run at once, and the client keeps a handle (`run_id`) it
+/// can poll after its own timeout expired — the tail reply used to be the only
+/// place the result ever appeared.
+#[test]
+fn a_tail_returns_running_and_finishes_in_the_background() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    // Hold the first request: the run is provably still in flight while the
+    // reply, the single-flight guard and the durable record are inspected. No
+    // sleep decides when the background thread has started.
+    fixture.pause();
+    let started = super::start_in_background(
+        scenario.store(),
+        backend.clone(),
+        client(&fixture),
+        day(2026, 11, 2),
+        request(RefreshMode::Tail, &[]),
+        INSTANCE,
+    )
+    .unwrap();
+    assert_eq!(started.status, RefreshStatus::Running);
+    assert!(started.finished_at.is_none());
+    assert_eq!(
+        started.requests, 0,
+        "a running record is not a progress meter"
+    );
+    // The immediate reply carries the plan, not results: the same units a dry
+    // run of the same request lists.
+    let planned = super::dry_run(day(2026, 11, 2), &request(RefreshMode::Tail, &[]))
+        .unwrap()
+        .planned;
+    assert_eq!(started.planned, planned);
+    let run_id = started.run_id.clone().unwrap();
+
+    // A client that timed out still finds the run.
+    let open = super::status_of(&backend, &run_id).unwrap();
+    assert_eq!(open.status, RefreshStatus::Running);
+    assert!(open.finished_at.is_none());
+
+    // Single-flight is unchanged: a second tail is refused while the first is
+    // open, and the refusal names the run to poll.
+    let rejected =
+        super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap_err();
+    assert_eq!(rejected.code(), "refresh_already_running");
+    assert_eq!(rejected.run_id(), Some(run_id.as_str()));
+
+    fixture.release();
+    let report = wait_for_run(&backend, &run_id);
+    assert_eq!(report.status, RefreshStatus::Succeeded);
+    assert!(report.finished_at.is_some());
+    assert!(report.requests > 0);
+    // The counters only exist in the durable record: the reply carried zeros.
+    assert_eq!(report.requests as usize, fixture.calls());
+    assert_eq!(report.run_id.as_deref(), Some(run_id.as_str()));
+    // The durable record is where the counters live: the reply said 0, and an
+    // empty store makes the first observation of both probes acquire their
+    // whole table, so the run spent more requests than its plan listed.
+    assert!(
+        report.requests as usize > started.planned.len(),
+        "{} request(s) for a {} unit plan",
+        report.requests,
+        started.planned.len()
+    );
+
+    // The guard is released.
+    let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
+    assert_ne!(next.run_id, run_id);
+}
+
+/// #582 failure path: an asynchronous tail that fails closes its own record
+/// `failed`, advances no `verified_through` and releases the single-flight
+/// guard, so the next daily run is not blocked by a failed refresh.
+#[test]
+fn a_failing_background_tail_reports_failed_without_a_verified_date() {
+    let fixture = RefreshFixture::new();
+    fixture.set_delisting_pages(2);
+    fixture.fail_page_two();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    let started = super::start_in_background(
+        scenario.store(),
+        backend.clone(),
+        client(&fixture),
+        day(2026, 11, 2),
+        request(RefreshMode::Tail, &["szse_delisting"]),
+        INSTANCE,
+    )
+    .unwrap();
+    let run_id = started.run_id.unwrap();
+
+    let report = wait_for_run(&backend, &run_id);
+    assert_eq!(report.status, RefreshStatus::Failed);
+    assert!(report.verified_through.is_none());
+    assert!(!report.failures.is_empty());
+    assert!(
+        report
+            .failures
+            .iter()
+            .all(|failure| failure.code == "snapshot_incomplete"),
+        "{:?}",
+        report.failures
+    );
+    assert!(
+        backend
+            .latest_complete_verified_through("szse_delisting")
+            .unwrap()
+            .is_none(),
+        "a failed background tail advances no verified date"
+    );
+    let row = backend.read_source_refresh_run(&run_id).unwrap().unwrap();
+    assert_eq!(row.status, "failed");
+    assert!(row.finished_at.is_some());
+
+    // Fail-closed, not fail-stuck: the next start is accepted.
+    let next = super::start(&backend, day(2026, 11, 2), RefreshMode::Tail, &[], INSTANCE).unwrap();
+    assert_ne!(next.run_id, run_id);
 }
 
 /// Poll the durable record until the background thread closes it.
@@ -1238,7 +1408,7 @@ fn a_panicking_background_full_reports_failed_without_a_verified_date() {
     let scenario = Scenario::new();
     let backend = scenario.open();
 
-    let started = super::start_full_in_background(
+    let started = super::start_in_background(
         scenario.store(),
         backend.clone(),
         client(&fixture),
@@ -1383,4 +1553,67 @@ fn reuse_is_gated_by_the_run_confirmation_not_the_page_date() {
     assert_eq!(error.code(), "source_refresh_overdue");
     assert!(error.to_string().contains(&confirmed_text), "{error}");
     assert_eq!(fixture.calls(), calls, "an overdue page is not refetched");
+}
+
+/// Reproduction harness for #582, not a regression test: a tail on an empty
+/// store is the production worst case (the first observation of both probe
+/// tables triggers their whole-table acquisition), so the plan is
+/// 146 (`szse_listing`) + 375 (`szse_short_name`) + 20 other requests.
+///
+/// The transport here answers instantly, so the numbers printed below are the
+/// stages that are *not* the network: store freeze, envelope parse, the index
+/// transaction of a 375-page table, and the write/read coordinator waits. Run
+/// it with `X_DATA_MCP_STAGE_TRACE=1` to get the per-stage breakdown:
+///
+/// ```text
+/// X_DATA_MCP_STAGE_TRACE=1 cargo nextest run --run-ignored \
+///   -E 'test(production_magnitude_tail_stage_timings)' --no-capture
+/// ```
+#[test]
+#[ignore = "reproduction harness (#582): prints staged timings, not an assertion"]
+fn production_magnitude_tail_stage_timings() {
+    let fixture = RefreshFixture::new();
+    fixture.set_table_pages(146, 375);
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    let started = std::time::Instant::now();
+    let report = run(
+        &scenario.store(),
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        &request(RefreshMode::Tail, &[]),
+        INSTANCE,
+    )
+    .unwrap();
+    let elapsed = started.elapsed();
+
+    eprintln!(
+        "#582 harness: tail wall {} ms, requests {}, pages {}, changed {}, \
+         status {:?}",
+        elapsed.as_millis(),
+        report.requests,
+        fixture.calls(),
+        report.changed,
+        report.status
+    );
+    // 146 + 375 pages, one page-1 guard re-read each, plus the 20 requests of
+    // the other sources in the tail plan.
+    assert_eq!(report.status, RefreshStatus::Succeeded);
+    assert!(
+        report.requests >= 541,
+        "the harness must reach the production page counts, got {}",
+        report.requests
+    );
+    let rows = backend
+        .read_source_refresh_run_sources(&report.run_id.unwrap())
+        .unwrap();
+    for row in &rows {
+        eprintln!(
+            "#582 harness source {:22} class {:6} requests {:4} elapsed {:8} ms complete {}",
+            row.source_id, row.class, row.requests, row.elapsed_ms, row.complete
+        );
+    }
 }

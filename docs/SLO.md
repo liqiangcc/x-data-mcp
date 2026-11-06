@@ -33,7 +33,8 @@
   `refresh_exchange_sources`：`tail` **<300s**、触发整表刷新 **<600s**、`full` **<60min**
   （1,941 请求 × 1.42s ≈ 46min；1 req/s 理论下界约 32min）。**`full` 自 R2b 起是异步的**，
   所以 <60min 量的是 run 记录的 `finished_at − started_at`（或日志里的真实墙钟），不是 MCP
-  调用的耗时：调用本身只校验并返回 `running`。<300s 量的是没有触发整表的 tail 同步调用时长。
+  调用的耗时：调用本身只校验并返回 `running`。**`tail` 自 #582 起也是异步的**，同理 <300s 量的是
+  run 记录的 `finished_at − started_at`，不是 MCP 调用耗时；门槛数字不变。
 - **2026-11-01 G2 的触发整表改按表计量**（[DECISIONS](decisions.md) D-67，owner 裁定）：
   探针触发整表时，**每张被触发的表各自 <600s**（`szse_listing`、`szse_short_name` 各算一张），
   run 总时长不设门禁。计量列是 schema 26 的 `source_refresh_run_sources.elapsed_ms`（该来源
