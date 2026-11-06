@@ -777,10 +777,9 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
     历史上的 `v4` 歧义不会消失，只是不再新增。
   - **`producer` 块**（`v5` 新增，顶层，与 `algorithms` 并列）：`git_sha` 是写出该清单的二进制的
     `build.rs` 提交 SHA（无 git 检出时为 `"unknown"`）；`algorithms` 是该二进制携带的派生算法标签：
-    `price_limit`（读时派生标签 `limit-v1+exr-guard1`，D-81；已登记规则数据集 `price_limit_rules` 的 `algorithm_version` 仍是 `limit-v1`）、`market_cap`（`market-cap-v1`）、`security_master`、`security_names`、
+    `price_limit`（读时派生标签 `limit-v1+exr-guard1`，D-81；已登记规则数据集 `price_limit_rules` 的 `algorithm_version` 仍是 `limit-v1`）、`market_cap`（`market-cap-v1`）、`tradability`（`tradability-v1`）、`security_master`、`security_names`、
     `risk_warnings`、`suspensions`，取自代码常量。`market_cap` 不是导出文件：导出不含市值，
     它在读时由 `capital_events` 与不复权收盘价重算，标签是快照唯一能说明「用哪个公式」的地方。
-    可交易性读模型没有版本常量，不在其中。
   - **`snapshot_id` 不含 `producer`**（审计建议，设计没有相反规定）：§7.3 的身份是
     `{schema, request, catalog, generations, algorithms, series, derived}`，没有二进制版本，
     本次未改。理由：内容相同的快照不应因二进制不同而被拆开；已写入的派生数据集的算法版本
