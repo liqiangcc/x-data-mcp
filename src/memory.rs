@@ -34,12 +34,45 @@ pub fn anon_bytes() -> Option<usize> {
 /// The tighter of `memory.high` and `memory.max` of this process's cgroup,
 /// `None` when it is unlimited or cannot be read (not cgroup v2, no access).
 pub fn cgroup_limit() -> Option<usize> {
-    let membership = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    let dir = cgroup_dir(&membership)?;
-    ["memory.high", "memory.max"]
-        .into_iter()
-        .filter_map(|file| parse_limit(&std::fs::read_to_string(dir.join(file)).ok()?))
-        .min()
+    cgroup_limits().ok()?.effective()
+}
+
+/// `memory.high` and `memory.max` of this process's cgroup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CgroupLimits {
+    pub high: Option<usize>,
+    pub max: Option<usize>,
+}
+
+impl CgroupLimits {
+    pub fn effective(&self) -> Option<usize> {
+        [self.high, self.max].into_iter().flatten().min()
+    }
+}
+
+/// Like [`cgroup_limit`], but says why the cgroup could not be read: `Err`
+/// is a human-readable reason, `Ok` with both fields `None` is a cgroup
+/// without limits. One unreadable file is a missing limit (the root cgroup
+/// has neither); `Err` is returned when neither can be read.
+pub fn cgroup_limits() -> Result<CgroupLimits, String> {
+    let membership = std::fs::read_to_string("/proc/self/cgroup")
+        .map_err(|e| format!("cannot read /proc/self/cgroup: {e}"))?;
+    let dir = cgroup_dir(&membership)
+        .ok_or_else(|| "process is not in a cgroup v2 hierarchy".to_owned())?;
+    let read = |file: &str| -> Result<Option<usize>, String> {
+        let path = dir.join(file);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        Ok(parse_limit(&text))
+    };
+    let (high, max) = (read("memory.high"), read("memory.max"));
+    if let (Err(reason), Err(_)) = (&high, &max) {
+        return Err(reason.clone());
+    }
+    Ok(CgroupLimits {
+        high: high.unwrap_or(None),
+        max: max.unwrap_or(None),
+    })
 }
 
 fn parse_anon(status: &str) -> Option<usize> {
@@ -91,6 +124,25 @@ mod tests {
         );
         assert!(cgroup_dir("0::/a/../../etc\n").is_none());
         assert!(cgroup_dir("12:memory:/legacy\n").is_none());
+    }
+
+    #[test]
+    fn effective_limit_is_the_tighter_of_high_and_max() {
+        let both = CgroupLimits {
+            high: Some(1 << 30),
+            max: Some(3 << 29),
+        };
+        assert_eq!(both.effective(), Some(1 << 30));
+        let only_max = CgroupLimits {
+            high: None,
+            max: Some(1 << 20),
+        };
+        assert_eq!(only_max.effective(), Some(1 << 20));
+        let none = CgroupLimits {
+            high: None,
+            max: None,
+        };
+        assert_eq!(none.effective(), None);
     }
 
     #[test]

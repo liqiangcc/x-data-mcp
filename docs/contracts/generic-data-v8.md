@@ -233,6 +233,9 @@ M3 PR-9（#446 §10.3）的 v2 附加字段 `selection.scope` 只接一个值：
 连接关闭即释放。服务进程接近自身 cgroup 的 `memory.high` 时（`src/data_supply/read_limits.rs`，
 常驻匿名内存 + 在途读取的预留 + 本次读取的估算 > `memory.high` 的 85%），读取立即返回
 `memory_budget_exceeded`（`isError`，不缓存新快照），不再让请求在内核回收里变慢。
+`data_service` 启动时向 stderr 写预算状态（触发线与 cgroup 限额，或“inactive”及原因）和游标池上限；
+每次拒绝写一行 `read refused: …`，每 10 秒最多一行并带上期间被抑制的次数。v2 读的页不再复制整份
+manifest（VM1-41）。
 
 **`selection.kind=universe` 的分页（#295）：** `market.daily`/`market.index` 的 v2 `universe` 读，
 每页的 `entities`、`versions`、`columns`（`dates`）只含**本页行涉及的实体**，响应字节随本页行数

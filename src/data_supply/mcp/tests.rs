@@ -947,6 +947,95 @@ fn yearly_batch_availability_reports_one_invalid_row_among_fresh() {
     assert_eq!(absent[0]["entity"]["code"], &victim[3..]);
 }
 
+/// VM1-41: what the `Observer` keeps per cursor. Availability is the largest
+/// thing it caches: at most 100 entities (a `universe` is one row), each with
+/// at most the in-flight tasks plus 5 finished ones. Measured here with 100
+/// entities that each have a finished daily task; the bound is far below the
+/// 16 MiB per entry the budget check would allow.
+#[test]
+fn a_cached_availability_snapshot_is_small() {
+    let f = fixture();
+    let symbols: Vec<String> = (0..100).map(|i| format!("sh.{:06}", 600000 + i)).collect();
+    let daily_task = task_many(&f, &symbols, "day", "req-size");
+    for (i, s) in symbols.iter().enumerate() {
+        publish_daily(
+            &f,
+            &daily_task,
+            &format!("item-{}", i + 1),
+            s,
+            vec![bar(day_epoch(2020, 1, 6), 100)],
+            None,
+        );
+    }
+    let entities: Vec<Value> = symbols
+        .iter()
+        .map(|s| json!({"exchange": "sh", "code": &s[3..]}))
+        .collect();
+    let page = f
+        .api
+        .call(
+            "get_data_availability",
+            json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "batch", "entities": entities},
+                "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2020-12-31"},
+                "version": {"kind": "latest_per_entity"},
+                "page_size": 10,
+            }),
+        )
+        .unwrap();
+    // The cursor holds all 100 items, not the 10 of the page.
+    let all = f
+        .api
+        .call(
+            "get_data_availability",
+            json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "batch", "entities": entities},
+                "filter": {"kind": "daily", "start_date": "2020-01-01", "end_date": "2020-12-31"},
+                "version": {"kind": "latest_per_entity"},
+                "page_size": 100,
+            }),
+        )
+        .unwrap();
+    assert!(page["next_cursor"].is_string());
+    let items = all["items"].as_array().unwrap();
+    assert_eq!(items.len(), 100);
+    let bytes = serde_json::to_vec(items).unwrap().len();
+    let related = items[0]["related_tasks"].as_array().unwrap();
+    eprintln!(
+        "availability snapshot: {bytes} B for 100 items ({} B per item, {} related tasks on the first)",
+        bytes / 100,
+        related.len()
+    );
+    // 6 related tasks per entity is the cap without in-flight tasks; scale
+    // the measured per-item size to that.
+    let one_task = serde_json::to_vec(&related[0]).unwrap().len();
+    let worst = bytes + 100 * one_task * 5;
+    eprintln!("one related task {one_task} B; worst case at 6 per entity {worst} B");
+    assert!(worst < 2 * 1024 * 1024, "{worst}");
+    // Progress caches the whole `ProgressPage` of a task of up to 100 items
+    // (larger tasks use the keyset shape, which caches only the head). Here
+    // the 100 items have all finished, so ask for the unfinished ones of a
+    // fresh task with 100 pending items.
+    let pending = task_many(&f, &symbols, "day", "req-size-progress");
+    let progress = f
+        .api
+        .call(
+            "get_task_progress",
+            json!({"task_id": pending, "page_size": 100}),
+        )
+        .unwrap();
+    let progress_bytes = serde_json::to_vec(&progress).unwrap().len();
+    eprintln!(
+        "progress snapshot: {progress_bytes} B, {} unfinished items",
+        progress["unfinished"].as_array().map_or(0, Vec::len)
+    );
+    assert!(progress_bytes < 512 * 1024, "{progress_bytes}");
+}
+
 #[test]
 fn progress_through_handler_on_compact_schema() {
     // N3 progress: a compact task reports through the real handler with
