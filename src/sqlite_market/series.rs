@@ -1097,24 +1097,27 @@ pub(crate) fn r7_raw_on_day(
     entity: &str,
     day: NaiveDate,
 ) -> Result<Option<u32>, Error> {
-    let result = c.query_row(
-        "SELECT b.r7_raw FROM market_series s JOIN series_bars b ON b.series_key=s.series_key \
+    let result = c
+        .query_row(
+            "SELECT b.r7_raw FROM market_series s JOIN series_bars b ON b.series_key=s.series_key \
          WHERE s.entity=?1 AND s.period=?2 AND s.adjustment=?3 AND s.instrument_class=?4 \
          AND b.trade_day=?5",
-        params![
-            entity,
-            super::compact_repo::period_code(Period::Day),
-            Adjustment::Raw.code(),
-            INSTRUMENT_CLASS_STOCK,
-            crate::compact_market::epoch_day(day)
-        ],
-        |r| r.get::<_, Option<i64>>(0),
-    )
-    .optional()
-    .map_err(storage)?;
-    
+            params![
+                entity,
+                super::compact_repo::period_code(Period::Day),
+                Adjustment::Raw.code(),
+                INSTRUMENT_CLASS_STOCK,
+                crate::compact_market::epoch_day(day)
+            ],
+            |r| r.get::<_, Option<i64>>(0),
+        )
+        .optional()
+        .map_err(storage)?;
+
     match result {
-        Some(Some(v)) => u32::try_from(v).map(Some).map_err(|_| invalid("r7_raw out of range")),
+        Some(Some(v)) => u32::try_from(v)
+            .map(Some)
+            .map_err(|_| invalid("r7_raw out of range")),
         Some(None) => Ok(None),
         None => Ok(None),
     }

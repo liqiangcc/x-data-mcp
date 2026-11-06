@@ -1729,12 +1729,17 @@ fn sh_600000_2008_04_24_uses_official_r7_reference_price() {
 fn r7_raw_hand_marker_uses_reference_price() {
     let fixture = Fixture::new();
     fixture.write_rules(&real_book());
-    
-    let days_2008 = vec![day(2008, 4, 21), day(2008, 4, 22), day(2008, 4, 23), day(2008, 4, 24)];
+
+    let days_2008 = vec![
+        day(2008, 4, 21),
+        day(2008, 4, 22),
+        day(2008, 4, 23),
+        day(2008, 4, 24),
+    ];
     let listing_days = vec![day(1999, 11, 10), day(1999, 11, 11)];
     let mut all_days = listing_days.clone();
     all_days.extend_from_slice(&days_2008);
-    
+
     fixture.add_legacy_members(&[LegacyMember {
         entity: "sh.600001",
         exchange: Exchange::Sh,
@@ -1743,7 +1748,7 @@ fn r7_raw_hand_marker_uses_reference_price() {
         days: &all_days,
         risk: Some("normal"),
     }]);
-    
+
     let mut c = fixture.open();
     let tx = c.transaction().unwrap();
     let series_key: i64 = tx.query_row(
@@ -1751,13 +1756,18 @@ fn r7_raw_hand_marker_uses_reference_price() {
         [],
         |r| r.get(0),
     ).unwrap();
-    
+
     // Set r7_raw to hand marker value
     tx.execute(
         "UPDATE series_bars SET r7_raw=? WHERE series_key=? AND trade_day=?",
-        rusqlite::params![0xC3640053_u32 as i64, series_key, crate::compact_market::epoch_day(day(2008, 4, 24))],
-    ).unwrap();
-    
+        rusqlite::params![
+            0xC3640053_u32 as i64,
+            series_key,
+            crate::compact_market::epoch_day(day(2008, 4, 24))
+        ],
+    )
+    .unwrap();
+
     // Add ex-rights event
     let set = crate::market_data::AdjustmentEventSet {
         entity: "sh.600001".into(),
@@ -1765,17 +1775,28 @@ fn r7_raw_hand_marker_uses_reference_price() {
             ordinal: 0,
             effective_day: day(2008, 4, 24),
             category: 1,
-            c_bits: [1.0f32.to_bits(), 0.0f32.to_bits(), 1.0f32.to_bits(), 0.0f32.to_bits()],
-            factors: ["1.0".parse().unwrap(), "0.0".parse().unwrap(), "1.0".parse().unwrap(), "0.0".parse().unwrap()],
+            c_bits: [
+                1.0f32.to_bits(),
+                0.0f32.to_bits(),
+                1.0f32.to_bits(),
+                0.0f32.to_bits(),
+            ],
+            factors: [
+                "1.0".parse().unwrap(),
+                "0.0".parse().unwrap(),
+                "1.0".parse().unwrap(),
+                "0.0".parse().unwrap(),
+            ],
             known_at: None,
             basis_status: crate::market_data::FactorBasisStatus::Verified,
         }],
         excluded: 0,
         precision: crate::market_data::FactorPrecision::Stock2dp,
     };
-    crate::sqlite_market::derived::replace_adjustment_events(&tx, &set, fixture.binding, "t", "i").unwrap();
+    crate::sqlite_market::derived::replace_adjustment_events(&tx, &set, fixture.binding, "t", "i")
+        .unwrap();
     tx.commit().unwrap();
-    
+
     let report = ask(&fixture.open(), "sh.600001", day(2008, 4, 24));
     assert_eq!(report.limit_basis, Some(LimitBasis::ReferencePrice));
 }
@@ -1785,12 +1806,17 @@ fn r7_raw_hand_marker_uses_reference_price() {
 fn r7_raw_sentinel_uses_reference_price() {
     let fixture = Fixture::new();
     fixture.write_rules(&real_book());
-    
-    let days_2008 = vec![day(2008, 4, 21), day(2008, 4, 22), day(2008, 4, 23), day(2008, 4, 24)];
+
+    let days_2008 = vec![
+        day(2008, 4, 21),
+        day(2008, 4, 22),
+        day(2008, 4, 23),
+        day(2008, 4, 24),
+    ];
     let listing_days = vec![day(1999, 11, 10), day(1999, 11, 11)];
     let mut all_days = listing_days.clone();
     all_days.extend_from_slice(&days_2008);
-    
+
     fixture.add_legacy_members(&[LegacyMember {
         entity: "sh.600002",
         exchange: Exchange::Sh,
@@ -1799,7 +1825,7 @@ fn r7_raw_sentinel_uses_reference_price() {
         days: &all_days,
         risk: Some("normal"),
     }]);
-    
+
     let mut c = fixture.open();
     let tx = c.transaction().unwrap();
     let series_key: i64 = tx.query_row(
@@ -1807,13 +1833,18 @@ fn r7_raw_sentinel_uses_reference_price() {
         [],
         |r| r.get(0),
     ).unwrap();
-    
+
     // Set r7_raw to sentinel
     tx.execute(
         "UPDATE series_bars SET r7_raw=? WHERE series_key=? AND trade_day=?",
-        rusqlite::params![0x10000_u32 as i64, series_key, crate::compact_market::epoch_day(day(2008, 4, 24))],
-    ).unwrap();
-    
+        rusqlite::params![
+            0x10000_u32 as i64,
+            series_key,
+            crate::compact_market::epoch_day(day(2008, 4, 24))
+        ],
+    )
+    .unwrap();
+
     // Add ex-rights event
     let set = crate::market_data::AdjustmentEventSet {
         entity: "sh.600002".into(),
@@ -1821,17 +1852,28 @@ fn r7_raw_sentinel_uses_reference_price() {
             ordinal: 0,
             effective_day: day(2008, 4, 24),
             category: 1,
-            c_bits: [1.0f32.to_bits(), 0.0f32.to_bits(), 1.0f32.to_bits(), 0.0f32.to_bits()],
-            factors: ["1.0".parse().unwrap(), "0.0".parse().unwrap(), "1.0".parse().unwrap(), "0.0".parse().unwrap()],
+            c_bits: [
+                1.0f32.to_bits(),
+                0.0f32.to_bits(),
+                1.0f32.to_bits(),
+                0.0f32.to_bits(),
+            ],
+            factors: [
+                "1.0".parse().unwrap(),
+                "0.0".parse().unwrap(),
+                "1.0".parse().unwrap(),
+                "0.0".parse().unwrap(),
+            ],
             known_at: None,
             basis_status: crate::market_data::FactorBasisStatus::Verified,
         }],
         excluded: 0,
         precision: crate::market_data::FactorPrecision::Stock2dp,
     };
-    crate::sqlite_market::derived::replace_adjustment_events(&tx, &set, fixture.binding, "t", "i").unwrap();
+    crate::sqlite_market::derived::replace_adjustment_events(&tx, &set, fixture.binding, "t", "i")
+        .unwrap();
     tx.commit().unwrap();
-    
+
     let report = ask(&fixture.open(), "sh.600002", day(2008, 4, 24));
     assert_eq!(report.limit_basis, Some(LimitBasis::ReferencePrice));
 }

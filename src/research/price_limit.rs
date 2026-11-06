@@ -521,14 +521,15 @@ pub fn price_limit_in(
     answer.price_scale = Some(price_scale);
 
     // limit-v2: determine the price limit basis (D-84, issue-433 §2).
-    let (basis_price, basis) = match ex_rights_basis(c, entity, prev_close, price_scale, prev_day, temporal.as_of)? {
-        Some((price, basis)) => (price, basis),
-        None => {
-            // Allotment or non-positive reference price
-            answer.reason = Some(PriceLimitReason::ExRightsUnverified);
-            return Ok(answer);
-        }
-    };
+    let (basis_price, basis) =
+        match ex_rights_basis(c, entity, prev_close, price_scale, prev_day, temporal.as_of)? {
+            Some((price, basis)) => (price, basis),
+            None => {
+                // Allotment or non-positive reference price
+                answer.reason = Some(PriceLimitReason::ExRightsUnverified);
+                return Ok(answer);
+            }
+        };
     answer.limit_basis = Some(basis);
 
     let limits = match compute_limit(basis_price, price_scale, rule, tick) {
@@ -578,13 +579,13 @@ fn ex_rights_basis(
     // Check if as_of is before 2010-09-14 and try r7_raw
     let (year, month, day) = R7_CUTOFF_DATE;
     let cutoff_date = chrono::NaiveDate::from_ymd_opt(year, month, day).unwrap();
-    
+
     if as_of < cutoff_date {
         // Try to get r7_raw on as_of
         if let Some(r7_value) = series::r7_raw_on_day(c, entity, as_of)? {
             // Check if r7_raw is a valid price (not sentinel or hand marker)
-            let is_sentinel = r7_value == R7_SENTINEL 
-                || (r7_value & R7_HAND_MARKER_MASK) == R7_HAND_MARKER;
+            let is_sentinel =
+                r7_value == R7_SENTINEL || (r7_value & R7_HAND_MARKER_MASK) == R7_HAND_MARKER;
 
             if r7_value != 0 && !is_sentinel {
                 // Use r7_raw as official reference price (in fen, scale 2)
@@ -597,7 +598,8 @@ fn ex_rights_basis(
                     i64::from(r7_value)
                 } else {
                     // Convert fen to higher precision: multiply by 10^(price_scale - 2)
-                    i64::from(r7_value).checked_mul(10_i64.pow(price_scale - 2))
+                    i64::from(r7_value)
+                        .checked_mul(10_i64.pow(price_scale - 2))
                         .ok_or_else(|| Error::Invalid("r7_raw conversion overflow".into()))?
                 };
                 return Ok(Some((r7_in_series_scale, LimitBasis::OfficialR7)));
