@@ -81,6 +81,7 @@ pub(crate) fn replace_risk_warnings(
         "content_digest": compact_market::digest_hex(&digest),
         "record_count": rows.len(),
         "sz_rows": rows.iter().filter(|row| row.exchange == crate::security_master::Exchange::Sz).count(),
+        "normal_rows": rows.iter().filter(|row| row.status == crate::security_master::RiskStatus::Normal).count(),
         "sh_rows": rows.iter().filter(|row| row.exchange == crate::security_master::Exchange::Sh).count(),
         "same_day_conflicts": set.same_day_conflict_evidence(),
         "observed_windows": set.observed_windows(),
@@ -100,8 +101,18 @@ pub(crate) fn replace_risk_warnings(
             "reason": pending.reason,
         })).collect::<Vec<_>>(),
         // D-58: absence of an announcement is `unknown`, never `normal`.
-        "absence_policy": "no row is inferred as normal; a missing interval or a \
-            not_observed coverage window is unknown (fail-closed)",
+        "absence_policy": "a missing interval or a not_observed coverage window is \
+            unknown (fail-closed); Shenzhen additionally writes explicit `normal` rows \
+            inside the short-name coverage (see normal_policy), so only an uncovered SZ \
+            day is unknown and SH/BJ never infer normal",
+        // D-81 task 49: Shenzhen `normal` rows are a closed-world complement of
+        // the ST intervals inside the short-name coverage, bounded by the
+        // security_master interval end (delisting). Shanghai/BJ never get them.
+        "normal_policy": "D-81: only SZ A-shares, inside the short-name coverage, with \
+            no ST interval, no PT/退/`*` name, not after a same-day conflict, and only up to \
+            the security_master interval end (a code absent from the main table gets none). \
+            The coverage end is the last rename day, so the newest days stay unknown until \
+            the next rename. SH/BJ never write normal.",
         // §5.3/Q4: SZ rows take the day the first snapshot carrying the row was
         // stored; SH rows keep the announcement day the source proves.
         "known_at_policy": "SZ name-history rows carry known_at = the day the first \
