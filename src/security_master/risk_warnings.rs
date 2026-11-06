@@ -36,7 +36,22 @@ pub const DATASET_KEY: &str = "a_share";
 /// Content-digest format registered with the dataset version.
 pub const DIGEST_FORMAT: &str = "sha256-risk-warning-intervals-v1";
 /// Algorithm version of the interval assembly.
-pub const ALGORITHM_VERSION: &str = "risk-warnings-v1";
+///
+/// `v2` (D-81 R5): a same-day conflict no longer fails the whole dataset. The
+/// conflicting code gets one `marker_only_unresolved` row on the conflict day
+/// and every other code is assembled as before. Datasets with no conflict
+/// assemble to the same rows under `v1` and `v2`, so the content digest (and
+/// the `version_id` derived from it) does not move when only the label does.
+pub const ALGORITHM_VERSION: &str = "risk-warnings-v2";
+
+/// `raw_status_code` of the row an SH implementation and revocation on one
+/// effective day collapse to.
+pub const RAW_SAME_DAY_ACTIONS: &str = "unresolved:same_day_action_conflict";
+/// `raw_status_code` of the row two SZ short-name changes on one day collapse
+/// to.
+pub const RAW_SAME_DAY_NAME_CHANGES: &str = "unresolved:same_day_name_changes";
+/// How many conflicts the evidence lists next to the count.
+pub const CONFLICT_SAMPLE_LIMIT: usize = 20;
 
 /// One dated short-name change from the SZSE `SSGSGMXX`/`tab2` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +105,55 @@ pub struct RiskWarningSet {
 }
 
 impl RiskWarningSet {
+    /// The rows that stand for a same-day conflict (D-81 R5): the code and the
+    /// day whose state the source cannot settle.
+    pub fn same_day_conflicts(&self) -> Vec<&RiskWarningInterval> {
+        let mut conflicts: Vec<&RiskWarningInterval> = self
+            .rows
+            .iter()
+            .filter(|row| row.status == RiskStatus::MarkerOnlyUnresolved)
+            .collect();
+        conflicts.sort_by(|left, right| {
+            (left.exchange, left.code.as_str(), left.effective_from).cmp(&(
+                right.exchange,
+                right.code.as_str(),
+                right.effective_from,
+            ))
+        });
+        conflicts
+    }
+
+    /// Item evidence of the conflicts: the count and the first
+    /// [`CONFLICT_SAMPLE_LIMIT`] `(code, day)` pairs. Both the daily item and
+    /// the registration evidence derive it from the rows, so a replay that
+    /// rebuilds the rows rebuilds the evidence too.
+    pub fn same_day_conflict_evidence(&self) -> serde_json::Value {
+        let conflicts = self.same_day_conflicts();
+        serde_json::json!({
+            "count": conflicts.len(),
+            "codes": conflicts
+                .iter()
+                .map(|row| (row.exchange, row.code.as_str()))
+                .collect::<BTreeSet<_>>()
+                .len(),
+            "sample_limit": CONFLICT_SAMPLE_LIMIT,
+            "sample": conflicts
+                .iter()
+                .take(CONFLICT_SAMPLE_LIMIT)
+                .map(|row| serde_json::json!({
+                    "exchange": row.exchange.as_str(),
+                    "code": row.code,
+                    "day": row.effective_from.to_string(),
+                    "kind": row.raw_status_code,
+                    "source_record_id": row.source_record_id,
+                }))
+                .collect::<Vec<_>>(),
+            "policy": "D-81 R5: a same-day conflict is written as marker_only_unresolved \
+                for that code on that day only; every other code is published and the \
+                state around the conflict is unknown, never normal",
+        })
+    }
+
     pub fn observed_windows(&self) -> usize {
         self.coverage
             .iter()
@@ -146,12 +210,8 @@ pub enum Error {
     SourceKind,
     #[error("a risk-warning row has a status that is not a warning interval")]
     Status,
-    #[error("a short-name change chain has two changes on the same day")]
-    SameDayConflict,
     #[error("a short-name change chain does not connect before_name to the prior after_name")]
     BrokenChain,
-    #[error("an implementation and a revocation share one announcement day")]
-    SameDayActionConflict,
     #[error("two implementation events on one day disagree about the warning status")]
     SameDayStatusConflict,
     #[error("a source event has no usable effective day")]
@@ -179,18 +239,38 @@ pub fn assemble_sz(
     let mut intervals = Vec::new();
     for (code, mut changes) in by_code {
         changes.sort_by_key(|change| change.day);
-        for pair in changes.windows(2) {
-            if pair[0].day == pair[1].day {
-                return Err(Error::SameDayConflict);
-            }
-        }
-        let mut current_name = changes[0].before_name.clone();
+        // `None` is "the chain's start" or "the name after a same-day
+        // conflict": the next row's `before_name` is accepted as the anchor.
+        let mut current_name: Option<&str> = None;
         let mut open: Option<RiskWarningInterval> = None;
-        for change in changes {
-            if change.before_name != current_name {
+        let mut index = 0usize;
+        while index < changes.len() {
+            let day = changes[index].day;
+            let mut end = index + 1;
+            while end < changes.len() && changes[end].day == day {
+                end += 1;
+            }
+            let group = &changes[index..end];
+            index = end;
+            if group.len() > 1 {
+                // D-81 R5: two changes on one day leave that day (and the name
+                // after it) unresolved for this code only. A group that does
+                // not even connect to the chain is still broken.
+                if let Some(name) = current_name
+                    && !group.iter().any(|change| change.before_name == name)
+                {
+                    return Err(Error::BrokenChain);
+                }
+                close_at(&mut open, &mut intervals, day);
+                intervals.push(sz_conflict_row(code, group, day));
+                current_name = None;
+                continue;
+            }
+            let change = group[0];
+            if current_name.is_some_and(|name| name != change.before_name) {
                 return Err(Error::BrokenChain);
             }
-            let before = warning_status(&current_name);
+            let before = warning_status(&change.before_name);
             let after = warning_status(&change.after_name);
             if (before != after || after.is_none())
                 && let Some(mut current) = open.take()
@@ -204,7 +284,7 @@ pub fn assemble_sz(
             {
                 open = Some(interval_from_sz(code, change, status));
             }
-            current_name = change.after_name.clone();
+            current_name = Some(change.after_name.as_str());
         }
         if let Some(interval) = open {
             intervals.push(interval);
@@ -245,23 +325,23 @@ pub fn assemble_sh(
         events.sort_by(|left, right| {
             (left.day, action_rank(left.action)).cmp(&(right.day, action_rank(right.action)))
         });
-        validate_sh_events(&events)?;
+        let steps = sh_steps(&events)?;
         let mut open: Option<RiskWarningInterval> = None;
         let mut cursor = 0usize;
         let code_gaps: Vec<NaiveDate> = gap_starts
             .iter()
             .copied()
-            .filter(|day| events.iter().any(|event| event.day > *day))
+            .filter(|day| steps.iter().any(|step| step.day() > *day))
             .collect();
         for day in code_gaps {
-            while cursor < events.len() && events[cursor].day <= day {
-                apply_sh_event(&mut open, &mut intervals, events[cursor]);
+            while cursor < steps.len() && steps[cursor].day() <= day {
+                apply_sh_step(&mut open, &mut intervals, &steps[cursor]);
                 cursor += 1;
             }
             close_at(&mut open, &mut intervals, day);
         }
-        for event in &events[cursor..] {
-            apply_sh_event(&mut open, &mut intervals, event);
+        for step in &steps[cursor..] {
+            apply_sh_step(&mut open, &mut intervals, step);
         }
         if let Some(interval) = open {
             intervals.push(interval);
@@ -275,7 +355,34 @@ pub fn assemble_sh(
     })
 }
 
-fn validate_sh_events(events: &[&RiskWarningStatusEvent]) -> Result<(), Error> {
+/// One thing that happens to a code's warning on one day: a single event, or
+/// the several events of a day the source contradicts itself on.
+enum ShStep<'a> {
+    Event(&'a RiskWarningStatusEvent),
+    /// D-81 R5: an implementation and a revocation on one effective day. The
+    /// state on that day is unknown, and so is the one after it until a later
+    /// event states one.
+    Conflict {
+        day: NaiveDate,
+        events: Vec<&'a RiskWarningStatusEvent>,
+    },
+}
+
+impl ShStep<'_> {
+    fn day(&self) -> NaiveDate {
+        match self {
+            Self::Event(event) => event.day,
+            Self::Conflict { day, .. } => *day,
+        }
+    }
+}
+
+/// Group one code's day-sorted events into steps. Two implementations of
+/// different statuses on one day, and an implementation without a status, are
+/// still errors for the whole set; an implementation next to a revocation
+/// isolates the code (D-81 R5, revising D-68 item 4).
+fn sh_steps<'a>(events: &[&'a RiskWarningStatusEvent]) -> Result<Vec<ShStep<'a>>, Error> {
+    let mut steps = Vec::with_capacity(events.len());
     let mut index = 0usize;
     while index < events.len() {
         let day = events[index].day;
@@ -300,11 +407,32 @@ fn validate_sh_events(events: &[&RiskWarningStatusEvent]) -> Result<(), Error> {
             }
         }
         if implement.is_some() && revoke {
-            return Err(Error::SameDayActionConflict);
+            steps.push(ShStep::Conflict {
+                day,
+                events: events[index..end].to_vec(),
+            });
+        } else {
+            steps.extend(events[index..end].iter().map(|event| ShStep::Event(event)));
         }
         index = end;
     }
-    Ok(())
+    Ok(steps)
+}
+
+fn apply_sh_step(
+    open: &mut Option<RiskWarningInterval>,
+    intervals: &mut Vec<RiskWarningInterval>,
+    step: &ShStep<'_>,
+) {
+    match step {
+        ShStep::Event(event) => apply_sh_event(open, intervals, event),
+        ShStep::Conflict { day, events } => {
+            // Whatever was open ran up to the conflict day; from there the
+            // state is unknown, so the warning is not carried across it.
+            close_at(open, intervals, *day);
+            intervals.push(sh_conflict_row(*day, events));
+        }
+    }
 }
 
 fn apply_sh_event(
@@ -342,6 +470,98 @@ fn close_at(
         current.effective_to = Some(day);
         intervals.push(current);
     }
+}
+
+/// The latest of the rows' knowledge times, `None` when any row has none: a
+/// conflict is known once every row that makes it is known.
+fn latest_known_at(days: impl Iterator<Item = Option<NaiveDate>>) -> Option<NaiveDate> {
+    let mut latest: Option<NaiveDate> = None;
+    for day in days {
+        let day = day?;
+        latest = Some(latest.map_or(day, |current| current.max(day)));
+    }
+    latest
+}
+
+/// One day of `marker_only_unresolved` for a code the source contradicts
+/// itself on. It lasts one calendar day: the days after it carry no row, which
+/// reads as `unknown` like every other uncovered day.
+#[allow(clippy::too_many_arguments)]
+fn conflict_row(
+    exchange: Exchange,
+    code: &str,
+    day: NaiveDate,
+    raw_status_code: &str,
+    announced_at: Option<String>,
+    known_at: Option<NaiveDate>,
+    source_kind: &str,
+    mut records: Vec<(String, String)>,
+) -> RiskWarningInterval {
+    // Order independent: the row must not depend on how the source listed the
+    // day's rows, or a replay could write a different row than the daily item.
+    records.sort();
+    let source_document_sha256 = records.first().map(|(_, sha)| sha.clone());
+    let ids: Vec<String> = records.into_iter().map(|(id, _)| id).collect();
+    RiskWarningInterval {
+        exchange,
+        code: code.to_string(),
+        effective_from: day,
+        effective_to: day.succ_opt(),
+        raw_status_code: raw_status_code.to_string(),
+        status: RiskStatus::MarkerOnlyUnresolved,
+        announced_at,
+        known_at,
+        source_kind: source_kind.to_string(),
+        source_record_id: Some(ids.join(",")),
+        source_document_sha256,
+    }
+}
+
+fn sz_conflict_row(code: &str, group: &[&SzNameChange], day: NaiveDate) -> RiskWarningInterval {
+    conflict_row(
+        Exchange::Sz,
+        code,
+        day,
+        RAW_SAME_DAY_NAME_CHANGES,
+        None,
+        latest_known_at(group.iter().map(|change| change.known_at)),
+        "szse_name_history",
+        group
+            .iter()
+            .map(|change| {
+                (
+                    change.source_record_id.clone(),
+                    change.source_document_sha256.clone(),
+                )
+            })
+            .collect(),
+    )
+}
+
+fn sh_conflict_row(day: NaiveDate, events: &[&RiskWarningStatusEvent]) -> RiskWarningInterval {
+    let announced_at = events
+        .iter()
+        .map(|event| event.announced_at.clone())
+        .collect::<Option<Vec<String>>>()
+        .and_then(|days| days.into_iter().max());
+    conflict_row(
+        Exchange::Sh,
+        &events[0].code,
+        day,
+        RAW_SAME_DAY_ACTIONS,
+        announced_at,
+        latest_known_at(events.iter().map(|event| event.known_at)),
+        "exchange_announcement",
+        events
+            .iter()
+            .map(|event| {
+                (
+                    event.source_record_id.clone(),
+                    event.source_document_sha256.clone(),
+                )
+            })
+            .collect(),
+    )
 }
 
 fn interval_from_sz(code: &str, change: &SzNameChange, status: RiskStatus) -> RiskWarningInterval {
@@ -558,13 +778,60 @@ mod tests {
         assert_eq!(set.rows[0].effective_to, Some(day(1999, 4, 28)));
     }
 
+    /// D-81 R5: two changes of one code on one day no longer fail the set.
+    /// The code is `marker_only_unresolved` on that day, the ST interval that
+    /// was open ends there, and another code is assembled as usual.
     #[test]
-    fn sz_same_day_conflict_fails_closed() {
+    fn sz_same_day_conflict_isolates_the_code() {
+        let rows = vec![
+            change("000001", "1998-01-05", "深发展A", "ST深发展"),
+            change("000001", "1998-04-28", "ST深发展", "深发展A"),
+            change("000001", "1998-04-28", "深发展A", "ST深发展"),
+            change("000002", "1998-02-02", "万科A", "ST万科"),
+        ];
+        let set = assemble_sz(&rows, Vec::new()).expect("a conflict is isolated, not fatal");
+        validate_set(&set.rows).expect("the rows are a valid interval set");
+        let by_code = |code: &str| -> Vec<&RiskWarningInterval> {
+            set.rows.iter().filter(|row| row.code == code).collect()
+        };
+        let conflicted = by_code("000001");
+        assert_eq!(conflicted.len(), 2);
+        assert_eq!(conflicted[0].status, RiskStatus::OtherRiskWarning);
+        assert_eq!(conflicted[0].effective_to, Some(day(1998, 4, 28)));
+        assert_eq!(conflicted[1].status, RiskStatus::MarkerOnlyUnresolved);
+        assert_eq!(conflicted[1].effective_from, day(1998, 4, 28));
+        assert_eq!(conflicted[1].effective_to, Some(day(1998, 4, 29)));
+        assert_eq!(conflicted[1].raw_status_code, RAW_SAME_DAY_NAME_CHANGES);
+        let normal = by_code("000002");
+        assert_eq!(normal.len(), 1);
+        assert_eq!(normal[0].status, RiskStatus::OtherRiskWarning);
+        assert_eq!(normal[0].effective_to, None);
+        assert_eq!(set.same_day_conflicts().len(), 1);
+    }
+
+    /// The conflict does not make the chain after it unreadable: the next row
+    /// anchors the name again, and a group that does not connect to the chain
+    /// is still `BrokenChain`.
+    #[test]
+    fn sz_chain_continues_after_a_conflict_and_still_breaks_when_unconnected() {
         let rows = vec![
             change("000001", "1998-04-28", "深发展A", "ST深发展"),
-            change("000001", "1998-04-28", "ST深发展", "深发展A"),
+            change("000001", "1998-04-28", "深发展A", "*ST深发展"),
+            change("000001", "1998-09-01", "*ST深发展", "深发展A"),
         ];
-        assert_eq!(assemble_sz(&rows, Vec::new()), Err(Error::SameDayConflict));
+        let set = assemble_sz(&rows, Vec::new()).expect("chain continues");
+        assert_eq!(set.rows.len(), 1);
+        assert_eq!(set.rows[0].status, RiskStatus::MarkerOnlyUnresolved);
+
+        let unconnected = vec![
+            change("000001", "1998-01-05", "深发展A", "深发展B"),
+            change("000001", "1998-04-28", "甲", "ST乙"),
+            change("000001", "1998-04-28", "丙", "丁"),
+        ];
+        assert_eq!(
+            assemble_sz(&unconnected, Vec::new()),
+            Err(Error::BrokenChain)
+        );
     }
 
     #[test]
@@ -610,37 +877,206 @@ mod tests {
         assert_eq!(cut.rows[0].effective_to, Some(day(2020, 3, 1)));
     }
 
+    fn sh_event(
+        code: &str,
+        when: NaiveDate,
+        action: RiskWarningAction,
+        status: Option<RiskStatus>,
+        id: &str,
+    ) -> RiskWarningStatusEvent {
+        RiskWarningStatusEvent {
+            code: code.into(),
+            day: when,
+            action,
+            status,
+            announced_at: Some(when.to_string()),
+            known_at: Some(when),
+            raw_status_code: match action {
+                RiskWarningAction::Implement => "implement:other_risk_warning".into(),
+                RiskWarningAction::Revoke => "revoke".into(),
+            },
+            source_kind: "exchange_announcement".into(),
+            source_record_id: id.into(),
+            source_document_sha256: "b".repeat(64),
+        }
+    }
+
+    /// D-81 R5 (revising D-68 item 4): a conflicting code is
+    /// `marker_only_unresolved` on the conflict day and a normal code in the
+    /// same set is published.
     #[test]
-    fn sh_same_day_implement_and_revoke_conflict() {
+    fn sh_same_day_implement_and_revoke_isolates_the_code() {
+        let other = Some(RiskStatus::OtherRiskWarning);
         let events = vec![
-            RiskWarningStatusEvent {
-                code: "600001".into(),
-                day: day(2020, 1, 2),
-                action: RiskWarningAction::Implement,
-                status: Some(RiskStatus::OtherRiskWarning),
-                announced_at: None,
-                known_at: None,
-                raw_status_code: "implement".into(),
-                source_kind: "exchange_announcement".into(),
-                source_record_id: "1".into(),
-                source_document_sha256: "b".repeat(64),
-            },
-            RiskWarningStatusEvent {
-                code: "600001".into(),
-                day: day(2020, 1, 2),
-                action: RiskWarningAction::Revoke,
-                status: None,
-                announced_at: None,
-                known_at: None,
-                raw_status_code: "revoke".into(),
-                source_kind: "exchange_announcement".into(),
-                source_record_id: "2".into(),
-                source_document_sha256: "b".repeat(64),
-            },
+            sh_event(
+                "600001",
+                day(2020, 1, 2),
+                RiskWarningAction::Implement,
+                other,
+                "a1",
+            ),
+            sh_event(
+                "600001",
+                day(2022, 1, 29),
+                RiskWarningAction::Implement,
+                other,
+                "a2",
+            ),
+            sh_event(
+                "600001",
+                day(2022, 1, 29),
+                RiskWarningAction::Revoke,
+                None,
+                "a3",
+            ),
+            sh_event(
+                "600001",
+                day(2022, 3, 1),
+                RiskWarningAction::Implement,
+                other,
+                "a4",
+            ),
+            sh_event(
+                "600002",
+                day(2021, 6, 1),
+                RiskWarningAction::Implement,
+                other,
+                "b1",
+            ),
+            sh_event(
+                "600002",
+                day(2021, 9, 1),
+                RiskWarningAction::Revoke,
+                None,
+                "b2",
+            ),
+        ];
+        let set = assemble_sh(&events, &[], Vec::new()).expect("the dataset is published");
+        validate_set(&set.rows).expect("the rows are a valid interval set");
+        let of = |code: &str| -> Vec<(NaiveDate, Option<NaiveDate>, RiskStatus)> {
+            set.rows
+                .iter()
+                .filter(|row| row.code == code)
+                .map(|row| (row.effective_from, row.effective_to, row.status))
+                .collect()
+        };
+        assert_eq!(
+            of("600001"),
+            vec![
+                (
+                    day(2020, 1, 2),
+                    Some(day(2022, 1, 29)),
+                    RiskStatus::OtherRiskWarning
+                ),
+                (
+                    day(2022, 1, 29),
+                    Some(day(2022, 1, 30)),
+                    RiskStatus::MarkerOnlyUnresolved
+                ),
+                (day(2022, 3, 1), None, RiskStatus::OtherRiskWarning),
+            ],
+            "the warning is not carried across the conflict day, and the days after \
+             it are uncovered (unknown) until the next event"
+        );
+        assert_eq!(
+            of("600002"),
+            vec![(
+                day(2021, 6, 1),
+                Some(day(2021, 9, 1)),
+                RiskStatus::OtherRiskWarning
+            )]
+        );
+        let conflicts = set.same_day_conflicts();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].code, "600001");
+        assert_eq!(conflicts[0].raw_status_code, RAW_SAME_DAY_ACTIONS);
+        assert_eq!(conflicts[0].source_record_id.as_deref(), Some("a2,a3"));
+        assert_eq!(conflicts[0].known_at, Some(day(2022, 1, 29)));
+        let evidence = set.same_day_conflict_evidence();
+        assert_eq!(evidence["count"], 1);
+        assert_eq!(evidence["sample"][0]["code"], "600001");
+        assert_eq!(evidence["sample"][0]["day"], "2022-01-29");
+    }
+
+    /// The conflict row must not depend on the order the events arrive in, or
+    /// replay could write a different row than the daily item.
+    #[test]
+    fn the_conflict_row_is_independent_of_event_order() {
+        let other = Some(RiskStatus::OtherRiskWarning);
+        let events = vec![
+            sh_event(
+                "600001",
+                day(2022, 1, 29),
+                RiskWarningAction::Implement,
+                other,
+                "z9",
+            ),
+            sh_event(
+                "600001",
+                day(2022, 1, 29),
+                RiskWarningAction::Revoke,
+                None,
+                "a1",
+            ),
+        ];
+        let mut reversed = events.clone();
+        reversed.reverse();
+        let forward = assemble_sh(&events, &[], Vec::new()).unwrap();
+        let backward = assemble_sh(&reversed, &[], Vec::new()).unwrap();
+        assert_eq!(forward.rows, backward.rows);
+        assert_eq!(
+            dataset_digest(&forward.rows),
+            dataset_digest(&backward.rows)
+        );
+        assert_eq!(forward.rows[0].source_record_id.as_deref(), Some("a1,z9"));
+    }
+
+    /// R5 isolates only the implementation-versus-revocation case. Two
+    /// implementations of different statuses on one day, and an
+    /// implementation without a status, still fail the set.
+    #[test]
+    fn other_same_day_failures_stay_fail_closed() {
+        let events = vec![
+            sh_event(
+                "600001",
+                day(2020, 1, 2),
+                RiskWarningAction::Implement,
+                Some(RiskStatus::OtherRiskWarning),
+                "1",
+            ),
+            sh_event(
+                "600001",
+                day(2020, 1, 2),
+                RiskWarningAction::Implement,
+                Some(RiskStatus::DelistingRiskWarning),
+                "2",
+            ),
         ];
         assert_eq!(
             assemble_sh(&events, &[], Vec::new()),
-            Err(Error::SameDayActionConflict)
+            Err(Error::SameDayStatusConflict)
         );
+        let statusless = vec![sh_event(
+            "600001",
+            day(2020, 1, 2),
+            RiskWarningAction::Implement,
+            None,
+            "1",
+        )];
+        assert_eq!(
+            assemble_sh(&statusless, &[], Vec::new()),
+            Err(Error::Status)
+        );
+    }
+
+    /// A conflict row reads as a status that is not `normal` and not a warning
+    /// class: the price-limit mapping and the member state treat it as unknown.
+    #[test]
+    fn the_conflict_status_is_a_valid_stored_status() {
+        assert_eq!(
+            RiskStatus::parse("marker_only_unresolved"),
+            Some(RiskStatus::MarkerOnlyUnresolved)
+        );
+        assert_ne!(RiskStatus::MarkerOnlyUnresolved, RiskStatus::Normal);
     }
 }

@@ -1228,6 +1228,13 @@ fn rebuild_risk_warnings(
         };
         key(left).cmp(&key(right))
     });
+    // D-81 R4 is checked on the pages the daily item reads, not on the older
+    // `END_DATE` answers of a window that only replay holds.
+    let superseded = crate::official_security::risk_warnings::superseded_bulletins(
+        bulletins
+            .iter()
+            .map(|record| (record.sha256.as_str(), record.origin.as_str())),
+    );
     let backend = match database {
         Some(path) => Some(open_database(path)?),
         None => None,
@@ -1296,8 +1303,14 @@ fn rebuild_risk_warnings(
         .filter(|window| !window.observed)
         .map(|window| (window.from, window.to))
         .collect();
-    let set = crate::official_security::risk_warnings::replay(store, &pages, &gaps, coverage)
-        .map_err(|error| format!("{}: {error}", error.code()))?;
+    let set = crate::official_security::risk_warnings::replay(
+        store,
+        &pages,
+        &superseded,
+        &gaps,
+        coverage,
+    )
+    .map_err(|error| format!("{}: {error}", error.code()))?;
     let summary = crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&set.rows));
     let mut outcome = ExchangeOutcome {
         status: "ok",

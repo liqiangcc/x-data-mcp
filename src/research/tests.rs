@@ -44,6 +44,11 @@ const GEN2: &str = "gen-2";
 /// Delisted A shares that are not members of the fixture's catalog head
 /// ([`Fixture::with_delisted_off_catalog`]).
 const OFF_CATALOG_DELISTED: [&str; 2] = ["sh.600001", "sz.000003"];
+/// Listing days of the fixture's ETFs, years before the first observation day
+/// and before the first stored bar (D-80).
+const ETF_LISTED_510050: NaiveDate = NaiveDate::from_ymd_opt(2005, 2, 23).unwrap();
+const ETF_LISTED_159919: NaiveDate = NaiveDate::from_ymd_opt(2012, 5, 28).unwrap();
+const ETF_LISTED_513330: NaiveDate = NaiveDate::from_ymd_opt(2017, 12, 20).unwrap();
 const MANIFEST_SHA: &str = "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b";
 const CREATED_AT: &str = "2026-10-26T00:00:00Z";
 
@@ -452,44 +457,50 @@ impl Fixture {
             DelistingReason, DelistingSource, Exchange, IssuerResolution, ListingSource,
         };
         let window = days();
-        let row =
-            |exchange: Exchange, code: &str, delisting: Option<NaiveDate>| SecurityLifecycleFact {
-                exchange,
-                code: code.into(),
-                effective_from: window[0],
-                effective_to: delisting,
-                instrument_class: 2,
-                issuer_key: Some(code.into()),
-                issuer_resolution: IssuerResolution::IssuerKey,
-                listing_date: Some(window[0]),
-                listing_date_tdx: Some(window[0]),
-                listing_source: ListingSource::ExchangeList,
-                b_listing_date: None,
-                delisting_date: delisting,
-                delisting_date_tdx: None,
-                delisting_source: if delisting.is_some() {
-                    DelistingSource::ExchangeList
-                } else {
-                    DelistingSource::Unknown
-                },
-                delisting_reason_class: if delisting.is_some() {
-                    DelistingReason::Other
-                } else {
-                    DelistingReason::Unknown
-                },
-                arrangement_start: None,
-                arrangement_end: None,
-                listing_conflict: false,
-                delisting_conflict: false,
-                known_at: Some(window[0]),
-            };
+        // D-80: the interval opens at the listing day; the first observation
+        // day (the fixture's first day) is only `known_at`. The listing days
+        // are years before the bars, so a fixture that equates the two cannot
+        // hide an interval pushed back to the observation day.
+        let row = |exchange: Exchange,
+                   code: &str,
+                   listing: NaiveDate,
+                   delisting: Option<NaiveDate>| SecurityLifecycleFact {
+            exchange,
+            code: code.into(),
+            effective_from: listing,
+            effective_to: delisting,
+            instrument_class: 2,
+            issuer_key: Some(code.into()),
+            issuer_resolution: IssuerResolution::IssuerKey,
+            listing_date: Some(listing),
+            listing_date_tdx: Some(listing),
+            listing_source: ListingSource::ExchangeList,
+            b_listing_date: None,
+            delisting_date: delisting,
+            delisting_date_tdx: None,
+            delisting_source: if delisting.is_some() {
+                DelistingSource::ExchangeList
+            } else {
+                DelistingSource::Unknown
+            },
+            delisting_reason_class: if delisting.is_some() {
+                DelistingReason::Other
+            } else {
+                DelistingReason::Unknown
+            },
+            arrangement_start: None,
+            arrangement_end: None,
+            listing_conflict: false,
+            delisting_conflict: false,
+            known_at: Some(window[0]),
+        };
         vec![
-            row(Exchange::Sh, "510050", None),
+            row(Exchange::Sh, "510050", ETF_LISTED_510050, None),
             // Terminated on the last fixture day: the last traded bar is the
             // day before, so `last_trade_date < delisting_date` (D-72).
-            row(Exchange::Sz, "159919", Some(window[2])),
+            row(Exchange::Sz, "159919", ETF_LISTED_159919, Some(window[2])),
             // Listed, no `.day` member: identity without bars.
-            row(Exchange::Sh, "513330", None),
+            row(Exchange::Sh, "513330", ETF_LISTED_513330, None),
         ]
     }
 
@@ -2189,6 +2200,72 @@ mod with_export {
             paths,
             vec![super::super::DAILY_QFQ_FILE, super::super::DAILY_RAW_FILE]
         );
+    }
+
+    /// D-83: the listing reads a real export. The fixture binds `gen-1`; once
+    /// the acquire store says it is `evidence_only`, the directory is marked
+    /// irreplaceable, and a changed byte count shows up as damage.
+    #[test]
+    fn list_snapshots_reads_a_real_export() {
+        use crate::research::retention::{GenerationStates, list_snapshots};
+
+        let fixture = Fixture::new();
+        let out = tempdir();
+        let outcome = export(
+            fixture.path(),
+            &ExportRequest::default(),
+            &options(out.path()),
+        )
+        .unwrap();
+        let store = out.path().join("acquire.sqlite");
+        let exports = out.path().join("exports");
+        std::fs::create_dir(&exports).unwrap();
+        std::fs::rename(&outcome.directory, exports.join(&outcome.snapshot_id)).unwrap();
+        let make = |state: &str| {
+            let _ = std::fs::remove_file(&store);
+            let c = Connection::open(&store).unwrap();
+            c.execute_batch(
+                "CREATE TABLE generations (generation_id TEXT PRIMARY KEY, \
+                 state TEXT NOT NULL, manifest_sha256 TEXT NOT NULL)",
+            )
+            .unwrap();
+            for id in [GEN1, GEN2] {
+                c.execute(
+                    "INSERT INTO generations VALUES (?1, ?2, ?3)",
+                    params![id, state, MANIFEST_SHA],
+                )
+                .unwrap();
+            }
+        };
+
+        make("superseded");
+        let listing =
+            list_snapshots(&exports, Some(&store), &GenerationStates::load(&store)).unwrap();
+        assert_eq!(listing.problem_count(), 0, "{}", listing.to_text());
+        let entry = &listing.snapshots[0];
+        assert_eq!(entry["snapshot_id"], outcome.snapshot_id.as_str());
+        assert_eq!(entry["schema"], crate::research::manifest::SCHEMA);
+        assert_eq!(entry["irreplaceable"], false);
+        let total: u64 = outcome.files.iter().map(|f| f.bytes).sum();
+        assert!(
+            entry["bytes"].as_u64().unwrap() > total,
+            "files plus manifest"
+        );
+
+        make("evidence_only");
+        let listing =
+            list_snapshots(&exports, Some(&store), &GenerationStates::load(&store)).unwrap();
+        assert_eq!(listing.snapshots[0]["irreplaceable"], true);
+
+        let first = &outcome.files[0].path;
+        let file = exports.join(&outcome.snapshot_id).join(first);
+        let mut bytes = std::fs::read(&file).unwrap();
+        bytes.push(0);
+        std::fs::write(&file, bytes).unwrap();
+        let listing =
+            list_snapshots(&exports, Some(&store), &GenerationStates::load(&store)).unwrap();
+        assert_eq!(listing.snapshots[0]["status"], "damaged");
+        assert!(listing.problem_count() > 0);
     }
 
     #[test]

@@ -530,6 +530,17 @@ pub enum Filter {
         start_date: NaiveDate,
         end_date: NaiveDate,
     },
+    /// `find_securities kind=etf`: ETFs of the main table with their latest
+    /// observed name (D-76). Built only by that tool, with `market.security_names`
+    /// and `selection.kind=market`; like `History` it is neither deserialized
+    /// nor advertised, so `query_data` cannot construct it and its schema does
+    /// not move. Serializable for the cursor key.
+    #[serde(skip_deserializing)]
+    #[schemars(skip)]
+    FindEtf {
+        code: Option<String>,
+        name_query: Option<String>,
+    },
 }
 impl Filter {
     /// The M2 point-in-time value lives inside `filter` (issue-387 §4.6,

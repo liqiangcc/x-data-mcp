@@ -32,7 +32,7 @@ pub enum ReadTool {
     SecurityEvents,
 }
 
-pub const FIND_SECURITIES_DESCRIPTION: &str = "Find current SH/SZ A-share securities by name, code or industry. Returns code, name and industry. ETFs and delisted codes are not listed.";
+pub const FIND_SECURITIES_DESCRIPTION: &str = "Find securities by name or code. Default kind=stock: current SH/SZ A-shares with industry. kind=etf: ETFs, current and delisted; names are observed from the first list snapshot and may be null.";
 pub const DAILY_BARS_DESCRIPTION: &str = "Daily bars for up to 100 securities. Stocks default to qfq; ETFs need adjustment=raw. Indices: use get_index_bars.";
 pub const YEARLY_BARS_DESCRIPTION: &str = "Calendar-year bars derived from qfq daily data, A-shares only. ETFs and indices have none. The current year is marked year_unfinished.";
 pub const INDEX_BARS_DESCRIPTION: &str = "Daily bars for the 9 registered index benchmarks.";
@@ -105,6 +105,19 @@ fn universe_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     json_schema!({"enum": ["a_current", "a_listed_ever", "etf_current", "etf_listed_ever"], "default": "a_current"})
 }
 
+/// What `find_securities` looks for. `stock` (the default) is the A-share
+/// catalog and answers exactly as it did before `kind` existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityKind {
+    Stock,
+    Etf,
+}
+
+fn security_kind_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    json_schema!({"enum": ["stock", "etf"], "default": "stock"})
+}
+
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindSecuritiesInput {
@@ -112,6 +125,9 @@ pub struct FindSecuritiesInput {
     pub query: Option<String>,
     pub code: Option<String>,
     pub industry_code: Option<String>,
+    #[serde(default)]
+    #[schemars(schema_with = "security_kind_schema")]
+    pub kind: Option<SecurityKind>,
     #[serde(default = "default_page")]
     #[schemars(range(min = 1, max = 1000))]
     pub page_size: usize,
@@ -424,6 +440,27 @@ impl ReadTool {
         match self {
             Self::FindSecurities => {
                 let a: FindSecuritiesInput = decode(input)?;
+                if a.kind == Some(SecurityKind::Etf) {
+                    // An ETF has no industry: refuse the filter instead of
+                    // answering a different question than the one asked.
+                    if a.industry_code.is_some() {
+                        return Err(invalid(
+                            "industry_code applies to kind=stock only; an ETF has no industry"
+                                .into(),
+                        ));
+                    }
+                    return Ok(query(
+                        Dataset::SecurityNames,
+                        Selection::Market {},
+                        Filter::FindEtf {
+                            code: a.code,
+                            name_query: a.query,
+                        },
+                        None,
+                        a.page_size,
+                        a.cursor,
+                    ));
+                }
                 Ok(query(
                     Dataset::Catalog,
                     Selection::Catalog {

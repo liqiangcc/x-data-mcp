@@ -579,7 +579,9 @@ fn member_rows_merge_two_sources_and_write_class_two_without_a_delisting_date() 
         .find(|row| row.exchange == Exchange::Sh)
         .unwrap();
     assert_eq!(sh.instrument_class, 2);
-    assert_eq!(sh.effective_from, day(2026, 10, 1));
+    // D-80: the listing day opens the interval, the earliest observation is
+    // `known_at`.
+    assert_eq!(sh.effective_from, day(2005, 2, 23));
     assert_eq!(sh.known_at, Some(day(2026, 10, 1)));
     assert_eq!(sh.issuer_key.as_deref(), Some("510050"));
     assert_eq!(sh.issuer_resolution, IssuerResolution::IssuerKey);
@@ -592,6 +594,115 @@ fn member_rows_merge_two_sources_and_write_class_two_without_a_delisting_date() 
         .unwrap();
     assert_eq!(sz.listing_source, ListingSource::Unknown);
     assert!(sz.delisting_date.is_none());
+    // No listing day: the first observation day is the only dated evidence.
+    assert_eq!(sz.effective_from, day(2026, 11, 3));
+    assert_eq!(sz.known_at, Some(day(2026, 11, 3)));
+}
+
+#[test]
+fn member_effective_from_is_the_listing_day_unless_it_would_not_precede_the_end() {
+    let seen = day(2026, 11, 5);
+    let listed = day(2005, 2, 23);
+    assert_eq!(member_effective_from(seen, Some(listed), None), listed);
+    assert_eq!(member_effective_from(seen, None, None), seen);
+    // Listing day before the interval end: the listing day.
+    assert_eq!(
+        member_effective_from(seen, Some(listed), Some(day(2026, 12, 1))),
+        listed
+    );
+    // Listing day on or after the end would make an empty interval, which the
+    // table rejects; the first observation day is kept for that row.
+    assert_eq!(
+        member_effective_from(
+            day(2020, 1, 1),
+            Some(day(2026, 12, 1)),
+            Some(day(2026, 12, 1))
+        ),
+        day(2020, 1, 1)
+    );
+    // A listing day after the first observation (a pre-announced listing) is
+    // still the interval start: the fund does not exist before it.
+    assert_eq!(
+        member_effective_from(day(2026, 1, 1), Some(day(2026, 3, 1)), None),
+        day(2026, 3, 1)
+    );
+}
+
+#[test]
+fn member_rows_open_the_interval_at_the_listing_day_and_keep_known_at() {
+    // Listed 2005, first observed 2026: the row exists for the years between.
+    let facts = vec![member(
+        Exchange::Sh,
+        "510050",
+        day(2026, 11, 5),
+        Some(day(2005, 2, 23)),
+        ListingSource::ExchangeList,
+    )];
+    let rows = member_rows(&facts).unwrap();
+    assert_eq!(rows[0].effective_from, day(2005, 2, 23));
+    assert_eq!(rows[0].known_at, Some(day(2026, 11, 5)));
+    assert_eq!(rows[0].listing_date, Some(day(2005, 2, 23)));
+    assert!(rows[0].effective_from < rows[0].known_at.unwrap());
+    // lookup() answers for a day in 2020 and not for the day before listing.
+    assert_eq!(
+        lookup(&rows, Exchange::Sh, "510050", day(2020, 6, 30))
+            .unwrap()
+            .map(|row| row.code.as_str()),
+        Some("510050")
+    );
+    assert!(
+        lookup(&rows, Exchange::Sh, "510050", day(2005, 2, 22))
+            .unwrap()
+            .is_none()
+    );
+    // Same input twice, and in another order, gives the same rows and digest.
+    let again = member_rows(&facts).unwrap();
+    assert_eq!(rows, again);
+    assert_eq!(assembly_digest(&rows, &[]), assembly_digest(&again, &[]));
+}
+
+#[test]
+fn a_delisted_member_ends_at_its_delisting_day_and_starts_at_its_listing_day() {
+    let mut fact = member(
+        Exchange::Sh,
+        "512390",
+        day(2026, 12, 1),
+        Some(day(2010, 1, 1)),
+        ListingSource::TdxSsdate,
+    );
+    fact.effective_to = Some(day(2026, 12, 10));
+    fact.delisting_date = Some(day(2026, 12, 10));
+    fact.delisting_source = DelistingSource::ExchangeList;
+    fact.delisting_reason_class = DelistingReason::Other;
+    let rows = member_rows(&[fact]).unwrap();
+    assert_eq!(rows[0].effective_from, day(2010, 1, 1));
+    assert_eq!(rows[0].effective_to, Some(day(2026, 12, 10)));
+    assert_eq!(rows[0].known_at, Some(day(2026, 12, 1)));
+    assert!(
+        lookup(&rows, Exchange::Sh, "512390", day(2015, 1, 5))
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        lookup(&rows, Exchange::Sh, "512390", day(2026, 12, 10))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_listing_day_not_before_the_end_keeps_the_observation_day_and_a_valid_row() {
+    let mut fact = member(
+        Exchange::Sh,
+        "512390",
+        day(2026, 12, 1),
+        Some(day(2026, 12, 10)),
+        ListingSource::TdxSsdate,
+    );
+    fact.effective_to = Some(day(2026, 12, 10));
+    let rows = member_rows(&[fact]).unwrap();
+    assert_eq!(rows[0].effective_from, day(2026, 12, 1));
+    assert!(rows[0].effective_to.unwrap() > rows[0].effective_from);
 }
 
 #[test]

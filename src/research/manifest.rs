@@ -98,12 +98,14 @@ pub const BUILD_SHA: &str = env!("X_DATA_MCP_BUILD_SHA");
 /// `limit-v1`) and `market_cap`, which the export does not write: it is recomputed
 /// at read time from `capital_events` and the raw close, so the label is the
 /// only place a snapshot can say which formula a consumer's market-cap
-/// numbers came from. The tradability read model has no version constant and
-/// is not listed.
+/// numbers came from. `tradability` is likewise a read-time derivation the
+/// export does not write, so its label is the only place a snapshot can name
+/// the formula behind a consumer's tradability verdicts.
 pub fn derivation_algorithms() -> Value {
     json!({
         "price_limit": super::price_limit::READ_ALGORITHM_VERSION,
         "market_cap": super::market_cap::ALGORITHM_VERSION,
+        "tradability": super::tradability::ALGORITHM_VERSION,
         "security_master": crate::security_master::assembly::ALGORITHM_VERSION,
         "security_names": crate::security_master::names::ALGORITHM_VERSION,
         "risk_warnings": crate::security_master::risk_warnings::ALGORITHM_VERSION,
