@@ -28,6 +28,7 @@ pub enum ReadTool {
     TradingCalendar,
     PriceLimitRules,
     SecurityState,
+    SecurityHistory,
     SecurityEvents,
 }
 
@@ -41,6 +42,7 @@ pub const PRICE_LIMIT_RULES_DESCRIPTION: &str =
     "Price limit rules in effect on as_of. as_of defaults to the latest trading day.";
 
 pub const SECURITY_STATE_DESCRIPTION: &str = "State of securities on one day (as_of, default latest trading day): one fact per call. known_at hides facts learned later. SH name history is empty (SZ only).";
+pub const SECURITY_HISTORY_DESCRIPTION: &str = "All intervals of one fact that overlap start_date..end_date (names, risk warnings, suspensions, industry). known_at hides facts learned later. SH name history is empty (SZ only).";
 pub const SECURITY_EVENTS_DESCRIPTION: &str = "Capital changes (capital) or ex-rights/dividend events (adjustment) of securities in a date range.";
 
 /// Tool names this module serves; the decode layer exempts them from the
@@ -54,6 +56,7 @@ pub const NAMES: &[&str] = &[
     "get_trading_calendar",
     "get_price_limit_rules",
     "get_security_state",
+    "get_security_history",
     "get_security_events",
 ];
 
@@ -232,6 +235,49 @@ pub struct SecurityStateInput {
     #[schemars(schema_with = "fact_schema")]
     pub fact: StateFact,
     pub as_of: Option<NaiveDate>,
+    pub known_at: Option<NaiveDate>,
+    #[serde(default = "default_page")]
+    #[schemars(range(min = 1, max = 1000))]
+    pub page_size: usize,
+    pub cursor: Option<String>,
+}
+
+/// The fact `get_security_history` reads: the interval-valued subset of
+/// [`StateFact`]. `security_master` is left out; its rows are one lifecycle
+/// record per security, not a history of states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryFact {
+    SecurityNames,
+    RiskWarnings,
+    Suspensions,
+    Industry,
+}
+
+impl HistoryFact {
+    fn dataset(self) -> Dataset {
+        match self {
+            Self::SecurityNames => Dataset::SecurityNames,
+            Self::RiskWarnings => Dataset::RiskWarnings,
+            Self::Suspensions => Dataset::Suspensions,
+            Self::Industry => Dataset::IndustryAssignments,
+        }
+    }
+}
+
+fn history_fact_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    json_schema!({"enum": ["security_names", "risk_warnings", "suspensions", "industry"]})
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SecurityHistoryInput {
+    #[schemars(schema_with = "securities_schema")]
+    pub securities: Vec<Security>,
+    #[schemars(schema_with = "history_fact_schema")]
+    pub fact: HistoryFact,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
     pub known_at: Option<NaiveDate>,
     #[serde(default = "default_page")]
     #[schemars(range(min = 1, max = 1000))]
@@ -516,6 +562,22 @@ impl ReadTool {
                 q.known_at = a.known_at;
                 Ok(q)
             }
+            Self::SecurityHistory => {
+                let a: SecurityHistoryInput = decode(input)?;
+                let mut q = query(
+                    a.fact.dataset(),
+                    selection(a.securities),
+                    Filter::History {
+                        start_date: a.start_date,
+                        end_date: a.end_date,
+                    },
+                    None,
+                    a.page_size,
+                    a.cursor,
+                );
+                q.known_at = a.known_at;
+                Ok(q)
+            }
             Self::SecurityEvents => {
                 let a: SecurityEventsInput = decode(input)?;
                 let dataset = match a.event {
@@ -541,8 +603,8 @@ impl ReadTool {
 
 const SH_NAMES_LIMITATION: &str = "name history covers SZ only (D-61): 0 rows for an SH security means the history is not available, not that it has no name";
 
-/// Limitations a tool adds to the answer of `query`. Only `get_security_state`
-/// has one: an SH security asked for `security_names`.
+/// Limitations a tool adds to the answer of `query`. `get_security_state` and
+/// `get_security_history` have one: an SH security asked for `security_names`.
 pub fn extra_limitations(query: &Query) -> Vec<&'static str> {
     let sh = match &query.selection {
         Selection::Single { entity } => entity.exchange == Exchange::Sh,

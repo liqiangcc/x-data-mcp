@@ -230,6 +230,63 @@ pub fn assignments(c: &Connection, request: &IndustryRequest) -> Result<Industry
     })
 }
 
+/// Every stored industry interval of the selected entities that overlaps
+/// `[start, end]`, in `(exchange, code, effective_from)` order
+/// (`get_security_history`). There is no `as_of`: the window alone selects the
+/// intervals, and an entity with none simply has no row (no `unknown` filler,
+/// because no single day is being asked about).
+///
+/// Information set first, as everywhere: each candidate row is observed
+/// through [`TemporalReport`], so a `known_at` cutoff never sees a later-known
+/// interval and the excluded rows are counted. The window test is the same
+/// half-open overlap the M2 datasets use (`effective_to` is exclusive).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndustryHistory {
+    pub coverage_start: Option<NaiveDate>,
+    pub intervals: Vec<AssignedIndustry>,
+    pub temporal: TemporalReport,
+}
+
+pub fn history(
+    c: &Connection,
+    entities: &[String],
+    start: NaiveDate,
+    end: NaiveDate,
+    known_at: Option<NaiveDate>,
+) -> Result<IndustryHistory, Error> {
+    let rows = store::read_assignments(c)?;
+    let coverage_start = coverage_start(&rows)?;
+    let mut report = TemporalReport::history(known_at);
+    let selected: BTreeSet<&str> = entities.iter().map(String::as_str).collect();
+    for entity in &selected {
+        split_entity(entity)?;
+    }
+    let (from_day, to_day) = (
+        crate::industry::epoch_day(start),
+        crate::industry::epoch_day(end),
+    );
+    let mut intervals = Vec::new();
+    for row in &rows {
+        let entity = format!("{}.{}", row.exchange, row.code);
+        if !selected.contains(entity.as_str()) {
+            continue;
+        }
+        if !report.observe(DATASET_INDUSTRY_ASSIGNMENTS, Some(row_known_at(row)?)) {
+            continue;
+        }
+        let overlaps =
+            row.effective_from <= to_day && row.effective_to.is_none_or(|to| to > from_day);
+        if overlaps {
+            intervals.push(assigned(row, &entity)?);
+        }
+    }
+    Ok(IndustryHistory {
+        coverage_start,
+        intervals,
+        temporal: report,
+    })
+}
+
 /// The dataset identity used by the entry adapter's manifest and pin check.
 pub fn dataset_identity(c: &Connection) -> Result<IndustryIdentity, Error> {
     let snapshots = store::read_snapshots(c)?;

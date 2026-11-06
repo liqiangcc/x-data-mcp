@@ -1,7 +1,8 @@
 //! Schema and routing share one descriptor; no advertised handler without a contract.
 use super::read_tools::{
     self, ColumnarPage, DailyBarsInput, IndexBarsInput, MarketSnapshotInput, PriceLimitRulesInput,
-    ReadTool, SecurityEventsInput, SecurityStateInput, TradingCalendarInput, YearlyBarsInput,
+    ReadTool, SecurityEventsInput, SecurityHistoryInput, SecurityStateInput, TradingCalendarInput,
+    YearlyBarsInput,
 };
 use super::wire::*;
 use schemars::{JsonSchema, schema_for};
@@ -62,6 +63,7 @@ pub const RESEARCH_TOOLS: &[&str] = &[
     "get_trading_calendar",
     "get_price_limit_rules",
     "get_security_state",
+    "get_security_history",
     "get_security_events",
 ];
 /// Ops entry: the daily-sync workflow surface. v9 adds `refresh_exchange_sources`
@@ -499,6 +501,9 @@ fn entry<I: JsonSchema, O: JsonSchema>(
             | Handler::RefreshExchangeSources
     ) {
         super::wire::strip_additional_properties(&mut input);
+        // Also the root `$schema` and `title`: about 80 B per tool, which is
+        // what keeps `research` inside its budget with `get_security_history`.
+        super::wire::strip_root_meta(&mut input);
     }
     Entry {
         name,
@@ -675,6 +680,12 @@ pub fn entries() -> Vec<Entry> {
             Handler::Read(ReadTool::SecurityState),
             read_tools::SECURITY_STATE_DESCRIPTION,
             json!({"securities":["sh.600006"],"fact":"risk_warnings","as_of":"2025-12-31"}),
+        ),
+        entry::<SecurityHistoryInput, ColumnarPage>(
+            "get_security_history",
+            Handler::Read(ReadTool::SecurityHistory),
+            read_tools::SECURITY_HISTORY_DESCRIPTION,
+            json!({"securities":["sh.600006"],"fact":"risk_warnings","start_date":"2020-01-01","end_date":"2025-12-31"}),
         ),
         entry::<SecurityEventsInput, ColumnarPage>(
             "get_security_events",

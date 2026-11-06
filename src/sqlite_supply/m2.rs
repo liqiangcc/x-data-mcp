@@ -117,17 +117,32 @@ fn cells(pairs: Vec<(&'static str, FactValue)>) -> BTreeMap<String, FactValue> {
 }
 
 /// Interval row admission: the range window and the `as_of` record set must
-/// both admit the row (issue-391 §12.2).
+/// both admit the row (issue-391 §12.2). `as_of: None` is a history read
+/// (`get_security_history`): the window alone decides, so every interval that
+/// overlaps it is admitted. `query_data` always passes `Some`, which keeps the
+/// original two-part test.
 fn interval_hits(
     from: NaiveDate,
     to: Option<NaiveDate>,
     start: NaiveDate,
     end: NaiveDate,
-    as_of: NaiveDate,
+    as_of: Option<NaiveDate>,
 ) -> bool {
     let in_window = from <= end && to.is_none_or(|to| to > start);
-    let effective = from <= as_of && to.is_none_or(|to| as_of < to);
+    let effective = as_of.is_none_or(|as_of| from <= as_of && to.is_none_or(|to| as_of < to));
     in_window && effective
+}
+
+/// The record-set day of a dataset that has no history mode. `QueryPlan::new`
+/// only lets `Filter::History` reach the datasets that do, so `None` here is a
+/// plan bug and is reported rather than guessed.
+fn point_in_time(report: &TemporalReport, dataset: Dataset) -> Result<NaiveDate, Error> {
+    report.as_of.ok_or_else(|| {
+        invalid(&format!(
+            "{} has no history mode; it needs an as_of day",
+            dataset.name()
+        ))
+    })
 }
 
 fn point_hits(day: NaiveDate, start: NaiveDate, end: NaiveDate, as_of: NaiveDate) -> bool {
@@ -138,9 +153,9 @@ fn suspension_hits(
     row: &crate::security_master::SuspensionInterval,
     start: NaiveDate,
     end: NaiveDate,
-    as_of: NaiveDate,
+    as_of: Option<NaiveDate>,
 ) -> bool {
-    row.start_day <= end && row.end_day >= start && row.covers(as_of)
+    row.start_day <= end && row.end_day >= start && as_of.is_none_or(|as_of| row.covers(as_of))
 }
 
 fn entity(entity: &str) -> Result<Security, Error> {
@@ -162,13 +177,20 @@ pub(super) fn query(
             start_date,
             end_date,
             ..
+        }
+        | Filter::History {
+            start_date,
+            end_date,
         } => (*start_date, *end_date),
         _ => return Err(invalid("M2 datasets require filter.kind=daily")),
     };
-    let mut report = TemporalReport::new(Temporal {
-        as_of: temporal.as_of,
-        known_at: temporal.known_at,
-    });
+    let mut report = match temporal.as_of {
+        Some(as_of) => TemporalReport::new(Temporal {
+            as_of,
+            known_at: temporal.known_at,
+        }),
+        None => TemporalReport::history(temporal.known_at),
+    };
     let mut result = QuerySnapshot {
         manifest: vec![],
         rows: vec![],
@@ -219,7 +241,7 @@ fn security_master(
         "known_at is stored only where a source supplies one and is NULL otherwise, never proxied by the effective day"
             .into(),
     );
-    let as_of = report.as_of;
+    let as_of = Some(point_in_time(report, Dataset::SecurityMaster)?);
     let selected: Option<BTreeSet<String>> = match &plan.args.selection {
         Selection::Market { .. } => None,
         _ => Some(plan.entities.iter().map(Security::symbol).collect()),
@@ -354,7 +376,7 @@ fn capital_events(
     report: &mut TemporalReport,
     result: &mut QuerySnapshot,
 ) -> Result<(), Error> {
-    let as_of = report.as_of;
+    let as_of = point_in_time(report, Dataset::CapitalEvents)?;
     for entity in &plan.entities {
         let registration = registration(c, Dataset::CapitalEvents, Some(entity))?;
         result.manifest.push(derived_or_absent(
@@ -547,7 +569,7 @@ fn price_limit_rules(
          rule rows carry no known_at"
             .into(),
     );
-    let as_of = report.as_of;
+    let as_of = Some(point_in_time(report, Dataset::PriceLimitRules)?);
     for rule in rules::read_trading_rules(c)?.price_limits {
         // Rule rows carry no 知晓时间 (§12.4 export columns); observing `None`
         // is what makes the temporal block report `known_at_coverage: none`.
@@ -853,21 +875,21 @@ mod tests {
             to,
             from,
             day(2020, 12, 31),
-            day(2020, 1, 15)
+            Some(day(2020, 1, 15))
         ));
         assert!(!interval_hits(
             from,
             to,
             from,
             day(2020, 12, 31),
-            day(2020, 2, 1)
+            Some(day(2020, 2, 1))
         ));
         assert!(!interval_hits(
             from,
             to,
             from,
             day(2020, 12, 31),
-            day(2019, 12, 31)
+            Some(day(2019, 12, 31))
         ));
         // A window that starts exactly at `to` does not overlap.
         assert!(!interval_hits(
@@ -875,7 +897,7 @@ mod tests {
             to,
             day(2020, 2, 1),
             day(2020, 12, 31),
-            day(2020, 1, 15)
+            Some(day(2020, 1, 15))
         ));
         // A point fact after `as_of` is not in the record set.
         assert!(!point_hits(
@@ -886,13 +908,37 @@ mod tests {
         ));
     }
 
+    /// A history read (`as_of: None`) admits every interval that overlaps the
+    /// window, whatever day it was in effect; the window test is unchanged.
+    #[test]
+    fn history_admits_every_interval_overlapping_the_window() {
+        let (start, end) = (day(2020, 3, 1), day(2020, 6, 30));
+        let hits = |from, to| interval_hits(from, to, start, end, None);
+        // Ended before the window, starts after it: not admitted.
+        assert!(!hits(day(2020, 1, 1), Some(day(2020, 3, 1))));
+        assert!(!hits(day(2020, 7, 1), None));
+        // Overlapping the window at either edge, inside it, or around it.
+        assert!(hits(day(2020, 1, 1), Some(day(2020, 3, 2))));
+        assert!(hits(day(2020, 6, 30), None));
+        assert!(hits(day(2020, 4, 1), Some(day(2020, 5, 1))));
+        assert!(hits(day(2019, 1, 1), None));
+        // With a point-in-time day the same intervals are narrowed to it.
+        assert!(!interval_hits(
+            day(2020, 4, 1),
+            Some(day(2020, 5, 1)),
+            start,
+            end,
+            Some(day(2020, 6, 1))
+        ));
+    }
+
     /// A dataset that never carries a 知晓时间 is named in the answer even when
     /// it contributed zero rows (issue-391 §12.2).
     #[test]
     fn none_coverage_is_named_with_zero_rows() {
         let report = TemporalReport::new(Temporal::known_by(day(2020, 1, 2), day(2020, 1, 1)));
         let block = temporal_block(Dataset::CapitalEvents, &report);
-        assert_eq!(block.as_of, day(2020, 1, 2));
+        assert_eq!(block.as_of, Some(day(2020, 1, 2)));
         assert_eq!(block.known_at, Some(day(2020, 1, 1)));
         assert_eq!(block.unknown_known_at_rows, 0);
         assert_eq!(block.datasets_without_known_at, vec!["capital_events"]);
