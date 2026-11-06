@@ -24,6 +24,7 @@
 
 pub mod manifest;
 pub mod read;
+pub mod retention;
 
 // M2 read model (issue-391 §16 PR-4…PR-7, separation points 3/4/7) plus the
 // M3 industry intervals (#446 §5.5). These modules answer research questions;
