@@ -232,9 +232,15 @@ pub enum Error {
 /// into an interval because its start day is unknown. A warning that was
 /// already open before the table's first row is therefore not fabricated: the
 /// adapter counts it as an unbounded prefix instead.
+///
+/// D-81 task 49: Normal intervals are written as the complement of ST/warning
+/// intervals, bounded by coverage and delisting dates. `delisting_dates` maps
+/// code to effective_to from security_master; codes not in the map will not
+/// write normal intervals (fail-closed).
 pub fn assemble_sz(
     rows: &[SzNameChange],
     mut coverage: Vec<CoverageWindow>,
+    delisting_dates: &BTreeMap<String, NaiveDate>,
 ) -> Result<RiskWarningSet, Error> {
     let mut by_code: BTreeMap<&str, Vec<&SzNameChange>> = BTreeMap::new();
     for row in rows {
@@ -311,6 +317,7 @@ pub fn assemble_sz(
             changes,
             &warning_intervals_clone,
             &coverage,
+            delisting_dates,
             &mut intervals,
         );
     }
@@ -669,21 +676,31 @@ fn is_plain_name(name: &str) -> bool {
 /// Rules:
 /// - Only write for codes that have at least one name row
 /// - Start from the first name row date (not before)
-/// - End at the coverage endpoint (from coverage windows)
+/// - End at the coverage endpoint (from coverage windows) or delisting date, whichever is earlier
 /// - Exclude days with ST/warning intervals
 /// - Exclude PT prefix days, 退 suffix days, * without ST days
 /// - Exclude conflict days and days after conflict until next event
 /// - Known_at matches the name row that covers each normal interval
+///
+/// `delisting_dates`: map from code to delisting date (effective_to from security_master).
+/// Codes not in this map will not write normal intervals (fail-closed).
 fn add_normal_intervals_sz(
     code: &str,
     changes: &[&SzNameChange],
     warning_intervals: &[RiskWarningInterval],
     coverage: &[CoverageWindow],
+    delisting_dates: &BTreeMap<String, NaiveDate>,
     all_intervals: &mut Vec<RiskWarningInterval>,
 ) {
     if changes.is_empty() {
         return; // No name rows -> no normal
     }
+
+    // Fail-closed: only write normal if we have delisting date for this code
+    let delisting_date = match delisting_dates.get(code) {
+        Some(&date) => date,
+        None => return, // No delisting date -> no normal (fail-closed)
+    };
 
     // Find coverage endpoint for Shenzhen from coverage windows
     let coverage_end = coverage
@@ -694,6 +711,9 @@ fn add_normal_intervals_sz(
     let Some(coverage_end) = coverage_end else {
         return; // No coverage -> no normal
     };
+
+    // Normal intervals cannot extend beyond the delisting date
+    let effective_end = coverage_end.min(delisting_date);
 
     // Build name segments: periods where a specific name is active
     // and track which ones are plain (eligible for normal)
@@ -725,7 +745,9 @@ fn add_normal_intervals_sz(
 
         if group.len() > 1 {
             // Conflict: close any open segment at the conflict day
-            if let Some(last) = segments.last_mut() && last.end.is_none() {
+            if let Some(last) = segments.last_mut()
+                && last.end.is_none()
+            {
                 last.end = Some(day);
             }
             had_conflict = true;
@@ -753,9 +775,11 @@ fn add_normal_intervals_sz(
         }
     }
 
-    // Close the last segment at coverage end
+    // Close the last segment at effective end (min of coverage and delisting), but only if it's still open
     if let Some(last) = segments.last_mut() {
-        last.end = Some(coverage_end.succ_opt().unwrap_or(coverage_end));
+        if last.end.is_none() {
+            last.end = Some(effective_end.succ_opt().unwrap_or(effective_end));
+        }
     }
 
     // Build occupied days from warning/conflict intervals for this code
@@ -767,7 +791,7 @@ fn add_normal_intervals_sz(
         let start = interval.effective_from;
         let end = interval
             .effective_to
-            .unwrap_or(coverage_end.succ_opt().unwrap_or(coverage_end));
+            .unwrap_or(effective_end.succ_opt().unwrap_or(effective_end));
         occupied_intervals.push((start, end));
     }
     occupied_intervals.sort();
@@ -784,7 +808,7 @@ fn add_normal_intervals_sz(
         let seg_start = segment.start.max(first_day);
         let seg_end = segment
             .end
-            .unwrap_or(coverage_end.succ_opt().unwrap_or(coverage_end));
+            .unwrap_or(effective_end.succ_opt().unwrap_or(effective_end));
         if seg_end <= seg_start {
             continue;
         }
@@ -999,13 +1023,27 @@ mod tests {
         }
     }
 
+    // Helper to create delisting dates for tests
+    // Default: far future (9999-12-31) means "not delisted"
+    fn delisting_dates(codes: &[(&str, Option<NaiveDate>)]) -> BTreeMap<String, NaiveDate> {
+        codes
+            .iter()
+            .map(|(code, date)| {
+                (
+                    code.to_string(),
+                    date.unwrap_or_else(|| day(9999, 12, 31)),
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn sz_chain_opens_and_closes_st_interval() {
         let rows = vec![
             change("000001", "1998-04-28", "深发展A", "ST深发展"),
             change("000001", "1999-04-28", "ST深发展", "深发展A"),
         ];
-        let set = assemble_sz(&rows, Vec::new()).expect("chain assembles");
+        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new()).expect("chain assembles");
         assert_eq!(set.rows.len(), 1);
         assert_eq!(set.rows[0].status, RiskStatus::OtherRiskWarning);
         assert_eq!(set.rows[0].effective_from, day(1998, 4, 28));
@@ -1023,7 +1061,7 @@ mod tests {
             change("000001", "1998-04-28", "深发展A", "ST深发展"),
             change("000002", "1998-02-02", "万科A", "ST万科"),
         ];
-        let set = assemble_sz(&rows, Vec::new()).expect("a conflict is isolated, not fatal");
+        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new()).expect("a conflict is isolated, not fatal");
         validate_set(&set.rows).expect("the rows are a valid interval set");
         let by_code = |code: &str| -> Vec<&RiskWarningInterval> {
             set.rows.iter().filter(|row| row.code == code).collect()
@@ -1053,7 +1091,7 @@ mod tests {
             change("000001", "1998-04-28", "深发展A", "*ST深发展"),
             change("000001", "1998-09-01", "*ST深发展", "深发展A"),
         ];
-        let set = assemble_sz(&rows, Vec::new()).expect("chain continues");
+        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new()).expect("chain continues");
         assert_eq!(set.rows.len(), 1);
         assert_eq!(set.rows[0].status, RiskStatus::MarkerOnlyUnresolved);
 
@@ -1063,14 +1101,14 @@ mod tests {
             change("000001", "1998-04-28", "丙", "丁"),
         ];
         assert_eq!(
-            assemble_sz(&unconnected, Vec::new()),
+            assemble_sz(&unconnected, Vec::new(), &BTreeMap::new()),
             Err(Error::BrokenChain)
         );
     }
 
     #[test]
     fn no_events_is_not_a_normal_row() {
-        let set = assemble_sz(&[], Vec::new()).expect("empty input is valid");
+        let set = assemble_sz(&[], Vec::new(), &BTreeMap::new()).expect("empty input is valid");
         assert!(set.rows.is_empty());
         assert_eq!(set.not_observed_windows(), 0);
     }
@@ -1331,7 +1369,7 @@ mod tests {
             rows: 2,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("plain names");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("plain names");
         validate_set(&set.rows).expect("valid set");
 
         // Should have normal intervals
@@ -1368,7 +1406,7 @@ mod tests {
             rows: 3,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("mixed periods");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("mixed periods");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1415,7 +1453,7 @@ mod tests {
             rows: 2,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("PT prefix");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("PT prefix");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1449,7 +1487,7 @@ mod tests {
             rows: 1,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("退 suffix");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("退 suffix");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1482,7 +1520,7 @@ mod tests {
             rows: 2,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("* without ST");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("* without ST");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1513,7 +1551,7 @@ mod tests {
             rows: 1,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("late first name");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("late first name");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1543,7 +1581,7 @@ mod tests {
             rows: 0,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("no names");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("no names");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1571,7 +1609,7 @@ mod tests {
             rows: 4,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("conflict recovery");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("conflict recovery");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1616,7 +1654,7 @@ mod tests {
             rows: 1,
             reason: String::new(),
         }];
-        let set = assemble_sz(&rows, coverage).expect("coverage limit");
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("coverage limit");
         validate_set(&set.rows).expect("valid set");
 
         let normals: Vec<_> = set
@@ -1630,6 +1668,59 @@ mod tests {
             assert!(
                 normal.effective_to.unwrap() <= day(2001, 1, 1), // succ of coverage end
                 "normal should not extend beyond coverage endpoint"
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_conflict_with_no_subsequent_event_stays_unknown_until_coverage_end() {
+        let rows = vec![
+            change("000001", "1998-01-05", "深发展A", "深发展B"),
+            change("000001", "1999-04-28", "深发展B", "深发展C"),
+            change("000001", "1999-04-28", "深发展B", "深发展D"), // Conflict, no more events
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 3,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(&rows, coverage, &delisting_dates(&[("000001", None), ("000002", None)])).expect("conflict at end");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        let conflicts: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::MarkerOnlyUnresolved)
+            .collect();
+
+        assert_eq!(conflicts.len(), 1, "should have one conflict marker");
+        assert_eq!(conflicts[0].effective_from, day(1999, 4, 28));
+
+        // No normal interval should extend beyond the conflict day
+        for normal in &normals {
+            assert!(
+                normal.effective_to.unwrap() <= day(1999, 4, 28),
+                "normal should end at or before conflict day: {} to {:?}",
+                normal.effective_from,
+                normal.effective_to
+            );
+        }
+
+        // Verify no normal interval covers the period after conflict to coverage end
+        for normal in &normals {
+            assert!(
+                !(normal.effective_from >= day(1999, 4, 29)
+                    && normal.effective_to.unwrap() <= day(2002, 1, 1)),
+                "should not have normal interval after conflict with no subsequent event"
             );
         }
     }

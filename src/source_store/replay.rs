@@ -1309,6 +1309,7 @@ fn rebuild_risk_warnings(
         &superseded,
         &gaps,
         coverage,
+        backend.as_ref(),
     )
     .map_err(|error| format!("{}: {error}", error.code()))?;
     let summary = crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&set.rows));
