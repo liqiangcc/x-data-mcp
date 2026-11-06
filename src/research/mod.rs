@@ -30,6 +30,7 @@ pub mod read;
 // the export reads `universe` for the member-interval file and the storage
 // adapters for the parsed facts, so the read model stays the only place that
 // decides membership. The v8 entry only projects these answers (M3 PR-7).
+pub mod context;
 pub mod industry;
 pub mod market_cap;
 pub mod member_state;
