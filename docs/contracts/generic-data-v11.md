@@ -122,3 +122,22 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 ## 5. 未验证
 
 线上真实数据未测；本代码面未部署，`tools/list` 字节为本地实测，线上以部署后的读回为准。
+
+## 6. `table` 布局的行键
+
+`table` 布局没有 `dates`，所以行键必须是一列。v10 有两处丢了行键：`market.adjustment_events` 的响应没有日期，查 `sh.600000` 只能看到金额，看不出哪天除权；`market.security_master` 的缺省列不含 `effective_from`，只有显式 `fields` 才有。v11 都已补上。追加列不改行顺序、`version_id`、`snapshot_id`，v1 不变。
+
+| dataset | 行键 | v10 | v11 |
+|---|---|---|---|
+| `securities.catalog` | 实体 | `entities` | 不变 |
+| `market.adjustment_events` | `effective_day` | **丢失** | **第一列，缺省返回，`fields` 可选** |
+| `market.calendar` | `trade_day` | 列 | 不变 |
+| `market.security_master` | `effective_from` | **缺省丢失** | **缺省含** |
+| `market.security_names` | `effective_from` | 列 | 不变 |
+| `market.capital_events` | `effective_day` | 列 | 不变 |
+| `market.risk_warnings` | `effective_from` | 列 | 不变 |
+| `market.suspensions` | `start_day` | 列 | 不变 |
+| `market.price_limit_rules` | `rule_id` + `effective_from` | 列 | 不变 |
+| `market.industry_assignments` | `effective_from` | 列 | 不变 |
+
+`market.adjustment_events` 的行仍按源（gbbq 解码）顺序，不是日期顺序。`basis_status` 不在读面上。
