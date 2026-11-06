@@ -71,6 +71,7 @@ fn entry_allowlists_cover_every_registered_tool_and_research_is_read_only() {
             "get_trading_calendar",
             "get_price_limit_rules",
             "get_security_state",
+            "get_security_history",
             "get_security_events",
         ]
     );
