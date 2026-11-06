@@ -355,13 +355,19 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
 ```text
 （每次日更，capability revision >= generic-data-v9）
 → refresh_exchange_sources {"mode":"tail"}          # 开窗 + 上一自然季度；整表类重读整表（深市上市/简称先探页 1）
-→ 读 RefreshReport：requests/reused/changed/failed_windows/unobserved_windows/revisions
+→ 拿到 {run_id,status:"running"}（带计划，计数为 0），用 {"status_of":run_id} 轮询到终态
+→ 读终态 run 记录：requests/reused/changed/failed_windows/unobserved_windows/verified_through/失败列表
 → plan_market_update → run_market_update（四个同源 item 读本次冻结集）
 →（每周一次，放在当天 run 终态之后）refresh_exchange_sources {"mode":"full"}
 → 用 {"status_of":<run_id>} 轮询到 succeeded/failed
 ```
 
-- `tail` **同步**返回 `RefreshReport`，不必轮询。
+- `tail` **异步**（#582）：调用只校验并写 run 记录，立即返回 `{run_id,status:"running"}`，
+  抓取在本进程后台线程（客户端断开不影响）；用 `{"status_of":run_id}` 轮询到
+  `succeeded`/`failed`。**原因**：tail 的 28 个请求约 40 s，探针触发整表时最多 549 个
+  （1 req/s 下约 13 分钟），而客户端预算是 60 s、一个连接只有一个线程；同步跑会把该连接上
+  后面的调用全部堵住，超时后又没有 `run_id` 可取回结果。`running` 期间的计数是 0，不是进度；
+  `status_of` 不返回 per-source 行与 `revision`（只有 run 行与失败列表是持久记录）。
 - **每周一次 `{"mode":"full"}`**：窗口类来源补齐全部季度、整表类来源重读整表，并推进
   `verified_through`。**调用位置**：当天日更 `run_market_update` 终态之后（或单独在低峰跑），
   不要插在 `tail` 与 plan/run 之间；`full` 只写来源库/索引与 run 记录，不发布数据集，

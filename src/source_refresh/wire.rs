@@ -3,9 +3,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const DESCRIPTION: &str = "Refresh exchange sources from HTTP. `tail` is synchronous \
-    (28 requests); `full` returns `running` at once and continues in the background. One run at \
-    a time; `status_of` reads a run record; `dry_run` lists the plan.";
+pub const DESCRIPTION: &str = "Refresh exchange sources from HTTP. `tail` and `full` return \
+    {run_id,status:running} at once and continue in the background; poll `status_of`. One run at \
+    a time; `dry_run` lists the plan.";
 
 /// `tail` refreshes the open + previous natural quarter of window sources, the
 /// cheap whole tables, and probes the two large tables; `full` observes every
@@ -29,8 +29,9 @@ impl RefreshMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshRequest {
-    /// Required unless `status_of` is set. `tail` is synchronous and bounded;
-    /// `full` returns `running` at once and continues in the background.
+    /// Required unless `status_of` is set. Neither mode waits for the run:
+    /// the reply is `{run_id,status:"running"}` and the acquisition continues
+    /// in a background thread of the service process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<RefreshMode>,
     /// Empty/absent means every HTTP exchange source. Names are the stable
@@ -58,7 +59,8 @@ impl RefreshRequest {
 #[serde(rename_all = "lowercase")]
 pub enum RefreshStatus {
     Planned,
-    /// The durable row is open; a `full` continues in the background.
+    /// The durable row is open; the acquisition continues in the background of
+    /// the service process. Poll `status_of` until `succeeded` or `failed`.
     Running,
     Succeeded,
     Failed,
@@ -140,7 +142,10 @@ pub struct RefreshFailure {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RefreshReport {
-    /// `None` only for a dry run: a dry run writes no run row.
+    /// `None` only for a dry run: a dry run writes no run row. Every run reply
+    /// carries it, and `{status_of: run_id}` reads the same record later — the
+    /// run outlives the call, so a client that timed out can still get the
+    /// result.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
     pub mode: RefreshMode,
