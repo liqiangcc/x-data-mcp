@@ -156,13 +156,55 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - 不变的 fail-closed：`BrokenChain`、同日两个不同状态的实施（`SameDayStatusConflict`）、无状态的实施事件、区间重叠、重复主键。深市同日冲突只在这组变更与链仍能连接时隔离；连接不上的仍是 `BrokenChain`。
 - 读路径：`marker_only_unresolved` 不是 `normal`。`member_state` 原样返回该状态；`price_limit` 把它与 `unknown` 同样处理（`StUnknown`，不写 `status_class`，只有所有状态共用一个涨跌幅档时才给出已知的涨跌幅并标 `status_unknown_band_invariant`）；`tradability` 不读风险状态。
 
-### 5.4 版本号与部署后的影响
+### 5.4 版本号与部署后的影响（R1/R4/R5）
 
 - `risk_warnings` 的 `ALGORITHM_VERSION`：`risk-warnings-v1` → `risk-warnings-v2`。它写入 `derived_dataset_versions.algorithm_version`、登记证据和导出 `producer.algorithms`（不属于导出快照的身份）。没有代码读取该值做兼容判断。
 - 内容摘要（`dataset_digest`，前缀仍是 `risk-warnings-v1`）、`digest_format`、`version_id` 不变。没有同日冲突的数据集重新组装后行逐字节相同，`version_id` 不变，只有 `algorithm_version` 一列在下一次 `derived:risk_warnings` 写入时更新为 `v2`。
 - 解析器版本（item 证据的 `parser_version`）：`risk-warnings-v5` → `risk-warnings-v6`，只影响证据标注。
 - 预期的数据影响：D-68 之后 preview.42 全量页集上 `SameDay*` 冲突为 0，所以线上现有 884 行沪市记录预计不变；这一点没有在线上核对（本任务不访问线上）。部署后第一次日更若出现冲突，会多出 `marker_only_unresolved` 行并在证据里列出，而不是让 item 失败。
 - 无 schema 变化，无 `tools/list` 变化，无需重新 `init`。
+
+### 5.5 深市风险警示闭世界：写 `normal`（D-81，任务 49）
+
+**仅深市 A 股**在简称表覆盖范围内、且以下条件同时满足的日子写 `status=normal`：
+
+- 没有 ST、*ST 区间（`other_risk_warning` / `delisting_risk_warning` 行）；
+- 简称链连续（`BrokenChain` 照旧 fail-closed）；
+- 当时的简称没有 PT 前缀、「退」或「退市」结尾、`*` 开头但无 ST 标记；
+- 不在 `marker_only_unresolved` 区间内；
+- 不在同日冲突之后到下一个事件之前的间隙（该间隙无行，读作 `unknown`）。
+
+**不写 `normal` 的情况**（保持 `unknown`）：
+
+- 首个简称行之前；
+- PT 前缀日（如 `PT凯地`，PT 与简称之间可能有空格）、「退」或「退市」结尾日（如 `国华退`、`*ST海润退市`）；
+- `*` 开头但没有 ST 的日子（如 `*金亚`、`*欣泰`，创业板 60 个 bar 日）；
+- 覆盖终点之后（`as_of` 晚于 `coverage[].to` 时；见下「覆盖终点」）；
+- 主表（`security_master`）里查不到该代码，或该代码已退市：`normal` 不越过 `effective_to`/退市日；
+- 没有任何简称行的代码（13 个有行情但无简称历史的代码）；
+- **所有沪市和北交所**。
+
+简称匹配前先做 NFKC 规范化并去掉空白，所以全角 `＊ＳＴ`、`ＰＴ`、`＊` 和 `PT 凯 地` 都按对应规则处理；「退」只按结尾匹配（取证里 104 个名称全部以「退」或「退市」结尾），不匹配任意位置。
+
+**依赖主表**：`normal` 的区间终点取「简称覆盖终点」与「主表该 A 股区间终点（`security_master.effective_to`/`delisting_date`）」的较早者。`derived:security_master` 在 `derived:risk_warnings` 之前运行（`item_specs` 的 `DATASETS` 顺序），所以日更能读到本次运行刚写的主表。主表里没有该代码时不写 `normal`（fail-closed）。重放有 `--db` 时从库里读同一张主表、走同一个组装函数；没有 `--db`（`database: None`）时不写 `normal`，结果说明为「没有数据库，深市 `normal` 行未计算」。
+
+**版本与数据影响**：
+
+- `ALGORITHM_VERSION`：`risk-warnings-v2` → `v3`；内容摘要前缀、`digest_format`、schema、`tools/list` 不变。
+- `validate_set` 只对 `source_kind=szse_name_history` 的行接受 `status=normal`，其余来源写 `normal` 会失败。
+- 估算新增行数（vm2 取证，2026-11-06）：简称区间内 plain 日，主板约 568 万、创业板约 296 万个 bar 日。其中 1998-04-28 到 2023-02-16 的主板约 441 万个，是涨跌停从 `unknown` 变确定值的主要部分。实际行数小于 bar 日数（一行可能覆盖多天）。
+- 读路径：`member_state` 读到 `normal`；`price_limit` 的 `status_class` 写 `Normal`，主板在无 ST 区间的日子从 `st_unknown` 变为确定的涨跌幅；`tradability` 不读风险状态。
+- 重放等价：重放与日更写入逐行相同（`known_at`、`source_record_id`、`source_document_sha256` 都取简称行的值，不随 run 记录变）。
+
+**覆盖终点**：`coverage[].to` 是简称表里**最新一次变更的日期**，不是快照日。所以最近几天通常仍是 `unknown`，要等下一次有代码改名才往前走。这是保守的（宁可 `unknown`），但使用者会看到「明明没有 ST 却未知」，所以读面 `limitations` 与本文都写明。
+
+**已知偏差**（GP29 对照，2026-11-06 取证）：
+
+- 22/1,729 个深市事件是「历史/身份缺口」（#308 评论 C6），`known_at` 目前全是首次采集日，所以 `known_at` 过滤下这些 `normal` 行对更早的日子不可见。
+- 5 个区间起点晚 1–2 个交易日。
+- 140 个带 ST 区间的已退市代码不在 GP29 包里，**这部分无法验证**——不能声称全部验证过。
+
+相关取证见 `docs/tasks/gp29-compare-20261106.md` §5、`docs/tasks/offline-measures-20261106.md` §3。
 
 ## 6. 未验证
 

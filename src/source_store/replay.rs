@@ -116,7 +116,9 @@ pub const REBUILT_GENERATION_FACTS: &str = "rebuilt";
 pub const COMPUTED_GENERATION_FACTS_NO_DB: &str = "computed_no_db";
 /// The risk-warning table set was recomputed and written.
 pub const REBUILT_RISK_WARNINGS: &str = "rebuilt";
-/// The risk-warning table set was recomputed but no `--db` was given.
+/// The risk-warning table set was recomputed but no `--db` was given. Without
+/// a database there is no `security_master`, so the Shenzhen `normal` rows are
+/// not computed (D-81 task 49) and the summary is smaller than the daily item's.
 pub const COMPUTED_RISK_WARNINGS_NO_DB: &str = "computed_no_db";
 /// The name-history table set was recomputed and written.
 pub const REBUILT_SECURITY_NAMES: &str = "rebuilt";
@@ -1383,6 +1385,7 @@ fn rebuild_risk_warnings(
         &superseded,
         &gaps,
         coverage,
+        backend.as_ref(),
     )
     .map_err(|error| format!("{}: {error}", error.code()))?;
     let summary = crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&set.rows));

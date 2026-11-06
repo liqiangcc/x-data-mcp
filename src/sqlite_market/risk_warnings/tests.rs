@@ -298,3 +298,71 @@ fn overlapping_intervals_are_refused_before_delete() {
     );
     assert_eq!(read_risk_warnings(&f.c).unwrap(), first.rows);
 }
+
+/// D-81 task 49: the table CHECK already admits `normal`, and the writer must
+/// accept a `normal` row from `szse_name_history` and read it back unchanged.
+/// This exercises the real write path (`replace_risk_warnings`), not just the
+/// assembly function.
+#[test]
+fn a_normal_row_from_szse_name_history_round_trips() {
+    let f = Fixture::new();
+    let normal = RiskWarningInterval {
+        exchange: Exchange::Sz,
+        code: "000002".into(),
+        effective_from: day(1998, 1, 5),
+        effective_to: Some(day(2001, 3, 7)),
+        raw_status_code: "plain".into(),
+        status: RiskStatus::Normal,
+        announced_at: None,
+        known_at: Some(day(1998, 1, 5)),
+        source_kind: "szse_name_history".into(),
+        source_record_id: Some("1998-01-05|000002|万科B".into()),
+        source_document_sha256: Some("b".repeat(64)),
+    };
+    let expected = set(vec![normal]);
+    replace_risk_warnings(
+        &f.c,
+        &expected,
+        f.binding,
+        "task-1",
+        "derived:risk_warnings",
+    )
+    .unwrap()
+    .expect("a normal row registers");
+    let stored = read_risk_warnings(&f.c).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].status, RiskStatus::Normal);
+    assert_eq!(stored[0].source_kind, "szse_name_history");
+    assert_eq!(stored[0], expected.rows[0]);
+}
+
+/// A `normal` row from any other source is refused before the table is
+/// touched (fail-closed): only `szse_name_history` may claim `normal`.
+#[test]
+fn a_normal_row_from_another_source_is_refused() {
+    let f = Fixture::new();
+    let mut normal = RiskWarningInterval {
+        exchange: Exchange::Sh,
+        code: "600001".into(),
+        effective_from: day(2000, 1, 5),
+        effective_to: None,
+        raw_status_code: "plain".into(),
+        status: RiskStatus::Normal,
+        announced_at: None,
+        known_at: Some(day(2000, 1, 5)),
+        source_kind: "exchange_announcement".into(),
+        source_record_id: Some("x".into()),
+        source_document_sha256: Some("c".repeat(64)),
+    };
+    assert!(
+        replace_risk_warnings(&f.c, &set(vec![normal.clone()]), f.binding, "t", "i").is_err(),
+        "a non-szse_name_history normal row must be refused"
+    );
+    normal.source_kind = "szse_name_history".into();
+    normal.exchange = Exchange::Sz;
+    normal.code = "000001".into();
+    assert!(
+        replace_risk_warnings(&f.c, &set(vec![normal]), f.binding, "t", "i").is_ok(),
+        "the same normal row from szse_name_history is accepted"
+    );
+}

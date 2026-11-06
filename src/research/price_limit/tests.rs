@@ -1329,6 +1329,54 @@ fn an_unknown_st_status_poisons_a_band_that_differs_by_status() {
     assert!(bands.contains(&Some(1_000)));
 }
 
+/// D-81 task 49: a Shenzhen main-board `normal` row (source
+/// `szse_name_history`) makes the band a known answer; a Shanghai main-board
+/// code with no risk row stays `unknown` + `st_unknown`. This is the read-path
+/// effect of writing `normal` for Shenzhen only.
+#[test]
+fn a_sz_normal_row_makes_the_band_known_but_sh_stays_unknown() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let c = fixture.open();
+    let evidence =
+        evidence_store::put_evidence(&c, EvidenceKind::Derived, &json!({"fixture": "normal"}))
+            .unwrap();
+    // sz.000002 has no risk row in the fixture: give it a `normal` row from the
+    // Shenzhen short-name source. sh.600519 had a normal row; remove it so the
+    // Shanghai main board has no covering row (the real SH situation).
+    c.execute(
+        "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
+         raw_status_code,normalized_status,announced_at,known_at,source_kind,\
+         source_record_id,source_document_sha256,source_generation_id,evidence_digest) \
+         VALUES('sz','000002',?1,NULL,'plain','normal',NULL,NULL,'szse_name_history',\
+         'plain|000002',NULL,NULL,?2)",
+        params![
+            crate::compact_market::epoch_day(day(2020, 1, 1)),
+            evidence.as_slice()
+        ],
+    )
+    .unwrap();
+    c.execute(
+        "DELETE FROM risk_warning_intervals WHERE exchange='sh' AND code='600519'",
+        [],
+    )
+    .unwrap();
+
+    // Both entities are seasoned by days()[9] (the 10th trading day). With a
+    // `normal` row the Shenzhen main board answers a concrete band and
+    // `status_class=Normal`; without any row the Shanghai main board stays
+    // `unknown` + `st_unknown`.
+    let sz = ask(&c, "sz.000002", days()[9]);
+    assert_eq!(sz.state, PriceLimitState::Known, "sz normal day is known");
+    assert_eq!(sz.status_class, Some(StatusClass::Normal));
+    assert_eq!(sz.band_bp, Some(1_000));
+
+    let sh = ask(&c, "sh.600519", days()[9]);
+    assert_eq!(sh.state, PriceLimitState::Unknown, "sh stays unknown");
+    assert_eq!(sh.reason, Some(PriceLimitReason::StUnknown));
+    assert_eq!(sh.status_class, None);
+}
+
 #[test]
 fn an_unknown_st_status_still_answers_when_every_status_shares_the_band() {
     let fixture = Fixture::new();

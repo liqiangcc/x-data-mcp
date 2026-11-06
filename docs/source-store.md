@@ -108,7 +108,12 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 `industry` 自 PR-6 起可重建 `industry_snapshots`/`industry_assignments`，
 `generation_facts` 自 PR-8 起重建设备退役门禁索引（行业成员 + 已绑定的派生事实），
 `risk_warnings` 自 PR-10 起可重建 `risk_warning_intervals`（选择与日更一致：
-同指纹取最新回答、简称表须为完整页集，XDM-154），`security_names`
+同指纹取最新回答、简称表须为完整页集，XDM-154）。D-81 任务 49 起深市写 `normal`
+区间，其终点受该库 `security_master` 的区间终点约束，所以这个 scope 也变成
+**条件可重放**：有 `--db` 时从库读同一张主表、与日更走同一个组装函数，逐行相同；
+无 `--db`（`database: None`）时**不计算深市 `normal` 行**（`computed_no_db`，
+结果说明写明「没有数据库，深市 `normal` 行未计算」），所以无库摘要会比日更少这些行。
+`security_names`
 自 PR-12 起可重建 `security_name_history` 与它的 `derived_dataset_versions`
 登记（整表替换，走日更 item 的同一写入器）；`suspensions`（XDM-138）可重放
 停牌数据集，但它是**条件可重放**：装配还依赖该库的主表、交易日历和 bar_days，

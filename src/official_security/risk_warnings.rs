@@ -715,13 +715,78 @@ fn merge_sets(
     sh_events: Vec<RiskWarningStatusEvent>,
     sh_coverage: Vec<CoverageWindow>,
     gaps: &[(NaiveDate, NaiveDate)],
+    delisting_dates: Option<&BTreeMap<String, Option<NaiveDate>>>,
 ) -> Result<RiskWarningSet, Error> {
-    let mut set = risk_warnings::assemble_sz(changes, sz_coverage)?;
+    // D-81 task 49: Convert Option<NaiveDate> to NaiveDate for assemble_sz.
+    // Some(None) means not delisted -> use far future.
+    // Not in map means not in security_master -> fail-closed, don't write normal.
+    let dates_for_assembly = if let Some(dates_map) = delisting_dates {
+        dates_map
+            .iter()
+            .map(|(code, opt_date)| {
+                (
+                    code.clone(),
+                    opt_date.unwrap_or_else(|| {
+                        NaiveDate::from_ymd_opt(9999, 12, 31).expect("far future")
+                    }),
+                )
+            })
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
+
+    let mut set = risk_warnings::assemble_sz(changes, sz_coverage, &dates_for_assembly)?;
     let sh = risk_warnings::assemble_sh(&sh_events, gaps, sh_coverage)?;
     set.rows.extend(sh.rows);
     set.coverage.extend(sh.coverage);
     set.pending_sources.extend(sh.pending_sources);
     Ok(set)
+}
+
+/// Read delisting dates (effective_to) from security_master for Shenzhen codes.
+/// Returns a map from code to Optional delisting date:
+/// - Some(Some(date)): code is delisted on this date
+/// - Some(None): code is in security_master but not yet delisted
+/// - Not in map: code not found in security_master (fail-closed: no normal)
+fn read_sz_delisting_dates(
+    market: &MarketBackend,
+    changes: &[SzNameChange],
+) -> Result<BTreeMap<String, Option<NaiveDate>>, Error> {
+    market
+        .read(|_conn| {
+            let mut dates = BTreeMap::new();
+            let codes: BTreeSet<&str> = changes.iter().map(|c| c.code.as_str()).collect();
+
+            // Read all security_master rows for Shenzhen A-shares
+            let all_rows =
+                crate::sqlite_market::security::read_security_master(_conn).map_err(|e| {
+                    crate::market_storage::Error::Invalid(format!(
+                        "failed to read security_master: {e}"
+                    ))
+                })?;
+
+            // Filter and group by code
+            for row in all_rows {
+                if row.exchange != crate::security_master::Exchange::Sz {
+                    continue;
+                }
+                if row.instrument_class != 0 {
+                    continue; // Only A-shares
+                }
+                let code = &row.code;
+                if !codes.contains(code.as_str()) {
+                    continue;
+                }
+
+                // Take the last row for each code (highest effective_from)
+                // effective_to: Some = delisted, None = still listed
+                dates.insert(code.clone(), row.effective_to);
+            }
+
+            Ok(dates)
+        })
+        .map_err(|e| Error::invalid(format!("failed to read delisting dates: {e}")))
 }
 
 /// Binding of both sources, sorted by `source_id`. A bulletin source with no
@@ -761,12 +826,17 @@ fn admitted(
     let sz_coverage = sz_coverage(&sz.changes)?;
     let (sh_coverage, gaps) = sh.coverage(windows);
     let sh_events = sh.events.events.len();
+
+    // D-81 task 49: Read delisting dates for normal interval computation
+    let delisting_dates = read_sz_delisting_dates(market, &sz.changes)?;
+
     let set = merge_sets(
         &sz.changes,
         sz_coverage,
         sh.events.events,
         sh_coverage,
         &gaps,
+        Some(&delisting_dates),
     )?;
     let mut snapshot_ids = sh.snapshot_ids;
     snapshot_ids.insert("szse_short_name", sz.snapshot_ids);
@@ -1558,12 +1628,17 @@ fn parse_day(text: &str, field: &str) -> Result<NaiveDate, Error> {
 /// containing the row entered the store (§5.3/Q4), exactly as the daily read
 /// path resolves it. The store manifest is the owner of arrival days, so a
 /// `--scope` replay without a database dates the rows too.
+///
+/// D-81 task 49: `market` is used to read delisting dates from security_master
+/// for Shenzhen codes. If `None` (replay --verify-only without database), no
+/// normal intervals are written (fail-closed).
 pub fn replay(
     store: &SourceStore,
     pages: &[(&str, String, Vec<u8>)],
     superseded: &BTreeSet<String>,
     gaps: &[(NaiveDate, NaiveDate)],
     coverage: Vec<CoverageWindow>,
+    market: Option<&MarketBackend>,
 ) -> Result<RiskWarningSet, Error> {
     // The replay entry reads the same declared `TABKEY` as the live
     // acquisition, so both paths select the same block from frozen bytes.
@@ -1607,6 +1682,9 @@ pub fn replay(
         sh_events.events,
         sh_coverage,
         gaps,
+        market
+            .and_then(|m| read_sz_delisting_dates(m, &sz_changes).ok())
+            .as_ref(),
     )
 }
 
