@@ -203,17 +203,29 @@ reason 码 `empty_name_set`），不写库、上一版仍可读。
   `assemble_suspensions`、**同一个** `commit_suspensions` 整表替换并登记
   `derived_dataset_versions`；generation binding 直接沿用 `security_master` 的，
   确保停牌 gap 与它所依据的 bars 属于同一代。
-- **fresh-init**：库还没有主表/日历 → fail-closed，状态与 reason 码都是
-  `suspension_replay_not_ready`，表不动；**不写空表冒充成功**。正确顺序是先重建
-  主表与日历（日更或对应写入路径），再显式运行本 scope；或直接跑日更
-  `derived:suspensions`。
+- **fresh-init**：库还没有主表/日历 → fail-closed，表不动；**不写空表冒充成功**。
+  单独跑本 scope 时状态与 reason 码都是 `suspension_replay_not_ready`（退出 1）。
+  在 `--scope all` 里见下一条。主表与日历由日更或对应写入路径建好，之后本 scope
+  才会写表；也可以直接跑日更 `derived:suspensions`。
 - **确定性**：`summary` 是已写行的 `suspensions-v1` 摘要；同一来源库 + 同一库状态
   重放两次逐位相同。库状态前进会合法地改变结果：三样输入哈希成 `inputs_digest`
   并写进登记证据，`--verify-only` 因此能报 `inputs_match=false` / `drift_cause=inputs_changed`
   （不是 `source_store_corrupt`）；输入未变而行不同才报 `rows_changed`。
-- **不进入 `--scope all`**：all 在 fresh-init、服务启动前运行，那时三样输入必然
-  不存在；把条件 scope 放进 all 会让每次 fresh-init 都失败。`all` 只覆盖不依赖
-  M2 库内输入的 scope。
+- **在 `--scope all` 里（T13）**：`all` 现在是六个 scope，`suspensions` 排最后。
+  部署钩子在 fresh-init、服务启动前运行 `all`，那时三样输入必然不存在，所以
+  可写的 `all` 把这个 scope 记为 `status=not_ready`，`not_ready_reason` 写明缺的是主表还是
+  日历，不写表，整次运行仍是 `ok`、退出 0。判断顺序是先看库里的输入，再解析冻结页，
+  所以库没就绪时冻结页的问题不会拖垮部署。`--verify-only` / `verify` 没有比较任何
+  东西，因此 `suspensions` 仍是 `not_ready`，但整次运行状态是 `suspension_replay_not_ready`
+  （退出 1），单独跑 `--scope suspensions` 也一样。来源库为空时是 `store_empty`，
+  不打开数据库。
+- **`inputs_changed` 的原因与不放松的理由**：`inputs_digest` 覆盖主表版本、交易日历
+  和**每个实体的全部不复权 bar 日**。首采 `sh_sz_a_listed_ever`（338 只退市股）写入
+  新序列后，bar 日变了，停牌 gap 的结果也会变，所以摘要变是对的，不是摘要多算。
+  摘要只给 drift 贴原因标签，判决始终来自行内容比较（`match` / `drift`），所以不会
+  漏掉真实变化；摘要变了而行没变时仍是 `match`（只是 `inputs_match=false`）。
+  因此没有改摘要，也不该改：让它不覆盖 bar 日会把「库里的 bar 变了」说成「输入没变」。
+  `inputs_changed` 的消除靠日更重算（它会用最新输入重写数据集与摘要），不靠改摘要。
 
 `--scope suspensions` 的 `--db` 写入仍需服务停止（重放取数据库租约），与其它写库
 scope 相同。
@@ -328,7 +340,8 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
 `source_store replay --store <state>/source-store --db <market db> --scope all`
 （PR-6 起重放会写库，所以要拿数据库租约；原来的位置在服务就绪之后，会与服务
 抢租约）。`store_empty` 记入报告的
-`source_store_replay` 字段且不算失败；非 0 退出（例如 blob sha 读回不符）会让
+`source_store_replay` 字段且不算失败；`suspensions` 在 fresh init 是 `not_ready`（见 §4.2），
+同样记入报告，不算失败；非 0 退出（例如 blob sha 读回不符）会让
 部署失败，而不是部署一个「探活通过、历史为空」的实例。回滚不动来源库。
 
 ## 8. 验证边界

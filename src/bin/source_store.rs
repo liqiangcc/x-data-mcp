@@ -33,8 +33,10 @@
 //! `suspensions` scope additionally reads the database's `security_master`,
 //! trading calendar and bar days, assembles the dataset with the daily item's
 //! own function and fails closed with `suspension_replay_not_ready` when those
-//! inputs are absent; it is run explicitly after they exist (not by
-//! `--scope all`). `register-generation-member` (XDM-150) is the retroactive
+//! inputs are absent. `--scope all` includes it: a writing `all` on a database
+//! that does not have those inputs yet (fresh init) reports the scope as
+//! `not_ready` and still exits 0; `--verify-only`, `verify` and
+//! `--scope suspensions` keep the failing status. `register-generation-member` (XDM-150) is the retroactive
 //! evidence repair for a generation acquired before the source store existed:
 //! it reads that generation's `tdxhy.cfg`/`incon.dat` out of the installed
 //! directory and registers them under `generation:<manifest sha>`, which is
