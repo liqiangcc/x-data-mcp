@@ -33,16 +33,17 @@ use chrono::NaiveDate;
 use rusqlite::Connection;
 
 use super::Error;
+use super::context::ResearchContext;
 use super::member_state::{Membership, NotMemberReason};
-use super::temporal::{DatasetTemporal, Temporal, TemporalReport};
-use super::universe::{UniverseRequest, member_state_report};
+use super::temporal::{Temporal, TemporalReport};
+use super::universe::{UniverseRequest, member_state_report_in};
 use crate::compact_market::canonical_entity;
 use crate::market_data::{Adjustment, Period};
 use crate::security_master::{Exchange, RiskStatus};
-use crate::sqlite_market::{calendar, derived, rules, series};
+use crate::sqlite_market::series;
 use crate::trading_calendar::TradingCalendar;
 use crate::trading_rules::{
-    ALGORITHM_VERSION, BandSide, BasisStatus, DATASET_KEY, DATASET_KIND, ListingPhase, MinTickRule,
+    ALGORITHM_VERSION, BandSide, BasisStatus, DATASET_KIND, ListingPhase, MinTickRule,
     PriceLimitRule, Rounding, RuleBoard, RuleBook, RuleLookup, RuleMarket, StatusClass,
 };
 
@@ -73,7 +74,8 @@ impl Board {
             "600" | "601" | "603" | "605" => Self::Main,
             "688" | "689" => Self::Star,
             "000" | "001" | "002" | "003" => Self::Main,
-            "300" | "301" => Self::Gem,
+            // 302 is the ChiNext code `sz.300114` migrated to (`sz.302132`, D-46).
+            "300" | "301" | "302" => Self::Gem,
             _ => return None,
         })
     }
@@ -284,31 +286,35 @@ pub fn price_limit(
     entity: &str,
     temporal: Temporal,
 ) -> Result<PriceLimitReport, Error> {
+    price_limit_in(&ResearchContext::new(c), entity, temporal)
+}
+
+/// [`price_limit`] over a shared [`ResearchContext`]: the same answer for the
+/// same entity, with the whole-table reads done once for all entities.
+pub fn price_limit_in(
+    ctx: &ResearchContext<'_>,
+    entity: &str,
+    temporal: Temporal,
+) -> Result<PriceLimitReport, Error> {
+    let c = ctx.connection();
     canonical_entity(entity)
         .map_err(|_| Error::Invalid(format!("non-canonical entity {entity}")))?;
     let request = UniverseRequest {
         temporal,
         strict: false,
     };
-    let (member, mut temporal_report) = member_state_report(c, entity, &request)?;
+    let (member, mut temporal_report) = member_state_report_in(ctx, entity, &request)?;
 
-    // Rules are loaded once per query so the price row and the tick row come
+    // Rules are loaded once per context so the price row and the tick row come
     // from the same dataset version. The dataset has no `known_at` column, so
     // it is reported with coverage `none` instead of pretending it was bounded
     // by the information-set filter.
-    let book = rules::read_trading_rules(c)?;
-    let rule_rows = book.price_limits.len() + book.min_ticks.len();
-    temporal_report.datasets.insert(
-        DATASET_PRICE_LIMIT_RULES,
-        DatasetTemporal {
-            rows: rule_rows,
-            rows_with_known_at: 0,
-            unknown_known_at_rows: rule_rows,
-            excluded_known_at_rows: 0,
-        },
-    );
-    let rules_version =
-        derived::read_version(c, DATASET_KIND, DATASET_KEY)?.map(|row| row.version_id);
+    let rules_input = ctx.rules()?;
+    let book = &rules_input.book;
+    temporal_report
+        .datasets
+        .insert(DATASET_PRICE_LIMIT_RULES, rules_input.temporal.clone());
+    let rules_version = rules_input.version.clone();
 
     let mut answer = PriceLimitReport::unknown(
         entity,
@@ -342,11 +348,11 @@ pub fn price_limit(
         return Ok(answer);
     };
 
-    let Some(calendar) = calendar::read_calendar(c)? else {
+    let Some(calendar) = ctx.calendar()? else {
         answer.reason = Some(PriceLimitReason::CalendarMissing);
         return Ok(answer);
     };
-    let phase_result = listing_phase(&calendar, listing, temporal.as_of);
+    let phase_result = listing_phase(calendar, listing, temporal.as_of);
     let phase = phase_result.ok();
     answer.listing_phase = phase;
 
@@ -384,7 +390,7 @@ pub fn price_limit(
         }
         Err(PriceLimitReason::StUnknown) => {
             let invariant = phase.and_then(|phase| {
-                invariant_band(&book, market, board.rule_board(), phase, temporal.as_of)
+                invariant_band(book, market, board.rule_board(), phase, temporal.as_of)
             });
             match invariant {
                 Some(rule) => {
@@ -394,7 +400,7 @@ pub fn price_limit(
                 None => {
                     answer.reason = Some(PriceLimitReason::StUnknown);
                     answer.candidates =
-                        candidates(&book, market, board.rule_board(), phase, temporal.as_of);
+                        candidates(book, market, board.rule_board(), phase, temporal.as_of);
                     return Ok(answer);
                 }
             }
