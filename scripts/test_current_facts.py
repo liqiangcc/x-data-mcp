@@ -133,8 +133,8 @@ REGION_REVISION = "generic-data-v10"
 # entry counts.
 REGION_DATA_TOOLS = 16
 REGION_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
-REGION_CODE_DATA_TOOLS = 34
-REGION_CODE_ENTRY_TOOLS = {"ops": 16, "research": 14, "maint": 9}
+REGION_CODE_DATA_TOOLS = 35
+REGION_CODE_ENTRY_TOOLS = {"ops": 16, "research": 15, "maint": 9}
 REGION_ACQUIRE_TOOLS = 10
 
 
@@ -209,7 +209,7 @@ class StaleCurrentRegions(unittest.TestCase):
         self.assertEqual(rules(region_claims(bad_acquire)), ["acquire-tool-count"])
 
     def test_code_tool_count_may_be_ahead_of_the_deployed_one(self):
-        # The code registers 34 data tools across three entries while the
+        # The code registers 35 data tools across three entries while the
         # deployed ops entry serves 16: a sentence explicitly marked as the
         # code fact is checked against the registry, and the deployed count
         # stays valid.
@@ -217,9 +217,9 @@ class StaleCurrentRegions(unittest.TestCase):
             region_claims("已部署实例仍为 16 data tools。\n"), []
         )
         self.assertEqual(
-            region_claims("代码（main）为 34 data tools（未部署）。\n"), []
+            region_claims("代码（main）为 35 data tools（未部署）。\n"), []
         )
-        found = region_claims("代码（main）为 35 data tools（未部署）。\n")
+        found = region_claims("代码（main）为 36 data tools（未部署）。\n")
         self.assertEqual(rules(found), ["data-tool-count"], found)
 
     def test_bare_tool_count_must_be_one_of_the_registries(self):
@@ -562,10 +562,10 @@ class StatusConsistency(unittest.TestCase):
 
     def test_code_tool_count_in_status_may_be_ahead(self):
         text = STATUS_OK + (
-            "\n代码（main）为 34 data tools；已部署实例为 16 data tools。\n"
+            "\n代码（main）为 35 data tools；已部署实例为 16 data tools。\n"
         )
         self.assertEqual(status_claims(text), [])
-        wrong = STATUS_OK + "\n代码（main）为 35 data tools（未部署）。\n"
+        wrong = STATUS_OK + "\n代码（main）为 36 data tools（未部署）。\n"
         self.assertEqual(rules(status_claims(wrong)), ["status-data-tool-count"])
 
     def test_deployed_and_code_entry_counts_agree_after_v9(self):

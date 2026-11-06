@@ -318,9 +318,9 @@ v7 增量（历史记录，代码已实现、部署日随二进制切换生效�
 
 ## 读取工具（代码面，未部署）
 
-D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批：在 `research` 入口新增窄输入的只读工具（PR-1 的 7 个，PR-1b 再加 `get_security_state`、`get_security_events`，共 9 个）。
-**状态：代码面（未部署）。** 已部署实例仍是上文所述的 5 个 `research` 工具；这 9 个工具随后续 preview 发布后才出现在 `tools/list`，
-`capability_revision` 也要到本系列最后一个 PR 才升级。设计与裁决见 [issue-525-read-tools](tasks/issue-525-read-tools.md)。
+D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `research` 入口新增窄输入的只读工具（PR-1 的 7 个，PR-1b 再加 `get_security_state`、`get_security_events`，PR-2 再加 `get_security_history`，共 10 个）。
+**状态：代码面（未部署）。** 已部署实例仍是上文所述的 5 个 `research` 工具；这 10 个工具随后续 preview 发布后才出现在 `tools/list`。
+代码的 `capability_revision` 已是 `generic-data-v11`（契约见 [generic-data-v11](contracts/generic-data-v11.md)），部署面仍是 v10。设计与裁决见 [issue-525-read-tools](tasks/issue-525-read-tools.md)。
 `ops`、`maint` 入口不变。
 
 每个工具把窄输入转成现有 `query_data` 的 v2 查询（`latest_per_entity`），由同一条读路径做校验、完整性检查和列式投影，
@@ -337,6 +337,7 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批�
 | `get_trading_calendar` | `start_date`、`end_date` | `page_size`（1..1000，默认 100）、`cursor` | `market.calendar`，`market` |
 | `get_price_limit_rules` | 无 | `as_of`、分页 | `market.price_limit_rules`，`market` |
 | `get_security_state` | `securities`（1..100）、`fact`（`security_master`/`security_names`/`risk_warnings`/`suspensions`/`industry`） | `as_of`、`known_at`、分页 | `fact` 对应的数据集（`market.security_master`、`market.security_names`、`market.risk_warnings`、`market.suspensions`、`market.industry_assignments`），`single`/`batch`，`filter={kind:daily,start_date:as_of,end_date:as_of,as_of}`，顶层 `known_at` |
+| `get_security_history` | `securities`（1..100）、`fact`（`security_names`/`risk_warnings`/`suspensions`/`industry`）、`start_date`、`end_date` | `known_at`、分页 | 同上四个数据集，`single`/`batch`，内部 `filter.kind=history`（不应用 `as_of`；`query_data` 不能构造）|
 | `get_security_events` | `securities`（1..100）、`event`（`capital`/`adjustment`）、`start_date`、`end_date` | 分页 | `market.capital_events` / `market.adjustment_events`，`single`/`batch`，`filter.kind=daily` |
 
 语义，均沿用现有规则，没有放松：
@@ -351,13 +352,15 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525) 的第一批�
 - `get_trading_calendar`：和其他工具一样分页。范围超过一页时响应是 `page_complete=false` 并带 `next_cursor`，把它作为 `cursor` 传回即取下一页，合并后与 `query_data` 一次取全的结果相同。
 - `get_security_state`：问“`as_of` 那天是什么状态”，只返回当天生效的记录；区间结束日当天已不生效（结束日不含）。不传 `as_of` 时取最近交易日，并把这一天同时写进 `start_date`、`end_date` 和 `as_of`。`known_at` 不传表示用现在已知的全部信息，回测应传；被排除的行和 `known_at` 为空的行数在响应的 `temporal` 里。响应带 `temporal`，与 `query_data` 一致。一次调用只读一个 `fact`（一次查询、一个快照）。
   对沪市标的查 `security_names` 时，`limitations` 追加“name history covers SZ only (D-61)…”：名称历史只覆盖深市，0 行表示没有这段历史，不表示没有名称。混合批次里有沪市标的时同样追加；`query_data` 的响应不变。
+- `get_security_history`：问“这段时间有过哪些状态”，返回与 `start_date..end_date` 有重叠的全部区间（多段 ST 全部返回，窗口外的不返回），没有 `as_of`，响应的 `temporal` 没有 `as_of` 键。`known_at` 照旧先应用：晚于它才知道的行和 `known_at` 为空的行被排除并计数。`fact` 不含 `security_master`（主表是每个证券的生命周期记录，不是状态序列）。沪市查 `security_names` 的 `limitations` 与 `get_security_state` 相同。细节见 [generic-data-v11](contracts/generic-data-v11.md) §2.1。
 - `get_security_events`：问“这段时间发生了什么”，返回日期范围内的事件。这两个数据集没有可用的知晓时间，所以没有 `known_at`，也没有 `as_of`。
 
 默认 `as_of` 的“今天”由 `data_supply::query::today()` 给出，现在是上海日（`calendar::shanghai_today()`）。
 此前它用 `chrono::Local::now()`，随主机时区变化：vm2-126 是上海时区、aws-node 是 UTC，UTC 16:00–24:00 之间两台机器的默认 `as_of` 会差一天。
 `query_data` 的事实类数据集不传 `as_of` 时同样受益。
 
-`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：18,437 B（14 个工具），CI 预算 18,600 B（owner 批准，D-75）；
-每个工具描述不超过 240 B。`ops`、`maint` 的工具清单和字节数不变。
+`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：18,094 B（15 个工具），CI 预算 18,600 B（owner 批准，D-75）；
+每个工具描述不超过 240 B。PR-2 起读工具的输入 schema 去掉根上的 `$schema` 和 `title`（约 80 B/工具），所以 `ops` 实测 29,872 B（预算 30,800）、`maint` 13,195 B（预算 14,500）也比之前小；
+工具清单不变。字节数和测量方式见 [generic-data-v11](contracts/generic-data-v11.md) §3。
 
-本批未包含：`get_security_history`（后续 PR）；`screen_market` 暂不做（D-78：能写脚本的 pi 用 codemode 筛选；#295 保持开放，出现不能写脚本的客户端需求时再提）。
+本批未包含：`screen_market` 暂不做（D-78：能写脚本的 pi 用 codemode 筛选；#295 保持开放，出现不能写脚本的客户端需求时再提）。

@@ -1,0 +1,934 @@
+{
+  "market.risk_warnings as_of-on-interval-end": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2016-05-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.risk_warnings as_of-outside-window": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2018-06-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.risk_warnings default-as_of": {
+    "columns": {
+      "effective_from": [
+        "2019-02-01"
+      ],
+      "known_at": [
+        "2026-11-01"
+      ],
+      "normalized_status": [
+        "other_risk_warning"
+      ],
+      "raw_status_code": [
+        "ST"
+      ],
+      "source_kind": [
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [
+      "sz.000011"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 1,
+    "temporal": {
+      "as_of": "2021-08-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.risk_warnings known_at": {
+    "columns": {
+      "effective_from": [
+        "2019-02-01"
+      ],
+      "known_at": [
+        "2026-11-01"
+      ],
+      "normalized_status": [
+        "other_risk_warning"
+      ],
+      "raw_status_code": [
+        "ST"
+      ],
+      "source_kind": [
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [
+      "sz.000011"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 1,
+    "temporal": {
+      "as_of": "2026-12-31",
+      "datasets_without_known_at": [],
+      "known_at": "2026-11-02",
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.risk_warnings long-window-as_of-in-gap": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2017-01-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.risk_warnings long-window-as_of-in-spell": {
+    "columns": {
+      "effective_from": [
+        "2018-04-02"
+      ],
+      "effective_to": [
+        "2019-06-03"
+      ],
+      "known_at": [
+        "2026-11-01"
+      ],
+      "normalized_status": [
+        "other_risk_warning"
+      ],
+      "raw_status_code": [
+        "ST"
+      ],
+      "source_kind": [
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [
+      "sz.000010"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 1,
+    "temporal": {
+      "as_of": "2018-06-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.risk_warnings long-window-as_of-open": {
+    "columns": {
+      "effective_from": [
+        "2022-04-01",
+        "2019-02-01"
+      ],
+      "known_at": [
+        "2026-11-03",
+        "2026-11-01"
+      ],
+      "normalized_status": [
+        "other_risk_warning",
+        "other_risk_warning"
+      ],
+      "raw_status_code": [
+        "ST",
+        "ST"
+      ],
+      "source_kind": [
+        "szse_name_history",
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [
+      "sz.000010",
+      "sz.000011"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 2,
+    "temporal": {
+      "as_of": "2026-12-31",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.risk_warnings single-day": {
+    "columns": {
+      "effective_from": [
+        "2019-02-01"
+      ],
+      "known_at": [
+        "2026-11-01"
+      ],
+      "normalized_status": [
+        "other_risk_warning"
+      ],
+      "raw_status_code": [
+        "ST"
+      ],
+      "source_kind": [
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.risk_warnings",
+    "entities": [
+      "sz.000011"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)",
+      "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
+    ],
+    "metadata": {
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_status": "complete",
+      "source": "derived:risk_warnings"
+    },
+    "page_complete": true,
+    "row_count": 1,
+    "temporal": {
+      "as_of": "2020-03-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "c0b6aa96a61ed119040b50d3430c663f994067dfd7226493da4ca3d119b49365"
+      }
+    ]
+  },
+  "market.security_names as_of-on-interval-end": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.security_names",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "coverage: effective-time name history is available from the source start (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) is available from the first capture day. known_at is the Shanghai day on which the first snapshot containing the change row was stored, never the change day; SH/BJ have no dated name source (D-61), so their absence is a coverage window and is not back-filled from a current name",
+      "coverage_status": "complete",
+      "source": "derived:security_names"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2016-05-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "1e57d76fed9c7b8911f0ccade4070a86ea27fe6d3820d4be1c341cc6fbe1fbcb"
+      }
+    ]
+  },
+  "market.security_names as_of-outside-window": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.security_names",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "coverage: effective-time name history is available from the source start (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) is available from the first capture day. known_at is the Shanghai day on which the first snapshot containing the change row was stored, never the change day; SH/BJ have no dated name source (D-61), so their absence is a coverage window and is not back-filled from a current name",
+      "coverage_status": "complete",
+      "source": "derived:security_names"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2018-06-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "1e57d76fed9c7b8911f0ccade4070a86ea27fe6d3820d4be1c341cc6fbe1fbcb"
+      }
+    ]
+  },
+  "market.security_names default-as_of": {
+    "columns": {
+      "certainty": [
+        "interval",
+        "unbounded"
+      ],
+      "effective_from": [
+        "2021-01-01",
+        "2019-01-01"
+      ],
+      "effective_to": [
+        "2022-01-01",
+        null
+      ],
+      "known_at": [
+        "2026-11-01",
+        "2026-11-01"
+      ],
+      "name": [
+        "甲",
+        "乙"
+      ],
+      "source_kind": [
+        "szse_name_history",
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.security_names",
+    "entities": [
+      "sz.000010",
+      "sz.000011"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "coverage: effective-time name history is available from the source start (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) is available from the first capture day. known_at is the Shanghai day on which the first snapshot containing the change row was stored, never the change day; SH/BJ have no dated name source (D-61), so their absence is a coverage window and is not back-filled from a current name",
+      "coverage_status": "complete",
+      "source": "derived:security_names"
+    },
+    "page_complete": true,
+    "row_count": 2,
+    "temporal": {
+      "as_of": "2021-08-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "1e57d76fed9c7b8911f0ccade4070a86ea27fe6d3820d4be1c341cc6fbe1fbcb"
+      }
+    ]
+  },
+  "market.security_names long-window-as_of-in-gap": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.security_names",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "coverage: effective-time name history is available from the source start (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) is available from the first capture day. known_at is the Shanghai day on which the first snapshot containing the change row was stored, never the change day; SH/BJ have no dated name source (D-61), so their absence is a coverage window and is not back-filled from a current name",
+      "coverage_status": "complete",
+      "source": "derived:security_names"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2017-01-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "1e57d76fed9c7b8911f0ccade4070a86ea27fe6d3820d4be1c341cc6fbe1fbcb"
+      }
+    ]
+  },
+  "market.security_names long-window-as_of-in-spell": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.security_names",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "coverage: effective-time name history is available from the source start (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) is available from the first capture day. known_at is the Shanghai day on which the first snapshot containing the change row was stored, never the change day; SH/BJ have no dated name source (D-61), so their absence is a coverage window and is not back-filled from a current name",
+      "coverage_status": "complete",
+      "source": "derived:security_names"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2018-06-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "1e57d76fed9c7b8911f0ccade4070a86ea27fe6d3820d4be1c341cc6fbe1fbcb"
+      }
+    ]
+  },
+  "market.security_names long-window-as_of-open": {
+    "columns": {
+      "certainty": [
+        "unbounded",
+        "unbounded"
+      ],
+      "effective_from": [
+        "2023-01-01",
+        "2019-01-01"
+      ],
+      "known_at": [
+        "2026-11-03",
+        "2026-11-01"
+      ],
+      "name": [
+        "甲",
+        "乙"
+      ],
+      "source_kind": [
+        "szse_name_history",
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.security_names",
+    "entities": [
+      "sz.000010",
+      "sz.000011"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "coverage: effective-time name history is available from the source start (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) is available from the first capture day. known_at is the Shanghai day on which the first snapshot containing the change row was stored, never the change day; SH/BJ have no dated name source (D-61), so their absence is a coverage window and is not back-filled from a current name",
+      "coverage_status": "complete",
+      "source": "derived:security_names"
+    },
+    "page_complete": true,
+    "row_count": 2,
+    "temporal": {
+      "as_of": "2026-12-31",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "1e57d76fed9c7b8911f0ccade4070a86ea27fe6d3820d4be1c341cc6fbe1fbcb"
+      }
+    ]
+  },
+  "market.security_names single-day": {
+    "columns": {
+      "certainty": [
+        "interval",
+        "unbounded"
+      ],
+      "effective_from": [
+        "2020-01-01",
+        "2019-01-01"
+      ],
+      "effective_to": [
+        "2021-01-01",
+        null
+      ],
+      "known_at": [
+        "2026-11-01",
+        "2026-11-01"
+      ],
+      "name": [
+        "ST甲",
+        "乙"
+      ],
+      "source_kind": [
+        "szse_name_history",
+        "szse_name_history"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.security_names",
+    "entities": [
+      "sz.000010",
+      "sz.000011"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates"
+    ],
+    "metadata": {
+      "coverage_reason": "coverage: effective-time name history is available from the source start (SZSE SSGSGMXX/tab2, 1994-01-03); knowledge-time PIT (known_at filtering) is available from the first capture day. known_at is the Shanghai day on which the first snapshot containing the change row was stored, never the change day; SH/BJ have no dated name source (D-61), so their absence is a coverage window and is not back-filled from a current name",
+      "coverage_status": "complete",
+      "source": "derived:security_names"
+    },
+    "page_complete": true,
+    "row_count": 2,
+    "temporal": {
+      "as_of": "2020-03-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 0
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "1e57d76fed9c7b8911f0ccade4070a86ea27fe6d3820d4be1c341cc6fbe1fbcb"
+      }
+    ]
+  },
+  "market.suspensions as_of-on-interval-end": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2016-05-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  },
+  "market.suspensions as_of-outside-window": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2018-06-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  },
+  "market.suspensions default-as_of": {
+    "columns": {
+      "certainty": [
+        "unresolved_gap"
+      ],
+      "end_day": [
+        "2021-08-03"
+      ],
+      "missing_days": [
+        2
+      ],
+      "reason": [
+        "missing_bar_no_event"
+      ],
+      "start_day": [
+        "2021-08-02"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [
+      "sz.000010"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 1,
+    "temporal": {
+      "as_of": "2021-08-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  },
+  "market.suspensions known_at": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2021-08-02",
+      "datasets_without_known_at": [],
+      "known_at": "2020-03-01",
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  },
+  "market.suspensions long-window-as_of-in-gap": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2017-01-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  },
+  "market.suspensions long-window-as_of-in-spell": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2018-06-01",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  },
+  "market.suspensions long-window-as_of-open": {
+    "columns": {},
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 0,
+    "temporal": {
+      "as_of": "2026-12-31",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  },
+  "market.suspensions single-day": {
+    "columns": {
+      "certainty": [
+        "confirmed"
+      ],
+      "end_day": [
+        "2020-03-04"
+      ],
+      "known_at": [
+        "2020-03-01"
+      ],
+      "missing_days": [
+        3
+      ],
+      "reason": [
+        "exchange_announcement"
+      ],
+      "start_day": [
+        "2020-03-02"
+      ]
+    },
+    "contract_version": "v2",
+    "dataset": "market.suspensions",
+    "entities": [
+      "sz.000010"
+    ],
+    "layout": "table",
+    "limitations": [
+      "fixed version selection is not a shared source acquisition time",
+      "declared scope: owner personal research, local-only (#71 comment-5749934485); coverage is not inferred from dates",
+      "`unresolved_gap` means a trading day without a bar for unknown reason, never `suspended`; SZ has no `confirmed` rows and SH has none before 2008 (D-60), so tradability there is `unknown`; intraday halts are not recorded; unresolved_gap rows have known_at NULL, so a known_at filter excludes them"
+    ],
+    "metadata": {
+      "coverage_reason": "SH `confirmed` rows come from the SSE suspension/resumption table since 2008 (D-60); every other gap is a derived `unresolved_gap` (AC-M2-8)",
+      "coverage_status": "complete",
+      "source": "derived:suspensions"
+    },
+    "page_complete": true,
+    "row_count": 1,
+    "temporal": {
+      "as_of": "2020-03-03",
+      "datasets_without_known_at": [],
+      "known_at": null,
+      "unknown_known_at_rows": 2
+    },
+    "versions": [
+      {
+        "status": "present",
+        "version_id": "d58951d35b7dd0d50555585b7c1fbb11b7dfbe804dd0a0e7e6dd5d4c99615b73"
+      }
+    ]
+  }
+}
