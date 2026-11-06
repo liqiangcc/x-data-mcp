@@ -1,8 +1,8 @@
 //! Schema and routing share one descriptor; no advertised handler without a contract.
 use super::read_tools::{
     self, ColumnarPage, DailyBarsInput, IndexBarsInput, MarketCapInput, MarketSnapshotInput,
-    PriceLimitRulesInput, ReadTool, SecurityEventsInput, SecurityHistoryInput,
-    SecurityStateInput, TableReply, TradabilityInput, TradingCalendarInput, YearlyBarsInput,
+    PriceLimitRulesInput, ReadTool, SecurityEventsInput, SecurityHistoryInput, SecurityStateInput,
+    TableReply, TradabilityInput, TradingCalendarInput, YearlyBarsInput,
 };
 use super::wire::*;
 use schemars::{JsonSchema, schema_for};

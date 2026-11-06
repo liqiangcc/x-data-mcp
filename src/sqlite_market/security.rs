@@ -876,7 +876,9 @@ fn read_security_master_rows(
 ) -> Result<Vec<SecurityLifecycleFact>, Error> {
     let raw = read_rows(
         c,
-        &format!("SELECT {MASTER_COLUMNS} FROM security_master ORDER BY exchange,code,effective_from"),
+        &format!(
+            "SELECT {MASTER_COLUMNS} FROM security_master ORDER BY exchange,code,effective_from"
+        ),
         &format!(
             "SELECT {MASTER_COLUMNS} FROM security_master \
              WHERE exchange=?1 AND code=?2 ORDER BY effective_from"
