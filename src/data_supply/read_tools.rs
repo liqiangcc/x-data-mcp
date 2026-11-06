@@ -380,11 +380,11 @@ pub struct MarketCapInput {
     pub as_of: Option<NaiveDate>,
 }
 
-fn decode<T: DeserializeOwned>(input: Value) -> Result<T, ApiError> {
+pub fn decode<T: DeserializeOwned>(input: Value) -> Result<T, ApiError> {
     serde_json::from_value(input).map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
 }
 
-fn invalid(message: String) -> ApiError {
+pub fn invalid(message: String) -> ApiError {
     ApiError::new("invalid_arguments", message)
 }
 
@@ -423,7 +423,7 @@ fn query(
 
 /// An index code (or its alias) is stored under `market.index`; reading it as
 /// a stock series would only return `absent`, so name the right tool instead.
-fn reject_indices(entities: &[Security]) -> Result<(), ApiError> {
+pub fn reject_indices(entities: &[Security]) -> Result<(), ApiError> {
     let hits: Vec<String> = entities
         .iter()
         .map(Security::symbol)

@@ -519,20 +519,276 @@ impl DataApi {
     ) -> Result<Value, super::Error> {
         use super::read_tools::ReadTool;
         match tool {
-            ReadTool::Tradability => {
-                // TODO: implement tradability handler
-                Err(super::Error::Invalid(
-                    "get_tradability not yet implemented".to_string(),
-                ))
-            }
-            ReadTool::MarketCap => {
-                // TODO: implement market_cap handler
-                Err(super::Error::Invalid(
-                    "get_market_cap not yet implemented".to_string(),
-                ))
-            }
+            ReadTool::Tradability => self.get_tradability(input),
+            ReadTool::MarketCap => self.get_market_cap(input),
             _ => unreachable!("only Tradability and MarketCap use Handler::Derived"),
         }
+    }
+
+    fn get_tradability(&self, input: Value) -> Result<Value, super::Error> {
+        use super::read_tools::{TradabilityInput, decode, reject_indices};
+        use crate::research::temporal::Temporal;
+        use crate::research::context::ResearchContext;
+
+        // Check for known_at before decoding
+        if let Value::Object(ref obj) = input {
+            if obj.contains_key("known_at") {
+                return Err(super::Error::Invalid(
+                    "known_at is not accepted: A-share inputs lack known_at columns. \
+                     Use get_security_state for facts with known_at.".to_string(),
+                ));
+            }
+        }
+        
+        let args: TradabilityInput = decode(input.clone()).map_err(|e| {
+            super::Error::Invalid(format!("{}", e.message))
+        })?;
+        
+        reject_indices(&args.securities).map_err(|e| {
+            super::Error::Invalid(format!("{}", e.message))
+        })?;
+        
+        let as_of = match args.as_of {
+            Some(day) => day,
+            None => {
+                use super::query::ReadRepository as _;
+                self.queries
+                    .repository
+                    .last_trading_day_upto(super::query::today())
+                    .map_err(super::Error::from)?
+            }
+        };
+        
+        // Read in a transaction
+        let answer = self.queries.repository.market.read(|c| {
+            let ctx = ResearchContext::new(c);
+            let temporal = Temporal {
+                as_of,
+                known_at: None,
+            };
+            
+            // Check required input datasets are registered
+            use crate::sqlite_market::derived;
+            let suspensions_version = derived::read_version(
+                c,
+                crate::security_master::suspensions::DATASET_KIND,
+                crate::security_master::suspensions::DATASET_KEY,
+            )?;
+            if suspensions_version.is_none() {
+                // G8: suspensions dataset never written
+                return Ok(self.assemble_tradability_unknown(
+                    &args.securities,
+                    as_of,
+                    "input_absent",
+                    "suspensions dataset not registered",
+                ));
+            }
+            
+            let mut states = Vec::new();
+            let mut reasons = Vec::new();
+            let mut suspensions_col = Vec::new();
+            let mut flags = Vec::new();
+            let mut limit_states = Vec::new();
+            let mut limit_reasons = Vec::new();
+            let mut limit_candidates = Vec::new();
+            let mut risk_statuses = Vec::new();
+            let mut limit_ups = Vec::new();
+            let mut limit_downs = Vec::new();
+            let mut prev_closes = Vec::new();
+            let mut prev_close_days = Vec::new();
+            let mut rule_ids = Vec::new();
+            
+            for entity in &args.securities {
+                let entity_str = entity.symbol();
+                
+                // Call research functions
+                let trad_report = crate::research::tradability::tradability_in(
+                    &ctx,
+                    &entity_str,
+                    temporal,
+                ).map_err(|e| match e {
+                    crate::research::Error::Integrity(s) => super::Error::Integrity(s),
+                    e => super::Error::from(crate::market_storage::Error::Storage(e.to_string())),
+                })?;
+                let limit_report = crate::research::price_limit::price_limit_in(
+                    &ctx,
+                    &entity_str,
+                    temporal,
+                ).map_err(|e| match e {
+                    crate::research::Error::Integrity(s) => super::Error::Integrity(s),
+                    e => super::Error::from(crate::market_storage::Error::Storage(e.to_string())),
+                })?;
+                
+                states.push(Value::String(trad_report.reason_code().to_string()));
+                reasons.push(Value::String(trad_report.reason_code().to_string()));
+                
+                // suspension column
+                if let Some(ref susp) = trad_report.suspension {
+                    suspensions_col.push(Value::String(format!(
+                        "{} {}..{}",
+                        susp.certainty.as_str(),
+                        susp.start_day,
+                        susp.end_day
+                    )));
+                } else {
+                    suspensions_col.push(Value::Null);
+                }
+                
+                flags.push(Value::Null);
+                
+                // Price limit fields
+                limit_states.push(Value::String(limit_report.reason_code().to_string()));
+                limit_reasons.push(Value::String(limit_report.reason_code().to_string()));
+                
+                // Candidates
+                if limit_report.candidates.is_empty() {
+                    limit_candidates.push(Value::Null);
+                } else {
+                    let cands: Vec<String> = limit_report.candidates
+                        .iter()
+                        .map(|c| match c.band_bp {
+                            Some(bp) => format!("{}bp", bp),
+                            None => "unbounded".to_string(),
+                        })
+                        .collect();
+                    limit_candidates.push(Value::String(cands.join("|")));
+                }
+                
+                // Risk status
+                if let Some(ref status) = limit_report.status_class {
+                    risk_statuses.push(Value::String(format!("{:?}", status).to_lowercase()));
+                } else {
+                    risk_statuses.push(Value::String("unknown".to_string()));
+                }
+                
+                // Limit prices
+                if let (Some(up), Some(scale)) = (limit_report.limit_up_units, limit_report.price_scale) {
+                    limit_ups.push(Value::String(format_price(up, scale)));
+                } else {
+                    limit_ups.push(Value::Null);
+                }
+                
+                if let (Some(down), Some(scale)) = (limit_report.limit_down_units, limit_report.price_scale) {
+                    limit_downs.push(Value::String(format_price(down, scale)));
+                } else {
+                    limit_downs.push(Value::Null);
+                }
+                
+                // Previous close
+                if let (Some(close), Some(scale)) = (limit_report.prev_close_units, limit_report.price_scale) {
+                    prev_closes.push(Value::String(format_price(close, scale)));
+                } else {
+                    prev_closes.push(Value::Null);
+                }
+                
+                if let Some(day) = limit_report.prev_close_day {
+                    prev_close_days.push(Value::String(day.to_string()));
+                } else {
+                    prev_close_days.push(Value::Null);
+                }
+                
+                if let Some(ref rule_id) = limit_report.rule_id {
+                    rule_ids.push(Value::String(rule_id.clone()));
+                } else {
+                    rule_ids.push(Value::Null);
+                }
+            }
+            
+            // Collect input versions
+            let mut inputs: Vec<Value> = Vec::new();
+            // TODO: collect actual input dataset versions
+            
+            let mut datasets_without_known_at = Vec::new();
+            datasets_without_known_at.push("security_master");
+            datasets_without_known_at.push("suspensions");
+            datasets_without_known_at.push("trading_calendar");
+            
+            Ok(serde_json::json!({
+                "tool": "get_tradability",
+                "layout": "table",
+                "snapshot_time": chrono::Utc::now().to_rfc3339(),
+                "as_of": as_of.to_string(),
+                "entities": args.securities.iter().map(|e| e.symbol()).collect::<Vec<_>>(),
+                "columns": {
+                    "state": states,
+                    "reason": reasons,
+                    "suspension": suspensions_col,
+                    "flags": flags,
+                    "limit_state": limit_states,
+                    "limit_reason": limit_reasons,
+                    "limit_candidates": limit_candidates,
+                    "risk_status": risk_statuses,
+                    "limit_up": limit_ups,
+                    "limit_down": limit_downs,
+                    "prev_close": prev_closes,
+                    "prev_close_day": prev_close_days,
+                    "rule_id": rule_ids,
+                },
+                "inputs": inputs,
+                "algorithm_versions": {
+                    "tradability": "tradability-v1",
+                    "price_limit": "limit-v1",
+                },
+                "limitations": [],
+                "temporal": {
+                    "as_of": as_of.to_string(),
+                    "known_at": Value::Null,
+                    "datasets_without_known_at": datasets_without_known_at,
+                },
+            }))
+        })?;
+        
+        Ok(answer)
+    }
+    
+    fn assemble_tradability_unknown(
+        &self,
+        securities: &[super::wire::Security],
+        as_of: chrono::NaiveDate,
+        reason: &str,
+        _message: &str,
+    ) -> Value {
+        let count = securities.len();
+        serde_json::json!({
+            "tool": "get_tradability",
+            "layout": "table",
+            "snapshot_time": chrono::Utc::now().to_rfc3339(),
+            "as_of": as_of.to_string(),
+            "entities": securities.iter().map(|e| e.symbol()).collect::<Vec<_>>(),
+            "columns": {
+                "state": vec![Value::String("unknown".to_string()); count],
+                "reason": vec![Value::String(reason.to_string()); count],
+                "suspension": vec![Value::Null; count],
+                "flags": vec![Value::Null; count],
+                "limit_state": vec![Value::String("unknown".to_string()); count],
+                "limit_reason": vec![Value::String(reason.to_string()); count],
+                "limit_candidates": vec![Value::Null; count],
+                "risk_status": vec![Value::String("unknown".to_string()); count],
+                "limit_up": vec![Value::Null; count],
+                "limit_down": vec![Value::Null; count],
+                "prev_close": vec![Value::Null; count],
+                "prev_close_day": vec![Value::Null; count],
+                "rule_id": vec![Value::Null; count],
+            },
+            "inputs": [],
+            "algorithm_versions": {
+                "tradability": "tradability-v1",
+                "price_limit": "limit-v1",
+            },
+            "limitations": [],
+            "temporal": {
+                "as_of": as_of.to_string(),
+                "known_at": Value::Null,
+                "datasets_without_known_at": [],
+            },
+        })
+    }
+    
+    fn get_market_cap(&self, _input: Value) -> Result<Value, super::Error> {
+        // TODO: implement market_cap handler
+        Err(super::Error::Invalid(
+            "get_market_cap not yet implemented".to_string(),
+        ))
     }
 
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
@@ -1600,6 +1856,14 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
         }
     }
     v
+}
+
+/// Format a price value (units) with its scale as a decimal string.
+fn format_price(units: i64, scale: u32) -> String {
+    let divisor = 10_i64.pow(scale);
+    let integer = units / divisor;
+    let fraction = units.abs() % divisor;
+    format!("{}.{:0width$}", integer, fraction, width = scale as usize)
 }
 
 #[cfg(test)]
