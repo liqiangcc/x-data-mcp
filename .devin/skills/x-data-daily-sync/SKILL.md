@@ -172,6 +172,11 @@ operator 若只用显式 `update_data` 把全部 head 发布到位、没有 `run
 2. 有界轮询 `get_acquisition_task(task_id)`：约 60s 一轮，总预算约 45 分钟（官方快照约 570MB，
    实测下载 20-40 分钟）。预算耗尽仍未到终态 → 停止，返回 `request_id`/`task_id`/`generation_id`
    并说明仍在进行，不无限等待。
+   - **拿到 `task_id` 后不得再调用 `acquire_generation`**，脚本超时或被中断也一样：task 在服务端继续运行，
+     只能用同一个 `task_id` 恢复轮询。换新 `request_id` 重新获取会多下载一份 generation。
+   - codemode 的脚本默认约 60 秒就结束。要么每段脚本只查一轮、下一轮另起脚本，要么在脚本第一行写
+     `// @options: {"timeout_ms": 600000}` 再循环。脚本结束不等于 task 失败，只有 `get_acquisition_task`
+     的 `failed` 才算失败。
 3. task `failed` → 停止，转述 `error`/`detail` 与 refs。
 4. `verify_generation(request_id=<新值>, generation_id)`：结果必须是 `consistency_verified`；`not_verified` / `conflict` / 其他 → 停止并报告。
 5. 先 `sync_status` 取当前 `active_generation_ref`；`activate_generation(request_id=<新值>, generation_id, expected_previous=<当前 active 或省略>`) 。拒绝/conflict → 停止，旧 active 不变。
