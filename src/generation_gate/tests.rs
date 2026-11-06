@@ -277,3 +277,71 @@ fn registered_at_is_not_part_of_the_summary() {
     facts[0].registered_at = "2030-01-01T00:00:00Z".into();
     assert_eq!(summary, facts_summary(&facts));
 }
+
+// ---------------------------------------------------------------------------
+// #583: a generation that was never activated has no derived facts to prove
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_never_activated_generation_needs_no_derived_facts() {
+    let fixture = tempfile::tempdir().unwrap();
+    let store = store_with_evidence(&fixture);
+    // No `generation_facts` rows at all: an unactivated generation never ran
+    // a task, so there is nothing to replay and nothing to exempt.
+    let check = evaluate_with_activation(
+        &store,
+        GENERATION,
+        &[],
+        &[],
+        ActivationRecord::NeverActivated,
+    )
+    .unwrap();
+    assert!(check.passes(), "{check:?}");
+    assert_eq!(check.reason_code(), None);
+    assert!(check.derived_facts_skipped);
+    assert!(check.missing_facts.is_empty());
+    assert!(check.exemptions.is_empty());
+    let detail = check.detail();
+    assert!(detail.contains("never activated"), "{detail}");
+}
+
+#[test]
+fn a_never_activated_generation_still_needs_source_store_evidence() {
+    let fixture = tempfile::tempdir().unwrap();
+    // Fresh store: neither irreproducible member is registered.
+    let store = SourceStore::new(fixture.path().join("source-store"));
+    let check = evaluate_with_activation(
+        &store,
+        GENERATION,
+        &[],
+        &[],
+        ActivationRecord::NeverActivated,
+    )
+    .unwrap();
+    assert!(!check.passes());
+    assert_eq!(check.reason_code(), Some("source_store_evidence_missing"));
+    assert_eq!(check.missing_evidence.len(), REQUIRED_SOURCE_EVIDENCE.len());
+    // The refusal names only the evidence step: the fact step did not apply.
+    let detail = check.detail();
+    assert!(
+        !detail.contains("replay --scope generation_facts"),
+        "{detail}"
+    );
+}
+
+#[test]
+fn the_activated_rule_is_unchanged_by_the_never_activated_path() {
+    let fixture = tempfile::tempdir().unwrap();
+    let store = store_with_evidence(&fixture);
+    // Same inputs as `a_never_activated_generation_needs_no_derived_facts`,
+    // but an activated generation still owes every required fact.
+    let check = evaluate_with_activation(&store, GENERATION, &[], &[], ActivationRecord::Activated)
+        .unwrap();
+    assert!(!check.passes());
+    assert_eq!(check.reason_code(), Some("derived_facts_missing"));
+    assert_eq!(check.missing_facts.len(), REQUIRED_FACTS.len());
+    assert!(!check.derived_facts_skipped);
+    // `evaluate` is the activated rule, not a third behaviour.
+    let default = evaluate(&store, GENERATION, &[], &[]).unwrap();
+    assert_eq!(default, check);
+}
