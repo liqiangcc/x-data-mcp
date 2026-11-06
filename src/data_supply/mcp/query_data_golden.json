@@ -12,7 +12,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },
@@ -44,7 +44,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },
@@ -94,7 +94,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },
@@ -144,7 +144,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },
@@ -176,7 +176,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },
@@ -229,7 +229,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },
@@ -285,7 +285,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },
@@ -335,7 +335,7 @@
       "a day without a covering row is `unknown`, never `normal`: absence of an announcement is not absence of ST (D-58)"
     ],
     "metadata": {
-      "coverage_reason": "4 SZ name-history row(s) and 0 SH announcement-event row(s); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
+      "coverage_reason": "4 SZ and 0 SH stored ST interval row(s) (SH intervals are built from announcement events); 1 acquisition window(s) observed, 0 not_observed; a day without a covering row is `unknown`, never `normal` (D-58)",
       "coverage_status": "complete",
       "source": "derived:risk_warnings"
     },

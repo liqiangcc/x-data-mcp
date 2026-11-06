@@ -12,10 +12,23 @@
 | `capability_revision` | `generic-data-v10` | `generic-data-v11` |
 | data 工具数 | ops 16 / research 5 / maint 9 | ops 16 / **research 15** / maint 9 |
 | compact schema | 27 | **不变**（27，没有迁移） |
-| `query_data` 的输入与输出 | | **不变**，同一请求逐字节相同（见 §4） |
+| `query_data` 的输入与输出 | | 工具和 `get_security_history` 的读取模式不改变它（见 §4）；但同一修订里有别的 v2 变化，见 §1.1 |
 | `tools/list` 输入 schema | 根上有 `$schema`、`title` | 读 schema 去掉这两项（见 §3） |
 
 加工具不改 schema，也不改 `query_data` 的 wire 形状。`TemporalBlock.as_of` 在内部变为可选，但 `query_data` 永远写它，已发布的 schema 保持 `{"type":"string","format":"date"}`。
+
+### 1.1 同一修订里的其他变化（相对已部署的 v10）
+
+下面这些不是读取工具带来的，但会随 v11 一起上线。客户端升级时要看这一节。
+
+| 变化 | 影响 | 出处 |
+|---|---|---|
+| v2 `universe` 读的分页形状：`entities`、`versions`、`columns` 只含本页行涉及的实体，不再每页带全量 | 大响应变小；按页合并时要按实体拼。v1 不变 | #541，[v8 §4](generic-data-v8.md) |
+| 新错误码 `memory_budget_exceeded`（`isError`）：服务接近自身 cgroup 的 `memory.high` 时拒绝读取 | 可以重试或缩小查询；不是“没有数据”。游标不被消耗 | #547，[v8 §4](generic-data-v8.md) |
+| 游标池变成进程级：总 48 MiB、单连接 24 MiB 且 32 条，LRU 淘汰 | 约 5 个以上全市场读者同时翻页时，别的连接可能收到 `invalid/expired cursor`，要重新查询 | #547 |
+| `market.risk_warnings` 的 `coverage_reason` 文案，不再有过时的 `pending`/`#308` 文字 | 只是文本 | #539、#548 |
+
+x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不受前两行分页形状影响；错误以 `isError` 到达（2026-11-06 读 `liqiangcc/x` 确认）。
 
 ## 2. 10 个新工具
 
