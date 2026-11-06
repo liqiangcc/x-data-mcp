@@ -1017,6 +1017,243 @@ fn an_announcement_on_several_query_pages_cites_the_same_page_in_replay_and_the_
     );
 }
 
+/// Freeze `risk_page`/`special_page` as the two title filters' answers of the
+/// 2024Q2 window (every other quarter quiet) and record the refresh runs.
+fn freeze_two_filter_bulletins(
+    scenario: &Scenario,
+    today: NaiveDate,
+    risk_page: &[u8],
+    special_page: &[u8],
+) {
+    freeze_sz_short_name(scenario, "2024-06-30T02:00:00Z");
+    let quiet = quiet_bulletin_page();
+    let windows = quarter_segments(day(2000, 1, 1), today).unwrap();
+    for (kind, plan) in risk_warnings::plans() {
+        let page = match kind {
+            risk_warnings::Kind::SzseShortName => continue,
+            risk_warnings::Kind::SseRiskWarning => risk_page,
+            risk_warnings::Kind::SseSpecialTreatment => special_page,
+        };
+        for window in &windows {
+            let body = if window.start() == day(2024, 4, 1) {
+                page.to_vec()
+            } else {
+                quiet.clone()
+            };
+            freeze(
+                scenario,
+                &plan,
+                1,
+                Some(*window),
+                "START_DATE",
+                "END_DATE",
+                &body,
+                "2024-06-30T02:00:00Z",
+            );
+        }
+    }
+    for source in [SourceId::SzseShortName, SourceId::SseBulletin] {
+        record_test_refresh_run(
+            &scenario.market,
+            source,
+            "2024-06-30",
+            "2024-06-30T02:00:00Z",
+        );
+    }
+}
+
+/// Write `set` the way the daily item does.
+fn commit_daily(scenario: &Scenario, set: &crate::security_master::risk_warnings::RiskWarningSet) {
+    let evidence = serde_json::json!({"fixture": true});
+    let (manifest, member, event) = (
+        crate::hash::sha256(b"manifest"),
+        crate::hash::sha256(b"member"),
+        crate::hash::sha256(b"event"),
+    );
+    scenario
+        .market
+        .commit_risk_warnings(&crate::sqlite_market::risk_warnings::RiskWarningWrite {
+            set,
+            task_id: "fixture",
+            item_id: "derived:risk_warnings",
+            generation_id: "fixture-generation",
+            generation_manifest_sha256: &manifest,
+            member_sha256: &member,
+            security_event_sha256: &event,
+            generation_evidence: &evidence,
+        })
+        .unwrap();
+}
+
+/// D-81 R5 end to end: `sh.600001` states an implementation and a revocation
+/// on one day, `sh.600002` is ordinary. The daily item publishes the dataset,
+/// the conflicting code is `marker_only_unresolved` for that day, and
+/// `replay --scope risk_warnings` rebuilds the very same rows (digest and
+/// row-by-row `--verify-only`), without a database too.
+#[test]
+fn a_same_day_conflict_isolates_its_code_and_replay_writes_the_same_rows() {
+    use crate::security_master::RiskStatus;
+    use crate::security_master::risk_warnings::dataset_digest;
+    use crate::source_store::replay::{ReplayRequest, Scope, replay};
+
+    let scenario = Scenario::new();
+    let today = day(2024, 7, 1);
+    let implement = "关于公司股票被实施其他风险警示的公告";
+    let revoke = "关于撤销公司股票其他风险警示的公告";
+    let risk_page = bulletin_page(&[
+        ("c-impl", "600001", implement, "2024-05-06"),
+        ("c-rev", "600001", revoke, "2024-05-06"),
+        ("n-impl", "600002", implement, "2024-05-08"),
+    ]);
+    let special_page = bulletin_page(&[
+        ("n-rev", "600002", revoke, "2024-06-03"),
+        ("c-rev", "600001", revoke, "2024-05-06"),
+    ]);
+    assert_ne!(risk_page, special_page);
+    freeze_two_filter_bulletins(&scenario, today, &risk_page, &special_page);
+
+    let admitted = risk_warnings::read_set(&scenario.store, &scenario.market, today)
+        .expect("one conflicting code does not fail the dataset");
+    let sh: Vec<_> = admitted
+        .set
+        .rows
+        .iter()
+        .filter(|row| row.exchange == Exchange::Sh)
+        .collect();
+    let conflict = sh
+        .iter()
+        .find(|row| row.code == "600001")
+        .expect("the conflicting code is written");
+    assert_eq!(sh.iter().filter(|row| row.code == "600001").count(), 1);
+    assert_eq!(conflict.status, RiskStatus::MarkerOnlyUnresolved);
+    assert_eq!(conflict.effective_from, day(2024, 5, 6));
+    assert_eq!(conflict.effective_to, Some(day(2024, 5, 7)));
+    let ordinary = sh
+        .iter()
+        .find(|row| row.code == "600002")
+        .expect("the other code is published");
+    assert_eq!(ordinary.status, RiskStatus::OtherRiskWarning);
+    assert_eq!(ordinary.effective_from, day(2024, 5, 8));
+    assert_eq!(ordinary.effective_to, Some(day(2024, 6, 3)));
+
+    let evidence = admitted.evidence();
+    assert_eq!(evidence["same_day_conflicts"]["count"], 1);
+    assert_eq!(
+        evidence["same_day_conflicts"]["sample"][0]["code"],
+        "600001"
+    );
+    assert_eq!(
+        evidence["same_day_conflicts"]["sample"][0]["day"],
+        "2024-05-06"
+    );
+    assert_eq!(evidence["parser_version"], "risk-warnings-v6");
+
+    let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
+    commit_daily(&scenario, &admitted.set);
+    let Scenario {
+        _dir: dir,
+        store,
+        market,
+    } = scenario;
+    drop(market);
+    let database = dir.path().join("market.sqlite");
+    let report = replay(
+        &store,
+        &ReplayRequest::new(Some(Scope::RiskWarnings), true, Some(&database)),
+    )
+    .unwrap();
+    let scope = &report.scopes[0];
+    assert_eq!(scope.summary.as_deref(), Some(daily_digest.as_str()));
+    assert_eq!(scope.database, Some("match"), "{scope:?}");
+    assert!(scope.drift.is_empty(), "{:?}", scope.drift);
+    let computed = replay(
+        &store,
+        &ReplayRequest::new(Some(Scope::RiskWarnings), false, None),
+    )
+    .unwrap();
+    assert_eq!(
+        computed.scopes[0].summary.as_deref(),
+        Some(daily_digest.as_str())
+    );
+}
+
+/// D-81 R4 end to end: the two title filters state one announcement with
+/// different dates. The daily item fails with `source_invalid` instead of
+/// keeping the first date.
+#[test]
+fn the_daily_item_refuses_one_announcement_stated_with_two_dates() {
+    let scenario = Scenario::new();
+    let today = day(2024, 7, 1);
+    let implement = "关于公司股票被实施其他风险警示的公告";
+    let risk_page = bulletin_page(&[("a1", "600001", implement, "2024-05-06")]);
+    let special_page = bulletin_page(&[("a1", "600001", implement, "2024-05-07")]);
+    freeze_two_filter_bulletins(&scenario, today, &risk_page, &special_page);
+    let error = risk_warnings::read_set(&scenario.store, &scenario.market, today)
+        .expect_err("a corrected date is not silently resolved");
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("D-81 R4"), "{error}");
+}
+
+/// The daily item reads the newest `END_DATE` answer of a window only. An older
+/// answer that dates an announcement differently is something only replay
+/// holds, so replay must not fail where the daily item succeeds, and both write
+/// the newest answer's date.
+#[test]
+fn replay_does_not_refuse_a_date_only_a_superseded_answer_states() {
+    use crate::security_master::risk_warnings::dataset_digest;
+    use crate::source_store::replay::{ReplayRequest, Scope, replay};
+
+    let scenario = Scenario::new();
+    let today = day(2024, 7, 1);
+    let implement = "关于公司股票被实施其他风险警示的公告";
+    let newest = bulletin_page(&[("a1", "600001", implement, "2024-05-07")]);
+    freeze_two_filter_bulletins(&scenario, today, &newest, &newest);
+    let older = bulletin_page(&[("a1", "600001", implement, "2024-05-06")]);
+    for (kind, plan) in risk_warnings::plans() {
+        if kind == risk_warnings::Kind::SzseShortName {
+            continue;
+        }
+        freeze(
+            &scenario,
+            &plan,
+            1,
+            Some(Segment::new(day(2024, 4, 1), day(2024, 5, 31)).unwrap()),
+            "START_DATE",
+            "END_DATE",
+            &older,
+            "2024-05-31T02:00:00Z",
+        );
+    }
+
+    let admitted = risk_warnings::read_set(&scenario.store, &scenario.market, today)
+        .expect("the daily item reads the newest answer only");
+    let row = admitted
+        .set
+        .rows
+        .iter()
+        .find(|row| row.exchange == Exchange::Sh)
+        .unwrap();
+    assert_eq!(row.effective_from, day(2024, 5, 7));
+    let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
+    commit_daily(&scenario, &admitted.set);
+    let Scenario {
+        _dir: dir,
+        store,
+        market,
+    } = scenario;
+    drop(market);
+    let database = dir.path().join("market.sqlite");
+    let report = replay(
+        &store,
+        &ReplayRequest::new(Some(Scope::RiskWarnings), true, Some(&database)),
+    )
+    .unwrap();
+    let scope = &report.scopes[0];
+    assert_eq!(scope.status, "ok", "{scope:?}");
+    assert_eq!(scope.summary.as_deref(), Some(daily_digest.as_str()));
+    assert_eq!(scope.database, Some("match"), "{scope:?}");
+}
+
 // ------------------------------------------------------------------- A-3 ---
 
 const A3_OBSERVED_AT: &str = "2008-04-14T02:00:00Z";
