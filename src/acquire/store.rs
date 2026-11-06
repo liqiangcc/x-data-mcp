@@ -240,6 +240,31 @@ impl Db {
         self.bind_outcome(request_id, &serde_json::to_string(outcome)?, now)
     }
 
+    /// Every recorded request of `kind` with its terminal outcome, oldest
+    /// first: `(payload, outcome)`. A request accepted but never answered
+    /// (crash before the reply was recorded) yields `None`, which callers must
+    /// treat as unresolved rather than as a negative. This is the durable
+    /// audit log the retire gate reads to decide whether a generation was ever
+    /// activated (`#583`): one row per daily-run activation, so the scan stays
+    /// proportional to the number of activations, not to data size.
+    pub fn requests_of_kind(&self, kind: &str) -> Result<Vec<(String, Option<String>)>, Error> {
+        self.read(|c| {
+            let mut stmt = c
+                .prepare(
+                    "SELECT r.payload, o.outcome FROM requests r \
+                     LEFT JOIN request_outcomes o ON o.request_id=r.request_id \
+                     WHERE r.kind=?1 ORDER BY r.created_at, r.request_id",
+                )
+                .map_err(storage)?;
+            let rows = stmt
+                .query_map(params![kind], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+                })
+                .map_err(storage)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(storage)
+        })
+    }
+
     pub fn create_task(&self, task: &Task) -> Result<(), Error> {
         self.write(|c| {
             c.execute(

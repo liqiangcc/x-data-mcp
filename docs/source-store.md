@@ -316,7 +316,9 @@ source_store register-generation-member --store <dir> \
 ## 5. 退役豁免
 
 退役门禁（[M3 设计](tasks/issue-446-m3-delisted-industry.md) §8.3）默认拒绝：
-来源库没有按 sha 读回的证据，或 `generation_facts` 缺必需 kind。确有外部原因时，
+来源库没有按 sha 读回的证据，或**激活过的代**在 `generation_facts` 缺必需 kind。
+从未激活的代不要求派生事实（`#583`，见 [日更文档](daily-sync.md)「Generation 模型」），
+这类代只需来源证据通过即可退役，不需要写豁免。确有外部原因时，
 owner 用 `source_store exempt` 写一行豁免，再重试退役：
 
 - `--missing` 用门禁报告里的键：`source_store_evidence:<role>:<source_id>` 或
@@ -325,6 +327,10 @@ owner 用 `source_store exempt` 写一行豁免，再重试退役：
 - 来源库证据的豁免必须再加 `--owner-approve-evidence`，否则命令拒绝（退出码 2）。
 - 豁免只覆盖列出的键，不覆盖 active/pin/in-flight 检查；退役成功后回复
   `detail=exemptions: ...` 指明用到了哪些豁免。
+- 「从未激活」不是豁免：门禁直接跳过派生事实步骤，回复
+  `detail=derived facts not required: generation was never activated`；
+  该判定只由 acquire 的持久记录得出（激活前的 `state` + active pointer +
+  `activate_generation` 请求结果），调用者无法自行声明。
 - 门禁本身绝不写豁免；Skill/自动流程也不得代为豁免（见
   [日更文档](daily-sync.md)）。
 

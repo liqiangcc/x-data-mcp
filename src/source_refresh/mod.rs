@@ -14,13 +14,17 @@
 //!
 //! R2b (§5.6): a run is **single-flight** — [`start`] refuses while any run is
 //! `running`, in the same write transaction that inserts the new row, so two
-//! clients can never share the exchanges' 1 request/s limit — and `full` is
-//! **asynchronous**: [`start_full_in_background`] opens the record, replies
-//! `running` and lets a background thread of the same process acquire. A run
-//! left `running` by a process that stopped is closed `failed`
-//! (`process_restarted`) by [`reclaim_abandoned`] when the next instance takes
-//! the database lease; attribution is the recorded owner instance id, never
-//! elapsed time, and such a run advances no `verified_through`.
+//! clients can never share the exchanges' 1 request/s limit — and **both
+//! modes are asynchronous** (#582): [`start_in_background`] opens the record,
+//! replies `running` and lets a background thread of the same process acquire.
+//! A `tail` used to run synchronously inside the MCP request thread, so a
+//! probe-triggered whole table (146 + 375 pages, ~13 min at 1 req/s) held the
+//! caller's connection for the whole run and the client's 60 s timeout left no
+//! handle to the result. A run left `running` by a process that stopped is
+//! closed `failed` (`process_restarted`) by [`reclaim_abandoned`] when the next
+//! instance takes the database lease; attribution is the recorded owner
+//! instance id, never elapsed time, and such a run advances no
+//! `verified_through`.
 //!
 //! Every run that stays inside this process is closed by
 //! [`execute_and_settle`], which also catches a panic of the acquisition
@@ -166,9 +170,12 @@ impl StartedRun {
     }
 }
 
-/// Run one refresh synchronously and persist its record. `tail` uses this;
-/// `full` uses [`start_full_in_background`]. `request.dry_run` must be false;
-/// call [`dry_run`] for the no-I/O planning response.
+/// Run one refresh synchronously and persist its record. The MCP surface does
+/// not use this (#582: both modes reply `running` at once and continue in the
+/// background); it stays as the in-process form the acceptance tests drive,
+/// where a caller that can wait wants the finished report.
+/// `request.dry_run` must be false; call [`dry_run`] for the no-I/O planning
+/// response.
 pub fn run(
     store: &SourceStore,
     backend: &MarketBackend,
@@ -227,14 +234,22 @@ pub fn start(
     })
 }
 
-/// `full` is asynchronous (§5.6 R2b): a 1,941-request run costs ~46 min at
-/// 1 req/s, so the MCP call only validates, opens the durable record and hands
-/// the acquisition to a background thread of this process. The thread owns the
-/// client, store and backend clones; the reply is already on its way out when
-/// the first request starts, and a client that disconnects does not stop the
-/// run. A process stop kills the thread, which leaves the row `running`; the
-/// next service start closes it `failed` (reason `process_restarted`).
-pub fn start_full_in_background(
+/// Both modes are asynchronous (§5.6 R2b, #582): the MCP call only validates,
+/// opens the durable record and hands the acquisition to a background thread of
+/// this process. The thread owns the client, store and backend clones; the
+/// reply is already on its way out when the first request starts, and a client
+/// that disconnects does not stop the run. A process stop kills the thread,
+/// which leaves the row `running`; the next service start closes it `failed`
+/// (reason `process_restarted`).
+///
+/// Why `tail` is asynchronous too: its plan is 28 requests (~40 s at the
+/// documented 1.42 s/request) and a probe-triggered whole table adds up to 549
+/// requests (~13 min at 1 req/s), while the client's budget is 60 s and one MCP
+/// connection is one thread. Measured non-network cost of the 551-request worst
+/// case is 0.5 s (store freeze 366 ms, index transactions 24 ms, parse 13 ms,
+/// lock waits ~0), so the wall clock is the exchanges' pacing — nothing a
+/// synchronous call can shorten.
+pub fn start_in_background(
     store: SourceStore,
     backend: MarketBackend,
     client: Client,
@@ -243,18 +258,13 @@ pub fn start_full_in_background(
     owner_instance: &str,
 ) -> Result<RefreshReport, RefreshError> {
     let mode = request.require_mode().map_err(RefreshError::Invalid)?;
-    if mode != RefreshMode::Full {
-        return Err(RefreshError::Invalid(
-            "start_full_in_background only serves mode=full".to_string(),
-        ));
-    }
     let started = start(&backend, today, mode, &request.sources, owner_instance)?;
     let reply = started.running_report();
     // The thread takes its own backend handle; this one is kept for the
     // spawn-failure path below.
     let spawn_backend = backend.clone();
     let spawned = std::thread::Builder::new()
-        .name("refresh-full".to_string())
+        .name("refresh-run".to_string())
         .spawn(move || {
             // A detached thread: the run must outlive the request, so nothing
             // joins it. Its terminal state is the durable row.
@@ -377,8 +387,8 @@ pub fn reclaim_abandoned(
 
 /// Execute an opened run and close it on any fault, including a panic, instead
 /// of leaving it `running` (which would block every later start until a
-/// restart). Both the synchronous `tail` path and the background `full` thread
-/// go through here, so a defect in either one releases the single-flight guard.
+/// restart). Both the background thread and the synchronous test form go
+/// through here, so a defect in either one releases the single-flight guard.
 fn execute_and_settle(
     store: &SourceStore,
     backend: &MarketBackend,

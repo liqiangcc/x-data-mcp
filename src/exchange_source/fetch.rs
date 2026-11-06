@@ -578,7 +578,14 @@ impl<'a> Entry<'a> {
                             method: request.method.clone(),
                             body: request.body.clone(),
                         };
-                        let response = match self.client.get(&http) {
+                        // XP-025 diagnostics (#582): one span per stage of a page,
+                        // inert unless `X_DATA_MCP_STAGE_TRACE=1`. The stages are
+                        // the ones a slow acquisition is argued about in: the
+                        // helper/network call, the store write, the parse, and the
+                        // index transaction.
+                        let response = match crate::stage_trace::timed("exchange.fetch", || {
+                            self.client.get(&http)
+                        }) {
                             Ok(response) => response,
                             Err(error) => {
                                 failure = Some(AcquireError::Unavailable {
@@ -596,20 +603,24 @@ impl<'a> Entry<'a> {
                         }
                         // Frozen before parsing: a parse failure keeps the bytes
                         // (§6.3). A failed parse never reaches the cache.
-                        let bytes = freeze_bytes(
-                            self.store,
-                            &request,
-                            &response,
-                            plan.format.parser_version(),
-                            plan.basis_status,
-                            &fetched_at,
-                        )?;
-                        let envelope = match validate::parse_page_with_request(
-                            plan.format,
-                            validate::declared_tabkey(&plan.params),
-                            &response.body,
-                            Some(&request),
-                        ) {
+                        let bytes = crate::stage_trace::timed("exchange.freeze", || {
+                            freeze_bytes(
+                                self.store,
+                                &request,
+                                &response,
+                                plan.format.parser_version(),
+                                plan.basis_status,
+                                &fetched_at,
+                            )
+                        })?;
+                        let envelope = match crate::stage_trace::timed("exchange.parse", || {
+                            validate::parse_page_with_request(
+                                plan.format,
+                                validate::declared_tabkey(&plan.params),
+                                &response.body,
+                                Some(&request),
+                            )
+                        }) {
                             Ok(envelope) => envelope,
                             Err(error) => {
                                 failure = Some(AcquireError::Invalid {
@@ -782,7 +793,9 @@ impl<'a> Entry<'a> {
         let recorded = if fetched.is_empty() {
             Vec::new()
         } else {
-            record_snapshots(self.backend, &fetched)?
+            crate::stage_trace::timed("exchange.index_write", || {
+                record_snapshots(self.backend, &fetched)
+            })?
         };
         let mut snapshots = Vec::with_capacity(entries.len());
         let mut selected = Vec::with_capacity(entries.len());

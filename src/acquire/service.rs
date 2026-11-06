@@ -19,7 +19,7 @@ use crate::{
         ConsistencyStatus, FileFact, MemberBinding,
     },
     generation::{self, Installed},
-    generation_gate::{GateCheck, RetireGate},
+    generation_gate::{ActivationRecord, GateCheck, RetireGate},
     snapshot::{FileInput, FileRole},
 };
 use chrono::Utc;
@@ -72,6 +72,16 @@ const GEN_CORRUPT: &str = "corrupt";
 const GEN_ACTIVE: &str = "active";
 const GEN_SUPERSEDED: &str = "superseded";
 const GEN_EVIDENCE_ONLY: &str = "evidence_only";
+/// Lifecycle states a generation can hold only if it never swapped the active
+/// pointer (`#583`). Anything outside this set — `active`, `superseded`,
+/// `evidence_only` or an unknown value — is treated as activated.
+const PRE_ACTIVATION_STATES: [&str; 5] = [
+    GEN_BYTE_VERIFIED,
+    GEN_VERIFIED,
+    GEN_NOT_VERIFIED,
+    GEN_CONFLICT,
+    GEN_CORRUPT,
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -1056,15 +1066,14 @@ impl AcquireService {
             ));
         }
         match self.retire_bytes_and_mark(row)? {
-            Ok(exemptions) => Ok(wire::RetireReply {
+            Ok(retired) => Ok(wire::RetireReply {
                 request_id: request_id.into(),
                 generation_id: generation_id.into(),
                 state: GEN_EVIDENCE_ONLY.into(),
                 reason_code: None,
                 // An exempted retire is still a retire; the audit trail names
                 // what it covered so the reply proves the exception was used.
-                detail: (!exemptions.is_empty())
-                    .then(|| format!("exemptions: {}", exemptions.join(","))),
+                detail: retired.detail(),
                 reused: false,
             }),
             Err(RetireBlock::Pinned(pins)) => Ok(wire::RetireReply {
@@ -1168,13 +1177,14 @@ impl AcquireService {
 
     /// Shared retire action: a live pin or an accepted/running acquisition
     /// task blocks the retire (not an error); then the retirement gate
-    /// (source-store evidence + derived-fact index) must pass; otherwise the
-    /// bytes are deleted and the row becomes `evidence_only`. Callers own the
-    /// active-generation and confirm-token checks.
+    /// (source-store evidence, plus derived facts unless the generation was
+    /// never activated) must pass; otherwise the bytes are deleted and the row
+    /// becomes `evidence_only`. Callers own the active-generation and
+    /// confirm-token checks.
     fn retire_bytes_and_mark(
         &self,
         row: store::Generation,
-    ) -> Result<Result<Vec<String>, RetireBlock>, Error> {
+    ) -> Result<Result<Retired, RetireBlock>, Error> {
         let pins = self.store.pins(&row.generation_id)?;
         if !pins.is_empty() {
             return Ok(Err(RetireBlock::Pinned(pins)));
@@ -1187,14 +1197,23 @@ impl AcquireService {
         }
         // M3 PR-8: both the manual retire and the automatic retention end
         // here, so both go through the same gate. Nothing is deleted before
-        // the source store reads the irreproducible bytes back and the
-        // derived-fact index names every required kind.
+        // the source store reads the irreproducible bytes back and, for a
+        // generation that was ever activated, the derived-fact index names
+        // every required kind.
         let Some(gate) = self.retire_gate.as_ref() else {
             return Ok(Err(RetireBlock::GateUnconfigured));
         };
-        let exemptions = match gate.check(&row.manifest_sha256) {
+        // #583: a generation that never swapped the active pointer cannot
+        // have written a derived fact (tasks bind `source_generation_id` from
+        // the pointer at acceptance), so the fact step is skipped for it.
+        // An unreadable activation record is a refusal, never a deletion.
+        let activation = match self.activation_record(&row) {
+            Ok(activation) => activation,
+            Err(error) => return Ok(Err(RetireBlock::GateUnavailable(error.to_string()))),
+        };
+        let check = match gate.check(&row.manifest_sha256, activation) {
             Ok(check) if !check.passes() => return Ok(Err(RetireBlock::Gate(check))),
-            Ok(check) => check.exemptions,
+            Ok(check) => check,
             Err(error) => return Ok(Err(RetireBlock::GateUnavailable(error.to_string()))),
         };
         self.store.retire_bytes(&row.generation_id)?;
@@ -1203,7 +1222,56 @@ impl AcquireService {
             updated_at: Utc::now(),
             ..row
         })?;
-        Ok(Ok(exemptions))
+        Ok(Ok(Retired {
+            exemptions: check.exemptions,
+            derived_facts_skipped: check.derived_facts_skipped,
+        }))
+    }
+
+    /// Whether the acquire store records that this generation was ever
+    /// activated (`#583`).
+    ///
+    /// Only positive evidence of "never activated" is returned as
+    /// [`ActivationRecord::NeverActivated`]; every other case — an `active`,
+    /// `superseded` or `evidence_only` row, an unknown state, the on-disk
+    /// pointer naming it, a recorded successful activation, or an activation
+    /// request that never recorded an outcome — keeps the strict rule. The
+    /// pre-activation lifecycle states are the only ones a generation can hold
+    /// without having swapped the pointer, and the durable request log covers
+    /// the crash window between the pointer swap and the row update.
+    fn activation_record(&self, row: &store::Generation) -> Result<ActivationRecord, Error> {
+        if !PRE_ACTIVATION_STATES.contains(&row.state.as_str()) {
+            return Ok(ActivationRecord::Activated);
+        }
+        if self
+            .store
+            .active()?
+            .is_some_and(|pointer| pointer.generation_id == row.generation_id)
+        {
+            return Ok(ActivationRecord::Activated);
+        }
+        for (payload, outcome) in self.db.requests_of_kind(KIND_ACTIVATE)? {
+            let payload: Value = match serde_json::from_str(&payload) {
+                Ok(payload) => payload,
+                // An unparseable audit row means the log cannot answer.
+                Err(_) => return Ok(ActivationRecord::Activated),
+            };
+            if payload["generation_id"].as_str() != Some(row.generation_id.as_str()) {
+                continue;
+            }
+            match outcome {
+                // Accepted, never answered: unresolved, so fail closed.
+                None => return Ok(ActivationRecord::Activated),
+                Some(outcome) => match serde_json::from_str::<Value>(&outcome) {
+                    Ok(outcome) if outcome["state"] == "active" => {
+                        return Ok(ActivationRecord::Activated);
+                    }
+                    Ok(_) => continue,
+                    Err(_) => return Ok(ActivationRecord::Activated),
+                },
+            }
+        }
+        Ok(ActivationRecord::NeverActivated)
     }
 
     // ---------- status ----------
@@ -1254,6 +1322,29 @@ enum RetireBlock {
     GateUnavailable(String),
     /// No market database was configured, so the gate has nothing to check.
     GateUnconfigured,
+}
+
+/// A completed retire: the exemption keys it used (empty when none) and
+/// whether the derived-fact step was skipped because the generation was never
+/// activated (`#583`). Both are carried into the reply's `detail`, so the
+/// exception — and its absence — stays visible without a second query.
+struct Retired {
+    exemptions: Vec<String>,
+    derived_facts_skipped: bool,
+}
+
+impl Retired {
+    /// `None` when there is nothing to report (no exemptions, no skip).
+    fn detail(&self) -> Option<String> {
+        let mut parts = Vec::new();
+        if self.derived_facts_skipped {
+            parts.push("derived facts not required: generation was never activated".to_string());
+        }
+        if !self.exemptions.is_empty() {
+            parts.push(format!("exemptions: {}", self.exemptions.join(",")));
+        }
+        (!parts.is_empty()).then(|| parts.join("; "))
+    }
 }
 
 fn detail_bytes(detail: &Value) -> u64 {
