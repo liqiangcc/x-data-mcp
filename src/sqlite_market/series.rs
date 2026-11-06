@@ -1056,6 +1056,7 @@ pub(crate) fn raw_daily_close_at(
 /// This is the §8.3 `prev_close_raw` lookup: the previous close is the last
 /// *bar*, not the previous calendar trading day, so a suspension/resumption
 /// pair uses the pre-suspension close exactly as the exchange does.
+#[allow(dead_code)] // Kept for compatibility with existing code
 pub(crate) fn raw_daily_close_before(
     c: &Connection,
     entity: &str,
@@ -1089,6 +1090,82 @@ pub(crate) fn raw_daily_close_before(
         Ok((close, scale, trade_day))
     })
     .transpose()
+}
+
+type RawDailyBarResult = (i64, u32, NaiveDate, Option<u32>);
+
+/// The last 不复权 daily bar before a given day, including r7_raw and trade_day.
+/// Used by limit-v2 to determine the price limit basis.
+pub(crate) fn raw_daily_bar_before(
+    c: &Connection,
+    entity: &str,
+    day: NaiveDate,
+) -> Result<Option<RawDailyBarResult>, Error> {
+    c.query_row(
+        "SELECT b.close_units,s.price_scale,b.trade_day,b.r7_raw FROM market_series s \
+         JOIN series_bars b ON b.series_key=s.series_key \
+         WHERE s.entity=?1 AND s.period=?2 AND s.adjustment=?3 AND s.instrument_class=?4 \
+         AND b.trade_day<?5 ORDER BY b.trade_day DESC LIMIT 1",
+        params![
+            entity,
+            super::compact_repo::period_code(Period::Day),
+            Adjustment::Raw.code(),
+            INSTRUMENT_CLASS_STOCK,
+            crate::compact_market::epoch_day(day)
+        ],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+            ))
+        },
+    )
+    .optional()
+    .map_err(storage)?
+    .map(|(close, scale, trade_day, r7)| {
+        let scale = u32::try_from(scale).map_err(|_| invalid("negative price_scale"))?;
+        let trade_day = crate::compact_market::epoch_date(trade_day).map_err(invalid)?;
+        let r7 = r7.and_then(|v| u32::try_from(v).ok());
+        Ok((close, scale, trade_day, r7))
+    })
+    .transpose()
+}
+
+/// Get the bar on a specific day (for limit-v2 r7_raw check).
+pub(crate) fn bar_on_day(
+    c: &Connection,
+    entity: &str,
+    day: NaiveDate,
+) -> Result<Option<CompactBar>, Error> {
+    c.query_row(
+        "SELECT b.trade_day,b.open_units,b.high_units,b.low_units,b.close_units,b.volume,b.amount,b.r7_raw \
+         FROM market_series s JOIN series_bars b ON b.series_key=s.series_key \
+         WHERE s.entity=?1 AND s.period=?2 AND s.adjustment=?3 AND s.instrument_class=?4 \
+         AND b.trade_day=?5",
+        params![
+            entity,
+            super::compact_repo::period_code(Period::Day),
+            Adjustment::Raw.code(),
+            INSTRUMENT_CLASS_STOCK,
+            crate::compact_market::epoch_day(day)
+        ],
+        |r| {
+            Ok(CompactBar {
+                trade_day: r.get(0)?,
+                open_units: r.get(1)?,
+                high_units: r.get(2)?,
+                low_units: r.get(3)?,
+                close_units: r.get(4)?,
+                volume: r.get(5)?,
+                amount: r.get(6)?,
+                r7_raw: r.get(7)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(storage)
 }
 
 /// Trade days inside [start_day, end_day] — the presence/year-set probe.

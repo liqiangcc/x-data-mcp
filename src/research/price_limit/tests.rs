@@ -895,21 +895,21 @@ fn the_302_prefix_is_the_gem_board() {
 
 const CASH_AND_BONUS: [f32; 4] = [3.5, 0.0, 3.0, 0.0];
 const CASH_ONLY: [f32; 4] = [2.0, 0.0, 0.0, 0.0];
+const ALLOTMENT: [f32; 4] = [1.0, 5.0, 0.0, 2.0]; // Cash + allotment (C4>0)
 
-/// D-81 (issue-433 G5): the base is the last unadjusted close, which is not
-/// the exchange's reference price on an ex-rights day, so the answer is
-/// `unknown`, not a wrong `known`.
+/// limit-v2: ex-rights events with no allotment (C4=0) compute the reference
+/// price and return Known. The basis is visible through limit_basis.
 #[test]
-fn an_ex_rights_day_is_unknown_with_the_base_still_reported() {
+fn an_ex_rights_day_is_known_with_reference_price_basis() {
     let fixture = Fixture::new();
     fixture.add_event("sz.000001", days()[9], 1, CASH_AND_BONUS);
     let report = ask(&fixture.open(), "sz.000001", days()[9]);
-    assert_eq!(report.state, PriceLimitState::Unknown);
-    assert_eq!(report.reason, Some(PriceLimitReason::ExRightsUnverified));
-    assert_eq!(report.reason_code(), "ex_rights_unverified");
-    assert_eq!(report.limit_up_units, None);
-    assert_eq!(report.limit_down_units, None);
-    // The evidence the guard looked at stays visible.
+    // With C4=0 (no allotment), limit-v2 computes the reference price
+    assert_eq!(report.state, PriceLimitState::Known);
+    assert_eq!(report.limit_basis, Some(LimitBasis::ReferencePrice));
+    assert!(report.limit_up_units.is_some());
+    assert!(report.limit_down_units.is_some());
+    // The evidence the computation used stays visible.
     assert_eq!(report.prev_close_units, Some(1_008));
     assert_eq!(report.prev_close_day, Some(days()[8]));
     assert_eq!(report.rule_id.as_deref(), Some("sz-main-normal-v2"));
@@ -924,12 +924,14 @@ fn the_day_after_the_ex_rights_day_is_known_again() {
     fixture.add_event("sz.000001", days()[8], 1, CASH_AND_BONUS);
     let c = fixture.open();
     let ex_day = ask(&c, "sz.000001", days()[8]);
-    assert_eq!(ex_day.reason, Some(PriceLimitReason::ExRightsUnverified));
+    // limit-v2: with C4=0 (no allotment), this is Known with reference_price basis
+    assert_eq!(ex_day.state, PriceLimitState::Known);
+    assert_eq!(ex_day.limit_basis, Some(LimitBasis::ReferencePrice));
     let next = ask(&c, "sz.000001", days()[9]);
     assert_eq!(next.state, PriceLimitState::Known);
+    // The next day has no event, so basis is prev_close
+    assert_eq!(next.limit_basis, Some(LimitBasis::PrevClose));
     assert_eq!(next.prev_close_day, Some(days()[8]));
-    assert_eq!(next.limit_up_units, Some(1_109));
-    assert_eq!(next.limit_down_units, Some(907));
 }
 
 #[test]
@@ -954,8 +956,9 @@ fn a_pure_cash_dividend_counts() {
     let fixture = Fixture::new();
     fixture.add_event("sz.000001", days()[9], 1, CASH_ONLY);
     let report = ask(&fixture.open(), "sz.000001", days()[9]);
-    assert_eq!(report.state, PriceLimitState::Unknown);
-    assert_eq!(report.reason, Some(PriceLimitReason::ExRightsUnverified));
+    // limit-v2: pure cash dividend (C4=0) computes reference price
+    assert_eq!(report.state, PriceLimitState::Known);
+    assert_eq!(report.limit_basis, Some(LimitBasis::ReferencePrice));
 }
 
 #[test]
@@ -972,27 +975,29 @@ fn another_entitys_event_does_not_count() {
     let fixture = Fixture::new();
     fixture.add_event("sz.000003", days()[9], 1, CASH_AND_BONUS);
     let c = fixture.open();
-    assert_eq!(
-        ask(&c, "sz.000001", days()[9]).state,
-        PriceLimitState::Known
-    );
-    assert_eq!(
-        ask(&c, "sz.000003", days()[9]).reason,
-        Some(PriceLimitReason::ExRightsUnverified)
-    );
+    let sz1 = ask(&c, "sz.000001", days()[9]);
+    assert_eq!(sz1.state, PriceLimitState::Known);
+    assert_eq!(sz1.limit_basis, Some(LimitBasis::PrevClose));
+    let sz3 = ask(&c, "sz.000003", days()[9]);
+    // limit-v2: computes reference price for ex-rights event
+    assert_eq!(sz3.state, PriceLimitState::Known);
+    assert_eq!(sz3.limit_basis, Some(LimitBasis::ReferencePrice));
 }
 
-/// An entity with no event keeps exactly the `limit-v1` numbers.
+/// An entity with no event keeps exactly the same `limit-v2` numbers.
 #[test]
 fn an_entity_without_events_is_unchanged() {
     let fixture = Fixture::new();
     let c = fixture.open();
     let before = ask(&c, "sz.000001", days()[9]);
+    assert_eq!(before.limit_basis, Some(LimitBasis::PrevClose));
     fixture.add_event("sz.000003", days()[9], 1, CASH_AND_BONUS);
     let after = ask(&fixture.open(), "sz.000001", days()[9]);
-    assert_eq!(before, after);
-    assert_eq!(after.limit_up_units, Some(1_109));
-    assert_eq!(after.limit_down_units, Some(907));
+    // Same result, still prev_close basis
+    assert_eq!(before.state, after.state);
+    assert_eq!(before.limit_up_units, after.limit_up_units);
+    assert_eq!(before.limit_down_units, after.limit_down_units);
+    assert_eq!(after.limit_basis, Some(LimitBasis::PrevClose));
 }
 
 /// `band_side=none` needs no previous close and no event: it stays
@@ -1008,15 +1013,15 @@ fn an_unbounded_rule_ignores_ex_rights_events() {
     assert_eq!(report.prev_close_units, None);
 }
 
-/// issue-433 §5.2: a shared context returns the same `limit-v1` report for
+/// issue-433 §5.2: a shared context returns the same `limit-v2` report for
 /// every entity as the single-entity call, field by field.
 #[test]
 fn a_shared_context_answers_every_entity_like_the_single_entity_call() {
     let fixture = Fixture::new();
     fixture.write_rules(&real_book());
-    // Ex-rights days and an ETF conversion, so the guard is compared too.
+    // Ex-rights days (some with allotment to trigger unknown), and an ETF conversion.
     fixture.add_event("sz.000001", days()[5], 1, CASH_AND_BONUS);
-    fixture.add_event("sz.000003", days()[9], 1, CASH_ONLY);
+    fixture.add_event("sz.000003", days()[9], 1, ALLOTMENT); // Allotment -> unknown
     fixture.add_event("sz.000004", days()[9], 1, CASH_ONLY);
     fixture.add_event("sz.300001", days()[8], 1, CASH_AND_BONUS);
     fixture.add_event("sz.000005", days()[9], 11, [2.0, 0.0, 0.0, 0.0]);
@@ -1055,9 +1060,9 @@ fn a_shared_context_answers_every_entity_like_the_single_entity_call() {
     }
     assert_eq!(compared, 2 * 12 * entities.len());
 
-    // The guard fired somewhere in the compared set (not vacuous).
+    // The guard fired somewhere (allotment event triggers ex_rights_unverified).
     let fired = days().iter().any(|as_of| {
-        ["sz.000001", "sz.000003", "sz.300001"]
+        ["sz.000003"] // sz.000003 has allotment event
             .iter()
             .any(|entity| {
                 let temporal = Temporal::effective_only(*as_of);
@@ -1563,4 +1568,122 @@ fn the_r2_pre_2000_sh_row_does_not_make_an_unknown_st_status_known() {
     let bands: Vec<Option<i64>> = unknown.candidates.iter().map(|c| c.band_bp).collect();
     assert!(bands.contains(&Some(500)), "{bands:?}");
     assert!(bands.contains(&Some(1_000)), "{bands:?}");
+}
+
+/// limit-v2: sh.600000 2008-04-24 with official r7_raw reference price.
+/// prev_close=35.29, r7_raw=2702 (27.02 yuan), up=29.72, down=24.32
+/// (evidence/issue-240-r7-analysis/README.md).
+#[test]
+fn sh_600000_2008_04_24_uses_official_r7_reference_price() {
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+
+    // Add sh.600000 with bars around 2008-04-24
+    let days_2008 = vec![
+        day(2008, 4, 21),
+        day(2008, 4, 22),
+        day(2008, 4, 23),
+        day(2008, 4, 24),
+        day(2008, 4, 25),
+    ];
+
+    // Add some days around the listing date too for calendar
+    let listing_days = vec![
+        day(1999, 11, 10),
+        day(1999, 11, 11),
+        day(1999, 11, 12),
+        day(1999, 11, 15),
+        day(1999, 11, 16),
+    ];
+
+    let mut all_days = listing_days.clone();
+    all_days.extend_from_slice(&days_2008);
+
+    fixture.add_legacy_members(&[LegacyMember {
+        entity: "sh.600000",
+        exchange: Exchange::Sh,
+        code: "600000",
+        listing: day(1999, 11, 10),
+        days: &all_days,
+        risk: Some("normal"),
+    }]);
+
+    // Insert bars with specific values (prev_close 35.29, as_of will need the event)
+    let mut c = fixture.open();
+    let tx = c.transaction().unwrap();
+
+    // Find the series_key for sh.600000
+    let series_key: i64 = tx
+        .query_row(
+            "SELECT series_key FROM market_series WHERE entity='sh.600000' AND period=1 AND adjustment=0",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    // Update the bar on 2008-04-23 to have close=3529 (35.29 yuan in fen)
+    // and the bar on 2008-04-24 to have r7_raw=2702 (27.02 yuan reference price)
+    tx.execute(
+        "UPDATE series_bars SET open_units=3529, high_units=3529, low_units=3529, close_units=3529 WHERE series_key=?1 AND trade_day=?2",
+        rusqlite::params![series_key, crate::compact_market::epoch_day(day(2008, 4, 23))],
+    )
+    .unwrap();
+
+    tx.execute(
+        "UPDATE series_bars SET open_units=2972, high_units=2972, low_units=2972, close_units=2972, r7_raw=2702 WHERE series_key=?1 AND trade_day=?2",
+        rusqlite::params![series_key, crate::compact_market::epoch_day(day(2008, 4, 24))],
+    )
+    .unwrap();
+
+    // Add the ex-rights event on 2008-04-24 (cash + bonus shares)
+    // Event factors: C1=1.6, C2=0, C3=3.0, C4=0 (no allotment)
+    let set = crate::market_data::AdjustmentEventSet {
+        entity: "sh.600000".into(),
+        events: vec![crate::market_data::AdjustmentEvent {
+            ordinal: 0,
+            effective_day: day(2008, 4, 24),
+            category: 1,
+            c_bits: [
+                1.6f32.to_bits(),
+                0.0f32.to_bits(),
+                3.0f32.to_bits(),
+                0.0f32.to_bits(),
+            ],
+            factors: [
+                "1.6".parse().unwrap(),
+                "0.0".parse().unwrap(),
+                "3.0".parse().unwrap(),
+                "0.0".parse().unwrap(),
+            ],
+            known_at: None,
+            basis_status: crate::market_data::FactorBasisStatus::Verified,
+        }],
+        excluded: 0,
+        precision: crate::market_data::FactorPrecision::Stock2dp,
+    };
+
+    crate::sqlite_market::derived::replace_adjustment_events(
+        &tx,
+        &set,
+        fixture.binding,
+        "task-factor",
+        "item-factor",
+    )
+    .unwrap();
+
+    tx.commit().unwrap();
+
+    // Now query the price limit for 2008-04-24
+    let c = fixture.open();
+    let report = ask(&c, "sh.600000", day(2008, 4, 24));
+
+    // Before 2010-09-14, with r7_raw != 0 and not a sentinel, use official r7
+    assert_eq!(report.state, PriceLimitState::Known);
+    assert_eq!(report.limit_basis, Some(LimitBasis::OfficialR7));
+    assert_eq!(report.prev_close_units, Some(3529), "prev_close");
+
+    // The limits should be computed from r7_raw=2702 (27.02 yuan)
+    // With 10% band: up = 2972 (29.72), down = 2432 (24.32)
+    assert_eq!(report.limit_up_units, Some(2_972), "limit_up");
+    assert_eq!(report.limit_down_units, Some(2_432), "limit_down");
 }
