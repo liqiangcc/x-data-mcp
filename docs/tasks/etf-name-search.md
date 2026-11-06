@@ -155,7 +155,7 @@ B 用 `source_kind` 与文档就能达到可接受的程度，而 C 的代价是
 | `ebs`、行情页 | 只有当前 | D-70 Q1 已定为报价锚，不是身份来源 |
 
 结论与残余缺口：
-1. 公告索引或 PDF 里查到名称，则退市 ETF 只有「公告时点的名称」一个值，没有改名史。区间沿用主表 `effective_from`/`effective_to`。
+1. 公告索引或 PDF 里查到名称，则退市 ETF 只有「公告时点的名称」一个值，没有改名史。**PR-4 补充（2026-11-06，#571 后）**：`effective_from` = 该名称的首次观测日，即终止上市公告的公告日（与现行 ETF 名称行同口径），**不读主表 `effective_from`**——D-80 把主表 ETF 区间起点改成了上市日，照「沿用主表」会把 2026 年才公告的名称倒推到上市那天。`effective_to` = 主表 `effective_to`（退市日，排他上界）。公告日不早于 `effective_to`（空区间）时**不写这一行**，读面是 `name: null`、`name_basis: unavailable`，并在 item/replay 证据里计数，不回退到上市日。同一代码已有更早的名单快照名称行时，快照末段在公告日闭合，公告名成为下一段，不产生重叠区间。
 2. 公告索引字段若没有简称，且 PDF 提取没做：128 只退市 ETF **没有名称**，`find_securities` 只能按代码找到它们，不能按名称。
 3. 本来就没有身份的 ETF 也没有名称：沪市公告索引最早 2006-08（更早的终止上市公告不可得）、深市「退市且不在 `hsjday`」的成员未验证（M3-2 §4.1）。
 4. 已退市但曾在某份名单快照里出现的 ETF，名称取快照；之后每个新退市的 ETF 在退市前都会进入快照，缺口只影响 2026-11-03 之前退市的存量。
@@ -258,7 +258,7 @@ design.md「扩展契约」逐条核对：
 | PR-1 解析 | `etf-list-v2` 读名称；合成夹具；`scan_history` 返回名称链。无行为变化 | PR-0 |
 | PR-2 写入与重放 | 域层 `assemble_etf_names`、放宽 `validate_set`、子集替换、names item 的 ETF 分支、replay 与等价测试 | PR-1 |
 | PR-3 读面 | 按名称找实体的读函数、`find_securities` 的 `kind`、`limitations`、契约（并入 #525 的 v11 草案）、`tools/list` 实测 | PR-2；与 #525 PR-1 排期对齐 |
-| PR-4 退市名称（可选） | 公告索引字段或 D-72 提取 CSV 加 `short_name`；显式 replay scope | PR-0 结论、Q4 |
+| PR-4 退市名称（**已完成**） | 深市公告索引读终止公告的 `secName`（含改名时序规则）；沪市 D-72 提取 CSV 加 `short_name`、`scripts/extract_etf_short_names.py` 离线提取脚本与单测；`known_at` 取首次入库的上海日期；空区间不写行并计数；接入 `derived:security_names` 与显式 replay scope `delisted_etf_names`（不进 `--scope all`，`not_ready` fail-closed）；合成夹具与验收测试 | PR-3、Q4/Q5、#571 |
 | PR-5 导出列（可选） | `security_names.parquet` 加 `instrument_class` 并收录 ETF 行 | 看 Q7 |
 
 部署：PR-1…3 无 schema 变化，随只换二进制的 preview.46 上线；二进制切换后，下一次日更的 `derived:security_names` item 写入 ETF 行，
@@ -326,143 +326,85 @@ owner 2026-11-05 对 Q1–Q9「全部按推荐」，记为 D-76。下表「推�
 3. 128 份退市 PDF 全量的场内简称（沪市 82 只靠它）。
 4. Rust 实现下的扫描与搜索耗时。
 
-## 9. PR-4 退市 ETF 名称：Operator 运行步骤
+## 9. PR-4 退市 ETF 名称：实现与 operator 运行步骤
 
-PR-4 为 128 只退市 ETF 提供名称（沪 82、深 46）。深市从公告索引读 `secName`，沪市需要 operator 从 PDF 提取场内简称。
+### 9.1 实现口径
 
-### 9.1 深市（46 只）
+范围：主表里 `instrument_class=2` 且 `effective_to` 非空的 128 只退市 ETF（沪 82、深 46）。代码在
+`src/official_security/etf_delisting.rs`（`DelistedEtfTarget`、`termination_notice`、
+`read_names_source`、`arrival_days`、`assemble_delisted_etf_names`、`merge_delisted_names`），
+接入 `src/official_security/etf_list.rs::run_names` 与
+`src/source_store/replay.rs::rebuild_delisted_etf_names`。
 
-深市退市 ETF 的名称直接从 `szse_etf_notice_ann` 公告索引的 `secName` 字段读取。无需 operator 额外操作，代码自动处理：
+| 项 | 规则 |
+|---|---|
+| 深市 46 只 | 从已冻结 `szse_etf_notice_ann` 公告索引读 `secName`。`etfNotice_disc` 频道还有改名公告，`secName` 是**该公告发布时**的名称（取证 §4/§5），所以名称只取标题含 `终止上市` 的公告：先按 URL 去重，优先正式公告（标题不含 `提示性`），再取公告日最新一份。改名公告永不提供退市名称。若 D-72 的身份 `main` 选中了另一条公告，证据计数 `identity_notice_mismatch`，名称仍取终止公告的值，身份规则不变 |
+| 沪市 82 只 | 索引无简称字段（取证 §4）。沿用 D-72：生产代码**不解析 PDF**。operator 用 `scripts/extract_etf_short_names.py` 离线从终止上市 PDF 提取场内简称，写入提取 CSV 的 `short_name` 列；写入路径只读这一列 |
+| 提不到 | `short_name` 留空；**不猜**，也**不用公告标题里的基金全称**（形态不同，`fundAbbr` 类短名与 `secNameFull` 类扩位简称不是一回事，取证 §2/§6）。读面为 `name: null`、`name_basis: unavailable` |
+| 证据列 | CSV 每行带 `doc_sha256`、`short_name_page_no`、`short_name_snippet`、`short_name_extractor`（提取器版本），并校验 PDF 字节的 sha256 与 `doc_sha256` 一致，防止串行 |
+| `source_kind` / `source_record_id` | `exchange_snapshot`（Q5，不加枚举、不做迁移）；`source_record_id` = `sse_fund_delist_ann:<URL>` 或 `szse_etf_notice_ann:<URL>`，前缀区分公告来源 |
+| 区间 | `effective_from` = 终止上市公告的公告日（名称首次观测日，与现行 ETF 名称行同口径，**不读主表 `effective_from`**，见 §3 结论 1 与补充）；`effective_to` = 主表 `effective_to`。公告日不早于 `effective_to` 时不写行，证据计数 `empty_interval` |
+| `known_at` | 回填行不得早于入库时间：取决定该名称的公告页与（沪市）提取 CSV 首次入库的**上海日期**中较晚者，且不小于公告日。`arrival_days` 读 manifest 的 `imported_at`（一次性导入）或 `acquired_at`，按 sha 取最早，沿用 `risk_warnings::resolve_known_at` 的方式 |
+| 与现行名称衔接 | `merge_delisted_names` 把同一代码已有快照名称链的末段在公告日闭合（`certainty=interval`），公告名成为下一段；若快照末段起点不早于公告日则跳过并计数 `overlap_skipped`，全表经 `validate_set_for` 校验，不产生重叠区间 |
+| 依赖主表 | 先从 `security_master` 读出退市 ETF 与 `effective_to`，所以不在 `--scope all` 中。照 `suspensions` 做显式 replay scope `delisted_etf_names`：无 `--db` 或库里没有 class-2 主表行时 fail-closed（`delisted_etf_names_not_ready`，写 0 行、不删旧行） |
 
-- 取证据显示 46/46 有 `secName`
-- 取终止上市公告对应的那个值（按 D-72 的 main-announcement 规则：去重、优先正式公告、取最新日）
-- `source_record_id` 格式：`szse_etf_notice_ann:<URL>`
+### 9.2 Operator 运行步骤（vm2，部署后执行）
 
-### 9.2 沪市（82 只）— Operator 提取步骤
+**前提**：128 份终止上市 PDF 已按 D-72 冻结进来源库（`source_id=etf_delist_pdf`），
+D-72 的 `etf_delist_extract` CSV 已导入。本 PR **不包含真实 CSV**，只包含代码与合成夹具。
 
-沪市公告索引没有简称字段。operator 需要离线提取 PDF 里的场内简称，结果通过 CSV 导入来源库。
+1. 取出 D-72 的提取 CSV 与 PDF blob 目录（按 D-72 的存放位置，CSV 与 PDF 只进来源库，不提交公开仓库）。
+   脚本按 `<doc_sha256>.pdf` 找 blob，找不到时再按 `doc_url` 的文件名找。
 
-**前提条件**：
-- 82 份终止上市 PDF 已按 D-72 冻结进来源库（`source_id=etf_delist_pdf`）
-- 已有 D-72 的 `etf_delist_extract` CSV（含 `delisting_date` 等字段）
+2. 离线运行提取脚本（纯 stdlib + `pdftotext`，不访问网络，不写来源库）：
 
-**提取脚本要求**（由 operator 实现）：
-
-```python
-#!/usr/bin/env python3
-# 提取 SSE 退市 ETF 的场内简称，追加到现有 extraction CSV
-
-import csv
-import subprocess
-import sys
-from pathlib import Path
-
-# 读取现有 extraction CSV
-input_csv = Path(sys.argv[1])  # etf_delist_extract_v1.csv
-output_csv = Path(sys.argv[2])  # etf_delist_extract_v1_with_names.csv
-pdfs_dir = Path(sys.argv[3])  # 包含 PDF 的目录
-
-with input_csv.open('r', encoding='utf-8') as infile:
-    reader = csv.DictReader(infile)
-    fieldnames = reader.fieldnames
-    if 'short_name' not in fieldnames:
-        fieldnames.append('short_name')
-    
-    rows = list(reader)
-
-for row in rows:
-    # 只处理 SSE 行（沪市）
-    if row['source_id'] != 'sse_fund_delist_ann':
-        continue
-    
-    pdf_sha = row['doc_sha256']
-    pdf_path = pdfs_dir / f"{pdf_sha}.pdf"
-    
-    if not pdf_path.exists():
-        print(f"Warning: {row['entity']} PDF not found: {pdf_sha}", file=sys.stderr)
-        row['short_name'] = ''  # 提取失败留空
-        continue
-    
-    # 用 pdftotext -layout 提取第 1 页
-    result = subprocess.run(
-        ['pdftotext', '-layout', '-f', '1', '-l', '1', str(pdf_path), '-'],
-        capture_output=True, text=True, encoding='utf-8'
-    )
-    
-    if result.returncode != 0:
-        print(f"Warning: {row['entity']} pdftotext failed", file=sys.stderr)
-        row['short_name'] = ''
-        continue
-    
-    # 正则提取：场内简称：XXX（可能含空格）
-    import re
-    match = re.search(r'场内简称[：:]]\s*([^\n]{1,20})', result.stdout)
-    if match:
-        name = match.group(1).strip()
-        # 去掉 ETF 和数字间的空格："民企 ETF" -> "民企ETF"
-        name = re.sub(r'\s+', '', name)
-        row['short_name'] = name
-        print(f"{row['entity']}: {name}")
-    else:
-        print(f"Warning: {row['entity']} no short_name found in PDF", file=sys.stderr)
-        row['short_name'] = ''
-
-with output_csv.open('w', encoding='utf-8', newline='') as outfile:
-    writer = csv.DictWriter(outfile, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
-
-print(f"\nDone. Output: {output_csv}", file=sys.stderr)
-```
-
-**运行步骤**：
-
-1. 在有来源库与 PDF 的机器（vm2）上运行提取脚本：
    ```bash
-   python3 extract_etf_short_names.py \
-       /path/to/current/etf_delist_extract_v1.csv \
-       /path/to/etf_delist_extract_v1_with_names.csv \
-       /path/to/pdf_blobs/
+   python3 scripts/extract_etf_short_names.py \
+       --csv  /path/to/etf_delist_extract_v1.csv \
+       --pdfs /path/to/source-store/blobs \
+       --out  /path/to/etf_delist_extract_v1_with_names.csv
    ```
 
-2. 检查输出：
-   - 82 个沪市实体应该都有 `short_name`
-   - 提不到的（正则没匹配上）留空，代码会写 `name: null` + `name_basis: unavailable`
-   - **不用公告标题里的基金全称代替**，也不猜
+   脚本只处理 `source_id=sse_fund_delist_ann` 的行，深市行原样保留。输出 CSV 保留 D-72 的全部列，
+   追加 `short_name`、`short_name_page_no`、`short_name_snippet`、`short_name_extractor`。
+   提不到就留空并在 stderr 计数；结束时打印 `rows/sse/named/unavailable/missing_pdf` 汇总。
+   单元测试：`python3 -B -m unittest discover -s scripts -p 'test_extract_etf_short_names.py'`
+   （合成文本夹具，不需要 PDF 字节）。
 
-3. 导入新 CSV 到来源库（替换旧的 extraction）：
+3. 核对输出：`named + unavailable + missing_pdf == sse`（82）。`unavailable` 与 `missing_pdf` 的名称
+   就是残余缺口，读面会如实回 `name_basis: unavailable`，不要用基金全称补。
+
+4. 用现有 D-72 import 路径把新 CSV 导入来源库（替换旧的提取批次）：
+
    ```bash
    source_store import --store /path/to/source-store \
-       --index etf_delist_extract_v1_with_names.csv \
-       --blobs /path/to/pdf_blobs/ \
+       --index /path/to/etf_delist_extract_v1_with_names.csv \
+       --blobs /path/to/source-store/blobs \
        --format etf-delisting
    ```
 
-4. 验证导入：检查清单里 `source_id=etf_delist_extract`、`parser_version=etf-delist-extract-v1` 的行包含新 sha
+   导入器会校验每行引用的 PDF 字节、`doc_sha256` 与 D-72 日期规则；新 CSV 的
+   `parser_version` 仍是 `etf-delist-extract-v1`。
 
-**CSV 格式**：
+5. 重放进市名称（**显式 scope，不在 `--scope all` 里**；先确认 `derived:security_master` 已重放／日更过，
+   否则库里没有退市 ETF，scope 会 fail-closed 报 `delisted_etf_names_not_ready`）：
 
-新增 `short_name` 列（可选，空值表示未提取到）：
+   ```bash
+   source_store replay --store /path/to/source-store \
+       --scope delisted_etf_names --db /path/to/market.sqlite --verify-only
+   source_store replay --store /path/to/source-store \
+       --scope delisted_etf_names --db /path/to/market.sqlite
+   ```
 
-```csv
-entity,delisting_date,announcement_date,source_id,doc_url,doc_sha256,page_no,snippet,extractor,extracted_at,confidence,last_operating_day,registration_date,short_name
-sh.510070,2020-11-20,2020-11-13,sse_fund_delist_ann,http://...,862c9ae6...,1,"...",pdftotext-v1,2026-11-05T12:00:00Z,high,2020-11-19,,民企ETF
-sh.512780,2021-08-27,2021-08-20,sse_fund_delist_ann,http://...,df063400...,1,"...",pdftotext-v1,2026-11-05T12:00:00Z,high,,,京津冀基
-```
+   写路径只替换 `security_name_history` 的 `exchange_snapshot` 子集，A 股名称行与登记证据保持不变；
+   `--verify-only` 逐行比较重算结果与库里已存的行。日常日更则由 `derived:security_names` item 自动带上
+   退市名称分支，不需要单独 replay。
 
-### 9.3 代码处理逻辑
+6. 验收：`find_securities kind=etf` 按名称能找到有 `short_name` / `secName` 的退市 ETF；
+   缺名称的只能按代码找到，`name: null`、`name_basis: unavailable`。
 
-- **SZSE**: `secName` 从 announcement 读取，无需 CSV 字段
-- **SSE**: `short_name` 从 extraction CSV 读取
-- 都没有时：`name: null`、`name_basis: unavailable`（不是空串）
-- `source_record_id`: `{source_label}:{URL}`（如 `sse_fund_delist_ann:http://...`）
-- 区间：`effective_from` = `announcement_date`，`effective_to` = 主表的 `effective_to`（退市日）
+### 9.3 合成夹具与测试
 
-### 9.4 测试
-
-合成 CSV 应包含：
-- 一个有 `short_name` 的沪市行
-- 一个 `short_name` 为空的沪市行
-- 一个深市行（`short_name` 列可选）
-
-生产 CSV 位置：按 D-72，提取结果只进来源库，不提交公开仓库。测试用合成记录。
+`src/official_security/etf_delisted_names_tests.rs`（合成公告索引、合成 CSV、缺字段、PDF 提取为空、
+`known_at` 回填、空区间、`as_of` 时点、改名时序、replay 等价、`not_ready`、A 股行不变、现行 ETF 行不变）
+与 `scripts/test_extract_etf_short_names.py`（提取脚本）。真实 PDF 字节与真实 CSV 不在本仓库。

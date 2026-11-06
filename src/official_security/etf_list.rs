@@ -997,7 +997,6 @@ pub struct AdmittedNames {
     /// the item outcome and never to the stored registration.
     pub evidence: Value,
 }
-
 /// The names item's ETF answer: rows, or the reason the branch is pending.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NamesRun {
@@ -1006,7 +1005,11 @@ pub enum NamesRun {
 }
 
 /// `derived:security_names`' ETF branch: read the frozen lists like the main
-/// table item does, then assemble the observed-name rows.
+/// table item does, then assemble the observed-name rows. PR-4 then attaches
+/// the names of the 128 delisted ETFs (D-76 Q4): those come from the frozen
+/// announcement indexes and the D-72 extraction CSV, and need the main
+/// table's delisted set. A missing store for that branch keeps the current
+/// rows (and is reported in evidence), never an empty replacement.
 pub fn run_names(
     market: &crate::sqlite_market::backend::MarketBackend,
     today: NaiveDate,
@@ -1017,8 +1020,49 @@ pub fn run_names(
             pending.dataset = names::DATASET_KIND;
             NamesRun::Pending(pending)
         }
-        RunSource::Admitted(admitted) => NamesRun::Admitted(Box::new(admitted.names_run()?)),
+        RunSource::Admitted(admitted) => {
+            let mut admitted = admitted.names_run()?;
+            let delisted = match crate::source_store::configured(policy) {
+                Ok(Some(store)) => {
+                    match crate::official_security::etf_delisting::delisted_names_from_store(
+                        &store, market,
+                    ) {
+                        Ok((_, mut delisted)) => {
+                            admitted.set = merge_current_and_delisted(admitted.set, &mut delisted)?;
+                            delisted.evidence.as_value()
+                        }
+                        Err(error) => json!({
+                            "status": "failed",
+                            "code": error.code(),
+                            "detail": error.to_string(),
+                            "stored_etf_rows": "kept",
+                        }),
+                    }
+                }
+                Ok(None) | Err(_) => json!({
+                    "status": "pending",
+                    "reason": "the M3 source store is not configured; delisted-ETF names \
+                               are not rebuilt",
+                }),
+            };
+            admitted.evidence = json!({
+                "current": admitted.evidence,
+                "delisted": delisted,
+            });
+            NamesRun::Admitted(Box::new(admitted))
+        }
     })
+}
+
+/// The daily item's merge: attach delisted names to the current set and
+/// validate the whole table. Kept separate from the pure domain merge so the
+/// error code is the names item's own vocabulary.
+fn merge_current_and_delisted(
+    current: EtfNameSet,
+    delisted: &mut crate::official_security::etf_delisting::DelistedEtfNames,
+) -> Result<EtfNameSet, EtfError> {
+    crate::official_security::etf_delisting::merge_delisted_names(current, delisted)
+        .map_err(|error| EtfError::invalid("source_invalid", error.to_string()))
 }
 
 impl Admitted {

@@ -30,6 +30,7 @@ fn the_main_announcement_prefers_a_formal_notice_over_a_prompt_one() {
             source_id: "szse_etf_notice_ann",
             source_label: "szse_etf_notice_ann",
             sec_name: None,
+            snapshot_sha256: String::new(),
         },
         Announcement {
             exchange: Exchange::Sz,
@@ -40,6 +41,7 @@ fn the_main_announcement_prefers_a_formal_notice_over_a_prompt_one() {
             source_id: "szse_etf_notice_ann",
             source_label: "szse_etf_notice_ann",
             sec_name: None,
+            snapshot_sha256: String::new(),
         },
     ];
     let main = main_announcements(&rows);
@@ -58,7 +60,8 @@ fn only_prompt_notices_are_used_and_marked() {
         url: "prompt.pdf".into(),
         source_id: "szse_etf_notice_ann",
         source_label: "szse_etf_notice_ann",
-            sec_name: None,
+        sec_name: None,
+        snapshot_sha256: String::new(),
     }];
     let main = main_announcements(&rows);
     assert!(main[&(Exchange::Sz, "159986".to_string())].only_prompt);
@@ -80,6 +83,7 @@ fn extraction_dates_must_fit_the_announcement_window_and_the_last_bar() {
         confidence: "high".into(),
         last_operating_day: Some(day(2026, 1, 9)),
         registration_date: None,
+        short_name: None,
     };
     good.validate(Some(day(2026, 1, 9))).unwrap();
 
@@ -125,9 +129,9 @@ fn only_a_candidate_that_hits_an_announcement_becomes_a_member_fact() {
                 url: "formal.pdf".into(),
                 source_id: "szse_etf_notice_ann",
                 source_label: "szse_etf_notice_ann",
-            sec_name: None,
                 only_prompt: false,
                 sec_name: None,
+                snapshot_sha256: String::new(),
             },
         )]),
         rows: Vec::new(),
@@ -164,9 +168,9 @@ fn extraction_turns_an_announcement_identity_into_an_exact_delisting_date() {
                 url: "sse.pdf".into(),
                 source_id: "sse_fund_delist_ann",
                 source_label: "sse_fund_delist_ann",
-            sec_name: None,
                 only_prompt: false,
                 sec_name: None,
+                snapshot_sha256: String::new(),
             },
         )]),
         rows: Vec::new(),
@@ -186,6 +190,7 @@ fn extraction_turns_an_announcement_identity_into_an_exact_delisting_date() {
         confidence: "high".into(),
         last_operating_day: Some(day(2026, 8, 4)),
         registration_date: None,
+        short_name: None,
     };
     let extractions = ExtractionSet {
         records: BTreeMap::from([((Exchange::Sh, "512390".into()), record)]),
@@ -251,9 +256,9 @@ fn synthetic_128_candidate_hits_produce_exactly_128_class_two_identity_rows() {
                 url: format!("sse-{index}.pdf"),
                 source_id: "sse_fund_delist_ann",
                 source_label: "sse_fund_delist_ann",
-            sec_name: None,
                 only_prompt: false,
                 sec_name: None,
+                snapshot_sha256: String::new(),
             },
         );
     }
@@ -270,9 +275,9 @@ fn synthetic_128_candidate_hits_produce_exactly_128_class_two_identity_rows() {
                 url: format!("szse-{index}.pdf"),
                 source_id: "szse_etf_notice_ann",
                 source_label: "szse_etf_notice_ann",
-            sec_name: None,
                 only_prompt: false,
                 sec_name: None,
+                snapshot_sha256: String::new(),
             },
         );
     }
