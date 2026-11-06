@@ -2,6 +2,8 @@
 
 日期：2026-11-06。代码版本：main `a6ebe1f`（含 #545 退市股导出修复、#546 可交易性读面设计）。输入：[严谨回测验收审计](rigorous-backtest-audit.md)（PR #540）。Refs [#296](https://github.com/liqiangcc/x-data-mcp/issues/296)。
 
+**owner 已于 2026-11-06 回复「全部按推荐」**，裁决记为 [D-80…D-83](../decisions.md)。下文保留裁决前的原文。
+
 本文只做裁决准备，不改代码，不访问线上，不改 Issue。所有结论来自仓库内的代码、文档和已提交报告。
 
 **标注约定**
