@@ -641,33 +641,45 @@ fn warning_status(name: &str) -> Option<RiskStatus> {
     }
 }
 
-/// D-81 task 49: Check if a name has PT prefix (after stripping whitespace).
-/// Examples: "PT凯地", "PT 凯 地", "PT 南 洋"
+/// D-81 task 49: Normalize and strip whitespace from a name.
+/// Uses NFKC normalization to handle full-width characters.
+fn normalize_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.nfkc().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+/// D-81 task 49: Check if a name has PT prefix (after normalization and stripping whitespace).
+/// Examples: "PT凯地", "PT 凯 地", "PT 南 洋", "ＰＴ凯地" (full-width)
 fn has_pt_prefix(name: &str) -> bool {
-    let compact: String = name.chars().filter(|ch| !ch.is_whitespace()).collect();
-    compact.starts_with("PT")
+    let normalized = normalize_name(name);
+    normalized.starts_with("PT")
 }
 
 /// D-81 task 49: Check if a name ends with "退" or "退市".
-/// Examples: "国华退", "*ST海润退市"
+/// Examples: "国华退", "*ST海润退市", "国华退 " (with trailing space)
 fn has_tui_suffix(name: &str) -> bool {
-    name.ends_with("退市") || name.ends_with("退")
+    let normalized = normalize_name(name);
+    normalized.ends_with("退市") || normalized.ends_with("退")
 }
 
 /// D-81 task 49: Check if a name starts with * but has no ST marker.
-/// Examples: "*金亚", "*欣泰" (60 bar-days in data)
+/// Examples: "*金亚", "*欣泰" (60 bar-days in data), "＊金亚" (full-width *)
 /// These are not ST and not plain Normal either.
 fn has_star_without_st(name: &str) -> bool {
-    name.starts_with('*') && warning_status(name).is_none()
+    let normalized = normalize_name(name);
+    normalized.starts_with('*') && !normalized.contains("ST")
 }
 
 /// D-81 task 49: Check if a name is "plain" - eligible for Normal status.
 /// A plain name has no ST, no PT prefix, no 退 suffix, and no * without ST.
+/// Handles full-width characters via NFKC normalization.
 fn is_plain_name(name: &str) -> bool {
-    warning_status(name).is_none()
-        && !has_pt_prefix(name)
-        && !has_tui_suffix(name)
-        && !has_star_without_st(name)
+    let normalized = normalize_name(name);
+    !normalized.contains("ST")
+        && !normalized.starts_with("PT")
+        && !normalized.ends_with("退市")
+        && !normalized.ends_with("退")
+        && !(normalized.starts_with('*') && !normalized.contains("ST"))
 }
 
 /// D-81 task 49: For Shenzhen codes only, write `normal` as the complement
@@ -719,14 +731,13 @@ fn add_normal_intervals_sz(
     // and track which ones are plain (eligible for normal)
     #[derive(Debug, Clone)]
     struct NameSegment<'a> {
-        #[allow(dead_code)]
-        name: &'a str,
         start: NaiveDate,
         end: Option<NaiveDate>, // None = until next change or coverage end
         is_plain: bool,
         known_at: Option<NaiveDate>,
-        #[allow(dead_code)]
-        after_conflict: bool, // True if this segment starts right after a conflict
+        // D-81 task 49 审查意见4: 来源于打开这段的那次变更
+        source_record_id: String,
+        source_document_sha256: String,
     }
 
     let mut segments: Vec<NameSegment> = Vec::new();
@@ -759,14 +770,13 @@ fn add_normal_intervals_sz(
         let is_plain = is_plain_name(after_name);
 
         segments.push(NameSegment {
-            name: after_name,
             start: day,
             end: None,
             is_plain,
             known_at: change.known_at,
-            after_conflict: had_conflict,
+            source_record_id: change.source_record_id.clone(),
+            source_document_sha256: change.source_document_sha256.clone(),
         });
-        had_conflict = false; // Reset after creating the segment
 
         // Close previous segment if it's still open
         let len = segments.len();
@@ -834,8 +844,8 @@ fn add_normal_intervals_sz(
                     announced_at: None,
                     known_at: segment.known_at,
                     source_kind: "szse_name_history".to_string(),
-                    source_record_id: None,
-                    source_document_sha256: None,
+                    source_record_id: Some(segment.source_record_id.clone()),
+                    source_document_sha256: Some(segment.source_document_sha256.clone()),
                 });
             }
 
@@ -855,8 +865,8 @@ fn add_normal_intervals_sz(
                 announced_at: None,
                 known_at: segment.known_at,
                 source_kind: "szse_name_history".to_string(),
-                source_record_id: None,
-                source_document_sha256: None,
+                source_record_id: Some(segment.source_record_id.clone()),
+                source_document_sha256: Some(segment.source_document_sha256.clone()),
             });
         }
     }
