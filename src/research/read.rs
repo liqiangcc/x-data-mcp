@@ -583,11 +583,28 @@ pub(crate) fn panel_version(
     let Some(row) = derived::read_version(c, kind, key).map_err(Error::from)? else {
         return Ok(None);
     };
+    // D-76 Q7: `security_names.parquet` holds the SZ A-share history only, but
+    // its registration covers the whole table (ETF observed names included).
+    // The entry's `record_count` describes the file, so the ETF rows are not
+    // counted in it. `version_id` stays the registration's: it names the table
+    // the file was cut from.
+    let record_count = if dataset == DerivedDataset::SecurityNames {
+        let etf: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM security_name_history WHERE source_kind='exchange_snapshot'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(db)?;
+        row.record_count - etf
+    } else {
+        row.record_count
+    };
     Ok(Some(DerivedEntry {
         dataset,
         key: row.dataset_key,
         version_id: row.version_id,
-        record_count: row.record_count,
+        record_count,
         first_day: compact_market::epoch_date(row.first_day).map_err(integrity)?,
         last_day: compact_market::epoch_date(row.last_day).map_err(integrity)?,
         digest_format: row.digest_format,
@@ -984,6 +1001,11 @@ pub fn security_name_rows(
     let rows = crate::sqlite_market::security::read_security_names(c).map_err(Error::from)?;
     Ok(rows
         .into_iter()
+        // D-76 Q7: the file stays the SZ A-share name history. ETF observed
+        // names share the table (`exchange_snapshot`) but not this export.
+        .filter(|row| {
+            row.source_kind != crate::security_master::names::NameSourceKind::ExchangeSnapshot
+        })
         .filter(|row| {
             interval_in_range(
                 row.effective_from,

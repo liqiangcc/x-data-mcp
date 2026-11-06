@@ -93,15 +93,16 @@ pub const BUILD_SHA: &str = env!("X_DATA_MCP_BUILD_SHA");
 
 /// Labels of the derivations this binary carries (v5 `producer.algorithms`).
 /// Like [`algorithms`] they are the stored constants, not copies. They cover
-/// the datasets the export writes (`price_limit_rules`, the security-master
-/// files) and `market_cap`, which the export does not write: it is recomputed
+/// the datasets the export writes (the security-master files) and the
+/// read-time derivations `price_limit` (its own label, not the rule dataset's
+/// `limit-v1`) and `market_cap`, which the export does not write: it is recomputed
 /// at read time from `capital_events` and the raw close, so the label is the
 /// only place a snapshot can say which formula a consumer's market-cap
 /// numbers came from. The tradability read model has no version constant and
 /// is not listed.
 pub fn derivation_algorithms() -> Value {
     json!({
-        "price_limit": crate::trading_rules::ALGORITHM_VERSION,
+        "price_limit": super::price_limit::READ_ALGORITHM_VERSION,
         "market_cap": super::market_cap::ALGORITHM_VERSION,
         "security_master": crate::security_master::assembly::ALGORITHM_VERSION,
         "security_names": crate::security_master::names::ALGORITHM_VERSION,

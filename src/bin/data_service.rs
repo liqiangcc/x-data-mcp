@@ -243,6 +243,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // One cursor pool and memory budget for the whole process: every
     // connection's DataApi draws from the same caps (VM1-23).
     let read_limits = x_data_mcp::data_supply::read_limits::ReadLimits::production();
+    report_read_limits_startup(&read_limits);
     let factory = {
         let gate = gate.clone();
         move |entry: EntryKind| {
@@ -289,6 +290,22 @@ fn source_store_policy(has_ops: bool, backend: &MarketBackend) -> Policy {
         MarketBackend::Compact(_) if has_ops => Policy::Required,
         _ => Policy::Optional,
     }
+}
+
+/// Startup visibility of the read path's memory limits (VM1-41): whether the
+/// memory budget is in force and at which line, or why it is inert (a
+/// deployment whose cgroup cannot be read would otherwise look protected), and
+/// the cursor pool caps. Refusals are logged where they happen.
+#[cfg(target_os = "linux")]
+fn report_read_limits_startup(limits: &x_data_mcp::data_supply::read_limits::ReadLimits) {
+    let pool = limits.pool().limits();
+    eprintln!("read memory budget: {}", limits.budget().status());
+    eprintln!(
+        "read cursor pool: {} MiB of serialized snapshots in total, {} MiB and {} cursors per connection",
+        pool.total_bytes >> 20,
+        pool.owner_bytes >> 20,
+        pool.owner_entries
+    );
 }
 
 /// Startup visibility (owner decision 3a, `silent-path #446` §14.6): the ops

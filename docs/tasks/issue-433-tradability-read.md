@@ -187,7 +187,7 @@
 
 | limit_state | limit_reason | 触发 | 来源缺口和限制 |
 |---|---|---|---|
-| `known` | 空 | 找到唯一一行规则，且前收、最小变动单位都有 | 规则 27 行价格规则加 2 行最小变动单位，全部 `verified`（`a7-d44-v1.json`）。除权日见 G5 |
+| `known` | 空 | 找到唯一一行规则，且前收、最小变动单位都有 | 规则 27 行价格规则加 2 行最小变动单位，全部 `verified`（`a7-d44-v1.json`）。前收日与 `as_of` 之间有 cat1 事件时不是 `known`，见下方 `ex_rights_unverified` |
 | `known` | 空，`risk_status=unknown` | 状态未知，但所有状态类别命中同一行规则（`status_class='all'`） | 创业板 2020-08-24 起、科创板。不借用两条同幅度的状态专属规则 |
 | `unbounded` | 空 | 规则明确 `band_side='none'` | 新股首日；主板 2023-02-17 起上市前 5 个交易日；创业板、科创板上市前 5 个交易日 |
 | `unknown` | `st_unknown` | 状态未知，且各状态类别命中不同规则 | **主板几乎恒为此值**：库里不写 `normal`，无 ST 区间的日子状态就是 `unknown`（`validate_set` 不接受 `Normal`，`status_of` 无区间时返回 `Unknown`）。沪市 2004Q1 前的风险警示状态永久 `unknown`（D-58）。`limit_candidates` 给出候选幅度。2026-07-06 起主板两档同为 10%，候选只剩一个，仍是 `unknown` |
@@ -197,7 +197,7 @@
 | `unknown` | `listing_unknown`、`listing_phase_unknown` | 上市日未知，或上市日早于日历起点而无法数交易日 | `listing_date` 现为 0 个未知 |
 | `unknown` | `no_series`、`no_prev_close` | 没有不复权序列，或没有更早的 bar | 335 个退市代码没有行情（M3 之前），上市首日无前收（首日规则为 `none` 时不需要前收，返回 `unbounded`） |
 | `unknown` | `calendar_missing`、`non_trading_day`、`not_listed`、`not_a_share`、`board_unsupported` | 同 §3.1 的对应情形 | `board_unsupported`：不在 600/601/603/605/688/689/000–003/300/301 的代码，包括 `302`（G6）、北交所、B 股 |
-| `unknown` | `ex_rights_unverified`（新增，取决于 Q3） | 前收日与 `as_of` 之间有除权事件 | G5 |
+| `unknown` | `ex_rights_unverified`（新增，D-81 已实现） | 前收日与 `as_of` 之间（`(prev_day, as_of]`）有该实体的 category 1 事件，含纯派现 | G5。category 11（ETF 份额折算）不算。判定顺序在规则查找和最小变动单位之后、算价之前：规则是 `band_side=none` 时不读前收也不读事件，仍是 `unbounded`。结果仍带 `prev_close_*` 和规则字段，供核对。读时派生的标签改为 `limit-v1+exr-guard1`；`limit-v1` 继续是已登记规则数据集的标签；`limit-v2` 留给真正算除权参考价的算法。事件按实体走 `adjustment_events_entity_day` 索引，单只与共享上下文走同一路径 |
 
 ### 3.3 `get_market_cap` 的 `state` 和 `reason`
 
@@ -361,7 +361,7 @@ AC 文字（§1.3）在 PR-B 通过后，由 owner 更新到 #391/#433，或随�
 - G1–G3 的行为来自本分支上的临时测试，用的是夹具，不是真实库。
 - 「主板涨跌停大多 `unknown`」「A 股主表行知晓时间为空」是读代码推出的，没有在 vm2 的只读库上查证（本任务不访问线上）。
 - 第 5 节的耗时全是推断。
-- G5 的触发条件（前收日与 `as_of` 之间有 cat1 事件）还没有用真实除权样本核对。
+- G5 的触发条件（前收日与 `as_of` 之间有 cat1 事件）已按 D-81 实现并用夹具测试，仍没有用真实除权样本（如 `sh.600000` 2008-04-24）在真实库上核对。
 - 没有核实 pi、kiro、x 的客户端是否依赖 `$schema` 或 `title`（选项 b）。
 - 没有核实 `query_data` 在 codemode 里的使用方式（选项 c）。
 - 示例响应里的值是占位。

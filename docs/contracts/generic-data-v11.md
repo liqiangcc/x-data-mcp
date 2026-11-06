@@ -14,6 +14,8 @@
 | compact schema | 27 | **不变**（27，没有迁移） |
 | `query_data` 的输入与输出 | | 工具和 `get_security_history` 的读取模式不改变它（见 §4）；但同一修订里有别的 v2 变化，见 §1.1 |
 | `tools/list` 输入 schema | 根上有 `$schema`、`title` | 读 schema 去掉这两项（见 §3） |
+| `market.adjustment_events` 的 v2 列 | `category, c1..c4`（没有日期） | **追加 `effective_day`**（见 §6） |
+| `market.security_master` 的 v2 缺省列 | 不含 `effective_from` | **追加 `effective_from`**（见 §6） |
 
 加工具不改 schema，也不改 `query_data` 的 wire 形状。`TemporalBlock.as_of` 在内部变为可选，但 `query_data` 永远写它，已发布的 schema 保持 `{"type":"string","format":"date"}`。
 
@@ -161,3 +163,22 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 ## 6. 未验证
 
 线上真实数据未测；本代码面未部署，`tools/list` 字节为本地实测，线上以部署后的读回为准。
+
+## 6. `table` 布局的行键
+
+`table` 布局没有 `dates`，所以行键必须是一列。v10 有两处丢了行键：`market.adjustment_events` 的响应没有日期，查 `sh.600000` 只能看到金额，看不出哪天除权；`market.security_master` 的缺省列不含 `effective_from`，只有显式 `fields` 才有。v11 都已补上。追加列不改行顺序、`version_id`、`snapshot_id`，v1 不变。
+
+| dataset | 行键 | v10 | v11 |
+|---|---|---|---|
+| `securities.catalog` | 实体 | `entities` | 不变 |
+| `market.adjustment_events` | `effective_day` | **丢失** | **第一列，缺省返回，`fields` 可选** |
+| `market.calendar` | `trade_day` | 列 | 不变 |
+| `market.security_master` | `effective_from` | **缺省丢失** | **缺省含** |
+| `market.security_names` | `effective_from` | 列 | 不变 |
+| `market.capital_events` | `effective_day` | 列 | 不变 |
+| `market.risk_warnings` | `effective_from` | 列 | 不变 |
+| `market.suspensions` | `start_day` | 列 | 不变 |
+| `market.price_limit_rules` | `rule_id` + `effective_from` | 列 | 不变 |
+| `market.industry_assignments` | `effective_from` | 列 | 不变 |
+
+`market.adjustment_events` 的行仍按源（gbbq 解码）顺序，不是日期顺序。`basis_status` 不在读面上。
