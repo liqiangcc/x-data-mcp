@@ -2186,22 +2186,6 @@ fn replay_generation_binding(
     })
 }
 
-/// Rebuild `suspension_intervals` from the frozen A-3 pages plus the database's
-/// own inputs (XDM-138).
-///
-/// The three non-store inputs are read from the supplied database in one
-/// snapshot (`sqlite_market::suspensions::read_inputs_if_ready`), the pages are re-parsed with
-/// the same A-3 parser the daily item uses, and the dataset is assembled by
-/// the daily item's own `assemble_suspensions` and written by its own
-/// `commit_suspensions` (bound to the same generation as the master). There is
-/// no second derivation and no second writer.
-///
-/// Without a database only the frozen pages are parsed and counted: without a
-/// `security_master` an interval cannot be placed in a member window, so the
-/// scope reports `computed_no_db` and writes nothing. With a database that has
-/// no master/calendar it reports `suspension_replay_not_ready` and leaves the
-/// table untouched: an empty table must never stand in for "not assembled".
-
 /// PR-4: the outcome of the explicit `delisted_etf_names` replay scope.
 struct DelistedEtfNamesOutcome {
     status: &'static str,
@@ -2278,16 +2262,37 @@ fn rebuild_delisted_etf_names(
                 .to_string(),
         ));
     }
+    let stored_all = backend
+        .read(crate::sqlite_market::security::read_security_names)
+        .map_err(|error| format!("stored names: {error}"))?;
+    let stored_etf = stored_intervals(&stored_all, true)?;
+    let list_rows: Vec<crate::security_master::names::NameInterval> = stored_etf
+        .iter()
+        .filter(|row| {
+            row.source_kind == names::NameSourceKind::ExchangeSnapshot
+                && row.source_record_id.as_deref().is_some_and(|id| {
+                    id.starts_with("sse_etf_list:") || id.starts_with("szse_etf_list:")
+                })
+        })
+        .cloned()
+        .collect();
     // The current ETF names come from the frozen lists through the very same
-    // manifest-only function `security_names` replay uses; the delisted ones
-    // come from the announcement/extraction bytes and the main table. One
-    // merge, shared with the daily item's rule, so live and replay agree.
+    // manifest-only function `security_names` replay uses. When the store has
+    // no frozen ETF list this scope must not delete the list-derived names
+    // already in the database: keep those rows as the current half (only the
+    // announcement-derived rows are this scope's to rebuild).
     let current = match crate::official_security::etf_list::replay_names(store)
         .map_err(|error| format!("{}: {error}", error.code()))?
     {
         crate::official_security::etf_list::ReplayedNames::Built(set) => set,
         crate::official_security::etf_list::ReplayedNames::Pending => {
-            crate::security_master::names::EtfNameSet::default()
+            crate::security_master::names::EtfNameSet {
+                entities: list_rows
+                    .iter()
+                    .map(|row| (row.exchange, row.code.clone()))
+                    .collect(),
+                rows: list_rows,
+            }
         }
     };
     let (_, mut delisted) =
@@ -2299,12 +2304,7 @@ fn rebuild_delisted_etf_names(
         .map_err(|error| format!("coverage: {error}"))?
         .map(|(windows, _)| windows)
         .unwrap_or_default();
-    let a_share = stored_intervals(
-        &backend
-            .read(crate::sqlite_market::security::read_security_names)
-            .map_err(|error| format!("stored names: {error}"))?,
-        false,
-    )?;
+    let a_share = stored_intervals(&stored_all, false)?;
     let mut all_rows = a_share.clone();
     all_rows.extend(set.rows.iter().cloned());
     let summary = names_summary(&all_rows, &coverage);
@@ -2315,16 +2315,7 @@ fn rebuild_delisted_etf_names(
         database: None,
         drift: Vec::new(),
         rows: Some(all_rows.len()),
-        delisted_rows: Some(
-            set.rows
-                .iter()
-                .filter(|row| {
-                    row.source_record_id
-                        .as_deref()
-                        .is_some_and(|id| id.contains("_delist_ann:"))
-                })
-                .count(),
-        ),
+        delisted_rows: Some(delisted.evidence.named),
         evidence: Some({
             let mut value = delisted.evidence.as_value();
             if let Some(object) = value.as_object_mut() {
@@ -2335,12 +2326,7 @@ fn rebuild_delisted_etf_names(
         problems: Vec::new(),
     };
     if verify_only {
-        let stored = stored_intervals(
-            &backend
-                .read(crate::sqlite_market::security::read_security_names)
-                .map_err(|error| format!("stored names: {error}"))?,
-            true,
-        )?;
+        let stored = stored_intervals(&stored_all, true)?;
         let stored_summary = names_summary(&stored, &coverage);
         if stored_summary == summary {
             outcome.database = Some("match");
@@ -2368,6 +2354,21 @@ fn rebuild_delisted_etf_names(
     Ok(outcome)
 }
 
+/// Rebuild `suspension_intervals` from the frozen A-3 pages plus the database's
+/// own inputs (XDM-138).
+///
+/// The three non-store inputs are read from the supplied database in one
+/// snapshot (`sqlite_market::suspensions::read_inputs_if_ready`), the pages are re-parsed with
+/// the same A-3 parser the daily item uses, and the dataset is assembled by
+/// the daily item's own `assemble_suspensions` and written by its own
+/// `commit_suspensions` (bound to the same generation as the master). There is
+/// no second derivation and no second writer.
+///
+/// Without a database only the frozen pages are parsed and counted: without a
+/// `security_master` an interval cannot be placed in a member window, so the
+/// scope reports `computed_no_db` and writes nothing. With a database that has
+/// no master/calendar it reports `suspension_replay_not_ready` and leaves the
+/// table untouched: an empty table must never stand in for "not assembled".
 fn rebuild_suspensions(
     store: &SourceStore,
     records: &[&ManifestRecord],

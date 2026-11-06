@@ -69,8 +69,8 @@ fn csv_row(
 ) -> String {
     format!(
         "{entity},{delisting},{announcement},{source},https://example.invalid/{doc_sha}.pdf,\
-         {doc_sha},1,终止上市日：{delisting},etf-short-name-v1,2026-11-06T02:00:00Z,high,,\
-         {short_name},1,场内简称：{short_name},etf-short-name-v1\n"
+         {doc_sha},1,终止上市日{delisting},etf-short-name-v1,2026-11-06T02:00:00Z,high,,,\
+         {short_name},1,场内简称{short_name},etf-short-name-v1\n"
     )
 }
 
@@ -150,7 +150,7 @@ fn csv_with_blobs(fixture: &Fixture, rows: &[(String, String)]) -> Vec<u8> {
             source,
             &sha,
             short_name,
-            "2026-05-10",
+            "2026-05-25",
             "2026-06-01",
         ));
     }
@@ -241,7 +241,7 @@ fn backfilled_name_known_at_is_the_first_ingestion_day_not_the_announcement_day(
 // ---------------------------------------------------------------------------
 #[test]
 fn szse_name_comes_from_the_termination_notice_not_a_later_rename() {
-    let rows = vec![
+    let rows = [
         announcement(
             Exchange::Sz,
             "159915",
@@ -264,7 +264,7 @@ fn szse_name_comes_from_the_termination_notice_not_a_later_rename() {
             "sha-b",
         ),
     ];
-    let set = announcements_set(rows.clone());
+    let set = announcements_set(rows.to_vec());
     assert_eq!(
         set.main[&(Exchange::Sz, "159915".into())].url,
         "/rename.pdf",
@@ -289,7 +289,7 @@ fn szse_name_comes_from_the_termination_notice_not_a_later_rename() {
 
 #[test]
 fn a_formal_termination_notice_beats_a_prompt_one_for_the_name() {
-    let rows = vec![
+    let rows = [
         announcement(
             Exchange::Sz,
             "159986",
@@ -334,7 +334,8 @@ fn no_termination_titled_notice_means_no_szse_name() {
         &arrivals(&[("sha-1", day(2026, 11, 6))]),
     );
     assert!(found.rows.is_empty());
-    assert_eq!(found.evidence.no_name, 1);
+    assert_eq!(found.evidence.missing_termination_notice, 1);
+    assert_eq!(found.evidence.no_name, 0);
 }
 
 // ---------------------------------------------------------------------------

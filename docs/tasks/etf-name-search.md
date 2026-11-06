@@ -405,6 +405,13 @@ D-72 的 `etf_delist_extract` CSV 已导入。本 PR **不包含真实 CSV**，�
 
 ### 9.3 合成夹具与测试
 
-`src/official_security/etf_delisted_names_tests.rs`（合成公告索引、合成 CSV、缺字段、PDF 提取为空、
-`known_at` 回填、空区间、`as_of` 时点、改名时序、replay 等价、`not_ready`、A 股行不变、现行 ETF 行不变）
-与 `scripts/test_extract_etf_short_names.py`（提取脚本）。真实 PDF 字节与真实 CSV 不在本仓库。
+- `src/official_security/etf_delisted_names_tests.rs`：合成公告索引 / 合成 CSV、缺 `secName` 字段、PDF 提取为空、
+  `known_at` 回填（公告 2019 / 入库 2026）、空区间不写行并计数、`as_of` 时点（上市 2005 / 公告 2026）、
+  改名时序（终止公告优先于后来的改名公告、正式公告优先于提示性）、`read_names_source` 的 manifest 纯函数等价、
+  与现行名称链衔接不重叠。
+- `src/source_store/delisted_etf_names_replay_tests.rs`：显式 scope 不在 `--scope all`、无 `--db` 与无主表行时
+  `not_ready` 写 0 行、空库 `nothing_selected`、写后 `--verify-only = match`、二次重放幂等、
+  A 股名称行与现行 ETF 名称行逐行不变、篡改后 `drift`。
+- `scripts/test_extract_etf_short_names.py`：提取脚本的 17 个单元测试（合成文本与合成 CSV，无 PDF 字节）。
+
+真实 PDF 字节与真实 CSV 不在本仓库。

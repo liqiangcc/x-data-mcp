@@ -1339,6 +1339,10 @@ pub struct DelistedEtfNameEvidence {
     /// the announcement day; adding this row would overlap, so it is skipped.
     pub overlap_skipped: usize,
     pub missing_announcement: usize,
+    /// SZSE: the channel has the code's announcements but none is a
+    /// termination notice. A rename or other notice's `secName` is never
+    /// used as the delisted ETF's name.
+    pub missing_termination_notice: usize,
     /// The deciding bytes have no readable arrival day (should be impossible
     /// for a registered record; counted when a name was available).
     pub missing_known_at: usize,
@@ -1359,6 +1363,7 @@ impl DelistedEtfNameEvidence {
             "identity_notice_mismatch": self.identity_notice_mismatch,
             "overlap_skipped": self.overlap_skipped,
             "missing_announcement": self.missing_announcement,
+            "missing_termination_notice": self.missing_termination_notice,
             "missing_known_at": self.missing_known_at,
             "limitations": [
                 "effective_from is the termination announcement day (the name's first \
@@ -1421,11 +1426,21 @@ pub fn assemble_delisted_etf_names(
             .cloned()
             .unwrap_or_default();
         // The name's first observation day is the termination announcement
-        // day. The identity main-announcement is the D-72 rule; when it is a
-        // rename notice from the same channel, the termination notice is the
-        // name's date instead (and the mismatch is counted).
+        // day. For SZSE a *termination-titled* notice is required: the
+        // `etfNotice_disc` channel also carries rename notices, whose
+        // `secName` is a different publication-time value. Falling back to
+        // the identity `main` would silently use such a name, so it is
+        // refused and counted instead. SSE rows are already filtered by the
+        // parser to `终止上市` + `交易型` titles.
         let notice = match target.exchange {
-            Exchange::Sz => termination_notice(&code_rows).or(main_row),
+            Exchange::Sz => {
+                let found = termination_notice(&code_rows);
+                if found.is_none() {
+                    out.evidence.missing_termination_notice += 1;
+                    continue;
+                }
+                found
+            }
             Exchange::Sh | Exchange::Bj => main_row,
         };
         let Some(notice) = notice else {

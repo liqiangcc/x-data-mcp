@@ -1045,10 +1045,12 @@ pub fn run_names(
                                are not rebuilt",
                 }),
             };
-            admitted.evidence = json!({
-                "current": admitted.evidence,
-                "delisted": delisted,
-            });
+            // Keep the current branch's evidence keys at the top level (the
+            // item contract exposes `status`, `rows`, ...); PR-4's counts live
+            // under `delisted`.
+            if let Some(object) = admitted.evidence.as_object_mut() {
+                object.insert("delisted".into(), delisted);
+            }
             NamesRun::Admitted(Box::new(admitted))
         }
     })
