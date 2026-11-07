@@ -42,12 +42,18 @@ pub const DIGEST_FORMAT: &str = "sha256-risk-warning-intervals-v1";
 /// and every other code is assembled as before. Datasets with no conflict
 /// assemble to the same rows under `v1` and `v2`, so the content digest (and
 /// the `version_id` derived from it) does not move when only the label does.
-///
-/// `v3` (D-81, task 49): for Shenzhen A-shares only, write `normal` intervals
-/// as the complement of ST/warning intervals within the name history coverage.
-/// The rules are closed-world: PT prefix, "退" suffix, `*` prefix without ST,
-/// and the state after a conflict until the next event remain `unknown`.
-pub const ALGORITHM_VERSION: &str = "risk-warnings-v3";
+/// `v3` (D-81, task 49/#578): for Shenzhen A-shares only, write `normal`
+/// intervals as the complement of ST/warning intervals within the name history
+/// coverage. The rules are closed-world: PT prefix, "退" suffix, `*` prefix
+/// without ST, and the state after a conflict until the next event remain
+/// `unknown`.
+/// `v4` (D-81 GP29 §7, #579): the title classifier rejects "存在被实施..."
+/// forward-looking risk notices instead of misclassifying them as
+/// implementations. This affects 14 SH announcements in 2014-12; the 7 codes
+/// that had open intervals from those dates get them closed. `v3` and `v4`
+/// were developed at the same time, so the numbers follow merge order: `v3`
+/// went to #578, which merged first.
+pub const ALGORITHM_VERSION: &str = "risk-warnings-v4";
 
 /// `raw_status_code` of the row an SH implementation and revocation on one
 /// effective day collapse to.

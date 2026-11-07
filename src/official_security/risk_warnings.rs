@@ -103,7 +103,7 @@ use std::sync::Arc;
 /// whose `known_at` is set on purpose. v4 → v5: title classification follows
 /// D-68 (a revocation handing over to another warning is `Implement(B)`;
 /// forecasts, pre-audit notes and third-party opinions are not events).
-pub const PARSER_VERSION: &str = "risk-warnings-v6";
+pub const PARSER_VERSION: &str = "risk-warnings-v7";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -1392,25 +1392,40 @@ fn sh_groups(value: &Value) -> Result<Vec<Vec<Value>>, Error> {
 /// status transition when B differs and into a no-op when it is the status
 /// already open, so the adapter only has to report `Implement(B)`.
 fn classify_title(title: &str) -> Option<(RiskWarningAction, Option<RiskStatus>)> {
+    classify_title_with(title, false)
+}
+
+/// Words that make a title a statement of intent or of a *possible* risk
+/// rather than an event. D-58 admits implementation/revocation, not intent
+/// (D-68).
+const NON_EVENT_MARKERS: [&str; 8] = [
+    "申请",
+    "拟",
+    "可能",
+    "将被",
+    "预计",
+    "预审计",
+    "将消除",
+    "争取",
+];
+
+/// `admit_risk_notices` is the pre-v7 rule, kept so one test can enumerate
+/// exactly what the v7 change moved (D-81 GP29 §7). With it set, a title that
+/// states a risk exists is read as an implementation, as parser v6 did.
+fn classify_title_with(
+    title: &str,
+    admit_risk_notices: bool,
+) -> Option<(RiskWarningAction, Option<RiskStatus>)> {
     let title = title.trim();
     if !title.contains("风险警示") && !title.contains("特别处理") {
         return None;
     }
-    // An application, a proposal, a forecast, or a pre-audit note is not an
-    // event. D-58 admits implementation/revocation, not intent (D-68).
-    if [
-        "申请",
-        "拟",
-        "可能",
-        "将被",
-        "预计",
-        "预审计",
-        "将消除",
-        "争取",
-    ]
-    .iter()
-    .any(|word| title.contains(word))
-    {
+    if NON_EVENT_MARKERS.iter().any(|word| title.contains(word)) {
+        return None;
+    }
+    // v7: 「存在被实施退市风险警示…的提示公告」 states that a risk exists, it
+    // does not report the exchange's implementation, so it is not an event.
+    if !admit_risk_notices && states_a_risk_exists(title) {
         return None;
     }
     // An accountant's/lawyer's/sponsor's opinion is evidence about a filing,
@@ -1429,6 +1444,22 @@ fn classify_title(title: &str) -> Option<(RiskWarningAction, Option<RiskStatus>)
     let (_, implement_end) = first_marker(title, &IMPLEMENTATION_MARKERS)?;
     let status = warning_status(&title[implement_end..]).or_else(|| warning_status(title))?;
     Some((RiskWarningAction::Implement, Some(status)))
+}
+
+/// 「存在被实施退市风险警示…的风险」 asserts that a risk *exists*, which is a
+/// notice (提示公告), not the exchange's implementation: the 实施 verb is
+/// subordinate to 存在 and its object is a risk. Both conditions are required,
+/// so a genuine implementation that merely mentions 存在 elsewhere
+/// (`…被实施退市风险警示…（存在异议）`) is still an event, and so is a title
+/// whose 存在 clause is not about a risk at all.
+fn states_a_risk_exists(title: &str) -> bool {
+    let Some(exists_at) = title.find("存在") else {
+        return false;
+    };
+    let Some((implement_at, implement_end)) = first_marker(title, &IMPLEMENTATION_MARKERS) else {
+        return false;
+    };
+    exists_at < implement_at && title[implement_end..].contains("风险")
 }
 
 /// The words an SSE title uses for a revocation. `撤消` is the old spelling
@@ -2003,6 +2034,166 @@ mod tests {
                 RiskWarningAction::Implement,
                 Some(RiskStatus::OtherRiskWarning)
             ))
+        );
+    }
+
+    /// D-81 GP29 §7: 「存在被实施退市风险警示及暂停上市风险的提示公告」 is a
+    /// notice that a risk exists, not the exchange's implementation. The
+    /// fixture lists every row the change moves (14 codes, 2014-12, forensic
+    /// evidence in `docs/tasks/gp29-compare-20261106.md` §7); the test pins
+    /// the before/after classification of each title and that no other kind
+    /// of title moves.
+    #[test]
+    fn the_2014_risk_notices_stop_being_implementations_and_nothing_else_moves() {
+        let raw = fixture("sse-risk-notice-titles.json");
+        let fixture_json: serde_json::Value =
+            serde_json::from_slice(&raw).expect("fixture is JSON");
+        let codes: Vec<&str> = fixture_json["codes"]
+            .as_array()
+            .expect("codes array")
+            .iter()
+            .map(|code| code.as_str().expect("code is a string"))
+            .collect();
+        assert_eq!(codes.len(), 14, "the forensic set is 14 announcements");
+        let open: Vec<&str> = fixture_json["open_interval_codes_after_v6"]
+            .as_array()
+            .expect("open-interval array")
+            .iter()
+            .map(|code| code.as_str().expect("code is a string"))
+            .collect();
+        assert_eq!(open.len(), 7, "7 of them left an open interval");
+        for code in &open {
+            assert!(codes.contains(code), "{code} is one of the 14");
+        }
+
+        let titles: Vec<&str> = fixture_json["titles"]
+            .as_array()
+            .expect("titles array")
+            .iter()
+            .map(|title| title.as_str().expect("title is a string"))
+            .collect();
+        assert_eq!(titles.len(), 2, "both recorded spellings are pinned");
+        for title in &titles {
+            assert_eq!(
+                classify_title_with(title, true),
+                Some((
+                    RiskWarningAction::Implement,
+                    Some(RiskStatus::DelistingRiskWarning)
+                )),
+                "before v7 this title was an implementation: {title}"
+            );
+            assert!(
+                classify_title(title).is_none(),
+                "after v7 it is a notice, not an event: {title}"
+            );
+        }
+
+        // The difference is confined to those titles: every other shape the
+        // census covers classifies the same under the v6 and the v7 rule, and
+        // the expected verdict is pinned rather than only compared, so a
+        // title that silently became "not an event" would fail here. Each of
+        // these is a real title shape from the D-68 census or the tests above.
+        for (title, expected) in [
+            (
+                "关于公司股票被实施其他风险警示的公告",
+                Some((
+                    RiskWarningAction::Implement,
+                    Some(RiskStatus::OtherRiskWarning),
+                )),
+            ),
+            (
+                "关于公司股票被实施退市风险警示的公告",
+                Some((
+                    RiskWarningAction::Implement,
+                    Some(RiskStatus::DelistingRiskWarning),
+                )),
+            ),
+            (
+                "太工天成关于股票交易实行退市风险警示的提示性公告",
+                Some((
+                    RiskWarningAction::Implement,
+                    Some(RiskStatus::DelistingRiskWarning),
+                )),
+            ),
+            (
+                "关于因未披露年报被实施退市风险警示的提示性公告",
+                Some((
+                    RiskWarningAction::Implement,
+                    Some(RiskStatus::DelistingRiskWarning),
+                )),
+            ),
+            (
+                "某公司关于撤销退市风险警示并继续被实施其他风险警示暨临时停牌的公告",
+                Some((
+                    RiskWarningAction::Implement,
+                    Some(RiskStatus::OtherRiskWarning),
+                )),
+            ),
+            (
+                "某公司关于撤销退市风险警示并变更股票简称的公告",
+                Some((RiskWarningAction::Revoke, None)),
+            ),
+            (
+                "国投电力撤消公司股票特别处理的公告",
+                Some((RiskWarningAction::Revoke, None)),
+            ),
+            (
+                "*ST民丰关于公司股票解除退市风险警示公告",
+                Some((RiskWarningAction::Revoke, None)),
+            ),
+            ("关于申请撤销公司股票其他风险警示的公告", None),
+            ("某公司关于公司股票被实施退市风险警示情形将消除的公告", None),
+            ("某律师事务所关于某公司撤销其他风险警示的法律意见书", None),
+            (
+                "关于公司股票被实施其他风险警示相关事项的进展公告",
+                Some((
+                    RiskWarningAction::Implement,
+                    Some(RiskStatus::OtherRiskWarning),
+                )),
+            ),
+        ] {
+            assert_eq!(
+                classify_title_with(title, true),
+                expected,
+                "v6 verdict for {title}"
+            );
+            assert_eq!(
+                classify_title(title),
+                expected,
+                "the v7 rule must not move this title: {title}"
+            );
+        }
+    }
+
+    /// The exclusion is the 存在-before-实施 shape with a risk as the object of
+    /// 实施, not the bare word: an announcement that reports an implementation
+    /// and merely mentions 存在 elsewhere stays an event (D-81 GP29 §7,
+    /// "不要写得过宽").
+    #[test]
+    fn a_title_that_merely_mentions_existence_is_still_an_event() {
+        assert_eq!(
+            classify_title("某公司关于公司股票被实施退市风险警示的公告（存在异议）"),
+            Some((
+                RiskWarningAction::Implement,
+                Some(RiskStatus::DelistingRiskWarning)
+            )),
+            "存在 after 实施 is not the notice shape"
+        );
+        assert_eq!(
+            classify_title("某公司关于公司股票被实施退市风险警示及存在暂停上市风险的公告"),
+            Some((
+                RiskWarningAction::Implement,
+                Some(RiskStatus::DelistingRiskWarning)
+            )),
+            "a real implementation that also mentions an existing risk stays an event"
+        );
+        assert!(
+            classify_title("某公司关于公司股票存在被实施退市风险警示风险的提示性公告").is_none(),
+            "存在 before 实施 with a risk as its object is a notice"
+        );
+        assert!(
+            classify_title("存在被实施退市风险警示及暂停上市风险的提示公告").is_none(),
+            "the forensics title shape"
         );
     }
 
