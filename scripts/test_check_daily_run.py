@@ -185,10 +185,13 @@ class Fixture:
         self.acquire.execute("INSERT INTO generations VALUES(?,?,?,?,?)",
                              (gid, state, "m", "VERIFIED_COMPATIBLE", "t"))
 
+    archive_members: set[str] | None = None
+
     def check(self, activated: bool = True, session: cdr.Session | None = None) -> dict:
         active = {"generation_id": GEN_NEW, "previous_generation_id": GEN_OLD,
                   "activated_at": stamp(5 if activated else -600)}
-        return cdr.run_checks(self.conn, SINCE, active, {"etag": '"abc"', "bytes": 1}, self.acquire, session)
+        return cdr.run_checks(self.conn, SINCE, active, {"etag": '"abc"', "bytes": 1}, self.acquire, session,
+                              self.archive_members)
 
 
 def full_day(fx: Fixture) -> None:
@@ -334,6 +337,34 @@ class MissedSteps(unittest.TestCase):
         step = by_id(fx.check())["3.3a-new"]
         self.assertEqual(step["status"], cdr.MISSING)
         self.assertEqual(step["details"]["missing"], ["sz.159999"])
+
+    def test_new_etf_member_absent_from_the_official_archive_is_a_known_gap(self) -> None:
+        fx = Fixture()
+        full_day(fx)
+        fx.etf_member("sh.526000", listing=TARGET_DAY - 3)   # not in the day archive: nothing can collect it
+        fx.archive_members = {"sh510300", "sz159999"}
+        step = by_id(fx.check())["3.3a-new"]
+        self.assertEqual(step["status"], cdr.NO_ACTION, step)
+        self.assertEqual(step["details"]["absent_from_official_archive"], 1)
+        self.assertEqual(step["details"]["absent_sample"], ["sh.526000"])
+
+    def test_new_etf_member_in_the_archive_without_series_is_still_flagged(self) -> None:
+        fx = Fixture()
+        full_day(fx)
+        fx.etf_member("sz.159999", listing=TARGET_DAY - 3)
+        fx.etf_member("sh.526000", listing=TARGET_DAY - 3)
+        fx.archive_members = {"sz159999"}                      # one is in the archive, one is not
+        step = by_id(fx.check())["3.3a-new"]
+        self.assertEqual(step["status"], cdr.MISSING)
+        self.assertEqual(step["details"]["missing"], ["sz.159999"])
+        self.assertEqual(step["details"]["absent_from_official_archive"], 1)
+
+    def test_unreadable_archive_infers_nothing_from_it(self) -> None:
+        fx = Fixture()
+        full_day(fx)
+        fx.etf_member("sh.526000", listing=TARGET_DAY - 3)
+        fx.archive_members = None
+        self.assertEqual(by_id(fx.check())["3.3a-new"]["status"], cdr.MISSING)
 
     def test_new_etf_member_known_gaps_are_not_flagged(self) -> None:
         fx = Fixture()

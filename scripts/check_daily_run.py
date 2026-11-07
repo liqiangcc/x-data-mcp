@@ -373,6 +373,9 @@ class Context:
     warnings: list[str] = field(default_factory=list)
     activated: bool = False
     required: bool = True  # False on a proven "no update" day
+    # Lower-case `sh510300`-style symbols in the active generation's day archive,
+    # or None when the archive could not be read (then nothing is inferred from it).
+    archive_members: set[str] | None = None
 
     def of(self, kind: str) -> list[Task]:
         return [t for t in self.tasks if t.kind == kind]
@@ -657,8 +660,11 @@ def step_etf_new_listing(ctx: Context) -> dict:
     daily series, already listed on or before the newest day, and not a known
     gap. A known gap is a `proven_gaps` day row for the symbol or a
     first-collection item that failed with `member absent or ambiguous`
-    (the official snapshot lacks the member). Such a member needs the
-    operator's one-off ETF first collection (Skill §3.3a, not a daily step)."""
+    (the official snapshot lacks the member). A member that is not in the
+    active generation's day archive at all is a known gap too: no collection can
+    produce a series for it, so it is listed apart and never flagged. Any other
+    such member needs the operator's one-off ETF first collection (Skill §3.3a,
+    not a daily step)."""
     title = "§3.3a ETF 新上市成员补采"
     if not ctx.required and not ctx.tasks:
         return not_required("3.3a-new", "§3.3a", title)
@@ -678,18 +684,21 @@ def step_etf_new_listing(ctx: Context) -> dict:
             "AND json_extract(i.outcome_json,'$.error') LIKE '%member absent or ambiguous%'"
         ) if r[0]
     }
-    lacking, not_yet, known = [], [], []
+    lacking, not_yet, known, absent = [], [], [], []
     for entity, listing in members:
         if entity in series:
             continue
         if entity in gaps:
             known.append(entity)
+        elif ctx.archive_members is not None and entity.replace(".", "") not in ctx.archive_members:
+            absent.append(entity)
         elif listing is not None and target is not None and listing > target:
             not_yet.append(entity)
         else:
             lacking.append(entity)
     details = dict(current_members=len(members), with_series=len(series & {m[0] for m in members}),
-                   known_gap=sample(known), listed_after_target=sample(not_yet))
+                   known_gap=sample(known), listed_after_target=sample(not_yet),
+                   absent_from_official_archive=len(absent), absent_sample=sample(absent))
     if lacking:
         return step("3.3a-new", "§3.3a", title, MISSING,
                     f"{len(lacking)} 个 ETF 成员在 security_master 里有、没有序列、也不是已知缺段",
@@ -1023,6 +1032,23 @@ def hot_generations(ctx: Context) -> dict | None:
 # --------------------------------------------------------------------------
 
 
+def read_archive_members(root: Path, active: dict | None) -> set[str] | None:
+    """Symbols (`sh510300`) in the active generation's `hsjday.zip`, read from the
+    zip directory only. None when there is no active generation or no archive."""
+    if not active:
+        return None
+    path = root / "generations" / active.get("generation_id", "") / "hsjday.zip"
+    if not path.is_file():
+        return None
+    import zipfile
+    try:
+        with zipfile.ZipFile(path) as archive:
+            return {n.replace("\\", "/").rsplit("/", 1)[-1][:-4].lower()
+                    for n in archive.namelist() if n.lower().endswith(".day")}
+    except (OSError, zipfile.BadZipFile):
+        return None
+
+
 def read_generation_root(root: Path) -> tuple[dict | None, dict | None, sqlite3.Connection | None]:
     if not root.is_dir():
         raise InputError(f"not a directory: {root}")
@@ -1046,6 +1072,7 @@ def run_checks(
     active_day_file: dict | None,
     acquire: sqlite3.Connection | None,
     session: Session | None = None,
+    archive_members: set[str] | None = None,
 ) -> dict:
     """Pure function over open connections; the tests drive it directly."""
     present = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -1053,6 +1080,7 @@ def run_checks(
     if absent:
         raise InputError("database lacks tables (schema too old or not a market DB): " + ", ".join(absent))
     ctx = Context(conn, since, active, active_day_file, acquire, session)
+    ctx.archive_members = archive_members
     ctx.tasks = load_tasks(conn, since)
     ctx.members = universe(conn)
     ctx.daily = a_share_daily(conn, ctx.members)
@@ -1153,7 +1181,8 @@ def main(argv: list[str] | None = None) -> int:
         conn = open_readonly(args.db)
         active, day_file, acquire = read_generation_root(args.generations)
         session = read_session(args.session) if args.session else None
-        report = run_checks(conn, since, active, day_file, acquire, session)
+        report = run_checks(conn, since, active, day_file, acquire, session,
+                            read_archive_members(args.generations, active))
         report["db"] = {"path": str(args.db), "schema_version": conn.execute("PRAGMA user_version").fetchone()[0]}
     except (InputError, sqlite3.Error, ValueError, OSError) as error:
         print(f"check_daily_run: {error}", file=sys.stderr)
