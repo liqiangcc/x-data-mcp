@@ -173,8 +173,8 @@ fn state_of(tradability: Tradability) -> &'static str {
 }
 
 /// `get_tradability`: whether each A share could trade on `as_of`, plus that
-/// day's price limits. One shared context decodes the whole-table inputs once
-/// for the whole batch.
+/// day's price limits and the basis each limit was computed from. One shared
+/// context decodes the whole-table inputs once for the whole batch.
 pub fn tradability(
     c: &Connection,
     securities: &[Security],
@@ -260,6 +260,7 @@ fn absent_tradability(securities: &[Security], as_of: NaiveDate) -> Value {
             "limit_reason": vec!["input_absent"; count],
             "limit_candidates": vec![Value::Null; count],
             "risk_status": vec!["unknown"; count],
+            "limit_basis": vec![Value::Null; count],
             "limit_up": vec![Value::Null; count],
             "limit_down": vec![Value::Null; count],
             "prev_close": vec![Value::Null; count],
@@ -337,6 +338,7 @@ struct Columns {
     limit_reason: Vec<Value>,
     limit_candidates: Vec<Value>,
     risk_status: Vec<Value>,
+    limit_basis: Vec<Value>,
     limit_up: Vec<Value>,
     limit_down: Vec<Value>,
     prev_close: Vec<Value>,
@@ -382,6 +384,15 @@ impl Columns {
             Some(class) => json!(class.as_str()),
             None => json!("unknown"),
         });
+        // The basis is the research enum's own label; `None` covers every
+        // answer without a limit price (`unknown`, `unbounded`, not in the
+        // main table, not an A share), so the column never implies a basis a
+        // limit was not computed from.
+        self.limit_basis.push(
+            limit
+                .limit_basis
+                .map_or(Value::Null, |basis| json!(basis.as_str())),
+        );
         let scale = limit.price_scale;
         self.limit_up.push(match (limit.limit_up_units, scale) {
             (Some(units), Some(scale)) => json!(price(units, scale)),
@@ -414,6 +425,7 @@ impl Columns {
             "limit_reason": self.limit_reason,
             "limit_candidates": self.limit_candidates,
             "risk_status": self.risk_status,
+            "limit_basis": self.limit_basis,
             "limit_up": self.limit_up,
             "limit_down": self.limit_down,
             "prev_close": self.prev_close,

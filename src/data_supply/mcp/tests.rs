@@ -6489,6 +6489,320 @@ fn derived_fixture() -> Fixture {
     f
 }
 
+/// The witnesses the `limit_basis` test needs on top of [`derived_fixture`]:
+///
+/// * `sz.300116` — a cat1 event with no allotment on the 2020 witness day, so
+///   the basis is the computed `reference_price` (GEM after 2020-08-24 has one
+///   band for every status, so the derivation reaches the basis).
+/// * `sz.300118` — a 2009-11 window, the only period where the official r7
+///   reference price is reachable (before the 2010-09-14 cutoff) on a board
+///   whose band does not depend on the risk status. Before 2020-08-24 the GEM
+///   ST and non-ST bands differ, so it also needs a `normal` risk-warning row:
+///   without a status the derivation stops at `st_unknown` before the basis.
+fn derived_limit_basis_fixture() -> Fixture {
+    use crate::compact_market::{CompactBar, EvidenceKind, SourceBinding, epoch_day};
+    use crate::market_data::{Adjustment, CoverageStatus, Period};
+    use crate::security_master::assembly::Assembly;
+    use crate::security_master::coverage::CoverageWindow;
+    use crate::security_master::risk_warnings::RiskWarningSet;
+    use crate::security_master::suspensions::SuspensionSet;
+    use crate::security_master::{
+        Exchange, RiskStatus, RiskWarningInterval, SuspensionCertainty, SuspensionInterval,
+        SuspensionReason,
+    };
+    use crate::sqlite_market::risk_warnings::RiskWarningWrite;
+    use crate::sqlite_market::series::NewSeries;
+    use crate::sqlite_market::{evidence_store, security, series, suspensions};
+
+    let f = derived_fixture();
+    let days = derived_days();
+    let gem_days = vec![
+        day(2009, 10, 30),
+        day(2009, 11, 2),
+        day(2009, 11, 3),
+        day(2009, 11, 4),
+        day(2009, 11, 5),
+        day(2009, 11, 6),
+        day(2009, 11, 9),
+        day(2009, 11, 10),
+        day(2009, 11, 11),
+        day(2009, 11, 12),
+        day(2009, 11, 13),
+        day(2009, 11, 16),
+        day(2009, 11, 17),
+    ];
+
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        let generation = evidence_store::put_evidence(
+            c,
+            EvidenceKind::Generation,
+            &json!({"generation": "gen-basis"}),
+        )?;
+        let binding = evidence_store::put_source_binding(
+            c,
+            &SourceBinding {
+                generation_id: "gen-basis".into(),
+                generation_manifest_sha256: [0x1b; 32],
+                day_member_sha256: [0x1c; 32],
+                security_event_sha256: [0x1e; 32],
+                evidence_digest: generation,
+            },
+        )?;
+        let evidence = evidence_store::put_evidence(
+            c,
+            EvidenceKind::Version,
+            &serde_json::to_value(crate::compact_market::VersionEvidence {
+                source: "official".into(),
+                coverage_reason: "fixture".into(),
+                unit_currency: units(),
+                adjustment_evidence: crate::market_data::AdjustmentEvidence::confirmed(
+                    "raw", "fixture",
+                ),
+                excluded_bars: None,
+            })
+            .unwrap(),
+        )?;
+
+        // sz.300116: the 2020 window, same bars as the other witnesses there.
+        seed_derived_series(
+            c,
+            binding,
+            evidence,
+            "sz.300116",
+            &[0, 1, 2, 3, 4],
+            7000,
+            0x81,
+        );
+
+        // sz.300118: the 2009 window. Every bar carries r7_raw=7 except the
+        // witness day, whose 2702 is the official reference price in fen.
+        let bars: Vec<CompactBar> = gem_days
+            .iter()
+            .enumerate()
+            .map(|(index, when)| CompactBar {
+                trade_day: epoch_day(*when),
+                open_units: 2500,
+                high_units: 2520,
+                low_units: 2490,
+                close_units: 2500 + index as i64,
+                volume: Some(100),
+                amount: Some("100500.00".into()),
+                r7_raw: Some(if *when == day(2009, 11, 17) { 2702 } else { 7 }),
+            })
+            .collect();
+        let key = series::insert_series(
+            c,
+            &NewSeries {
+                entity: "sz.300118".into(),
+                period: Period::Day,
+                adjustment: Adjustment::Raw,
+                instrument_class: crate::market_data::INSTRUMENT_CLASS_STOCK,
+                price_scale: 2,
+                content_digest: [0x82; 32],
+                record_count: bars.len() as i64,
+                first_day: bars[0].trade_day,
+                last_day: bars[bars.len() - 1].trade_day,
+                coverage_status: CoverageStatus::Complete,
+                source_binding_digest: binding,
+                evidence_digest: evidence,
+                last_event_seq: 1,
+                created_at: "2026-10-26T00:00:00Z".into(),
+                updated_at: "2026-10-26T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        series::insert_bars(c, key, &bars).unwrap();
+
+        let mut rows = security::read_security_master(c)?;
+        rows.push(derived_lifecycle(
+            Exchange::Sz,
+            "300116",
+            Some(day(2020, 1, 2)),
+            None,
+            0,
+        ));
+        rows.push(derived_lifecycle(
+            Exchange::Sz,
+            "300118",
+            Some(day(2009, 10, 30)),
+            None,
+            0,
+        ));
+        security::replace_security_master(
+            c,
+            &Assembly {
+                rows,
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(days[4]),
+            },
+            binding,
+            "task-master-basis",
+            "derived:security_master",
+        )?;
+
+        // Cat1 events without an allotment component: the reference price is
+        // computable, so the basis is not withheld as `ex_rights_unverified`.
+        for (entity, when, item) in [
+            ("sz.300116", days[4], "item-basis-300116"),
+            ("sz.300118", day(2009, 11, 17), "item-basis-300118"),
+        ] {
+            crate::sqlite_market::derived::replace_adjustment_events(
+                c,
+                &crate::market_data::AdjustmentEventSet {
+                    entity: entity.into(),
+                    events: vec![crate::market_data::AdjustmentEvent {
+                        ordinal: 1,
+                        effective_day: when,
+                        category: 1,
+                        c_bits: [
+                            1.6f32.to_bits(),
+                            0.0f32.to_bits(),
+                            3.0f32.to_bits(),
+                            0.0f32.to_bits(),
+                        ],
+                        factors: [
+                            rust_decimal::Decimal::new(16, 1),
+                            rust_decimal::Decimal::ZERO,
+                            rust_decimal::Decimal::new(30, 1),
+                            rust_decimal::Decimal::ZERO,
+                        ],
+                        known_at: None,
+                        basis_status: crate::market_data::FactorBasisStatus::Verified,
+                    }],
+                    excluded: 0,
+                    precision: crate::market_data::FactorPrecision::Stock2dp,
+                },
+                binding,
+                "task-events-basis",
+                item,
+            )?;
+        }
+
+        // The basis is a property of the day, not of trading: 300116 is
+        // suspended on the witness day and still has a derivable limit. The
+        // two existing rows are kept as they are.
+        let suspension = |code: &str,
+                          start: NaiveDate,
+                          end: NaiveDate,
+                          certainty: SuspensionCertainty,
+                          missing_days: i64,
+                          reason: SuspensionReason| SuspensionInterval {
+            exchange: Exchange::Sz,
+            code: code.into(),
+            start_day: start,
+            end_day: end,
+            certainty,
+            missing_days,
+            reason,
+            known_at: None,
+            source_kind: "fixture".into(),
+            source_record_id: None,
+        };
+        let set = SuspensionSet {
+            rows: vec![
+                suspension(
+                    "000631",
+                    days[1],
+                    days[3],
+                    SuspensionCertainty::UnresolvedGap,
+                    3,
+                    SuspensionReason::MissingBarNoEvent,
+                ),
+                suspension(
+                    "000004",
+                    days[1],
+                    days[2],
+                    SuspensionCertainty::Confirmed,
+                    2,
+                    SuspensionReason::ExchangeAnnouncement,
+                ),
+                suspension(
+                    "300116",
+                    days[4],
+                    days[4],
+                    SuspensionCertainty::Confirmed,
+                    1,
+                    SuspensionReason::ExchangeAnnouncement,
+                ),
+            ],
+            confirmed_rows: 2,
+            gap_rows: 1,
+            single_day_gap_rows: 0,
+            multi_day_gap_rows: 1,
+            deferred_beyond_calendar: 0,
+            deferred_samples: Vec::new(),
+            skipped_no_trading_day: 0,
+            skipped_samples: Vec::new(),
+            pending_sources: Vec::new(),
+        };
+        suspensions::replace_suspensions(
+            c,
+            &set,
+            binding,
+            "task-suspensions-basis",
+            "derived:suspensions",
+        )?;
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+
+    // A `normal` status for the 2009 witness. D-81 admits `normal` only for SZ
+    // name-history rows, which is exactly what this is.
+    let set = RiskWarningSet {
+        rows: vec![RiskWarningInterval {
+            exchange: Exchange::Sz,
+            code: "300118".into(),
+            effective_from: day(2009, 10, 30),
+            effective_to: None,
+            status: RiskStatus::Normal,
+            raw_status_code: "normal".into(),
+            announced_at: None,
+            known_at: None,
+            source_kind: "szse_name_history".into(),
+            source_record_id: Some("sz|300118|2009-10-30".into()),
+            source_document_sha256: None,
+        }],
+        coverage: vec![CoverageWindow {
+            source_kind: "szse_name_history".into(),
+            exchange: Exchange::Sz,
+            from: day(2009, 10, 30),
+            to: day(2009, 11, 17),
+            observed: true,
+            rows: 1,
+            reason: "fixture".into(),
+        }],
+        pending_sources: Vec::new(),
+    };
+    f.backend
+        .commit_risk_warnings(&RiskWarningWrite {
+            set: &set,
+            task_id: "task-risk-basis",
+            item_id: "derived:risk_warnings",
+            generation_id: "gen-basis-risk",
+            generation_manifest_sha256: &"61".repeat(32),
+            member_sha256: &"62".repeat(32),
+            security_event_sha256: &"63".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-basis-risk"}),
+        })
+        .unwrap();
+
+    let mut all_days = days.clone();
+    all_days.extend_from_slice(&gem_days);
+    // The 2020 witnesses are listed on 2020-01-02. The committed calendar is
+    // replaced, so the listing day has to stay in it: a listing that predates
+    // the calendar's first day is only `seasoned` while the calendar is short.
+    all_days.push(day(2020, 1, 2));
+    all_days.sort_unstable();
+    commit_calendar_days(&f, &all_days);
+    f
+}
+
 fn tradability_row(answer: &Value, entity: &str) -> Value {
     let index = answer["entities"]
         .as_array()
@@ -6594,6 +6908,13 @@ fn get_tradability_matches_the_research_functions_row_by_row() {
                 limit
                     .prev_close_day
                     .map_or(Value::Null, |day| json!(day.to_string())),
+                "{entity}"
+            );
+            assert_eq!(
+                row["limit_basis"],
+                limit
+                    .limit_basis
+                    .map_or(Value::Null, |basis| json!(basis.as_str())),
                 "{entity}"
             );
             assert_eq!(
@@ -6747,6 +7068,61 @@ fn get_tradability_reports_ex_rights_unverified_instead_of_a_biased_limit() {
     // The previous close is still reported: it exists, it is just not the
     // basis of a limit.
     assert_eq!(row["prev_close"], json!("60.03"));
+    // No limit price, no basis: the column is null, not the previous close.
+    assert_eq!(row["limit_basis"], Value::Null, "{row}");
+}
+
+#[test]
+fn get_tradability_names_the_basis_of_each_limit() {
+    let f = derived_limit_basis_fixture();
+
+    // 2020-09-11: the GEM band is the same for every status, so all three
+    // reach a basis.
+    let answer = f
+        .api
+        .call(
+            "get_tradability",
+            json!({
+                "securities": ["sz.300114", "sz.300116", "sz.300115"],
+                "as_of": derived_days()[4].to_string(),
+            }),
+        )
+        .unwrap();
+
+    // No ex-rights event: the previous close is the basis.
+    let prev = tradability_row(&answer, "sz.300114");
+    assert_eq!(prev["limit_state"], json!("known"), "{prev}");
+    assert_eq!(prev["limit_basis"], json!("prev_close"), "{prev}");
+
+    // An ex-rights event after the cutoff: the computed reference price. The
+    // code is also suspended that day, and the basis is still reported: it
+    // describes the day's limit, not whether an order would have filled.
+    let reference = tradability_row(&answer, "sz.300116");
+    assert_eq!(reference["state"], json!("not_tradable"), "{reference}");
+    assert_eq!(reference["reason"], json!("suspended"), "{reference}");
+    assert_eq!(reference["limit_state"], json!("known"), "{reference}");
+    assert_eq!(
+        reference["limit_basis"],
+        json!("reference_price"),
+        "{reference}"
+    );
+    assert!(reference["limit_up"].is_string(), "{reference}");
+
+    // Before the 2010-09-14 cutoff the official r7 reference price wins: prev
+    // close 25.11, r7 2702 fen (27.02), 10% band → 29.72 / 24.32.
+    let answer = f
+        .api
+        .call(
+            "get_tradability",
+            json!({"securities": ["sz.300118"], "as_of": "2009-11-17"}),
+        )
+        .unwrap();
+    let official = tradability_row(&answer, "sz.300118");
+    assert_eq!(official["limit_state"], json!("known"), "{official}");
+    assert_eq!(official["limit_basis"], json!("official_r7"), "{official}");
+    assert_eq!(official["prev_close"], json!("25.11"), "{official}");
+    assert_eq!(official["limit_up"], json!("29.72"), "{official}");
+    assert_eq!(official["limit_down"], json!("24.32"), "{official}");
 }
 
 #[test]
@@ -6767,12 +7143,31 @@ fn get_tradability_says_input_absent_when_suspensions_were_never_written() {
     assert_eq!(answer["columns"]["reason"], json!(["input_absent"]));
     assert_eq!(answer["columns"]["limit_state"], json!(["unknown"]));
     assert_eq!(answer["columns"]["limit_reason"], json!(["input_absent"]));
+    // No input, no basis: the column exists and is null, never a borrowed
+    // label.
+    assert_eq!(answer["columns"]["limit_basis"], json!([null]));
     assert!(
         answer["limitations"][0]
             .as_str()
             .unwrap()
             .contains("input_absent")
     );
+
+    // Both branches produce a table, so they must carry the same column set:
+    // a caller can read a response without asking which branch answered.
+    let present = derived_fixture()
+        .api
+        .call(
+            "get_tradability",
+            json!({"securities": ["sz.000001"], "as_of": derived_days()[2].to_string()}),
+        )
+        .unwrap();
+    let mut absent_columns: Vec<&String> = answer["columns"].as_object().unwrap().keys().collect();
+    let mut present_columns: Vec<&String> =
+        present["columns"].as_object().unwrap().keys().collect();
+    absent_columns.sort();
+    present_columns.sort();
+    assert_eq!(absent_columns, present_columns);
 }
 
 #[test]
