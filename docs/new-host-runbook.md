@@ -127,18 +127,23 @@ rsync -a --partial --rsync-path="$R" $SRC:/root/x-daily-sync/ /root/x-daily-sync
 - **`x-data-mcp-data`**：一个进程三个 socket（`mcp.sock` 的 `--entry ops`、`research.sock`、`maint.sock`），尾部 `--poll-ms 1000`。
 - **`x-data-mcp-acquire`**：`acquire_service <generations> <acquire.sock> --market-db <state/preview.sqlite>`。
 
-drop-in（逐字沿用来源机，第一次测量不调参）：
+drop-in（除 `memory.conf` 按内存分档取推荐值外，其余逐字沿用来源机；第一次测量不调参）：
 
 | 单元 | drop-in | 内容 |
 |---|---|---|
 | data | `exec-start.conf` | 三 socket 的 `ExecStart`（先写空的 `ExecStart=` 复位） |
 | data | `generation.conf` | `X_DATA_MCP_GENERATION_ROOT=/opt/x-data-mcp-preview/generations`，并把该目录加进 `ReadWritePaths` |
 | data | `source-store.conf` | `X_DATA_MCP_SOURCE_STORE=/opt/x-data-mcp-preview/state/source-store` |
-| data | `memory.conf` | `MemoryHigh=384M`、`MemoryMax=640M`、`MemorySwapMax=512M` |
+| data | `memory.conf` | 约 7.6 GiB 机器：`MemoryHigh=1G`、`MemoryMax=1536M`、`MemorySwapMax=0`；约 1.9 GiB 机器：`MemoryHigh=448M`、`MemoryMax=640M`、`MemorySwapMax=256M`（未实测，低置信） |
 | data | `prepare-workers.conf` | `X_DATA_MCP_RUN_PREPARE_WORKERS=1` |
 | data | `text-mode.conf` | `X_DATA_MCP_TEXT_MODE=full` |
 | acquire | `market-db.conf` | 追加 `--market-db`，并把 `state` 加进 `ReadWritePaths` |
 | data、acquire | **`timezone.conf`** | `[Service]` 下 `Environment=TZ=UTC` |
+
+旧值 `MemoryHigh=384M` 会让 #547 的读预算在 `memory.high` 的 85%（约 326 MiB）就拒绝读取；
+上面的值把 7.6 GiB 机器的读预算抬到约 870 MiB，1.9 GiB 机器抬到约 381 MiB。`MemorySwapMax=0`
+表示该 cgroup 不使用 swap：超过 `MemoryMax` 时内核直接 OOM 杀掉 data 服务（不是只节流或拒绝读取），
+所以 `MemoryMax` 要留出日更峰值余量，重启交给 systemd。1.9 GiB 那一组没有实测，置信低。
 
 **`TZ=UTC` 对 preview.45 及更早的二进制必须加；含 D-75 PR-1 的 release 起不再需要。**
 preview.45 及更早的 `src/data_supply/query.rs` 里 `today()` 用 `chrono::Local::now()`，决定读面默认 `as_of` 的“今天”。
