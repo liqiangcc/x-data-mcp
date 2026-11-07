@@ -31,6 +31,8 @@
 | 游标池变成进程级：总 48 MiB、单连接 24 MiB 且 32 条，LRU 淘汰 | 约 5 个以上全市场读者同时翻页时，别的连接可能收到 `invalid/expired cursor`，要重新查询 | #547 |
 | `market.risk_warnings` 的 `coverage_reason` 文案，不再有过时的 `pending`/`#308` 文字 | 只是文本 | #539、#548 |
 | ETF 的 `security_master.effective_from`（D-80）：有 `listing_date` 的 class=2 行取上市日，`known_at` 仍是首次观察日；没有上市日的行不变。A 股行不变。schema 与列不变；主表 `algorithm_version` 升到 `security-master-assembly-v2`，导出 `producer` 随之变化 | `market.security_master`、`universe_intervals` 里 ETF 行的 `effective_from`/`member_from` 变早；`snapshot_id` 随之变；`known_at` 早于首次观察日的查询仍排除并计数。v10 是已部署快照，不改：v10 §1.1「这两个字段是身份观测/退市上界」按旧取值写 | [#509](https://github.com/liqiangcc/x-data-mcp/issues/509)，[M3-2 设计](../tasks/issue-509-m3-2-etf.md) §3.3 |
+| `market.risk_warnings` 的开区间按 `security_master.delisting_date` 截断（#587）：`effective_to` 为空且证券有退市日时，返回的有效终点取退市日（排他），`effective_to` 列写截断后的值；退市日当天及之后不再返回该区间。导出、`version_id`、`snapshot_id`、schema、`tools/list` 都不变 | 已退市证券不再在退市后的日子被读成 ST；`get_security_history` 的窗口重叠也按截断后的终点判断 | [#587](https://github.com/liqiangcc/x-data-mcp/issues/587)，[D-86](../decisions.md)、§5.7 |
+| `market.risk_warnings` 的沪市生效日按 D-84 取「公告日当天或其后第一个交易日的下一个交易日」（显式标题日期优先）；实施与撤销同一规则，`known_at` 仍是公告日。无 schema 变化，无 `tools/list` 变化 | 库内 884 行沪市事件整体后移 1–2 个交易日；行内容变化使下次写入的 `version_id`/内容摘要变化；日历覆盖不到的事件暂不写行、状态 `unknown` | [#308](https://github.com/liqiangcc/x-data-mcp/issues/308)、D-84、§5.8 |
 
 x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不受前两行分页形状影响；错误以 `isError` 到达（2026-11-06 读 `liqiangcc/x` 确认）。
 
@@ -229,7 +231,21 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
   `PARSER_VERSION` 不受影响（`v7` 只改标题分类，解析器版本只有本 PR 动）。
 - 无 schema 变化，无 `tools/list` 变化，无需重新 `init`。
 
-### 5.7 沪市生效日 R2：公告日后的下一个交易日（D-84）
+### 5.7 开区间按退市日截断（#587）
+
+`market.risk_warnings` 的开区间（`effective_to` 为空）在读到已退市证券时不再无限延伸：
+
+- 读路径在 **query 过滤阶段**取 `security_master.delisting_date`，有效终点 = min(存储的 `effective_to`, 退市日)，返回行的 `effective_to` 列写截断后的值。`get_security_state`、`query_data`、`get_security_history` 三个入口一致。
+- **退市日是排他上界**：`as_of >= delisting_date` 即不再返回。这与 `security_master.effective_to` 的区间终点口径相同，也与 `member_state` 的 `Out(AfterDelisting)`（`as_of >= delisting` 判出）一致——退市日当天证券已不在成员内。
+- 已关闭且 `effective_to <= 退市日` 的区间不变；`effective_to` 晚于退市日的区间同样截到退市日。
+- 证券没有退市日、或主表查不到该代码：不截断，行为与 v10 相同（没有可用的上界，不猜）。
+- 同一代码被复用时按「区间起点所在的生命周期行」的退市日截断；区间早于所有主表行时取最早一行的退市日。
+- 截断是读时过滤：导出（`research::read::risk_warning_rows`）、`derived_dataset_versions.version_id`、`snapshot_id`、schema、`tools/list` 都不变。导出仍带原始开区间（`effective_to = NULL`）。
+- 关联的读时派生：`price_limit` 在 `membership = Out(AfterDelisting)` 时原因码为 `delisted`（此前是 `not_listed`，与「从未上市」同码），答案仍是 `unknown`；其余 `Out(_)` 仍是 `not_listed`。`tradability` 早已是 `delisted`，不变。
+- 测试：`data_supply::mcp::tests::risk_warnings_open_intervals_stop_at_the_delisting_date`（沪深各 3 个代码 × 退市前一日/退市日/退市后一年 × `get_security_state` 与 `query_data`）、`risk_warnings_truncate_only_open_intervals_of_delisted_securities`（无退市日、主表缺行、已关闭区间）、`read_time_truncation_leaves_the_export_identity_unchanged`、`sqlite_supply::m2::tests::delisting_truncates_only_open_intervals_of_the_lifecycle_row_in_force`、`research::read_model_tests::price_limit_separates_delisted_from_never_listed`。
+- 未覆盖：线上库（本任务不访问线上）；影响面按 #579 取证是沪 104 + 深 68 个开区间行，部署后第一次读取即生效，不需要重跑派生。
+
+### 5.8 沪市生效日 R2：公告日后的下一个交易日（D-84）
 
 **规则**：沪市公告没有显式生效日时，生效日 = **公告日当天或其后第一个交易日的下一个交易日**。
 公告日是交易日 → 下一个交易日；周五 → 下周一；周六 → 下周二。有显式标题日期时保留显式日期，
@@ -357,3 +373,37 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 ### 8.5 未覆盖
 
 生产机与生产库（本任务不访问线上）；「22 分钟」这个绝对值只能按生产实测的每请求成本换算；`status_of` 不补 `revisions`/per-source 行（与 `full` 一致，需要时查库）。
+## 9. 派生只读工具（D-82 PR-B，代码面）
+
+`research` 入口新增 `get_tradability` 和 `get_market_cap`。状态：代码面（未部署）。
+
+| 工具 | 必填 | 可选 | 数据来源 |
+|---|---|---|---|
+| `get_tradability` | `securities`（1..100） | `as_of` | `security_master`, `suspensions`, `trading_calendar`, `risk_warning_intervals`, `series_bars`, `price_limit_rules` |
+| `get_market_cap` | `securities`（1..100）, `scope` | `as_of` | `capital_events`, `series_bars` |
+
+- 不接受 `known_at`：输入表缺少知晓时间列，传了返回 `invalid_arguments`，消息指向 `get_security_state`。
+- 不分页：每次调用读全部请求的实体（最多 100），响应没有 `cursor` 和 `page_complete`。
+- 响应 `layout=table`，列名与类型见设计文档；每个请求的实体一行，包括不在主表的代码和非 A 股代码。
+- `algorithm_versions` 字段列出算法版本（`tradability-v1`、`limit-v2`（`price_limit::READ_ALGORITHM_VERSION`）、`market-cap-v1`，直接取代码常量，不手写）。
+- `temporal` 有 `as_of`、`known_at: null`、`datasets_without_known_at`（列出实际用到的无知晓时间数据集）。
+- 复现：输入数据集版本（`inputs`）加 `algorithm_versions` 决定结果，无 `snapshot_id`。
+- 指数代码报 `invalid_arguments` 并指向 `get_index_bars`。
+
+详见 [issue-433-tradability-read](../tasks/issue-433-tradability-read.md) §2、§3、§4。
+
+### 9.1 预算、延迟与内存（实测）
+
+`research` 入口 `tools/list` 实测 **19,264 B / 17 个工具**（无 `outputSchema`），预算 19,600 B（D-82）；紧凑目录 `get_data_capabilities({})` 实测 **2,790 B**，测试上限随之为 2,800 B。测量方式与 §3 相同。§8.3 里的 `research` 18,197 B 是 #582 当时的读数，本 PR 加两个工具后为 19,264 B。
+
+延迟与内存由 `data_supply::mcp::tests::probe_derived_tools_peak_heap_and_latency` 测（夹具用生产写入器构造：主表 7,400 行、停牌 72,000 行、日历 300 天、规则书）：
+
+| 实体数 | 一次调用耗时（3 次） | 峰值 RSS-anon 增长 |
+|---|---|---|
+| 1 | 250.9 / 206.7 / 265.6 ms | **8.9 MiB**（冷启动，含共享加载） |
+| 10 | 159.3 / 203.9 / 194.6 ms | 0.0 MiB |
+| 100 | 257.9 / 285.5 / 312.2 ms | 0.1 MiB |
+
+整表解码（约 200 ms、8.9 MiB）主导，单只边际成本不足 1 ms，所以设计 §5.2 估的「单只约 1 秒」在共享加载下不成立。夹具日历 300 天（生产 8,798）、无风险警示行（生产约 1,300），按每行 40 B / 150 B 计增加不足 1 MiB，生产一次调用峰值接近 10 MiB。
+
+调用按 `derived_tools::READ_RESERVE`（**16 MiB**，约实测峰值的 1.6 倍）向 `ReadBudget` 预留；超限返回 `memory_budget_exceeded`，不绕开 #547 的准入（`derived_tools_admit_through_the_read_budget` 覆盖）。

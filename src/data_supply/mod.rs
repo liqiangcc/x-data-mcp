@@ -56,6 +56,8 @@ pub mod read_limits;
 
 pub mod columnar;
 
+pub mod derived_tools;
+
 pub mod read_tools;
 
 pub mod observe;

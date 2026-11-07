@@ -353,7 +353,7 @@ def main():
         try:
             assert request("initialize", {})["serverInfo"]["name"] == "x-data-mcp"
             tools = request("tools/list", {})["tools"]
-            assert len(tools) == 35
+            assert len(tools) == 37
             capabilities = call("get_data_capabilities", {})
             assert capabilities["production_ready"] is False
             assert capabilities["capability_revision"] == "generic-data-v11"

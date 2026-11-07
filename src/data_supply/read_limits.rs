@@ -177,6 +177,13 @@ impl ReadBudget {
         self.admit(BUILD_RESERVE)
     }
 
+    /// For a derived read that names its own heap need (D-82). The caller
+    /// measured the decode of the shared inputs; the number is not a snapshot
+    /// size, so it is reserved as given.
+    pub(super) fn reserve_derived(self: &Arc<Self>, bytes: usize) -> Result<Permit, Error> {
+        self.admit(bytes)
+    }
+
     /// For a snapshot of `snapshot_bytes` serialized bytes about to be paged.
     pub(super) fn reserve(self: &Arc<Self>, snapshot_bytes: usize) -> Result<Permit, Error> {
         self.admit(snapshot_bytes.saturating_mul(TRANSIENT_FACTOR))
