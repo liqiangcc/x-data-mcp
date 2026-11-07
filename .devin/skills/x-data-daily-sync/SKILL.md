@@ -619,6 +619,8 @@ start_collection{dataset:"market.daily", contract_version:"v2",
   成功项没有 per-item evidence（v2 的 `publication_versions`/`range_results` 在 plan/run
   任务上也是空的），`get_task` v2 也只给失败样本；所以 run 终态后对各目标 dataset 用
   `list_data_versions` 只读回读，报告最新 `version_id` 与 `published_at`
+  （响应是 table 布局，版本在 `versions[]` 里，每项 `version_id`、`published_at`；字段名不是 `items`——
+  脚本读 `items` 会得到空数组，把有版本的数据集误报成「没有版本」，11-06 的补做会话就这样误报过）
   （`published_at` 落在本次 run 的 `get_task.created_at` ~ 终态 `last_progress_at` 窗口内
   即算本次产出）。若 run 因 `source_store_unconfigured` 失败，本次不会产生新的
   `market.security_master` 版本，最新版本仍是上一版；按该版本报告并注明 `published_at`
