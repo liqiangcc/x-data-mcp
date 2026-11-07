@@ -156,7 +156,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - 不变的 fail-closed：`BrokenChain`、同日两个不同状态的实施（`SameDayStatusConflict`）、无状态的实施事件、区间重叠、重复主键。深市同日冲突只在这组变更与链仍能连接时隔离；连接不上的仍是 `BrokenChain`。
 - 读路径：`marker_only_unresolved` 不是 `normal`。`member_state` 原样返回该状态；`price_limit` 把它与 `unknown` 同样处理（`StUnknown`，不写 `status_class`，只有所有状态共用一个涨跌幅档时才给出已知的涨跌幅并标 `status_unknown_band_invariant`）；`tradability` 不读风险状态。
 
-### 5.4 版本号与部署后的影响
+### 5.4 版本号与部署后的影响（R1/R4/R5）
 
 - `risk_warnings` 的 `ALGORITHM_VERSION`：`risk-warnings-v1` → `risk-warnings-v2`。它写入 `derived_dataset_versions.algorithm_version`、登记证据和导出 `producer.algorithms`（不属于导出快照的身份）。没有代码读取该值做兼容判断。
 - 内容摘要（`dataset_digest`，前缀仍是 `risk-warnings-v1`）、`digest_format`、`version_id` 不变。没有同日冲突的数据集重新组装后行逐字节相同，`version_id` 不变，只有 `algorithm_version` 一列在下一次 `derived:risk_warnings` 写入时更新为 `v2`。
@@ -164,7 +164,49 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - 预期的数据影响：D-68 之后 preview.42 全量页集上 `SameDay*` 冲突为 0，所以线上现有 884 行沪市记录预计不变；这一点没有在线上核对（本任务不访问线上）。部署后第一次日更若出现冲突，会多出 `marker_only_unresolved` 行并在证据里列出，而不是让 item 失败。
 - 无 schema 变化，无 `tools/list` 变化，无需重新 `init`。
 
-### 5.5 风险提示标题的排除（D-81 GP29 §7）
+### 5.5 深市风险警示闭世界：写 `normal`（D-81，任务 49）
+
+**仅深市 A 股**在简称表覆盖范围内、且以下条件同时满足的日子写 `status=normal`：
+
+- 没有 ST、*ST 区间（`other_risk_warning` / `delisting_risk_warning` 行）；
+- 简称链连续（`BrokenChain` 照旧 fail-closed）；
+- 当时的简称没有 PT 前缀、「退」或「退市」结尾、`*` 开头但无 ST 标记；
+- 不在 `marker_only_unresolved` 区间内；
+- 不在同日冲突之后到下一个事件之前的间隙（该间隙无行，读作 `unknown`）。
+
+**不写 `normal` 的情况**（保持 `unknown`）：
+
+- 首个简称行之前；
+- PT 前缀日（如 `PT凯地`，PT 与简称之间可能有空格）、「退」或「退市」结尾日（如 `国华退`、`*ST海润退市`）；
+- `*` 开头但没有 ST 的日子（如 `*金亚`、`*欣泰`，创业板 60 个 bar 日）；
+- 覆盖终点之后（`as_of` 晚于 `coverage[].to` 时；见下「覆盖终点」）；
+- 主表（`security_master`）里查不到该代码，或该代码已退市：`normal` 不越过 `effective_to`/退市日；
+- 没有任何简称行的代码（13 个有行情但无简称历史的代码）；
+- **所有沪市和北交所**。
+
+简称匹配前先做 NFKC 规范化并去掉空白，所以全角 `＊ＳＴ`、`ＰＴ`、`＊` 和 `PT 凯 地` 都按对应规则处理；「退」只按结尾匹配（取证里 104 个名称全部以「退」或「退市」结尾），不匹配任意位置。
+
+**依赖主表**：`normal` 的区间终点取「简称覆盖终点」与「主表该 A 股区间终点（`security_master.effective_to`/`delisting_date`）」的较早者。`derived:security_master` 在 `derived:risk_warnings` 之前运行（`item_specs` 的 `DATASETS` 顺序），所以日更能读到本次运行刚写的主表。主表里没有该代码时不写 `normal`（fail-closed）。重放有 `--db` 时从库里读同一张主表、走同一个组装函数；没有 `--db`（`database: None`）时不写 `normal`，结果说明为「没有数据库，深市 `normal` 行未计算」。
+
+**版本与数据影响**：
+
+- `ALGORITHM_VERSION`：`risk-warnings-v2` → `v3`；内容摘要前缀、`digest_format`、schema、`tools/list` 不变。
+- `validate_set` 只对 `source_kind=szse_name_history` 的行接受 `status=normal`，其余来源写 `normal` 会失败。
+- 估算新增行数（vm2 取证，2026-11-06）：简称区间内 plain 日，主板约 568 万、创业板约 296 万个 bar 日。其中 1998-04-28 到 2023-02-16 的主板约 441 万个，是涨跌停从 `unknown` 变确定值的主要部分。实际行数小于 bar 日数（一行可能覆盖多天）。
+- 读路径：`member_state` 读到 `normal`；`price_limit` 的 `status_class` 写 `Normal`，主板在无 ST 区间的日子从 `st_unknown` 变为确定的涨跌幅；`tradability` 不读风险状态。
+- 重放等价：重放与日更写入逐行相同（`known_at`、`source_record_id`、`source_document_sha256` 都取简称行的值，不随 run 记录变）。
+
+**覆盖终点**：`coverage[].to` 是简称表里**最新一次变更的日期**，不是快照日。所以最近几天通常仍是 `unknown`，要等下一次有代码改名才往前走。这是保守的（宁可 `unknown`），但使用者会看到「明明没有 ST 却未知」，所以读面 `limitations` 与本文都写明。
+
+**已知偏差**（GP29 对照，2026-11-06 取证）：
+
+- 22/1,729 个深市事件是「历史/身份缺口」（#308 评论 C6），`known_at` 目前全是首次采集日，所以 `known_at` 过滤下这些 `normal` 行对更早的日子不可见。
+- 5 个区间起点晚 1–2 个交易日。
+- 140 个带 ST 区间的已退市代码不在 GP29 包里，**这部分无法验证**——不能声称全部验证过。
+
+相关取证见 `docs/tasks/gp29-compare-20261106.md` §5、`docs/tasks/offline-measures-20261106.md` §3。
+
+### 5.6 风险提示标题的排除（D-81 GP29 §7，Refs #579）
 
 「存在被实施退市风险警示及暂停上市风险的提示(性)公告」陈述的是**风险存在**，不是交易所的实施决定；它与
 `将被`/`可能`/`争取` 同类（D-68 第 1 项：意向不算事件）。判定条件是两个同时成立：标题含 `存在`，且 `存在`
@@ -238,3 +280,42 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - **读路径**：内部过滤 `Filter::FindEtf { code, name_query }` 与 `Filter::History` 同一种做法，`serde(skip_deserializing)` 且 `schemars(skip)`，`query_data` 构造不了（`filter.kind=find_etf` 返回 `invalid_arguments`），也不改 `query_data` 的 schema。它只与 `market.security_names` + `selection.kind=market` 配对，其余组合在 `QueryPlan::new` 里报 `dataset/filter range mismatch`。搜索归一化是 `security_master::names::search_key`，增加了依赖 `unicode-normalization`（0.1，纯 Rust，带 `tinyvec`）。
 - **不变**：`market.security_names` 与 `get_security_state`/`get_security_history` 对 ETF 仍不返回 `exchange_snapshot` 行；`security_names.parquet` 不含 ETF（Q7）。
 - **未验证**：线上真实名单未测（代码面，未部署）；约 1.7 千行 ETF 的内存搜索耗时没有单独测量，每次调用读一遍主表和名称表（与 `market.security_master` 的读法相同）。
+
+## 8. `refresh_exchange_sources` 的 `tail` 改为异步（#582）
+
+**状态**：代码面（未部署）。相对 v10 只有一处行为变化，无新工具、无 schema 变化、无迁移。
+
+### 8.1 变化
+
+| 项 | v10 | v11（本 PR） |
+|---|---|---|
+| `{"mode":"tail"}` 的回包 | 同步跑完，返回终态 `RefreshReport`（`succeeded`/`failed`，带 `sources`、`revisions`、计数） | 只写 run 记录就返回 `{run_id, status:"running"}`：`finished_at` 缺省，计数为 0，`sources[]` 是计划（`planned_units`/`planned_windows`），`planned` 是请求单元 |
+| `{"mode":"full"}` | 已经是 `running` + 后台线程 | 不变 |
+| 结果怎么拿 | `tail` 直接从回包读 | `{"status_of":run_id}` 轮询到 `succeeded`/`failed`；回包是 run 行：`mode`/`status`/`scope`/起止时间/`requests`/`reused`/`changed`/`failed_windows`/`unobserved_windows`/`verified_through`/`failures` |
+| 单飞 | `tail`/`full` 互斥，`refresh_already_running` 回带 `details.run_id` | 不变 |
+| 失败 | 同步回包或 `Err` | run 记录 `failed`（含失败列表）；`refresh_panicked`、`refresh_start_failed`、`process_restarted` 语义不变 |
+| `dry_run` | 只列计划，不写 run | 不变 |
+
+**为什么**（[#582](https://github.com/liqiangcc/x-data-mcp/issues/582)，复现读数见该 Issue 的评论）：tail 的计划是 28 个请求（1.42 s/请求约 40 s），首次观测或页 1 变化触发两张整表时最多 549 个（1 req/s 下约 13 分钟）。它原先跑在 MCP 连接的请求线程里，而一个连接只有一个线程，所以该连接上后面的调用全部排队；客户端 60 s 预算一到就超时，且没有 `run_id` 可取回结果。本地 551 请求的复现里，非网络工作合计 **0.49 s**（来源库写入 366 ms、索引事务 24 ms、解析 13 ms、锁等待 ≈0），墙钟由交易所限速决定——同步调用无法缩短它，只能把等待从调用方拿走。
+
+### 8.2 兼容性
+
+- **回包形状不变，语义变了**：字段集仍是 v9 定义的 `RefreshReport`，`status` 早已有 `running`（v9 R2b 为 `full` 加的），所以旧客户端不会因为解析失败而崩；但**按 v10 读 `tail` 回包的客户端必须改成轮询**，否则会看到 `status="running"`、计数为 0。
+- **`status_of` 不回 `revisions` 与 per-source 行**：与 `full` 从 v9 起的现状一致——只有 run 行和失败列表是持久记录，per-source 计数在 `source_refresh_run_sources`（runbook 的查询），`revisions` 可从 run 成员表与快照索引重建。`tail` 因此不再把 revision 列表直接交给调用方。
+- **谁必须改**：`.devin/skills/x-data-daily-sync/SKILL.md` §3.0、`docs/daily-sync.md`「来源刷新」、`docs/generic-data-tools.md` 的工具表、`docs/exchange-source.md` 的 run 语义段、`docs/source-refresh-runbook.md` 的读数口径——本 PR 一并更新。
+- **门禁数字不变**：`tail` <300 s、触发整表每张 <600 s、`full` 按来源组 <60 min/<40 min（D-66/D-67/D-73）全部照旧；变的只是读数来源。`tail` 的 <300 s 从「同步调用时长」改为 run 记录的 `finished_at − started_at`（runbook 本来就把 run 行当官方读数，MCP 墙钟只是旁证）。`docs/SLO.md` 第 2 行的备注同步改了措辞。
+- **回滚**：回退二进制即可；schema 27 的 run 记录与 v10 相同，`running` 行的回收规则不变。
+
+### 8.3 `tools/list`
+
+只改 `refresh_exchange_sources` 的描述（说明两种 mode 都返回 `run_id` 并轮询），描述仍 ≤240 B。`ops` 入口实测 29,872 → **29,896 B**（+24 B），预算 **30,800 B 不变**；`research` 18,197 B、`maint` 13,195 B 不变。测量方式与 §3 相同（`tests/mcp/v8_tool_surface.rs` 的 `tools_list_stays_within_entry_budgets_without_output_schema`，`serde_json::to_vec(tools)`，代码版本为本 PR）。
+
+### 8.4 验证
+
+- `src/source_refresh/tests.rs`：`a_tail_returns_running_and_finishes_in_the_background`（回包是句柄、`status_of` 可查、单飞拒绝并回带 run id、终态计数来自 run 记录）、`a_failing_background_tail_reports_failed_without_a_verified_date`（失败 fail-closed、不推进 `verified_through`、闸门释放）。
+- `src/data_supply/mcp/tests.rs`：`a_read_tool_answers_while_a_refresh_run_is_in_flight`（假传输在第一个请求处用 Condvar 卡住，读到「已进入」后调 `get_data_capabilities`，断言 <5 s 且刷新仍在进行；释放后按 `run_id` 轮询到 `succeeded` 且计数 >0）。同步点是条件变量，不是 sleep。
+- 诊断：`exchange.fetch`/`exchange.freeze`/`exchange.parse`/`exchange.index_write` 四个 `stage_trace` span（`X_DATA_MCP_STAGE_TRACE=1` 才计时），用于以后按同一口径回答「耗时花在哪」。
+
+### 8.5 未覆盖
+
+生产机与生产库（本任务不访问线上）；「22 分钟」这个绝对值只能按生产实测的每请求成本换算；`status_of` 不补 `revisions`/per-source 行（与 `full` 一致，需要时查库）。

@@ -42,8 +42,11 @@ pub const DIGEST_FORMAT: &str = "sha256-risk-warning-intervals-v1";
 /// and every other code is assembled as before. Datasets with no conflict
 /// assemble to the same rows under `v1` and `v2`, so the content digest (and
 /// the `version_id` derived from it) does not move when only the label does.
-/// `v3` (D-81, #578): SZ A shares inside the short-name coverage with no ST
-/// interval are written as `normal` instead of `unknown`.
+/// `v3` (D-81, task 49/#578): for Shenzhen A-shares only, write `normal`
+/// intervals as the complement of ST/warning intervals within the name history
+/// coverage. The rules are closed-world: PT prefix, "退" suffix, `*` prefix
+/// without ST, and the state after a conflict until the next event remain
+/// `unknown`.
 /// `v4` (D-81 GP29 §7, #579): the title classifier rejects "存在被实施..."
 /// forward-looking risk notices instead of misclassifying them as
 /// implementations. This affects 14 SH announcements in 2014-12; the 7 codes
@@ -235,15 +238,28 @@ pub enum Error {
 /// into an interval because its start day is unknown. A warning that was
 /// already open before the table's first row is therefore not fabricated: the
 /// adapter counts it as an unbounded prefix instead.
+///
+/// D-81 task 49: Normal intervals are written as the complement of ST/warning
+/// intervals, bounded by coverage and delisting dates. `delisting_dates` maps
+/// code to effective_to from security_master; codes not in the map will not
+/// write normal intervals (fail-closed).
 pub fn assemble_sz(
     rows: &[SzNameChange],
     mut coverage: Vec<CoverageWindow>,
+    delisting_dates: &BTreeMap<String, NaiveDate>,
 ) -> Result<RiskWarningSet, Error> {
     let mut by_code: BTreeMap<&str, Vec<&SzNameChange>> = BTreeMap::new();
     for row in rows {
         check_code(&row.code)?;
         by_code.entry(row.code.as_str()).or_default().push(row);
     }
+
+    // D-81 task 49: Store changes for later use in normal interval computation
+    let code_changes: Vec<(String, Vec<&SzNameChange>)> = by_code
+        .iter()
+        .map(|(code, changes)| (code.to_string(), changes.clone()))
+        .collect();
+
     let mut intervals = Vec::new();
     for (code, mut changes) in by_code {
         changes.sort_by_key(|change| change.day);
@@ -298,6 +314,20 @@ pub fn assemble_sz(
             intervals.push(interval);
         }
     }
+
+    // D-81 task 49: Add Normal intervals for Shenzhen codes
+    let warning_intervals_clone = intervals.clone();
+    for (code, changes) in &code_changes {
+        add_normal_intervals_sz(
+            code,
+            changes,
+            &warning_intervals_clone,
+            &coverage,
+            delisting_dates,
+            &mut intervals,
+        );
+    }
+
     coverage.sort_by(|left, right| (left.from, right.to).cmp(&(right.from, right.to)));
     Ok(RiskWarningSet {
         rows: intervals,
@@ -617,6 +647,246 @@ fn warning_status(name: &str) -> Option<RiskStatus> {
     }
 }
 
+/// D-81 task 49: Normalize and strip whitespace from a name.
+/// Uses NFKC normalization to handle full-width characters.
+fn normalize_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.nfkc().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+/// D-81 task 49: Check if a name has PT prefix (after normalization and stripping whitespace).
+/// Examples: "PT凯地", "PT 凯 地", "PT 南 洋", "ＰＴ凯地" (full-width)
+fn has_pt_prefix(name: &str) -> bool {
+    let normalized = normalize_name(name);
+    normalized.starts_with("PT")
+}
+
+/// D-81 task 49: Check if a name ends with "退" or "退市".
+/// Examples: "国华退", "*ST海润退市", "国华退 " (with trailing space)
+fn has_tui_suffix(name: &str) -> bool {
+    let normalized = normalize_name(name);
+    normalized.ends_with("退市") || normalized.ends_with("退")
+}
+
+/// D-81 task 49: Check if a name starts with * but has no ST marker.
+/// Examples: "*金亚", "*欣泰" (60 bar-days in data), "＊金亚" (full-width *)
+/// These are not ST and not plain Normal either.
+fn has_star_without_st(name: &str) -> bool {
+    let normalized = normalize_name(name);
+    normalized.starts_with('*') && !normalized.contains("ST")
+}
+
+/// D-81 task 49: Does the (normalized) name carry an ST marker?
+/// Separate from `warning_status` on purpose: `warning_status` classifies the
+/// ST interval rows and must not change; this only decides `normal`.
+fn has_st_marker(name: &str) -> bool {
+    normalize_name(name).contains("ST")
+}
+
+/// D-81 task 49: Check if a name is "plain" - eligible for Normal status.
+/// A plain name has no ST, no PT prefix, no 退 suffix, and no * without ST.
+/// Each predicate normalizes via NFKC, so full-width markers count too.
+fn is_plain_name(name: &str) -> bool {
+    !has_st_marker(name)
+        && !has_pt_prefix(name)
+        && !has_tui_suffix(name)
+        && !has_star_without_st(name)
+}
+
+/// D-81 task 49: For Shenzhen codes only, write `normal` as the complement
+/// of ST/warning intervals within the name history coverage.
+///
+/// Rules:
+/// - Only write for codes that have at least one name row
+/// - Start from the first name row date (not before)
+/// - End at the coverage endpoint (from coverage windows) or delisting date, whichever is earlier
+/// - Exclude days with ST/warning intervals
+/// - Exclude PT prefix days, 退 suffix days, * without ST days
+/// - Exclude conflict days and days after conflict until next event
+/// - Known_at matches the name row that covers each normal interval
+///
+/// `delisting_dates`: map from code to delisting date (effective_to from security_master).
+/// Codes not in this map will not write normal intervals (fail-closed).
+fn add_normal_intervals_sz(
+    code: &str,
+    changes: &[&SzNameChange],
+    warning_intervals: &[RiskWarningInterval],
+    coverage: &[CoverageWindow],
+    delisting_dates: &BTreeMap<String, NaiveDate>,
+    all_intervals: &mut Vec<RiskWarningInterval>,
+) {
+    if changes.is_empty() {
+        return; // No name rows -> no normal
+    }
+
+    // The caller's `code_changes` preserves source order; the segments below
+    // need chronological order, so sort a local copy.
+    let mut changes: Vec<&SzNameChange> = changes.to_vec();
+    changes.sort_by_key(|change| change.day);
+
+    // Fail-closed: only write normal if we have delisting date for this code
+    let delisting_date = match delisting_dates.get(code) {
+        Some(&date) => date,
+        None => return, // No delisting date -> no normal (fail-closed)
+    };
+
+    // Find coverage endpoint for Shenzhen from coverage windows
+    let coverage_end = coverage
+        .iter()
+        .filter(|w| w.exchange == Exchange::Sz && w.source_kind == "szse_name_history")
+        .map(|w| w.to)
+        .max();
+    let Some(coverage_end) = coverage_end else {
+        return; // No coverage -> no normal
+    };
+
+    // Normal intervals are half-open `[from, to)`.
+    // `coverage_end` is inclusive (the last rename day), so its exclusive
+    // bound is `coverage_end + 1`. `delisting_date` (security_master
+    // `effective_to`) is already exclusive: the delisting day is not a member
+    // day. Normal therefore stops at the earlier of the two exclusive bounds.
+    let coverage_end_exclusive = coverage_end.succ_opt().unwrap_or(coverage_end);
+    let effective_end = coverage_end_exclusive.min(delisting_date);
+
+    // Build name segments: periods where a specific name is active
+    // and track which ones are plain (eligible for normal)
+    #[derive(Debug, Clone)]
+    struct NameSegment {
+        start: NaiveDate,
+        end: Option<NaiveDate>, // None = until next change or coverage end
+        is_plain: bool,
+        known_at: Option<NaiveDate>,
+        // D-81 task 49 审查意见4: 来源于打开这段的那次变更
+        source_record_id: String,
+        source_document_sha256: String,
+    }
+
+    let mut segments: Vec<NameSegment> = Vec::new();
+    let first_day = changes.first().unwrap().day;
+    let mut index = 0usize;
+
+    while index < changes.len() {
+        let day = changes[index].day;
+        let mut end = index + 1;
+        while end < changes.len() && changes[end].day == day {
+            end += 1;
+        }
+        let group = &changes[index..end];
+        index = end;
+
+        if group.len() > 1 {
+            // Conflict: close any open segment at the conflict day
+            if let Some(last) = segments.last_mut()
+                && last.end.is_none()
+            {
+                last.end = Some(day);
+            }
+            continue;
+        }
+
+        let change = group[0];
+        let after_name = change.after_name.as_str();
+        let is_plain = is_plain_name(after_name);
+
+        segments.push(NameSegment {
+            start: day,
+            end: None,
+            is_plain,
+            known_at: change.known_at,
+            source_record_id: change.source_record_id.clone(),
+            source_document_sha256: change.source_document_sha256.clone(),
+        });
+
+        // Close previous segment if it's still open
+        let len = segments.len();
+        if len > 1 && segments[len - 2].end.is_none() {
+            segments[len - 2].end = Some(day);
+        }
+    }
+
+    // Close the last segment at effective end (min of coverage and delisting), but only if it's still open
+    if let Some(last) = segments.last_mut()
+        && last.end.is_none()
+    {
+        last.end = Some(effective_end);
+    }
+
+    // Build occupied days from warning/conflict intervals for this code
+    let mut occupied_intervals: Vec<(NaiveDate, NaiveDate)> = Vec::new();
+    for interval in warning_intervals {
+        if interval.code != code {
+            continue;
+        }
+        let start = interval.effective_from;
+        let end = interval.effective_to.unwrap_or(effective_end);
+        occupied_intervals.push((start, end));
+    }
+    occupied_intervals.sort();
+
+    // For each plain name segment, write Normal intervals in the gaps
+    for segment in &segments {
+        if !segment.is_plain {
+            continue; // Skip non-plain names
+        }
+
+        // If this segment starts right after a conflict, the period from
+        // the previous segment to this one should remain unknown (no normal row).
+        // So we only write normal intervals starting from this segment's start.
+        let seg_start = segment.start.max(first_day);
+        let seg_end = segment.end.unwrap_or(effective_end);
+        if seg_end <= seg_start {
+            continue;
+        }
+
+        // Find gaps in this segment that are not occupied by warnings
+        let mut normal_start = seg_start;
+
+        for (occ_start, occ_end) in &occupied_intervals {
+            if *occ_end <= seg_start || *occ_start >= seg_end {
+                continue; // Occupied interval doesn't overlap this segment
+            }
+
+            // Write normal interval before this occupied interval
+            let gap_end = (*occ_start).min(seg_end);
+            if normal_start < gap_end {
+                all_intervals.push(RiskWarningInterval {
+                    exchange: Exchange::Sz,
+                    code: code.to_string(),
+                    effective_from: normal_start,
+                    effective_to: Some(gap_end),
+                    raw_status_code: "plain".to_string(),
+                    status: RiskStatus::Normal,
+                    announced_at: None,
+                    known_at: segment.known_at,
+                    source_kind: "szse_name_history".to_string(),
+                    source_record_id: Some(segment.source_record_id.clone()),
+                    source_document_sha256: Some(segment.source_document_sha256.clone()),
+                });
+            }
+
+            // Move start to after this occupied interval
+            normal_start = (*occ_end).max(normal_start);
+        }
+
+        // Write any remaining normal interval after all occupied intervals
+        if normal_start < seg_end {
+            all_intervals.push(RiskWarningInterval {
+                exchange: Exchange::Sz,
+                code: code.to_string(),
+                effective_from: normal_start,
+                effective_to: Some(seg_end),
+                raw_status_code: "plain".to_string(),
+                status: RiskStatus::Normal,
+                announced_at: None,
+                known_at: segment.known_at,
+                source_kind: "szse_name_history".to_string(),
+                source_record_id: Some(segment.source_record_id.clone()),
+                source_document_sha256: Some(segment.source_document_sha256.clone()),
+            });
+        }
+    }
+}
+
 fn raw_status(status: RiskStatus) -> &'static str {
     match status {
         RiskStatus::OtherRiskWarning => "ST",
@@ -663,7 +933,12 @@ pub fn validate_set(rows: &[RiskWarningInterval]) -> Result<(), Error> {
         if row.source_kind.trim().is_empty() {
             return Err(Error::SourceKind);
         }
-        if !matches!(
+        // Normal is admitted only for szse_name_history source (D-81, task 49)
+        if row.status == RiskStatus::Normal {
+            if row.source_kind != "szse_name_history" {
+                return Err(Error::Status);
+            }
+        } else if !matches!(
             row.status,
             RiskStatus::OtherRiskWarning
                 | RiskStatus::DelistingRiskWarning
@@ -773,13 +1048,22 @@ mod tests {
         }
     }
 
+    // Helper to create delisting dates for tests
+    // Default: far future (9999-12-31) means "not delisted"
+    fn delisting_dates(codes: &[(&str, Option<NaiveDate>)]) -> BTreeMap<String, NaiveDate> {
+        codes
+            .iter()
+            .map(|(code, date)| (code.to_string(), date.unwrap_or_else(|| day(9999, 12, 31))))
+            .collect()
+    }
+
     #[test]
     fn sz_chain_opens_and_closes_st_interval() {
         let rows = vec![
             change("000001", "1998-04-28", "深发展A", "ST深发展"),
             change("000001", "1999-04-28", "ST深发展", "深发展A"),
         ];
-        let set = assemble_sz(&rows, Vec::new()).expect("chain assembles");
+        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new()).expect("chain assembles");
         assert_eq!(set.rows.len(), 1);
         assert_eq!(set.rows[0].status, RiskStatus::OtherRiskWarning);
         assert_eq!(set.rows[0].effective_from, day(1998, 4, 28));
@@ -797,7 +1081,8 @@ mod tests {
             change("000001", "1998-04-28", "深发展A", "ST深发展"),
             change("000002", "1998-02-02", "万科A", "ST万科"),
         ];
-        let set = assemble_sz(&rows, Vec::new()).expect("a conflict is isolated, not fatal");
+        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new())
+            .expect("a conflict is isolated, not fatal");
         validate_set(&set.rows).expect("the rows are a valid interval set");
         let by_code = |code: &str| -> Vec<&RiskWarningInterval> {
             set.rows.iter().filter(|row| row.code == code).collect()
@@ -827,7 +1112,7 @@ mod tests {
             change("000001", "1998-04-28", "深发展A", "*ST深发展"),
             change("000001", "1998-09-01", "*ST深发展", "深发展A"),
         ];
-        let set = assemble_sz(&rows, Vec::new()).expect("chain continues");
+        let set = assemble_sz(&rows, Vec::new(), &BTreeMap::new()).expect("chain continues");
         assert_eq!(set.rows.len(), 1);
         assert_eq!(set.rows[0].status, RiskStatus::MarkerOnlyUnresolved);
 
@@ -837,14 +1122,14 @@ mod tests {
             change("000001", "1998-04-28", "丙", "丁"),
         ];
         assert_eq!(
-            assemble_sz(&unconnected, Vec::new()),
+            assemble_sz(&unconnected, Vec::new(), &BTreeMap::new()),
             Err(Error::BrokenChain)
         );
     }
 
     #[test]
     fn no_events_is_not_a_normal_row() {
-        let set = assemble_sz(&[], Vec::new()).expect("empty input is valid");
+        let set = assemble_sz(&[], Vec::new(), &BTreeMap::new()).expect("empty input is valid");
         assert!(set.rows.is_empty());
         assert_eq!(set.not_observed_windows(), 0);
     }
@@ -1086,5 +1371,603 @@ mod tests {
             Some(RiskStatus::MarkerOnlyUnresolved)
         );
         assert_ne!(RiskStatus::MarkerOnlyUnresolved, RiskStatus::Normal);
+    }
+
+    // D-81 task 49: Normal interval tests
+
+    #[test]
+    fn sz_writes_normal_when_no_st_and_plain_name() {
+        let rows = vec![
+            change("000001", "1998-01-05", "万科A", "万科B"),
+            change("000001", "2000-01-10", "万科B", "万科C"),
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 2,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("plain names");
+        validate_set(&set.rows).expect("valid set");
+
+        // Should have normal intervals
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        assert!(
+            !normals.is_empty(),
+            "should write normal intervals for plain names"
+        );
+
+        // Normal intervals should be from szse_name_history source
+        for normal in &normals {
+            assert_eq!(normal.source_kind, "szse_name_history");
+            assert_eq!(normal.exchange, Exchange::Sz);
+        }
+    }
+
+    #[test]
+    fn sz_normal_does_not_write_for_st_periods() {
+        let rows = vec![
+            change("000001", "1998-01-05", "深发展A", "深发展B"),
+            change("000001", "1999-01-01", "深发展B", "ST深发展"),
+            change("000001", "2000-01-01", "ST深发展", "深发展C"),
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 3,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("mixed periods");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        let warnings: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::OtherRiskWarning)
+            .collect();
+
+        assert!(!warnings.is_empty(), "should have ST interval");
+        // Normal intervals should not overlap with ST intervals
+        for normal in &normals {
+            for warning in &warnings {
+                let normal_start = normal.effective_from;
+                let normal_end = normal.effective_to.unwrap();
+                let warning_start = warning.effective_from;
+                let warning_end = warning.effective_to.unwrap_or(day(9999, 12, 31));
+
+                // Check no overlap
+                assert!(
+                    normal_end <= warning_start || normal_start >= warning_end,
+                    "normal and warning should not overlap"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sz_normal_excludes_pt_prefix_days() {
+        let rows = vec![
+            change("000001", "1998-01-05", "万科A", "PT万科"),
+            change("000001", "2000-01-01", "PT万科", "万科B"),
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 2,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("PT prefix");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+
+        // No normal interval should cover the PT period (1998-01-05 to 2000-01-01)
+        for normal in &normals {
+            assert!(
+                normal.effective_to.unwrap() <= day(1998, 1, 5)
+                    || normal.effective_from >= day(2000, 1, 1),
+                "normal should not cover PT period"
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_excludes_tui_suffix_days() {
+        let rows = vec![
+            change("000001", "1998-01-05", "万科A", "万科退"),
+            // After delisting marker, typically no more changes
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 1,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("退 suffix");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+
+        // No normal interval should cover the period after 退 appears
+        for normal in &normals {
+            assert!(
+                normal.effective_to.unwrap() <= day(1998, 1, 5),
+                "normal should end before 退 suffix"
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_excludes_star_without_st() {
+        let rows = vec![
+            change("000001", "1998-01-05", "万科A", "*金亚"),
+            change("000001", "2000-01-01", "*金亚", "万科B"),
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 2,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("* without ST");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+
+        // No normal interval should cover the * period (1998-01-05 to 2000-01-01)
+        for normal in &normals {
+            assert!(
+                normal.effective_to.unwrap() <= day(1998, 1, 5)
+                    || normal.effective_from >= day(2000, 1, 1),
+                "normal should not cover * without ST period"
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_does_not_write_before_first_name_row() {
+        let rows = vec![change("000001", "2000-01-05", "万科A", "万科B")];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1), // Coverage starts before first name
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 1,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("late first name");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+
+        // All normal intervals should start on or after the first name row date
+        for normal in &normals {
+            assert!(
+                normal.effective_from >= day(2000, 1, 5),
+                "normal should not start before first name row"
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_does_not_write_for_codes_with_no_name_rows() {
+        let rows = vec![]; // Empty
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 0,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("no names");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        assert!(normals.is_empty(), "no normal for codes without name rows");
+    }
+
+    #[test]
+    fn sz_normal_after_conflict_until_next_event_is_unknown() {
+        let rows = vec![
+            change("000001", "1998-01-05", "深发展A", "深发展B"),
+            change("000001", "1999-04-28", "深发展B", "深发展C"),
+            change("000001", "1999-04-28", "深发展B", "深发展D"), // Conflict
+            change("000001", "2000-01-01", "深发展D", "深发展E"),
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 4,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("conflict recovery");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        let conflicts: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::MarkerOnlyUnresolved)
+            .collect();
+
+        assert_eq!(conflicts.len(), 1, "should have one conflict marker");
+        assert_eq!(conflicts[0].effective_from, day(1999, 4, 28));
+
+        // No normal interval should cover the period from conflict to next event
+        // (1999-04-28 to 2000-01-01)
+        for normal in &normals {
+            let covers_conflict_gap = normal.effective_from < day(2000, 1, 1)
+                && normal.effective_to.unwrap() > day(1999, 4, 28);
+            assert!(
+                !covers_conflict_gap,
+                "normal should not cover post-conflict gap: {} to {:?}",
+                normal.effective_from, normal.effective_to
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_stops_at_coverage_endpoint() {
+        let rows = vec![
+            change("000001", "1998-01-05", "万科A", "万科B"),
+            // Name continues but coverage ends
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2000, 12, 31), // Ends before present
+            observed: true,
+            rows: 1,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("coverage limit");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+
+        // No normal interval should extend beyond coverage endpoint
+        for normal in &normals {
+            assert!(
+                normal.effective_to.unwrap() <= day(2001, 1, 1), // succ of coverage end
+                "normal should not extend beyond coverage endpoint"
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_conflict_with_no_subsequent_event_stays_unknown_until_coverage_end() {
+        let rows = vec![
+            change("000001", "1998-01-05", "深发展A", "深发展B"),
+            change("000001", "1999-04-28", "深发展B", "深发展C"),
+            change("000001", "1999-04-28", "深发展B", "深发展D"), // Conflict, no more events
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2001, 12, 31),
+            observed: true,
+            rows: 3,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(
+            &rows,
+            coverage,
+            &delisting_dates(&[("000001", None), ("000002", None)]),
+        )
+        .expect("conflict at end");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        let conflicts: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::MarkerOnlyUnresolved)
+            .collect();
+
+        assert_eq!(conflicts.len(), 1, "should have one conflict marker");
+        assert_eq!(conflicts[0].effective_from, day(1999, 4, 28));
+
+        // No normal interval should extend beyond the conflict day
+        for normal in &normals {
+            assert!(
+                normal.effective_to.unwrap() <= day(1999, 4, 28),
+                "normal should end at or before conflict day: {} to {:?}",
+                normal.effective_from,
+                normal.effective_to
+            );
+        }
+
+        // Verify no normal interval covers the period after conflict to coverage end
+        for normal in &normals {
+            assert!(
+                !(normal.effective_from >= day(1999, 4, 29)
+                    && normal.effective_to.unwrap() <= day(2002, 1, 1)),
+                "should not have normal interval after conflict with no subsequent event"
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_stops_at_delisting_date() {
+        // 退市代码最后简称是 plain，退市日及之后不应有 normal。
+        let rows = vec![change("000001", "1998-01-05", "万科A", "万科B")];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2005, 12, 31),
+            observed: true,
+            rows: 1,
+            reason: String::new(),
+        }];
+        // Delisted on 2000-06-30
+        let dates = delisting_dates(&[("000001", Some(day(2000, 6, 30)))]);
+        let set = assemble_sz(&rows, coverage, &dates).expect("delisted");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        assert!(!normals.is_empty(), "should write normal before delisting");
+        for normal in &normals {
+            assert!(
+                normal.effective_to.unwrap() <= day(2000, 6, 30),
+                "normal must not extend past the delisting date: {} to {:?}",
+                normal.effective_from,
+                normal.effective_to
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_not_written_when_code_absent_from_security_master() {
+        // 主表里没有的代码不写 normal（fail-closed）。
+        let rows = vec![change("000001", "1998-01-05", "万科A", "万科B")];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2005, 12, 31),
+            observed: true,
+            rows: 1,
+            reason: String::new(),
+        }];
+        let set = assemble_sz(&rows, coverage, &BTreeMap::new()).expect("no master row");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        assert!(
+            normals.is_empty(),
+            "a code absent from security_master must not get a normal row"
+        );
+    }
+
+    #[test]
+    fn sz_normal_rows_carry_the_opening_change_provenance() {
+        // normal 行必须带来源：打开该段的简称变更的 record id 与 sha。
+        let rows = vec![change("000001", "1998-01-05", "万科A", "万科B")];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2005, 12, 31),
+            observed: true,
+            rows: 1,
+            reason: String::new(),
+        }];
+        let dates = delisting_dates(&[("000001", None)]);
+        let set = assemble_sz(&rows, coverage, &dates).expect("plain");
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        assert!(!normals.is_empty());
+        for normal in &normals {
+            assert_eq!(
+                normal.source_record_id.as_deref(),
+                Some("1998-01-05|000001|万科B")
+            );
+            assert_eq!(
+                normal.source_document_sha256.as_deref(),
+                Some("a".repeat(64).as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_treats_full_width_markers_as_not_plain() {
+        // 全角字符（＊ＳＴ、ＰＴ、＊）在 NFKC 规范化后不算 plain。
+        let rows = vec![
+            change("000001", "1998-01-05", "万科A", "＊ＳＴ某某"),
+            change("000001", "1999-01-05", "＊ＳＴ某某", "ＰＴ凯地"),
+            change("000001", "2000-01-05", "ＰＴ凯地", "＊金亚"),
+            change("000001", "2001-01-05", "＊金亚", "万科B"),
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "szse_name_history".to_string(),
+            exchange: Exchange::Sz,
+            from: day(1998, 1, 1),
+            to: day(2002, 12, 31),
+            observed: true,
+            rows: 4,
+            reason: String::new(),
+        }];
+        let dates = delisting_dates(&[("000001", None)]);
+        let set = assemble_sz(&rows, coverage, &dates).expect("full-width markers");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        // Only the segment after 2001-01-05 (万科B) may be normal.
+        for normal in &normals {
+            assert!(
+                normal.effective_from >= day(2001, 1, 5),
+                "full-width marker periods must not be normal: {} to {:?}",
+                normal.effective_from,
+                normal.effective_to
+            );
+        }
+    }
+
+    #[test]
+    fn sz_normal_does_not_write_for_shanghai() {
+        // This test verifies that assemble_sh does NOT write normal intervals
+        // (only assemble_sz should)
+        let events = vec![
+            sh_event(
+                "600000",
+                day(2000, 1, 1),
+                RiskWarningAction::Implement,
+                Some(RiskStatus::OtherRiskWarning),
+                "test-1",
+            ),
+            sh_event(
+                "600000",
+                day(2001, 1, 1),
+                RiskWarningAction::Revoke,
+                None,
+                "test-2",
+            ),
+        ];
+        let coverage = vec![CoverageWindow {
+            source_kind: "exchange_announcement".to_string(),
+            exchange: Exchange::Sh,
+            from: day(1998, 1, 1),
+            to: day(2005, 12, 31),
+            observed: true,
+            rows: 2,
+            reason: String::new(),
+        }];
+        let set = assemble_sh(&events, &[], coverage).expect("shanghai");
+        validate_set(&set.rows).expect("valid set");
+
+        let normals: Vec<_> = set
+            .rows
+            .iter()
+            .filter(|r| r.status == RiskStatus::Normal)
+            .collect();
+        assert!(
+            normals.is_empty(),
+            "Shanghai should never write normal intervals"
+        );
     }
 }

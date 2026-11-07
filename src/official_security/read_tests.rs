@@ -105,6 +105,10 @@ impl Scenario {
         self.store.records().unwrap().len()
     }
 
+    fn db_path(&self) -> std::path::PathBuf {
+        self._dir.path().join("market.sqlite")
+    }
+
     fn index_rows(&self) -> usize {
         self.market.read_exchange_snapshots().unwrap().len()
     }
@@ -1260,6 +1264,165 @@ fn replay_does_not_refuse_a_date_only_a_superseded_answer_states() {
     assert_eq!(scope.status, "ok", "{scope:?}");
     assert_eq!(scope.summary.as_deref(), Some(daily_digest.as_str()));
     assert_eq!(scope.database, Some("match"), "{scope:?}");
+}
+
+// ---------------------------------------- D-81 task 49: SZ normal replay ---
+
+/// Write one Shenzhen A-share into `security_master` so the risk-warning item
+/// can read its delisting date (D-81 task 49: `normal` is bounded by it).
+fn write_sz_master(scenario: &Scenario, code: &str, delisting: Option<NaiveDate>) {
+    use crate::compact_market::{EvidenceKind, SourceBinding};
+    use crate::security_master::assembly::Assembly;
+    use crate::sqlite_market::{evidence_store, security};
+
+    let c = rusqlite::Connection::open(scenario.db_path()).unwrap();
+    c.pragma_update(None, "foreign_keys", true).unwrap();
+    let generation = evidence_store::put_evidence(
+        &c,
+        EvidenceKind::Generation,
+        &serde_json::json!({"generation_id": "fixture", "manifest_sha256": "fixture"}),
+    )
+    .unwrap();
+    let binding = evidence_store::put_source_binding(
+        &c,
+        &SourceBinding {
+            generation_id: "fixture".into(),
+            generation_manifest_sha256: [0x0b; 32],
+            day_member_sha256: [0x0c; 32],
+            security_event_sha256: [0x0e; 32],
+            evidence_digest: generation,
+        },
+    )
+    .unwrap();
+    let listing = day(1995, 1, 2);
+    let fact = SecurityLifecycleFact {
+        exchange: Exchange::Sz,
+        code: code.into(),
+        effective_from: listing,
+        effective_to: delisting,
+        instrument_class: 0,
+        issuer_key: None,
+        issuer_resolution: IssuerResolution::CodeDate,
+        listing_date: Some(listing),
+        listing_date_tdx: Some(listing),
+        listing_source: ListingSource::TdxSsdate,
+        b_listing_date: None,
+        delisting_date: delisting,
+        delisting_date_tdx: None,
+        delisting_source: DelistingSource::Unknown,
+        delisting_reason_class: DelistingReason::Unknown,
+        arrangement_start: None,
+        arrangement_end: None,
+        listing_conflict: false,
+        delisting_conflict: false,
+        known_at: None,
+    };
+    security::replace_security_master(
+        &c,
+        &Assembly {
+            rows: vec![fact],
+            migrations: Vec::new(),
+            conflicts: Vec::new(),
+            pending_sources: Vec::new(),
+            unresolved: Vec::new(),
+            exchange_as_of: None,
+        },
+        binding,
+        "task-master",
+        "derived:security_master",
+    )
+    .unwrap();
+}
+
+/// D-81 task 49: with the main table present, the daily item writes Shenzhen
+/// `normal` rows, and the replay writes them row for row — twice. Without a
+/// database the replay writes no `normal` rows (fail-closed), so its digest
+/// differs by exactly those rows.
+#[test]
+fn a_sz_normal_dataset_replays_row_for_row_and_needs_the_database() {
+    use crate::security_master::RiskStatus;
+    use crate::security_master::risk_warnings::dataset_digest;
+    use crate::source_store::replay::{ReplayRequest, Scope, replay};
+
+    let scenario = Scenario::new();
+    let today = day(2024, 7, 1);
+    // The SZ short-name fixture is a chain on 000004: ST from 1998-04-28,
+    // plain 1999-04-27..2001-03-07, plain 深安达 from 2001-03-07.
+    write_sz_master(&scenario, "000004", None);
+    freeze_named_sources(&scenario, today, "2024-06-30T02:00:00Z");
+
+    let admitted = risk_warnings::read_set(&scenario.store, &scenario.market, today).unwrap();
+    let sz_normals: Vec<_> = admitted
+        .set
+        .rows
+        .iter()
+        .filter(|row| row.exchange == Exchange::Sz && row.status == RiskStatus::Normal)
+        .collect();
+    assert!(
+        !sz_normals.is_empty(),
+        "the daily item writes normal rows for a plain Shenzhen chain"
+    );
+    let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
+
+    // The digest without the normal rows: what a replay with no database (and
+    // therefore no delisting dates) can produce.
+    let without_normal: Vec<_> = admitted
+        .set
+        .rows
+        .iter()
+        .filter(|row| row.status != RiskStatus::Normal)
+        .cloned()
+        .collect();
+    let no_db_digest = crate::compact_market::digest_hex(&dataset_digest(&without_normal));
+    assert_ne!(daily_digest, no_db_digest, "normal rows change the digest");
+
+    commit_daily(&scenario, &admitted.set);
+    let Scenario {
+        _dir: dir,
+        store,
+        market,
+    } = scenario;
+    drop(market);
+    let database = dir.path().join("market.sqlite");
+
+    // With the database the replay reads the same main table and writes the
+    // same rows. Run it twice to show it is deterministic.
+    for attempt in 0..2 {
+        let report = replay(
+            &store,
+            &ReplayRequest::new(Some(Scope::RiskWarnings), true, Some(&database)),
+        )
+        .unwrap();
+        let scope = &report.scopes[0];
+        assert_eq!(
+            scope.summary.as_deref(),
+            Some(daily_digest.as_str()),
+            "attempt {attempt}"
+        );
+        assert_eq!(
+            scope.database,
+            Some("match"),
+            "attempt {attempt}: {scope:?}"
+        );
+        assert!(
+            scope.drift.is_empty(),
+            "attempt {attempt}: {:?}",
+            scope.drift
+        );
+    }
+
+    // Without a database the replay has no main table, so it writes no normal
+    // rows: the digest is the no-database digest, not the daily one.
+    let computed = replay(
+        &store,
+        &ReplayRequest::new(Some(Scope::RiskWarnings), false, None),
+    )
+    .unwrap();
+    assert_eq!(
+        computed.scopes[0].summary.as_deref(),
+        Some(no_db_digest.as_str()),
+        "without a database the normal rows are not computed"
+    );
 }
 
 // ------------------------------------------------------------------- A-3 ---

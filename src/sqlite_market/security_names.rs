@@ -331,6 +331,144 @@ fn stored_etf_rows(c: &Connection) -> Result<Vec<NameInterval>, Error> {
         .collect()
 }
 
+/// Replace **only** the `exchange_snapshot` (ETF) subset, preserving the
+/// A-share rows and their registration evidence (PR-4 replay scope).
+///
+/// The delisted-name replay is an explicit, database-dependent scope: it has
+/// no SZSE short-name page set of its own, so it cannot call
+/// [`replace_security_names_with`] without rebuilding (and re-dating) the
+/// A-share half. This writer reads the stored A-share rows, validates the
+/// combined table with the ETF entities declared, and re-registers the version
+/// with the existing evidence object's coverage/pending fields left untouched.
+/// Only the digest, counts and the ETF evidence block change.
+pub(crate) fn replace_etf_names_only(
+    c: &Connection,
+    etf: &EtfNameSet,
+    task_id: &str,
+    item_id: &str,
+) -> Result<Option<DerivedVersionRow>, Error> {
+    let stored: Vec<NameInterval> = super::security::read_security_names(c)?
+        .iter()
+        .map(super::security::SecurityNameRow::to_interval)
+        .collect::<Result<Vec<_>, _>>()?;
+    let a_share: Vec<NameInterval> = stored
+        .iter()
+        .filter(|row| row.source_kind != NameSourceKind::ExchangeSnapshot)
+        .cloned()
+        .collect();
+    names::validate_set(&a_share).map_err(name_error)?;
+    let mut rows = a_share;
+    rows.extend(etf.rows.iter().cloned());
+    sort_rows(&mut rows);
+    names::validate_set_for(&rows, &etf.entities).map_err(name_error)?;
+    let digest = names::dataset_digest(&rows);
+    c.execute(
+        "DELETE FROM security_name_history WHERE source_kind = ?1",
+        params![NameSourceKind::ExchangeSnapshot.as_str()],
+    )
+    .map_err(storage)?;
+    if rows.is_empty() {
+        c.execute(
+            "DELETE FROM derived_dataset_versions WHERE dataset_kind=?1 AND dataset_key=?2",
+            params![DATASET_KIND, DATASET_KEY],
+        )
+        .map_err(storage)?;
+        return Ok(None);
+    }
+    let mut evidence = derived::read_version(c, DATASET_KIND, DATASET_KEY)
+        .map_err(storage)?
+        .and_then(|version| {
+            let (kind, text) = evidence_store::read_evidence(c, &version.evidence_digest).ok()?;
+            (kind == EvidenceKind::Derived)
+                .then(|| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .flatten()
+        })
+        .unwrap_or_else(|| {
+            json!({
+                "dataset": DATASET_KIND,
+                "dataset_key": DATASET_KEY,
+                "digest_format": DIGEST_FORMAT,
+                "algorithm_version": ALGORITHM_VERSION,
+                "coverage": [],
+                "pending_sources": [],
+            })
+        });
+    if let Some(object) = evidence.as_object_mut() {
+        object.insert(
+            "content_digest".into(),
+            json!(compact_market::digest_hex(&digest)),
+        );
+        object.insert("record_count".into(), json!(rows.len()));
+        object.insert(
+            "interval_rows".into(),
+            json!(
+                rows.iter()
+                    .filter(|row| row.certainty == names::NameCertainty::Interval)
+                    .count()
+            ),
+        );
+        object.insert(
+            "unbounded_rows".into(),
+            json!(
+                rows.iter()
+                    .filter(|row| row.certainty == names::NameCertainty::Unbounded)
+                    .count()
+            ),
+        );
+        if let Some(etf_json) = etf_evidence(&rows) {
+            object.insert("etf".into(), etf_json);
+        } else {
+            object.remove("etf");
+        }
+        object.insert("etf_replay_scope".into(), json!("delisted_etf_names"));
+    }
+    let evidence_digest = evidence_store::put_evidence(c, EvidenceKind::Derived, &evidence)?;
+    for row in rows
+        .iter()
+        .filter(|row| row.source_kind == NameSourceKind::ExchangeSnapshot)
+    {
+        c.execute(
+            "INSERT INTO security_name_history(exchange,code,effective_from,effective_to,\
+             name,certainty,known_at,source_kind,source_record_id,evidence_digest) \
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                row.exchange.as_str(),
+                row.code,
+                compact_market::epoch_day(row.effective_from),
+                row.effective_to.map(compact_market::epoch_day),
+                row.name,
+                row.certainty.as_str(),
+                row.known_at.map(|day| day.to_string()),
+                row.source_kind.as_str(),
+                row.source_record_id,
+                evidence_digest.as_slice(),
+            ],
+        )
+        .map_err(storage)?;
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    c.execute(
+        "UPDATE derived_dataset_versions SET version_id=?3, content_digest=?4, \
+         record_count=?5, evidence_digest=?6, task_id=?7, item_id=?8, updated_at=?9 \
+         WHERE dataset_kind=?1 AND dataset_key=?2",
+        params![
+            DATASET_KIND,
+            DATASET_KEY,
+            compact_market::digest_hex(&digest),
+            digest.as_slice(),
+            i64::try_from(rows.len()).unwrap_or(i64::MAX),
+            evidence_digest.as_slice(),
+            task_id,
+            item_id,
+            now,
+        ],
+    )
+    .map_err(storage)?;
+    derived::read_version(c, DATASET_KIND, DATASET_KEY)?
+        .map(Some)
+        .ok_or_else(|| integrity("name-history registration vanished after the ETF replay"))
+}
+
 /// Registration evidence of the ETF subset. A pure function of the rows, so a
 /// daily write and a replay of the same store register identical evidence.
 /// What only the daily item knows (the selected list, unresolved codes) goes

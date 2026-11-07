@@ -108,11 +108,21 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 `industry` 自 PR-6 起可重建 `industry_snapshots`/`industry_assignments`，
 `generation_facts` 自 PR-8 起重建设备退役门禁索引（行业成员 + 已绑定的派生事实），
 `risk_warnings` 自 PR-10 起可重建 `risk_warning_intervals`（选择与日更一致：
-同指纹取最新回答、简称表须为完整页集，XDM-154），`security_names`
+同指纹取最新回答、简称表须为完整页集，XDM-154）。D-81 任务 49 起深市写 `normal`
+区间，其终点受该库 `security_master` 的区间终点约束，所以这个 scope 也变成
+**条件可重放**：有 `--db` 时从库读同一张主表、与日更走同一个组装函数，逐行相同；
+无 `--db`（`database: None`）时**不计算深市 `normal` 行**（`computed_no_db`，
+结果说明写明「没有数据库，深市 `normal` 行未计算」），所以无库摘要会比日更少这些行。
+`security_names`
 自 PR-12 起可重建 `security_name_history` 与它的 `derived_dataset_versions`
 登记（整表替换，走日更 item 的同一写入器）；`suspensions`（XDM-138）可重放
 停牌数据集，但它是**条件可重放**：装配还依赖该库的主表、交易日历和 bar_days，
 详见 §4.2。
+`delisted_etf_names`（PR-4）是**显式 scope，不在 `--scope all` 里**：它从
+`security_master` 读出退市 ETF 与 `effective_to`，从两个公告索引和 D-72 提取 CSV
+拼出退市名称，只替换 `security_name_history` 的 `exchange_snapshot` 子集；无 `--db`
+或库里没有 class-2 主表行时 fail-closed 报 `delisted_etf_names_not_ready`，写 0 行。
+详见 [ETF 名称设计](tasks/etf-name-search.md) §9。
 `rebuilt` 取值：
 `nothing_selected`（该 scope 在清单里没有匹配记录，什么都没算、没写）、
 `skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）、
@@ -230,6 +240,23 @@ reason 码 `empty_name_set`），不写库、上一版仍可读。
 `--scope suspensions` 的 `--db` 写入仍需服务停止（重放取数据库租约），与其它写库
 scope 相同。
 
+### 4.2.1 `delisted_etf_names`：显式、依赖主表
+
+只选 `source_id` 为 `sse_fund_delist_ann`、`szse_etf_notice_ann`、
+`etf_delist_extract`、`etf_delist_pdf` 的冻结记录。它与 `suspensions` 一样依赖库内
+输入（哪些 ETF 已退市、区间何时结束），但**故意不进 `--scope all`**：fresh-init
+时主表还不存在，让 `all` 带上它只会多一个必然 `not_ready` 的 scope。
+
+- 无 `--db`，或库里没有 `instrument_class=2` 的 `security_master` 行 →
+  `delisted_etf_names_not_ready`（退出 1），不写表、不删既有 ETF 名称行。
+- 有库且主表就绪 → 与日更 `derived:security_names` 用同一个
+  `assemble_delisted_etf_names` / `merge_delisted_names`，只替换
+  `source_kind='exchange_snapshot'` 的行；A 股名称行与登记证据里的 coverage /
+  pending 字段不变。
+- `--verify-only` 比较重算的整张名称表与库里已存的行，返回 `match` / `drift`。
+- 报告的 `delisted_etf_names` 对象给出 `targets`、`rows`、`no_name`、
+  `empty_interval`、`identity_notice_mismatch`、`overlap_skipped` 等计数。
+
 ### 4.3 `register-generation-member`：遗留代补登记
 
 在来源库出现之前采集的 generation，成员字节可能已经在库里（`archive_import`，
@@ -294,7 +321,9 @@ source_store register-generation-member --store <dir> \
 ## 5. 退役豁免
 
 退役门禁（[M3 设计](tasks/issue-446-m3-delisted-industry.md) §8.3）默认拒绝：
-来源库没有按 sha 读回的证据，或 `generation_facts` 缺必需 kind。确有外部原因时，
+来源库没有按 sha 读回的证据，或**激活过的代**在 `generation_facts` 缺必需 kind。
+从未激活的代不要求派生事实（`#583`，见 [日更文档](daily-sync.md)「Generation 模型」），
+这类代只需来源证据通过即可退役，不需要写豁免。确有外部原因时，
 owner 用 `source_store exempt` 写一行豁免，再重试退役：
 
 - `--missing` 用门禁报告里的键：`source_store_evidence:<role>:<source_id>` 或
@@ -303,6 +332,10 @@ owner 用 `source_store exempt` 写一行豁免，再重试退役：
 - 来源库证据的豁免必须再加 `--owner-approve-evidence`，否则命令拒绝（退出码 2）。
 - 豁免只覆盖列出的键，不覆盖 active/pin/in-flight 检查；退役成功后回复
   `detail=exemptions: ...` 指明用到了哪些豁免。
+- 「从未激活」不是豁免：门禁直接跳过派生事实步骤，回复
+  `detail=derived facts not required: generation was never activated`；
+  该判定只由 acquire 的持久记录得出（激活前的 `state` + active pointer +
+  `activate_generation` 请求结果），调用者无法自行声明。
 - 门禁本身绝不写豁免；Skill/自动流程也不得代为豁免（见
   [日更文档](daily-sync.md)）。
 

@@ -8,7 +8,7 @@
 //! allowlists and the documented per-entry tool counts unchanged.
 //!
 //! ```text
-//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all]
+//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all]
 //!                     [--db <market.sqlite>] [--verify-only]
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl|extract.csv> --blobs <dir>
@@ -45,6 +45,11 @@
 //! database or creates the store. `verify` always compares, even if
 //! `--verify-only` is also given.
 //!
+//! PR-4's `delisted_etf_names` scope is explicit only (never in `--scope
+//! all`): it needs the database's delisted ETF `security_master` rows and
+//! fails closed with `delisted_etf_names_not_ready` without `--db` or before
+//! the main table has been rebuilt.
+//!
 //! Every command prints one JSON object on stdout. Exit 0 means `ok` or
 //! `store_empty`; a corrupt store, an unknown parser version, a drift verdict or
 //! a failed rebuild exits 1; bad usage exits 2.
@@ -57,10 +62,10 @@ use x_data_mcp::source_store::{SourceStore, generation_member, import, replay};
 const USAGE: &str = "\
 usage:
   source_store replay --store <dir> \
-[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all] \
 [--db <market.sqlite>] [--verify-only]
   source_store verify --store <dir> \
-[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all] \
 [--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl|extract.csv> --blobs <dir> \
 [--tiers A,B] [--kind industry|exchange] [--format archive|etf-delisting] [--batch <id>] [--dry-run]
@@ -187,7 +192,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         other => Some(replay::Scope::parse(other).ok_or_else(|| {
             format!(
                 "unknown scope {other} \
-                 (industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all)"
+                 (industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all)"
             )
         })?),
     };

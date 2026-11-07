@@ -7,8 +7,8 @@
 use super::*;
 use crate::compact_market::{Digest, EvidenceKind, SourceBinding};
 use crate::generation_gate::{
-    KIND_ADJUSTMENT_EVENTS, KIND_CAPITAL_EVENTS, KIND_DAILY_SERIES, RetireGate, facts_summary,
-    industry_fact_rows_from_store,
+    ActivationRecord, KIND_ADJUSTMENT_EVENTS, KIND_CAPITAL_EVENTS, KIND_DAILY_SERIES, RetireGate,
+    facts_summary, industry_fact_rows_from_store,
 };
 use crate::market_storage::Error;
 use crate::source_store::replay::{ReplayRequest, Scope, verify};
@@ -340,7 +340,9 @@ fn commit_refreshes_every_generation_and_orphaned_facts_survive_the_gate() {
 
     // The retired generation still passes the real gate: row existence is
     // what it checks, and the source-store evidence is untouched.
-    let check = RetireGate::new(store.clone(), &db).check(&gen1).unwrap();
+    let check = RetireGate::new(store.clone(), &db)
+        .check(&gen1, ActivationRecord::Activated)
+        .unwrap();
     assert!(check.passes(), "{check:?}");
 
     // A second refresh is an idempotent upsert: same rows, same summary.

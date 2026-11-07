@@ -17,7 +17,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
-use x_data_mcp::generation_gate::{self, FactGap, RetireGate};
+use x_data_mcp::generation_gate::{self, ActivationRecord, FactGap, RetireGate};
 use x_data_mcp::source_store::{Registration, SourceStore, StoreKind};
 use x_data_mcp::sqlite_tasks::SqliteTasks;
 
@@ -219,7 +219,7 @@ fn registration_makes_the_evidence_real_and_leaves_only_market_facts() {
 
     let db = market_db(root.path());
     let before = RetireGate::new(store.clone(), db.clone())
-        .check(&generation.generation)
+        .check(&generation.generation, ActivationRecord::Activated)
         .unwrap();
     assert!(
         !before.missing_evidence.is_empty(),
@@ -306,7 +306,7 @@ fn registration_makes_the_evidence_real_and_leaves_only_market_facts() {
     assert_eq!(replay["scopes"][0]["facts"], 3);
 
     let gate = RetireGate::new(store.clone(), db)
-        .check(&generation.generation)
+        .check(&generation.generation, ActivationRecord::Activated)
         .unwrap();
     assert!(gate.missing_evidence.is_empty(), "{gate:?}");
     assert_eq!(

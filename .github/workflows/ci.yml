@@ -51,6 +51,8 @@ jobs:
         run: python3 -B -m unittest discover -s scripts -p 'test_v8_token_budget.py'
       - name: Read-tool evaluation harness (fake sessions, no model, no data)
         run: python3 -B -m unittest discover -s scripts -p 'test_eval_read_tools.py'
+      - name: ETF short-name extractor (synthetic text, no PDF bytes, no network)
+        run: python3 -B -m unittest discover -s scripts -p 'test_extract_etf_short_names.py'
       - run: cargo fmt --check
       - if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
