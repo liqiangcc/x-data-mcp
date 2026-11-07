@@ -31,6 +31,7 @@
 | 游标池变成进程级：总 48 MiB、单连接 24 MiB 且 32 条，LRU 淘汰 | 约 5 个以上全市场读者同时翻页时，别的连接可能收到 `invalid/expired cursor`，要重新查询 | #547 |
 | `market.risk_warnings` 的 `coverage_reason` 文案，不再有过时的 `pending`/`#308` 文字 | 只是文本 | #539、#548 |
 | ETF 的 `security_master.effective_from`（D-80）：有 `listing_date` 的 class=2 行取上市日，`known_at` 仍是首次观察日；没有上市日的行不变。A 股行不变。schema 与列不变；主表 `algorithm_version` 升到 `security-master-assembly-v2`，导出 `producer` 随之变化 | `market.security_master`、`universe_intervals` 里 ETF 行的 `effective_from`/`member_from` 变早；`snapshot_id` 随之变；`known_at` 早于首次观察日的查询仍排除并计数。v10 是已部署快照，不改：v10 §1.1「这两个字段是身份观测/退市上界」按旧取值写 | [#509](https://github.com/liqiangcc/x-data-mcp/issues/509)，[M3-2 设计](../tasks/issue-509-m3-2-etf.md) §3.3 |
+| `market.risk_warnings` 的开区间按 `security_master.delisting_date` 截断（#587）：`effective_to` 为空且证券有退市日时，返回的有效终点取退市日（排他），`effective_to` 列写截断后的值；退市日当天及之后不再返回该区间。导出、`version_id`、`snapshot_id`、schema、`tools/list` 都不变 | 已退市证券不再在退市后的日子被读成 ST；`get_security_history` 的窗口重叠也按截断后的终点判断 | [#587](https://github.com/liqiangcc/x-data-mcp/issues/587)，[D-86](../decisions.md)、§5.7 |
 
 x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不受前两行分页形状影响；错误以 `isError` 到达（2026-11-06 读 `liqiangcc/x` 确认）。
 
@@ -228,6 +229,20 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
   #578 合并（深市 `normal`），本 PR 取 `v4`；两个变更的组装结果不同，不能共用一个版本号。
   `PARSER_VERSION` 不受影响（`v7` 只改标题分类，解析器版本只有本 PR 动）。
 - 无 schema 变化，无 `tools/list` 变化，无需重新 `init`。
+
+### 5.7 开区间按退市日截断（#587）
+
+`market.risk_warnings` 的开区间（`effective_to` 为空）在读到已退市证券时不再无限延伸：
+
+- 读路径在 **query 过滤阶段**取 `security_master.delisting_date`，有效终点 = min(存储的 `effective_to`, 退市日)，返回行的 `effective_to` 列写截断后的值。`get_security_state`、`query_data`、`get_security_history` 三个入口一致。
+- **退市日是排他上界**：`as_of >= delisting_date` 即不再返回。这与 `security_master.effective_to` 的区间终点口径相同，也与 `member_state` 的 `Out(AfterDelisting)`（`as_of >= delisting` 判出）一致——退市日当天证券已不在成员内。
+- 已关闭且 `effective_to <= 退市日` 的区间不变；`effective_to` 晚于退市日的区间同样截到退市日。
+- 证券没有退市日、或主表查不到该代码：不截断，行为与 v10 相同（没有可用的上界，不猜）。
+- 同一代码被复用时按「区间起点所在的生命周期行」的退市日截断；区间早于所有主表行时取最早一行的退市日。
+- 截断是读时过滤：导出（`research::read::risk_warning_rows`）、`derived_dataset_versions.version_id`、`snapshot_id`、schema、`tools/list` 都不变。导出仍带原始开区间（`effective_to = NULL`）。
+- 关联的读时派生：`price_limit` 在 `membership = Out(AfterDelisting)` 时原因码为 `delisted`（此前是 `not_listed`，与「从未上市」同码），答案仍是 `unknown`；其余 `Out(_)` 仍是 `not_listed`。`tradability` 早已是 `delisted`，不变。
+- 测试：`data_supply::mcp::tests::risk_warnings_open_intervals_stop_at_the_delisting_date`（沪深各 3 个代码 × 退市前一日/退市日/退市后一年 × `get_security_state` 与 `query_data`）、`risk_warnings_truncate_only_open_intervals_of_delisted_securities`（无退市日、主表缺行、已关闭区间）、`read_time_truncation_leaves_the_export_identity_unchanged`、`sqlite_supply::m2::tests::delisting_truncates_only_open_intervals_of_the_lifecycle_row_in_force`、`research::read_model_tests::price_limit_separates_delisted_from_never_listed`。
+- 未覆盖：线上库（本任务不访问线上）；影响面按 #579 取证是沪 104 + 深 68 个开区间行，部署后第一次读取即生效，不需要重跑派生。
 
 ## 6. 未验证
 

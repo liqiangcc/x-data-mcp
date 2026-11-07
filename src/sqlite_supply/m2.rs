@@ -561,6 +561,52 @@ fn capital_events(
     Ok(())
 }
 
+/// `security_master` 的退市日，按实体索引（#587）。同一代码被复用时一个实体有
+/// 多条生命周期行，所以每条都保留自己的区间起点。
+type DelistingIndex = BTreeMap<String, Vec<(NaiveDate, Option<NaiveDate>)>>;
+
+fn delisting_index(c: &Connection) -> Result<DelistingIndex, Error> {
+    let mut index: DelistingIndex = BTreeMap::new();
+    for fact in security::read_security_master(c)? {
+        index
+            .entry(fact.entity())
+            .or_default()
+            .push((fact.effective_from, fact.delisting_date));
+    }
+    Ok(index)
+}
+
+/// The effective end of a risk-warning interval once the main table is taken
+/// into account (#587): an open interval stops at the security's delisting
+/// date. That date is the same exclusive upper bound the main table and
+/// `member_state` use — `as_of >= delisting_date` is already
+/// `Out(AfterDelisting)` — so the delisting day itself no longer carries the
+/// warning. A code absent from the main table, or a security without a
+/// delisting date, keeps its stored end (there is nothing to truncate).
+///
+/// Code reuse puts several lifecycle rows on one entity; the row in force at
+/// the interval's start supplies the date. An interval that starts before
+/// every row takes the earliest row's date.
+fn effective_to_at_delisting(
+    index: &DelistingIndex,
+    entity: &str,
+    from: NaiveDate,
+    to: Option<NaiveDate>,
+) -> Option<NaiveDate> {
+    let Some(rows) = index.get(entity) else {
+        return to;
+    };
+    let row = rows
+        .iter()
+        .filter(|(start, _)| *start <= from)
+        .max_by_key(|(start, _)| *start)
+        .or_else(|| rows.iter().min_by_key(|(start, _)| *start));
+    let Some((_, Some(delisting))) = row else {
+        return to;
+    };
+    Some(to.map_or(*delisting, |to| to.min(*delisting)))
+}
+
 fn risk_warnings(
     c: &Connection,
     plan: &QueryPlan,
@@ -593,6 +639,7 @@ fn risk_warnings(
     };
     result.limitations.extend(described.limitations);
     let as_of = report.as_of;
+    let delistings = delisting_index(c)?;
     let selected: BTreeSet<String> = plan.entities.iter().map(Security::symbol).collect();
     for row in security::read_risk_warning_intervals(c)? {
         let entity = entity(&row.entity())?;
@@ -604,7 +651,13 @@ fn risk_warnings(
         if !report.observe("risk_warnings", row.known_at) {
             continue;
         }
-        if !interval_hits(row.effective_from, row.effective_to, start, end, as_of) {
+        let effective_to = effective_to_at_delisting(
+            &delistings,
+            &entity.symbol(),
+            row.effective_from,
+            row.effective_to,
+        );
+        if !interval_hits(row.effective_from, effective_to, start, end, as_of) {
             continue;
         }
         result.rows.push(Row::Fact {
@@ -612,7 +665,7 @@ fn risk_warnings(
             day: row.effective_from,
             cells: cells(vec![
                 ("effective_from", date(Some(row.effective_from))),
-                ("effective_to", date(row.effective_to)),
+                ("effective_to", date(effective_to)),
                 ("normalized_status", text(row.status.as_str())),
                 ("raw_status_code", text(row.raw_status_code.clone())),
                 (
@@ -1073,6 +1126,60 @@ mod tests {
             start,
             end,
             Some(day(2020, 6, 1))
+        ));
+    }
+
+    /// #587: an open interval stops at the delisting date of the lifecycle row
+    /// in force at its start, and a reused code does not borrow the later
+    /// row's (empty) delisting date.
+    #[test]
+    fn delisting_truncates_only_open_intervals_of_the_lifecycle_row_in_force() {
+        let mut index = DelistingIndex::new();
+        index.insert(
+            "sz.000001".into(),
+            vec![(day(2018, 1, 1), Some(day(2019, 6, 28)))],
+        );
+        index.insert(
+            "sz.000002".into(),
+            vec![
+                (day(2010, 1, 1), Some(day(2015, 6, 30))),
+                (day(2020, 1, 1), None),
+            ],
+        );
+        let open = |entity: &str, from| effective_to_at_delisting(&index, entity, from, None);
+        assert_eq!(open("sz.000001", day(2014, 12, 1)), Some(day(2019, 6, 28)));
+        assert_eq!(open("sz.000002", day(2011, 1, 1)), Some(day(2015, 6, 30)));
+        // The later lifecycle row has no delisting date: the reused code's new
+        // interval is not truncated by the previous issuer's date.
+        assert_eq!(open("sz.000002", day(2020, 6, 1)), None);
+        // A closed interval before the delisting date is unchanged; one that
+        // extends past it is cut at the delisting date.
+        assert_eq!(
+            effective_to_at_delisting(&index, "sz.000001", day(2014, 12, 1), Some(day(2019, 6, 3))),
+            Some(day(2019, 6, 3))
+        );
+        assert_eq!(
+            effective_to_at_delisting(&index, "sz.000001", day(2014, 12, 1), Some(day(2021, 1, 4))),
+            Some(day(2019, 6, 28))
+        );
+        // No main-table row: nothing to truncate with.
+        assert_eq!(open("sz.999999", day(2014, 12, 1)), None);
+        // The truncated end feeds the same half-open test: the delisting day
+        // itself is already outside.
+        let end = open("sz.000001", day(2014, 12, 1));
+        assert!(interval_hits(
+            day(2014, 12, 1),
+            end,
+            day(2019, 6, 27),
+            day(2019, 6, 27),
+            Some(day(2019, 6, 27))
+        ));
+        assert!(!interval_hits(
+            day(2014, 12, 1),
+            end,
+            day(2019, 6, 28),
+            day(2019, 6, 28),
+            Some(day(2019, 6, 28))
         ));
     }
 
