@@ -167,11 +167,13 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 ### 5.5 风险提示标题的排除（D-81 GP29 §7）
 
 「存在被实施退市风险警示及暂停上市风险的提示(性)公告」陈述的是**风险存在**，不是交易所的实施决定；它与
-`将被`/`可能`/`争取` 同类（D-68 第 1 项：意向不算事件）。规则：标题含 `存在`，且 `存在` 之后还有 `风险`
-才排除；只含 `存在` 而不在说风险的标题不受影响，所以真正的实施公告不会被误伤。
+`将被`/`可能`/`争取` 同类（D-68 第 1 项：意向不算事件）。判定条件是两个同时成立：标题含 `存在`，且 `存在`
+在**第一个** `实施`/`实行` 之前，并且该动词之后仍出现 `风险`（即「存在被实施…风险」这个句式）。只在别处
+提到 `存在`、或 `实施` 在 `存在` 之前的真实施公告不受影响。
 
-- `ALGORITHM_VERSION`：`risk-warnings-v2` → `risk-warnings-v3`；解析器版本（item 证据）`risk-warnings-v6`
-  → `risk-warnings-v7`。内容摘要（前缀仍是 `risk-warnings-v1`）、`digest_format`、`version_id` 的算法不变。
+- `ALGORITHM_VERSION`：`risk-warnings-v3` → `risk-warnings-v4`（`v3` 已由 #578 的深市 `normal` 占用）；
+  解析器版本（item 证据）`risk-warnings-v6` → `risk-warnings-v7`。内容摘要（前缀仍是 `risk-warnings-v1`）、
+  `digest_format`、`version_id` 的算法不变。
 - 预期数据影响（根据取证 `docs/tasks/gp29-compare-20261106.md` §7，不是线上核对）：14 条沪市公告，全部
   2014-12，代码 600076、600146、600193、600301、600315、600368、600403、600421、600469、600610、
   600656、600671、600822、600966。此前它们各开一个 `DelistingRiskWarning` 区间；其中 7 个（600076、
@@ -180,6 +182,9 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
   这些日子回到 `unknown`（不是 `normal`：没有区间不等于无警示）。
 - 重放等价：同一份冻结页集上 `source_store replay --scope risk_warnings` 与日更写入逐行相同；与 v2/v6
   相比只有这 14 条公告产生的行不同，其余行（含 `known_at`、`source_record_id`）不变。
+- **版本号先后**：#578（深市闭世界）与本 PR 同时把 `ALGORITHM_VERSION` 从 `v2` 往上升。`v3` 已随
+  #578 合并（深市 `normal`），本 PR 取 `v4`；两个变更的组装结果不同，不能共用一个版本号。
+  `PARSER_VERSION` 不受影响（`v7` 只改标题分类，解析器版本只有本 PR 动）。
 - 无 schema 变化，无 `tools/list` 变化，无需重新 `init`。
 
 ## 6. 未验证

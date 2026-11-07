@@ -357,13 +357,13 @@ risk_warnings|security_names` 读同一个声明值，所以同一份冻结字�
   生效日全部取自公告日 `SSEDATE`（全库标题没有一条带显式日期），标题显式日分支在真实
   数据上从未被行使。
 - **标题分类（`risk-warnings-v7`，D-81 GP29 §7）**：「存在被实施退市风险警示及暂停上市风险的
-  提示(性)公告」陈述的是风险存在，不是实施事件，与 `将被`/`可能`/`争取` 同类排除。判定条件是
-  标题含 `存在` 且 `存在` 之后还有 `风险`；只含 `存在` 而不在说风险的标题不受影响，真正的实施
-  公告不被误伤。取证里共 14 条（全部 2014-12），测试夹具
-  `tests/fixtures/exchange-risk-warnings/sse-risk-notice-titles.json` 列全并钉住改动前后的分类
-  （用测试内的 v6 排除词表重算旧规则）。部署后的只读核对（在 vm2 上跑，不在开发机）：
-  `source_store replay --store <source store> --scope risk_warnings --verify-only` 应与日更逐行相同，
-  且这 14 条代码不再有 2014-12 起点的开区间。
+  提示(性)公告」陈述的是风险存在，不是实施事件，与 `将被`/`可能`/`争取` 同类排除。判定条件是两个
+  同时成立：`存在` 在第一个 `实施`/`实行` 之前，且该动词之后仍出现 `风险`。只在别处提到 `存在`
+  （如「…的公告（存在异议）」）或 `实施` 在 `存在` 之前的真实施公告不受影响。取证里共 14 条（全部
+  2014-12），测试夹具 `tests/fixtures/exchange-risk-warnings/sse-risk-notice-titles.json` 列全并
+  钉住改动前后的分类（`classify_title_with(title, true)` 复现 v6 规则）。部署后的只读核对（在 vm2
+  上跑，不在开发机）：`source_store replay --store <source store> --scope risk_warnings --verify-only`
+  应与日更逐行相同，且这 14 条代码不再有 2014-12 起点的开区间。
 
 ### A-3 停复牌消费者（`derived:suspensions`）
 
