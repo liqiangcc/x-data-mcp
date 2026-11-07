@@ -123,7 +123,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - `src/research/industry/industry_query_golden.txt`：`market.industry_assignments` 在 4 个标的 × 5 个 `as_of` 上的行与 `temporal`，同样在改动前记录。
 - `m2.rs` 的单元测试保留原有的 `as_of` 半开区间断言，增加 `as_of: None` 的窗口重叠断言。
 
-## 5. 风险警示的时点规则（D-81 R1、R4、R5）
+## 5. 风险警示的时点规则（D-81 R1、R4、R5；D-84 R2）
 
 适用于 `market.risk_warnings`（`query_data`、`get_security_state`、`get_security_history` 读到的 `risk_warning_intervals`）。**compact schema 不变**，`tools/list` 与响应形状不变。`ALGORITHM_VERSION` 在代码面升级，影响见下。
 
@@ -228,6 +228,44 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
   #578 合并（深市 `normal`），本 PR 取 `v4`；两个变更的组装结果不同，不能共用一个版本号。
   `PARSER_VERSION` 不受影响（`v7` 只改标题分类，解析器版本只有本 PR 动）。
 - 无 schema 变化，无 `tools/list` 变化，无需重新 `init`。
+
+### 5.7 沪市生效日 R2：公告日后的下一个交易日（D-84）
+
+**规则**：沪市公告没有显式生效日时，生效日 = **公告日当天或其后第一个交易日的下一个交易日**。
+公告日是交易日 → 下一个交易日；周五 → 下周一；周六 → 下周二。有显式标题日期时保留显式日期，
+不套用本规则。**实施与撤销用同一规则**。证据档位 `OWNER_RISK_ACCEPTED`：这是规则推断，不是
+公告原文。GP29 配对实施 617 条命中 607 条；撤销去重后 691 条、配得上 544 条、命中 540 条
+（99.3%），周六 21/21 为 +2，跨长假 31 条全命中；未命中见
+`docs/tasks/gp29-compare-20261106.md` 与 `docs/tasks/revoke-effective-20261106.md`。
+
+**实现位置**：`risk_warnings::sh_effective_day` / `place_sh_events`（域层），日更与
+`source_store replay --scope risk_warnings` 都调用同一函数。`known_at` 不变，仍是公告日；
+只移动 `effective_from`/`effective_to`。区间结束日同规则，半开区间语义不变。
+
+**日历输入与未就绪**：
+
+- 规则只读库内 `trading_days`，不用周末规则代替日历（600530 2020-04-29 五一前的反例说明
+  周末规则会错）。公告日或其后第一个交易日不在日历内 → 无法确定，**不写该事件的行**，状态
+  保持 `unknown`；事件以 `sh_deferred` 计数和前 20 条样本写入 item/登记证据，下一次日历推进后
+  再写。
+- `--db` 的 replay 在日历为空且选中页含沪市公告时，`--scope risk_warnings` 返回稳定码
+  `risk_warnings_replay_not_ready`，不写任何行。fresh init 的 `replay --scope all` 在服务启动前
+  运行、数据库尚无日历，因此该 scope 在 `all` 内报告 `status=not_ready`（`not_ready_reason`
+  说明缺日历），`all` 仍退出 0，部署顺序不变；`--verify-only` 保持稳定失败码和非零退出。
+- 没有 `--db` 的 replay 没有日历，所有沪市公告事件 deferred；摘要只含深市行和带显式日期的沪市
+  行，不能与日更摘要逐字比较。重放等价是 `--db` 的性质。
+
+**版本与摘要**：`ALGORITHM_VERSION` `risk-warnings-v4` → `risk-warnings-v5`；解析器
+`risk-warnings-v7` → `risk-warnings-v8`（只改 `day_is_explicit` 标注和生效日放置）。
+`dataset_digest` 前缀、`digest_format`、`version_id` 算法不变，但行内容移动，所以下次写入的
+`version_id`/内容摘要会变。登记证据新增 `sh_effective_day`（规则、`inputs_digest`、deferred
+计数与样本）和顶层 `replay_inputs_digest`；`--verify-only` 用后者区分 `inputs_changed`
+（日历推进）与 `rows_changed`。**无 schema 变化**，无 `tools/list` 变化，无需重新 `init`。
+
+**部署影响**：库内 884 行沪市事件整体后移 1–2 个交易日（公告日为交易日 → +1；周末公告 →
++2），`known_at` 不变；深市行不变。日历未覆盖的尾部公告不写行，部署后第一次日更的行数可能
+暂时少于 884。另有 267 个沪市区间在 GP29 证据包里没有可配对公告，**这部分不能声称已验证**，
+规则对它们只是外推。
 
 ## 6. 未验证
 

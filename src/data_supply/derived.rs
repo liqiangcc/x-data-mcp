@@ -1008,6 +1008,7 @@ fn execute(
                     member_sha256: &source.base_member_sha256,
                     security_event_sha256: &source.security_event_sha256,
                     generation_evidence: &generation_evidence,
+                    replay_inputs_digest: admitted.inputs_digest.as_deref(),
                 })?;
                 let pending = admitted.set.pending_sources.clone();
                 return Ok(json!({

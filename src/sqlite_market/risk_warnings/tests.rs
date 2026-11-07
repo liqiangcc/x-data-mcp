@@ -119,6 +119,7 @@ fn set(rows: Vec<RiskWarningInterval>) -> RiskWarningSet {
             },
         ],
         pending_sources: Vec::new(),
+        sh_deferred: Vec::new(),
     }
 }
 
@@ -148,6 +149,7 @@ fn round_trip_keeps_provenance_and_registers_counts() {
         f.binding,
         "task-1",
         "derived:risk_warnings",
+        None,
     )
     .unwrap()
     .expect("non-empty set registers");
@@ -196,6 +198,7 @@ fn registered_evidence_has_the_keys_the_reader_uses() {
         f.binding,
         "task-1",
         "derived:risk_warnings",
+        None,
     )
     .unwrap()
     .expect("non-empty set registers");
@@ -243,6 +246,7 @@ fn empty_set_removes_rows_and_registration() {
         f.binding,
         "task-1",
         "derived:risk_warnings",
+        None,
     )
     .unwrap()
     .expect("first write registers");
@@ -252,11 +256,19 @@ fn empty_set_removes_rows_and_registration() {
         rows: Vec::new(),
         coverage: Vec::new(),
         pending_sources: Vec::new(),
+        sh_deferred: Vec::new(),
     };
     assert!(
-        replace_risk_warnings(&f.c, &empty, f.binding, "task-2", "derived:risk_warnings")
-            .unwrap()
-            .is_none()
+        replace_risk_warnings(
+            &f.c,
+            &empty,
+            f.binding,
+            "task-2",
+            "derived:risk_warnings",
+            None
+        )
+        .unwrap()
+        .is_none()
     );
     assert!(read_risk_warnings(&f.c).unwrap().is_empty());
     assert!(read_registration(&f.c).unwrap().is_none());
@@ -272,9 +284,16 @@ fn overlapping_intervals_are_refused_before_delete() {
         Some(day(2001, 3, 7)),
         RiskStatus::OtherRiskWarning,
     )]);
-    replace_risk_warnings(&f.c, &first, f.binding, "task-1", "derived:risk_warnings")
-        .unwrap()
-        .expect("first write registers");
+    replace_risk_warnings(
+        &f.c,
+        &first,
+        f.binding,
+        "task-1",
+        "derived:risk_warnings",
+        None,
+    )
+    .unwrap()
+    .expect("first write registers");
 
     let overlap = set(vec![
         row(
@@ -293,8 +312,15 @@ fn overlapping_intervals_are_refused_before_delete() {
         ),
     ]);
     assert!(
-        replace_risk_warnings(&f.c, &overlap, f.binding, "task-2", "derived:risk_warnings")
-            .is_err()
+        replace_risk_warnings(
+            &f.c,
+            &overlap,
+            f.binding,
+            "task-2",
+            "derived:risk_warnings",
+            None
+        )
+        .is_err()
     );
     assert_eq!(read_risk_warnings(&f.c).unwrap(), first.rows);
 }
@@ -326,6 +352,7 @@ fn a_normal_row_from_szse_name_history_round_trips() {
         f.binding,
         "task-1",
         "derived:risk_warnings",
+        None,
     )
     .unwrap()
     .expect("a normal row registers");
@@ -355,14 +382,14 @@ fn a_normal_row_from_another_source_is_refused() {
         source_document_sha256: Some("c".repeat(64)),
     };
     assert!(
-        replace_risk_warnings(&f.c, &set(vec![normal.clone()]), f.binding, "t", "i").is_err(),
+        replace_risk_warnings(&f.c, &set(vec![normal.clone()]), f.binding, "t", "i", None).is_err(),
         "a non-szse_name_history normal row must be refused"
     );
     normal.source_kind = "szse_name_history".into();
     normal.exchange = Exchange::Sz;
     normal.code = "000001".into();
     assert!(
-        replace_risk_warnings(&f.c, &set(vec![normal]), f.binding, "t", "i").is_ok(),
+        replace_risk_warnings(&f.c, &set(vec![normal]), f.binding, "t", "i", None).is_ok(),
         "the same normal row from szse_name_history is accepted"
     );
 }

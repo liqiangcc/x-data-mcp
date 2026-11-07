@@ -1361,6 +1361,14 @@ fn a_sz_normal_row_makes_the_band_known_but_sh_stays_unknown() {
         [],
     )
     .unwrap();
+    // The fixture master rows carry no `known_at`; a `known_at` filter would
+    // exclude the member itself. Give this one a day so the filter can isolate
+    // the risk-warning row.
+    c.execute(
+        "UPDATE security_master SET known_at=?1 WHERE exchange='sh' AND code='600519'",
+        params![days()[0].to_string()],
+    )
+    .unwrap();
 
     // Both entities are seasoned by days()[9] (the 10th trading day). With a
     // `normal` row the Shenzhen main board answers a concrete band and
@@ -2729,4 +2737,85 @@ fn allotment_with_other_events_entire_period_unknown() {
     let report_15 = ask(&fixture.open(), "sh.600040", day(2026, 7, 2));
     assert_eq!(report_15.state, PriceLimitState::Unknown);
     assert_eq!(report_15.reason, Some(PriceLimitReason::ExRightsUnverified));
+}
+
+/// D-84: the read models see the effective day the writer stored, not the
+/// announcement day. The fixture's `sh.600519` normal row is replaced by an
+/// interval that starts on `days()[6]` but was announced on `days()[5]`.
+#[test]
+fn an_sh_interval_reads_from_its_effective_day_not_the_announcement() {
+    use crate::research::universe::{UniverseRequest, member_state};
+    use crate::security_master::RiskStatus;
+
+    let fixture = Fixture::new();
+    fixture.write_rules(&real_book());
+    let c = fixture.open();
+    let evidence =
+        evidence_store::put_evidence(&c, EvidenceKind::Derived, &json!({"fixture": "D-84"}))
+            .unwrap();
+    c.execute(
+        "DELETE FROM risk_warning_intervals WHERE exchange='sh' AND code='600519'",
+        [],
+    )
+    .unwrap();
+    // The fixture master rows carry no `known_at`; a `known_at` filter would
+    // exclude the member itself. Give this one a day so the filter can isolate
+    // the risk-warning row.
+    c.execute(
+        "UPDATE security_master SET known_at=?1 WHERE exchange='sh' AND code='600519'",
+        params![days()[0].to_string()],
+    )
+    .unwrap();
+    c.execute(
+        "INSERT INTO risk_warning_intervals(exchange,code,effective_from,effective_to,\
+         raw_status_code,normalized_status,announced_at,known_at,source_kind,\
+         source_record_id,source_document_sha256,source_generation_id,evidence_digest) \
+         VALUES('sh','600519',?1,NULL,'implement:other_risk_warning','other_risk_warning',\
+         ?2,?2,'exchange_announcement','d84',NULL,NULL,?3)",
+        params![
+            crate::compact_market::epoch_day(days()[6]),
+            days()[5].to_string(),
+            evidence.as_slice()
+        ],
+    )
+    .unwrap();
+
+    // The day before the effective day is still `unknown`, not `normal`.
+    let before = ask(&c, "sh.600519", days()[5]);
+    assert_eq!(before.state, PriceLimitState::Unknown);
+    assert_eq!(before.reason, Some(PriceLimitReason::StUnknown));
+    let state_before = member_state(&c, "sh.600519", &UniverseRequest::new(days()[5]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(state_before.status, RiskStatus::Unknown);
+
+    // From the effective day the warning band applies and `member_state`
+    // reports the status.
+    let on = ask(&c, "sh.600519", days()[6]);
+    assert_eq!(on.state, PriceLimitState::Known, "{on:?}");
+    assert_eq!(on.status_class, Some(StatusClass::St));
+    assert_eq!(on.band_bp, Some(1_000));
+    let state_on = member_state(&c, "sh.600519", &UniverseRequest::new(days()[6]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(state_on.status, RiskStatus::OtherRiskWarning);
+
+    // `known_at` stays the announcement day: the row is visible from days[5],
+    // not from days[4], even though its effective day is days[6].
+    let not_known = member_state(
+        &c,
+        "sh.600519",
+        &UniverseRequest::new(days()[6]).with_known_at(days()[4]),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(not_known.status, RiskStatus::Unknown);
+    let known = member_state(
+        &c,
+        "sh.600519",
+        &UniverseRequest::new(days()[6]).with_known_at(days()[5]),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(known.status, RiskStatus::OtherRiskWarning, "{known:?}");
 }

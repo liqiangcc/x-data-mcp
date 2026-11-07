@@ -2816,6 +2816,7 @@ fn seed_risk_warnings(f: &Fixture) {
             },
         ],
         pending_sources: Vec::new(),
+        sh_deferred: Vec::new(),
     };
     f.backend
         .commit_risk_warnings(&RiskWarningWrite {
@@ -2827,6 +2828,7 @@ fn seed_risk_warnings(f: &Fixture) {
             member_sha256: &"52".repeat(32),
             security_event_sha256: &"53".repeat(32),
             generation_evidence: &json!({"generation_id": "gen-risk"}),
+            replay_inputs_digest: None,
         })
         .unwrap()
         .expect("a non-empty set registers its version");
@@ -2874,6 +2876,11 @@ fn registered_risk_warnings_carry_no_pending_text_and_state_real_limits() {
     let limitations = page["limitations"].to_string();
     assert!(!limitations.contains("pending"), "{limitations}");
     assert!(limitations.contains("announcement events"), "{limitations}");
+    assert!(limitations.contains("D-84"), "{limitations}");
+    assert!(
+        !limitations.contains("effective day is the announcement day"),
+        "{limitations}"
+    );
     assert!(limitations.contains("BJ is not available"), "{limitations}");
     assert!(
         limitations.contains("sh: 1 window(s) between 2000-01-01 and 2003-12-31"),
@@ -4841,6 +4848,7 @@ fn seed_st_spells(f: &Fixture) {
             reason: "fixture".into(),
         }],
         pending_sources: Vec::new(),
+        sh_deferred: Vec::new(),
     };
     f.backend
         .commit_risk_warnings(&RiskWarningWrite {
@@ -4852,6 +4860,7 @@ fn seed_st_spells(f: &Fixture) {
             member_sha256: &"52".repeat(32),
             security_event_sha256: &"53".repeat(32),
             generation_evidence: &json!({"generation_id": "gen-risk"}),
+            replay_inputs_digest: None,
         })
         .unwrap()
         .expect("a non-empty set registers its version");

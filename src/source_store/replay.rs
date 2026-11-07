@@ -117,9 +117,14 @@ pub const COMPUTED_GENERATION_FACTS_NO_DB: &str = "computed_no_db";
 /// The risk-warning table set was recomputed and written.
 pub const REBUILT_RISK_WARNINGS: &str = "rebuilt";
 /// The risk-warning table set was recomputed but no `--db` was given. Without
-/// a database there is no `security_master`, so the Shenzhen `normal` rows are
-/// not computed (D-81 task 49) and the summary is smaller than the daily item's.
+/// a database there is no `security_master` (so the Shenzhen `normal` rows are
+/// not computed, D-81 task 49) and no trading calendar (so no SH effective day
+/// can be placed, D-84); the summary is smaller than the daily item's.
 pub const COMPUTED_RISK_WARNINGS_NO_DB: &str = "computed_no_db";
+/// Stable code of a `--db` risk-warnings replay whose database has no trading
+/// calendar but whose store holds SH bulletins. D-84 cannot place an effective
+/// day, so nothing is written; the rows stay as they were.
+pub const RISK_WARNINGS_REPLAY_NOT_READY: &str = "risk_warnings_replay_not_ready";
 /// The name-history table set was recomputed and written.
 pub const REBUILT_SECURITY_NAMES: &str = "rebuilt";
 /// The name-history table set was recomputed but no `--db` was given.
@@ -185,12 +190,13 @@ pub enum Scope {
 }
 
 impl Scope {
-    /// The scopes `--scope all` replays. `suspensions` derives from the
-    /// database's `security_master`, calendar and bar days, which a fresh-init
-    /// `--scope all` (run before the services start) does not have yet. A
-    /// writing `all` therefore reports it as [`SCOPE_NOT_READY`] instead of
-    /// failing the deployment (see `run`); no other scope reads those inputs,
-    /// so its position does not matter.
+    /// The scopes `--scope all` replays. `risk_warnings` (D-84) and
+    /// `suspensions` derive from the database's calendar (and the latter also
+    /// from `security_master` and bar days), which a fresh-init `--scope all`
+    /// (run before the services start) does not have yet. A writing `all`
+    /// therefore reports them as [`SCOPE_NOT_READY`] instead of failing the
+    /// deployment (see `run`); no other scope reads those inputs, so their
+    /// position does not matter.
     pub const ALL: [Scope; 6] = [
         Scope::Industry,
         Scope::Exchange,
@@ -619,18 +625,31 @@ fn run(
                     summary = outcome.summary;
                     database_verdict = outcome.database;
                     drift_keys = outcome.drift;
+                    drift_cause = outcome.drift_cause;
+                    inputs_digest = outcome.inputs_digest;
+                    inputs_match = outcome.inputs_match;
                     snapshot_count = Some(outcome.snapshots);
-                    for issue in outcome.problems {
-                        problems.push(BlobProblem {
-                            sha256: issue.snapshot_id,
-                            source_id: issue.source_id,
-                            reason: issue.reason,
-                            expected: outcome.expected.clone(),
-                            actual: issue.detail,
-                        });
-                    }
-                    if outcome.status != "ok" {
+                    // D-84: a fresh-init deployment replays `all` before the
+                    // calendar exists. Inside `all` that is the scope status
+                    // `not_ready`, not a failure; the run status below decides
+                    // whether it passes.
+                    if outcome.status == RISK_WARNINGS_REPLAY_NOT_READY && request.scope.is_none() {
+                        status = SCOPE_NOT_READY;
+                        not_ready_reason =
+                            outcome.problems.first().map(|issue| issue.detail.clone());
+                    } else if outcome.status != "ok" {
                         status = outcome.status;
+                    }
+                    if status != SCOPE_NOT_READY || request.verify_only {
+                        for issue in outcome.problems {
+                            problems.push(BlobProblem {
+                                sha256: issue.snapshot_id,
+                                source_id: issue.source_id,
+                                reason: issue.reason,
+                                expected: outcome.expected.clone(),
+                                actual: issue.detail,
+                            });
+                        }
                     }
                 }
                 Err(error) => {
@@ -838,7 +857,11 @@ fn run(
         // `not_ready` scope only passes a writing run: a verifying run that
         // compared nothing keeps the stable failing code.
         if failed.status == SCOPE_NOT_READY {
-            SUSPENSION_REPLAY_NOT_READY
+            if failed.scope == "risk_warnings" {
+                RISK_WARNINGS_REPLAY_NOT_READY
+            } else {
+                SUSPENSION_REPLAY_NOT_READY
+            }
         } else {
             failed.status
         }
@@ -881,6 +904,13 @@ struct ExchangeOutcome {
     snapshots: usize,
     problems: Vec<crate::exchange_source::RebuildProblem>,
     expected: String,
+    /// Digest of the database inputs a scope read (D-84: the calendar).
+    inputs_digest: Option<String>,
+    /// Whether the stored inputs digest equals the one just read.
+    inputs_match: Option<bool>,
+    /// Why a verify-only comparison differed: `inputs_changed` or
+    /// `rows_changed`.
+    drift_cause: Option<&'static str>,
 }
 
 impl ExchangeOutcome {
@@ -901,6 +931,9 @@ impl ExchangeOutcome {
                 detail,
             }],
             expected: expected.to_string(),
+            inputs_digest: None,
+            inputs_match: None,
+            drift_cause: None,
         }
     }
 }
@@ -969,6 +1002,9 @@ fn rebuild_exchange(
         snapshots: rebuild.rows.len(),
         problems: rebuild.problems,
         expected,
+        inputs_digest: None,
+        inputs_match: None,
+        drift_cause: None,
     };
     let Some(database) = database else {
         return Ok(outcome);
@@ -1379,6 +1415,18 @@ fn rebuild_risk_warnings(
         .filter(|window| !window.observed)
         .map(|window| (window.from, window.to))
         .collect();
+    // D-84: the SH effective day is a database input. A fresh init runs
+    // `--scope all` before the calendar exists; writing the announcement day
+    // then would be a different rule, so the scope is not ready instead. The
+    // check is on the events that actually need placement, not on the presence
+    // of a bulletin page: an empty page or explicit title dates need no
+    // calendar.
+    let calendar = match &backend {
+        Some(backend) => Some(backend.calendar_days().map_err(|error| error.to_string())?),
+        None => None,
+    };
+    let calendar = calendar.as_deref().filter(|days| !days.is_empty());
+    let inputs_digest = calendar.map(risk_warnings::inputs_digest);
     let set = crate::official_security::risk_warnings::replay(
         store,
         &pages,
@@ -1386,8 +1434,20 @@ fn rebuild_risk_warnings(
         &gaps,
         coverage,
         backend.as_ref(),
+        calendar,
     )
     .map_err(|error| format!("{}: {error}", error.code()))?;
+    if backend.is_some() && calendar.is_none() && !set.sh_deferred.is_empty() {
+        return Ok(ExchangeOutcome::not_built(
+            RISK_WARNINGS_REPLAY_NOT_READY,
+            "sse_bulletin",
+            "a database trading calendar reaching the day after the first trading day on \
+             or after each SH announcement (D-84)",
+            "the database has no trading calendar; the SH effective day cannot be placed, \
+             so no row is written"
+                .to_string(),
+        ));
+    }
     let summary = crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&set.rows));
     let mut outcome = ExchangeOutcome {
         status: "ok",
@@ -1398,10 +1458,14 @@ fn rebuild_risk_warnings(
         snapshots: set.rows.len(),
         problems: Vec::new(),
         expected: "a parseable SZSE short-name and SSE bulletin page set".to_string(),
+        inputs_digest: inputs_digest.clone(),
+        inputs_match: None,
+        drift_cause: None,
     };
     let Some(backend) = backend else {
         return Ok(outcome);
     };
+    let stored_inputs = stored_risk_warning_inputs_digest(&backend)?;
     if verify_only {
         let stored = backend
             .read(crate::sqlite_market::risk_warnings::read_risk_warnings)
@@ -1410,10 +1474,18 @@ fn rebuild_risk_warnings(
             crate::compact_market::digest_hex(&risk_warnings::dataset_digest(&stored));
         if stored_summary == summary {
             outcome.database = Some("match");
+            outcome.inputs_match = Some(stored_inputs == inputs_digest);
             return Ok(outcome);
         }
         outcome.status = "drift";
         outcome.database = Some("drift");
+        outcome.drift_cause = Some(
+            if stored_inputs.is_some() && stored_inputs.as_deref() != inputs_digest.as_deref() {
+                "inputs_changed"
+            } else {
+                "rows_changed"
+            },
+        );
         outcome.drift = row_drift(&set.rows, &stored);
         return Ok(outcome);
     }
@@ -1446,6 +1518,7 @@ fn rebuild_risk_warnings(
         member_sha256: &member_sha,
         security_event_sha256: &event_sha,
         generation_evidence: &generation_evidence,
+        replay_inputs_digest: inputs_digest.as_deref(),
     };
     backend
         .commit_risk_warnings(&write)
@@ -1457,10 +1530,12 @@ fn rebuild_risk_warnings(
     if stored_summary == summary {
         outcome.rebuilt = REBUILT_RISK_WARNINGS;
         outcome.database = Some("match");
+        outcome.inputs_match = Some(true);
         return Ok(outcome);
     }
     outcome.status = "drift";
     outcome.database = Some("drift");
+    outcome.drift_cause = Some("rows_changed");
     outcome.drift = row_drift(&set.rows, &stored);
     Ok(outcome)
 }
@@ -2139,6 +2214,19 @@ fn stored_suspension_inputs_digest(backend: &MarketBackend) -> Result<Option<Str
         backend,
         crate::security_master::suspensions::DATASET_KIND,
         crate::security_master::suspensions::DATASET_KEY,
+    )?;
+    Ok(evidence
+        .as_ref()
+        .and_then(|value| value.get("replay_inputs_digest"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string))
+}
+
+fn stored_risk_warning_inputs_digest(backend: &MarketBackend) -> Result<Option<String>, String> {
+    let evidence = derived_evidence(
+        backend,
+        risk_warnings::DATASET_KIND,
+        risk_warnings::DATASET_KEY,
     )?;
     Ok(evidence
         .as_ref()

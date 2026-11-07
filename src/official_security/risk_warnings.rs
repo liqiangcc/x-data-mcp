@@ -38,10 +38,11 @@
 //!   every 2000–2003 quarter answers `pageCount=0`, so those years stay
 //!   `not_observed` permanently instead of being claimed as covered
 //!   (XDM-151 §7). The effective day is owner-risk: an explicit date in the
-//!   title when present, otherwise the announcement day. Real data uses the
-//!   announcement day for all events (no title carries an explicit date); it is
-//!   recorded as `OWNER_RISK_ACCEPTED` in the item evidence, never claimed as a
-//!   dated name history.
+//!   title when present, otherwise the trading day after the first trading day
+//!   on or after the announcement day (D-84). The rule reads the database
+//!   calendar, so an event the calendar cannot reach yet is deferred (no row)
+//!   and the state stays `unknown`. It is recorded as `OWNER_RISK_ACCEPTED` in
+//!   the item evidence, never claimed as a dated name history.
 //! - SH before 2000-01 and BJ are not requested and not inferred.
 //!
 //! ## 0 rows
@@ -103,7 +104,11 @@ use std::sync::Arc;
 /// whose `known_at` is set on purpose. v4 → v5: title classification follows
 /// D-68 (a revocation handing over to another warning is `Implement(B)`;
 /// forecasts, pre-audit notes and third-party opinions are not events).
-pub const PARSER_VERSION: &str = "risk-warnings-v7";
+/// v7 → v8 (D-84): an announcement-anchored SH event carries
+/// `day_is_explicit = false` and is placed by the trading calendar after
+/// parsing, so old evidence stays distinguishable from rows whose effective
+/// day is the D-84 day.
+pub const PARSER_VERSION: &str = "risk-warnings-v8";
 /// Environment variable naming the deployment's source store, shared with
 /// A-1/A-2 (`X_DATA_MCP_SOURCE_STORE`).
 pub const SOURCE_STORE_ENV: &str = crate::source_store::CONFIG_ENV;
@@ -254,6 +259,10 @@ pub struct Admitted {
     /// The **Shanghai** day the oldest registered short-name snapshot entered
     /// the store: the start of the SZ rows' knowledge-time window (§5.3/Q4).
     pub first_capture_day: Option<NaiveDate>,
+    /// D-84: digest of the trading-calendar days the SH placement read. The
+    /// writer registers it with the rows so a replay can tell a calendar move
+    /// from a source-store move.
+    pub inputs_digest: Option<String>,
 }
 
 impl Admitted {
@@ -295,12 +304,32 @@ impl Admitted {
                 "rows": window.rows,
                 "reason": window.reason,
             })).collect::<Vec<_>>(),
-            // D-58 says the SH effective day is not in the announcement source;
-            // this is the owner-risk anchor the writer records.
+            // D-58/D-84: the SH effective day is not in the announcement
+            // source; the title date (when present) or the calendar rule is
+            // the owner-risk anchor the writer records.
             "effective_date_basis": {
                 "sz": "source_change_date (APPROVED_SOURCE)",
-                "sh": "explicit title date when present, otherwise announcement day (OWNER_RISK_ACCEPTED)",
+                "sh": "explicit title date when present, otherwise the trading day after the \
+                    first trading day on or after the announcement day (D-84, OWNER_RISK_ACCEPTED)",
                 "sh_status": "owner_risk_accepted",
+                "sh_rule": "D-84",
+            },
+            // D-84: the rule reads the database calendar, so its input and the
+            // events it could not place travel with the rows.
+            "sh_effective_day": {
+                "rule": "the trading day after the first trading day on or after the \
+                    announcement day; an explicit title date wins",
+                "inputs_digest": self.inputs_digest,
+                "deferred": self.set.sh_deferred.len(),
+                "deferred_sample": self.set.sh_deferred.iter().take(20).map(|event| json!({
+                    "code": event.code,
+                    "announced": event.announced.to_string(),
+                    "action": match event.action {
+                        RiskWarningAction::Implement => "implement",
+                        RiskWarningAction::Revoke => "revoke",
+                    },
+                    "source_record_id": event.source_record_id,
+                })).collect::<Vec<_>>(),
             },
             // §5.3/Q4: the two coverage sentences are separate claims. The
             // effective-time history is the sources' own (SZ table from 1994,
@@ -715,6 +744,7 @@ fn merge_sets(
     sh_events: Vec<RiskWarningStatusEvent>,
     sh_coverage: Vec<CoverageWindow>,
     gaps: &[(NaiveDate, NaiveDate)],
+    calendar: Option<&[NaiveDate]>,
     delisting_dates: Option<&BTreeMap<String, Option<NaiveDate>>>,
 ) -> Result<RiskWarningSet, Error> {
     // D-81 task 49: Convert Option<NaiveDate> to NaiveDate for assemble_sz.
@@ -737,10 +767,15 @@ fn merge_sets(
     };
 
     let mut set = risk_warnings::assemble_sz(changes, sz_coverage, &dates_for_assembly)?;
+    // D-84: the calendar places announcement-anchored SH events before the
+    // domain assembles intervals. An event the calendar cannot reach is
+    // deferred (no row) and recorded on the set.
+    let (sh_events, sh_deferred) = risk_warnings::place_sh_events(sh_events, calendar);
     let sh = risk_warnings::assemble_sh(&sh_events, gaps, sh_coverage)?;
     set.rows.extend(sh.rows);
     set.coverage.extend(sh.coverage);
     set.pending_sources.extend(sh.pending_sources);
+    set.sh_deferred = sh_deferred;
     Ok(set)
 }
 
@@ -829,6 +864,13 @@ fn admitted(
 
     // D-81 task 49: Read delisting dates for normal interval computation
     let delisting_dates = read_sz_delisting_dates(market, &sz.changes)?;
+    // D-84: the SH effective day needs the database calendar. Without it an SH
+    // event cannot be placed, so the daily item fails instead of writing the
+    // announcement day; a replay without a database defers instead.
+    let calendar = market
+        .calendar_days()
+        .map_err(|error| Error::invalid(format!("failed to read the trading calendar: {error}")))?;
+    let inputs_digest = (!calendar.is_empty()).then(|| risk_warnings::inputs_digest(&calendar));
 
     let set = merge_sets(
         &sz.changes,
@@ -836,8 +878,15 @@ fn admitted(
         sh.events.events,
         sh_coverage,
         &gaps,
+        (!calendar.is_empty()).then_some(calendar.as_slice()),
         Some(&delisting_dates),
     )?;
+    if calendar.is_empty() && !set.sh_deferred.is_empty() {
+        return Err(Error::invalid(
+            "the trading calendar is empty; the SH risk-warning effective day (D-84) \
+             cannot be placed",
+        ));
+    }
     let mut snapshot_ids = sh.snapshot_ids;
     snapshot_ids.insert("szse_short_name", sz.snapshot_ids);
     let multi_document_bulletins = sh
@@ -861,6 +910,7 @@ fn admitted(
         sh_multi_doc_bulletins: multi_document_bulletins,
         sh_max_docs_per_bulletin: max_docs_per_bulletin,
         freshness,
+        inputs_digest,
     })
 }
 
@@ -1311,12 +1361,14 @@ fn sh_document_event(
         return Ok(None);
     };
     let announced = parse_day(&text_field(row, "SSEDATE")?, "SSEDATE")?;
-    let effective = explicit_effective_day(&title).unwrap_or(announced);
+    let explicit = explicit_effective_day(&title);
+    let effective = explicit.unwrap_or(announced);
     let record_id = bulletin_id(row)
         .ok_or_else(|| Error::invalid(format!("SSE bulletin row {code} {announced} has no id")))?;
     Ok(Some(RiskWarningStatusEvent {
         code,
         day: effective,
+        day_is_explicit: explicit.is_some(),
         action,
         status,
         announced_at: Some(announced.to_string()),
@@ -1670,6 +1722,7 @@ pub fn replay(
     gaps: &[(NaiveDate, NaiveDate)],
     coverage: Vec<CoverageWindow>,
     market: Option<&MarketBackend>,
+    calendar: Option<&[NaiveDate]>,
 ) -> Result<RiskWarningSet, Error> {
     // The replay entry reads the same declared `TABKEY` as the live
     // acquisition, so both paths select the same block from frozen bytes.
@@ -1713,6 +1766,7 @@ pub fn replay(
         sh_events.events,
         sh_coverage,
         gaps,
+        calendar,
         market
             .and_then(|m| read_sz_delisting_dates(m, &sz_changes).ok())
             .as_ref(),
@@ -1880,6 +1934,7 @@ mod tests {
             page.events[0].day,
             NaiveDate::from_ymd_opt(2024, 5, 6).unwrap()
         );
+        assert!(page.events[0].day_is_explicit, "the title date is explicit");
         assert_eq!(page.events[0].announced_at.as_deref(), Some("2024-04-30"));
     }
 
@@ -2615,7 +2670,7 @@ mod tests {
             .collect();
         assert_eq!(sh_rows.len(), 1);
         assert_eq!(sh_rows[0].code, "600001");
-        assert_eq!(sh_rows[0].effective_from, day(2000, 5, 8));
+        assert_eq!(sh_rows[0].effective_from, day(2000, 5, 9));
         assert_eq!(
             sh_rows[0].effective_to,
             Some(day(2000, 7, 1)),

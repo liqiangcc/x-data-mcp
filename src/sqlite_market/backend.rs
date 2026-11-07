@@ -106,6 +106,15 @@ impl MarketBackend {
         }
     }
 
+    /// Every stored trading day, ascending. D-84 uses this as the only
+    /// authority for the SH effective day; an empty calendar cannot place an
+    /// event.
+    pub(crate) fn calendar_days(&self) -> Result<Vec<chrono::NaiveDate>, Error> {
+        self.read(|c| {
+            super::calendar::read_days(c).map(|days| days.into_iter().map(|day| day.day).collect())
+        })
+    }
+
     /// Replace the derived trading calendar and register its version
     /// (issue-383 §9.2, M1 PR-7). The derived `derived:calendar` item drives
     /// this.

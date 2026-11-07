@@ -53,7 +53,13 @@ pub const DIGEST_FORMAT: &str = "sha256-risk-warning-intervals-v1";
 /// that had open intervals from those dates get them closed. `v3` and `v4`
 /// were developed at the same time, so the numbers follow merge order: `v3`
 /// went to #578, which merged first.
-pub const ALGORITHM_VERSION: &str = "risk-warnings-v4";
+/// `v5` (D-84, this task): the SH effective day is the trading day after the
+/// first trading day on or after the announcement day (or the explicit title
+/// date when one is present). Implementation and revocation use the same rule;
+/// an event the calendar cannot place yet is deferred and writes no row. The
+/// rows move by one trading day (two when the announcement is not a trading
+/// day), so the content digest and `version_id` move on the next write.
+pub const ALGORITHM_VERSION: &str = "risk-warnings-v5";
 
 /// `raw_status_code` of the row an SH implementation and revocation on one
 /// effective day collapse to.
@@ -96,7 +102,14 @@ pub enum RiskWarningAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RiskWarningStatusEvent {
     pub code: String,
+    /// The day the event takes effect. A title with an explicit date sets this
+    /// directly (`day_is_explicit`); every other event starts at its
+    /// announcement day and [`place_sh_events`] applies the D-84 trading-day
+    /// rule to it.
     pub day: NaiveDate,
+    /// `true` when `day` came from an explicit date in the title. D-84 never
+    /// moves such a day, so placement must not apply the calendar rule twice.
+    pub day_is_explicit: bool,
     pub action: RiskWarningAction,
     pub status: Option<RiskStatus>,
     pub announced_at: Option<String>,
@@ -107,12 +120,28 @@ pub struct RiskWarningStatusEvent {
     pub source_document_sha256: String,
 }
 
+/// One SH event whose D-84 effective day cannot be placed yet because the
+/// trading calendar does not reach the day after the first trading day on or
+/// after the announcement. It writes no row: the state stays `unknown` until a
+/// later run has the calendar day, instead of guessing with a weekend rule.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredShEvent {
+    pub code: String,
+    pub announced: NaiveDate,
+    pub action: RiskWarningAction,
+    pub status: Option<RiskStatus>,
+    pub source_record_id: String,
+}
+
 /// The complete admitted answer for one dataset version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RiskWarningSet {
     pub rows: Vec<RiskWarningInterval>,
     pub coverage: Vec<CoverageWindow>,
     pub pending_sources: Vec<PendingSource>,
+    /// SH events the calendar cannot place yet (D-84). They write no row; the
+    /// count and a sample travel in the item/registration evidence.
+    pub sh_deferred: Vec<DeferredShEvent>,
 }
 
 impl RiskWarningSet {
@@ -198,6 +227,7 @@ pub fn risk_warning_source(rows: Option<Vec<RiskWarningInterval>>) -> RiskWarnin
             rows,
             coverage: Vec::new(),
             pending_sources: Vec::new(),
+            sh_deferred: Vec::new(),
         }),
         None => RiskWarningSource::Pending(PendingSource {
             dataset: DATASET_KIND,
@@ -333,17 +363,84 @@ pub fn assemble_sz(
         rows: intervals,
         coverage,
         pending_sources: Vec::new(),
+        sh_deferred: Vec::new(),
     })
+}
+
+/// D-84: the SH effective day is the trading day after the first trading day on
+/// or after the announcement day. It is `None` when the calendar does not reach
+/// that second day: a weekend rule would guess wrong across holidays (the
+/// 2020-04-29 May Day case), so the event waits for the calendar instead.
+///
+/// `calendar` is the stored `trading_days` list, strictly ascending. The rule is
+/// owner-risk (`OWNER_RISK_ACCEPTED`), checked against GP29: 607/617 paired SH
+/// implementations and 540/544 paired revocations match it; the revoke report
+/// is `docs/tasks/revoke-effective-20261106.md`.
+pub fn sh_effective_day(announced: NaiveDate, calendar: &[NaiveDate]) -> Option<NaiveDate> {
+    let first = calendar.partition_point(|day| *day < announced);
+    calendar.get(first.checked_add(1)?).copied()
+}
+
+/// Apply D-84 to the parsed SH events: an announcement-anchored event moves to
+/// [`sh_effective_day`], an explicit title date stays as parsed, and an event
+/// the calendar cannot place is returned as deferred (it writes no row).
+///
+/// `calendar` is `None` only for a `--scope` replay without a database, where no
+/// SH row can be placed; every event is then deferred instead of being written
+/// with the announcement day.
+pub fn place_sh_events(
+    events: Vec<RiskWarningStatusEvent>,
+    calendar: Option<&[NaiveDate]>,
+) -> (Vec<RiskWarningStatusEvent>, Vec<DeferredShEvent>) {
+    let mut placed = Vec::with_capacity(events.len());
+    let mut deferred = Vec::new();
+    for mut event in events {
+        if event.day_is_explicit {
+            placed.push(event);
+            continue;
+        }
+        match calendar.and_then(|days| sh_effective_day(event.day, days)) {
+            Some(day) => {
+                event.day = day;
+                placed.push(event);
+            }
+            None => deferred.push(DeferredShEvent {
+                code: event.code,
+                announced: event.day,
+                action: event.action,
+                status: event.status,
+                source_record_id: event.source_record_id,
+            }),
+        }
+    }
+    (placed, deferred)
+}
+
+/// Content digest of the database input the SH effective-day rule reads: the
+/// trading calendar days. The source store alone cannot name them, so a replay
+/// registers this digest next to the rows: when the calendar advances, a
+/// `--verify-only` comparison can say `inputs_changed` instead of treating the
+/// difference as store corruption.
+pub fn inputs_digest(calendar: &[NaiveDate]) -> String {
+    let mut payload = Vec::with_capacity(32 + calendar.len() * 8);
+    payload.extend_from_slice(b"risk-warning-inputs-v1\0");
+    payload.extend_from_slice(&(calendar.len() as u64).to_be_bytes());
+    for day in calendar {
+        payload.extend_from_slice(&crate::compact_market::epoch_day(*day).to_be_bytes());
+    }
+    crate::hash::sha256(&payload)
 }
 
 /// Assemble SH intervals from event-level announcement metadata.
 ///
 /// D-58 admits only implementation/revocation plus the announcement day for
-/// SH. The effective day is anchored to the announcement day with
-/// `OWNER_RISK_ACCEPTED` (the caller records that basis in the item evidence);
-/// this function never invents a dated name history. A `not_observed` coverage
-/// window cuts every open interval at its start, so a missing announcement can
-/// only produce an unknown gap, never a warning claimed across it.
+/// SH. The effective day is the D-84 trading day after the first trading day on
+/// or after the announcement day (`OWNER_RISK_ACCEPTED`); an explicit date in
+/// the title wins and is never moved. Placement happens in [`place_sh_events`]
+/// before this function, which never invents a dated name history. A
+/// `not_observed` coverage window cuts every open interval at its start, so a
+/// missing announcement can only produce an unknown gap, never a warning claimed
+/// across it.
 pub fn assemble_sh(
     events: &[RiskWarningStatusEvent],
     gaps: &[(NaiveDate, NaiveDate)],
@@ -390,6 +487,7 @@ pub fn assemble_sh(
         rows: intervals,
         coverage,
         pending_sources: Vec::new(),
+        sh_deferred: Vec::new(),
     })
 }
 
@@ -1031,6 +1129,7 @@ fn push_opt_day(out: &mut Vec<u8>, day: Option<NaiveDate>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Datelike;
 
     fn day(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).expect("valid test day")
@@ -1140,6 +1239,7 @@ mod tests {
             RiskWarningStatusEvent {
                 code: "600001".into(),
                 day: day(2020, 1, 2),
+                day_is_explicit: false,
                 action: RiskWarningAction::Implement,
                 status: Some(RiskStatus::OtherRiskWarning),
                 announced_at: Some("2020-01-02".into()),
@@ -1152,6 +1252,7 @@ mod tests {
             RiskWarningStatusEvent {
                 code: "600001".into(),
                 day: day(2020, 5, 6),
+                day_is_explicit: false,
                 action: RiskWarningAction::Revoke,
                 status: None,
                 announced_at: Some("2020-05-06".into()),
@@ -1170,6 +1271,147 @@ mod tests {
         assert_eq!(cut.rows[0].effective_to, Some(day(2020, 3, 1)));
     }
 
+    fn weekdays(from: NaiveDate, to: NaiveDate) -> Vec<NaiveDate> {
+        let mut days = Vec::new();
+        let mut day = from;
+        while day <= to {
+            if day.weekday().number_from_monday() <= 5 {
+                days.push(day);
+            }
+            day = day.succ_opt().unwrap();
+        }
+        days
+    }
+
+    /// D-84: Thursday announcement → Friday, Friday → Monday, Saturday →
+    /// Tuesday. The rule is not "announcement + 1 calendar day".
+    #[test]
+    fn sh_effective_day_uses_the_next_trading_day() {
+        let calendar = weekdays(day(2024, 5, 1), day(2024, 5, 31));
+        assert_eq!(
+            sh_effective_day(day(2024, 5, 9), &calendar),
+            Some(day(2024, 5, 10))
+        );
+        assert_eq!(
+            sh_effective_day(day(2024, 5, 10), &calendar),
+            Some(day(2024, 5, 13))
+        );
+        assert_eq!(
+            sh_effective_day(day(2024, 5, 11), &calendar),
+            Some(day(2024, 5, 14))
+        );
+    }
+
+    /// D-84: a holiday is read from the calendar, not guessed from the weekend.
+    /// 2020-04-30 is the last trading day before May Day; the next trading day
+    /// is 2020-05-06, so the effective day is 2020-05-06.
+    #[test]
+    fn sh_effective_day_crosses_a_holiday_from_the_calendar() {
+        let calendar = vec![
+            day(2020, 4, 28),
+            day(2020, 4, 29),
+            day(2020, 4, 30),
+            day(2020, 5, 6),
+            day(2020, 5, 7),
+        ];
+        assert_eq!(
+            sh_effective_day(day(2020, 4, 30), &calendar),
+            Some(day(2020, 5, 6))
+        );
+        // Saturday before a Monday holiday: the first trading day is Tuesday,
+        // the effective day is Wednesday. A weekend rule would say Tuesday.
+        let holiday_monday = vec![day(2024, 5, 10), day(2024, 5, 14), day(2024, 5, 15)];
+        assert_eq!(
+            sh_effective_day(day(2024, 5, 11), &holiday_monday),
+            Some(day(2024, 5, 15))
+        );
+    }
+
+    /// D-84: the day after the first trading day must be on the calendar. A
+    /// calendar that ends on the announcement day (or before it) cannot place
+    /// the event; it is deferred, never written on the announcement day.
+    #[test]
+    fn sh_effective_day_is_unknown_past_the_calendar_end() {
+        let calendar = weekdays(day(2024, 5, 1), day(2024, 5, 10));
+        assert_eq!(sh_effective_day(day(2024, 5, 10), &calendar), None);
+        assert_eq!(sh_effective_day(day(2024, 5, 11), &calendar), None);
+        assert_eq!(sh_effective_day(day(2024, 6, 1), &calendar), None);
+    }
+
+    /// D-84: implementation and revocation move by the same rule; an explicit
+    /// title date is kept; an event past the calendar is deferred and writes no
+    /// row.
+    #[test]
+    fn place_sh_events_shifts_both_actions_and_defers_past_the_calendar() {
+        let calendar = weekdays(day(2024, 5, 1), day(2024, 5, 31));
+        let mut explicit = sh_event(
+            "600003",
+            day(2024, 5, 6),
+            RiskWarningAction::Implement,
+            Some(RiskStatus::OtherRiskWarning),
+            "explicit",
+        );
+        explicit.day_is_explicit = true;
+        let events = vec![
+            sh_event(
+                "600001",
+                day(2024, 5, 9),
+                RiskWarningAction::Implement,
+                Some(RiskStatus::OtherRiskWarning),
+                "impl",
+            ),
+            sh_event(
+                "600001",
+                day(2024, 5, 10),
+                RiskWarningAction::Revoke,
+                None,
+                "revoke",
+            ),
+            explicit,
+            sh_event(
+                "600004",
+                day(2024, 6, 3),
+                RiskWarningAction::Implement,
+                Some(RiskStatus::OtherRiskWarning),
+                "late",
+            ),
+        ];
+        let (placed, deferred) = place_sh_events(events, Some(&calendar));
+        assert_eq!(placed.len(), 3);
+        assert_eq!(placed[0].day, day(2024, 5, 10));
+        assert_eq!(placed[1].day, day(2024, 5, 13));
+        assert_eq!(placed[2].day, day(2024, 5, 6));
+        assert_eq!(deferred.len(), 1);
+        assert_eq!(deferred[0].code, "600004");
+        assert_eq!(deferred[0].announced, day(2024, 6, 3));
+
+        // `known_at` stays the announcement day: the rule moves when the state
+        // starts, not when we knew about it.
+        assert_eq!(placed[0].known_at, Some(day(2024, 5, 9)));
+
+        let set = assemble_sh(&placed, &[], Vec::new()).expect("placed events assemble");
+        let row = &set.rows[0];
+        assert_eq!(row.effective_from, day(2024, 5, 10));
+        assert_eq!(row.effective_to, Some(day(2024, 5, 13)));
+    }
+
+    /// D-84: without a calendar (a `--scope` replay without a database) no SH
+    /// row is placed; the events are deferred rather than written on the
+    /// announcement day.
+    #[test]
+    fn place_sh_events_without_a_calendar_defers_every_announcement() {
+        let events = vec![sh_event(
+            "600001",
+            day(2024, 5, 9),
+            RiskWarningAction::Implement,
+            Some(RiskStatus::OtherRiskWarning),
+            "impl",
+        )];
+        let (placed, deferred) = place_sh_events(events, None);
+        assert!(placed.is_empty());
+        assert_eq!(deferred.len(), 1);
+    }
+
     fn sh_event(
         code: &str,
         when: NaiveDate,
@@ -1180,6 +1422,7 @@ mod tests {
         RiskWarningStatusEvent {
             code: code.into(),
             day: when,
+            day_is_explicit: false,
             action,
             status,
             announced_at: Some(when.to_string()),

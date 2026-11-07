@@ -55,6 +55,7 @@ pub(crate) fn replace_risk_warnings(
     source_binding_digest: Digest,
     task_id: &str,
     item_id: &str,
+    replay_inputs_digest: Option<&str>,
 ) -> Result<Option<DerivedVersionRow>, Error> {
     risk_warnings::validate_set(&set.rows).map_err(risk_error)?;
 
@@ -84,6 +85,27 @@ pub(crate) fn replace_risk_warnings(
         "normal_rows": rows.iter().filter(|row| row.status == crate::security_master::RiskStatus::Normal).count(),
         "sh_rows": rows.iter().filter(|row| row.exchange == crate::security_master::Exchange::Sh).count(),
         "same_day_conflicts": set.same_day_conflict_evidence(),
+        // D-84: the digest a replay compares before blaming the rows.
+        "replay_inputs_digest": replay_inputs_digest,
+        // D-84: the SH effective day is computed from the database calendar,
+        // not the source store. Registering the input digest lets a replay tell
+        // "the calendar moved" from "the source store moved".
+        "sh_effective_day": {
+            "rule": "D-84: the trading day after the first trading day on or after the \
+                announcement day; an explicit title date wins",
+            "basis": "OWNER_RISK_ACCEPTED",
+            "inputs_digest": replay_inputs_digest,
+            "deferred": set.sh_deferred.len(),
+            "deferred_sample": set.sh_deferred.iter().take(20).map(|event| json!({
+                "code": event.code,
+                "announced": event.announced.to_string(),
+                "action": match event.action {
+                    risk_warnings::RiskWarningAction::Implement => "implement",
+                    risk_warnings::RiskWarningAction::Revoke => "revoke",
+                },
+                "source_record_id": event.source_record_id,
+            })).collect::<Vec<_>>(),
+        },
         "observed_windows": set.observed_windows(),
         "not_observed_windows": set.not_observed_windows(),
         "coverage": set.coverage.iter().map(|window| json!({
@@ -213,6 +235,8 @@ pub(crate) struct RiskWarningWrite<'a> {
     pub member_sha256: &'a str,
     pub security_event_sha256: &'a str,
     pub generation_evidence: &'a serde_json::Value,
+    /// D-84: digest of the trading calendar the SH effective day read.
+    pub replay_inputs_digest: Option<&'a str>,
 }
 
 /// Write the generation binding, then replace the whole dataset, in the
@@ -229,7 +253,14 @@ pub(crate) fn commit_risk_warnings(
         write.security_event_sha256,
         write.generation_evidence,
     )?;
-    replace_risk_warnings(c, write.set, binding, write.task_id, write.item_id)
+    replace_risk_warnings(
+        c,
+        write.set,
+        binding,
+        write.task_id,
+        write.item_id,
+        write.replay_inputs_digest,
+    )
 }
 
 /// Every stored risk-warning row, decoded by the read model's decoder.
