@@ -7,8 +7,8 @@
 
 **状态**：历史快照。`generic-data-v7` 自 preview.33 起运行（2026-10-16 发布），
 2026-10-27 由 `generic-data-v8` 最小切换取代，2026-11-02 起由 `generic-data-v9` 取代，
-2026-11-05 起由 `generic-data-v10` 取代；当前部署见 [STATUS](../STATUS.md) 与
-[generic-data-v10](generic-data-v10.md)。
+2026-11-05 起由 `generic-data-v10` 取代，2026-11-07 起由 `generic-data-v11` 取代；当前部署见
+[STATUS](../STATUS.md) 与 [generic-data-v11](generic-data-v11.md)。
 凡下文标注「实现已核」的论断附 文件:行号；未标者为契约目标。
 
 ## 1. 适用面与不变量

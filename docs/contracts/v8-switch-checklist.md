@@ -3,7 +3,7 @@
 **状态**：已执行（2026-10-27，最小切换；2026-10-28 preview.38 起单进程三 socket，见 §9.7）。
 本清单描述的历史状态：`generic-data-v8` / 15 data tools（`mcp.sock` 的 `ops` 入口）、`research.sock`
 的 `research` 入口与 `maint.sock` 的 `maint` 入口（仅本机运维）/ compact schema 25。当前部署已由
-`generic-data-v10` / schema 27 取代（见 [STATUS](../STATUS.md) 与 [v10 契约](generic-data-v10.md)）；
+`generic-data-v11` / schema 27 取代（见 [STATUS](../STATUS.md) 与 [v11 契约](generic-data-v11.md)）；
 隧道改指 `research.sock`（Ops-D）已于 2026-11-02 preview.42 部署窗口执行；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），结论见 §2.3。
 契约本身见 [generic-data-v8](generic-data-v8.md)。
 
