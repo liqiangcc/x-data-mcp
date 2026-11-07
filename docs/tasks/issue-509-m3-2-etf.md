@@ -43,7 +43,8 @@
    目前没有口径参数，ETF 只有不复权序列，因此需要 owner 在 Q4 决定读取口径的表达方式；
    **ETF 在未指定口径时必须显式报错（fail-closed）**，不能静默返回不复权或空结果。
 6. **A 股字节不变**是可执行的验收项：改动前后 16,354 条 `market_series` 的 `version_id`、
-   5,561+5,561+9+5,223 条序列的 digest、以及 A 股导出文件 sha256 必须逐一相同（§13 AC-M3-2-2）。
+   5,561+5,561+9+5,223 条序列的 digest、以及 A 股导出文件 sha256 必须逐一相同（§13 AC-M3-2-2）；
+   2026-11-05 线上对账的结论见该行（11,116/11,122 逐条相同，6 条由 11-05 除权事件解释）。
 7. **SLO**：ETF 加入会把同代全量 `update_data` 的 item 数从 5,238 推到约 6,869。按 preview.42 同代
    实测的 109.5 ms/item 外推 ≈ **752s**，超过第 1 行 600s hard 门禁（**推断**，未实测）。
    设计不把外推写成结论：§11 给 A/B 测量方法，Q8 决定「重新基线 / ETF 独立批次预算 / 先优化」。
@@ -396,9 +397,12 @@ source_refresh（已有 R2 出站最小间隔 1s、冻结、清单）
 **为什么现在才发现**：M1 已把价格单位从"分"改成"按序列 scale"（schema 22），XDM-15 的 `cents()`
 清单（2dp 拒绝 3dp）已过期；真正剩余的是 `.day` 适配器的写入/校验、读面可见性与导出的品种过滤。
 
-**A 股不变的可执行定义**（写成测试，AC-M3-2-2）：
-1. 改动前后 `market_series` 全表 16,354 行的 `(series_key, version_id, content_digest, price_scale,
-   instrument_class, adjustment)` 完全一致；
+**A 股不变的可执行定义**（写成测试，AC-M3-2-2；2026-11-05 线上对账结果见 §13 该行）：
+1. A 股/指数/年线 16,354 条序列中，可与 aws-node 冻结库逐条对照的 11,122 条（A 股 raw 5,561 +
+   qfq 5,561）里有 11,116 条的行数与内容摘要（截断到 2026-11-04）相同；其余 6 条差异全部由 11-05
+   日更新增的除权事件解释（`sh.603309`、`sh.603596`、`sz.000777`、`sz.002152`、`sz.300259`、
+   `sz.301529` 的 qfq 序列内容变化）。`version_id` 只在无新增 bar 的 690 条上相同：`content_digest`
+   覆盖整条序列，日更追加 bar 后必然改变，所以「16,354 条 `version_id` 逐一相同」不是可满足的判据；
 2. 5,561 条不复权 + 5,561 条前复权 + 9 条指数 + 5,223 条年线的 `record_count/first_day/last_day/digest` 一致；
 3. A 股导出文件（`daily_raw`/`daily_qfq`/`universe`/`calendar` 等）sha256 一致（ETF 未导出时）；
 4. 抽样 `query_data` 的 A 股 K 线 JSON 逐字节一致。
@@ -682,7 +686,7 @@ forward(t) = 对 t 之后所有事件按“先 cat11 后 cat1”的次序做仿�
 | AC | 判据（可执行） |
 |---|---|
 | AC-M3-2-1 身份 | 1,717 只现行 class=2；沪市上市日来自 `FUND_LIST.listingDate`（947/947 与 `base.dbf SSDATE` 一致）、深市来自 `SSDATE`；86 只 `absent`（带原因）；**128 只有公告的退市 ETF 也是 class=2（沪 82/深 46），`delisting_date` 在无 D-72 提取结果时为 `unknown`，有提取结果时为精确终止上市日**；`sh_sz_etf_listed_ever` 含这 128 只，`sh_sz_etf_current` 不含；名单移出不删 class=2 行；`FUND_LIST` 与 `ebs` 代码集差集为空；`replay --verify-only` = match；名单/公告快照 sha256/URL/时间入清单 |
-| AC-M3-2-2 精度 + A 股不变 | ETF OHLC 3dp 精确往返；A 股 16,354 条 series 的 version_id/digest 与改动前逐一相同；A 股导出行/文件 sha256 相同 |
+| AC-M3-2-2 精度 + A 股不变 | ETF OHLC 3dp 精确往返；A 股/指数/年线 16,354 条序列中，可与 aws-node 冻结库逐条对照的 11,122 条里有 11,116 条的行数与内容摘要（截断到 2026-11-04）相同，其余 6 条差异全部由 11-05 日更新增的除权事件解释（qfq 序列内容变化）；`version_id` 只在无新增 bar 的 690 条上相同（`content_digest` 覆盖整条序列，日更追加 bar 后「逐一相同」不可满足）。A 股导出行、前缀与文件 sha256 相同；`daily_raw`/`universe_intervals` 因新增 ETF 列整体 sha 变化，见 [v10 §1.6](../contracts/generic-data-v10.md) |
 | AC-M3-2-3 量纲 | 3,819 根手日夹具还原 ×100 + `volume_quantum=100`；`r7` 标记与量额一致性表 4 个分支各 1 测试；不一致 → item 失败（不部分写） |
 | AC-M3-2-4 成员集 | 新 scope 只在 `market.daily`；`securities.catalog` 拒绝；默认 `universe` 成员数不变；`market.daily` 单只 ETF 可读 |
 | AC-M3-2-5 采集 | 4 批（500/500/500/131）首采；considered/succeeded/absent/failed 逐项报告；86 只 absent；不静默丢 |
