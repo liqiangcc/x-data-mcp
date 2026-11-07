@@ -6789,6 +6789,7 @@ fn derived_limit_basis_fixture() -> Fixture {
             reason: "fixture".into(),
         }],
         pending_sources: Vec::new(),
+        sh_deferred: Vec::new(),
     };
     f.backend
         .commit_risk_warnings(&RiskWarningWrite {
@@ -6800,6 +6801,7 @@ fn derived_limit_basis_fixture() -> Fixture {
             member_sha256: &"62".repeat(32),
             security_event_sha256: &"63".repeat(32),
             generation_evidence: &json!({"generation_id": "gen-basis-risk"}),
+            replay_inputs_digest: None,
         })
         .unwrap();
 
