@@ -630,6 +630,16 @@ impl<R: ReadRepository> Queries<R> {
             sequence: RefCell::new(0),
         }
     }
+    /// Admit a derived read (D-82) whose heap need is known up front: the
+    /// shared inputs are decoded once for the whole batch, so the tool names
+    /// its own reserve instead of a snapshot size. The permit is held for the
+    /// duration of the call and released on drop; a refusal is
+    /// `memory_budget_exceeded`, the same code the v2 read path returns, so no
+    /// tool can bypass #547 admission.
+    pub fn reserve_derived(&self, bytes: usize) -> Result<Permit, Error> {
+        self.budget.reserve_derived(bytes)
+    }
+
     /// Swap the build headroom (if any) for the working set of one page.
     /// The old permit goes first so the call is never counted twice.
     fn reserve_pages(&self, snapshot_bytes: usize) -> Result<(), Error> {

@@ -5818,3 +5818,1192 @@ fn query_data_cannot_reach_the_etf_name_filter() {
         .unwrap_err();
     assert_eq!(error.code, "invalid_arguments");
 }
+
+// ---- D-82 derived read-only tools (issue-433 PR-B) -------------------------
+//
+// The two tools call the research read models directly, so each test either
+// compares the tool's row with the research function's own answer (the
+// equivalence rule of PR-1) or pins one fail-closed state. The fixture is
+// built through the production writers, so the rows the tools read carry the
+// encoding a daily run produces.
+
+/// Five consecutive trading days after the 2020-08-24 GEM reform: on the GEM
+/// board every status class shares one band from that day, so a limit is
+/// `known` while the risk status is still `unknown` (design §2.2).
+fn derived_days() -> Vec<NaiveDate> {
+    vec![
+        day(2020, 9, 7),
+        day(2020, 9, 8),
+        day(2020, 9, 9),
+        day(2020, 9, 10),
+        day(2020, 9, 11),
+    ]
+}
+
+fn derived_lifecycle(
+    exchange: crate::security_master::Exchange,
+    code: &str,
+    listing: Option<NaiveDate>,
+    delisting: Option<NaiveDate>,
+    instrument_class: u8,
+) -> crate::security_master::SecurityLifecycleFact {
+    use crate::security_master::{
+        DelistingReason, DelistingSource, IssuerResolution, ListingSource, SecurityLifecycleFact,
+    };
+    SecurityLifecycleFact {
+        exchange,
+        code: code.into(),
+        effective_from: listing.unwrap_or(day(2019, 1, 2)),
+        effective_to: None,
+        instrument_class,
+        issuer_key: None,
+        issuer_resolution: IssuerResolution::IssuerKey,
+        listing_date: listing,
+        listing_date_tdx: listing,
+        listing_source: if listing.is_some() {
+            ListingSource::ExchangeList
+        } else {
+            ListingSource::Unknown
+        },
+        b_listing_date: None,
+        delisting_date: delisting,
+        delisting_date_tdx: delisting,
+        delisting_source: if delisting.is_some() {
+            DelistingSource::ExchangeList
+        } else {
+            DelistingSource::Unknown
+        },
+        delisting_reason_class: DelistingReason::Unknown,
+        arrangement_start: None,
+        arrangement_end: None,
+        listing_conflict: false,
+        delisting_conflict: false,
+        known_at: None,
+    }
+}
+
+/// A raw daily series with one bar per listed day, all at `base` plus the
+/// day's index, so a rendered price is checkable by hand.
+fn seed_derived_series(
+    c: &Connection,
+    binding: [u8; 32],
+    evidence: [u8; 32],
+    entity: &str,
+    indexes: &[usize],
+    base: i64,
+    seed: u8,
+) {
+    use crate::compact_market::{CompactBar, epoch_day};
+    use crate::market_data::{CoverageStatus, Period};
+    use crate::sqlite_market::series::NewSeries;
+
+    let days = derived_days();
+    let bars: Vec<CompactBar> = indexes
+        .iter()
+        .map(|index| CompactBar {
+            trade_day: epoch_day(days[*index]),
+            open_units: base,
+            high_units: base + 10,
+            low_units: base - 10,
+            close_units: base + *index as i64,
+            volume: Some(100),
+            amount: Some("100500.00".into()),
+            r7_raw: Some(7),
+        })
+        .collect();
+    let key = series::insert_series(
+        c,
+        &NewSeries {
+            entity: entity.into(),
+            period: Period::Day,
+            adjustment: Adjustment::Raw,
+            instrument_class: crate::market_data::INSTRUMENT_CLASS_STOCK,
+            price_scale: 2,
+            // The series identity is the content digest, so each entity needs
+            // its own: a shared digest collides on `market_series.version_id`.
+            content_digest: [seed; 32],
+            record_count: bars.len() as i64,
+            first_day: bars[0].trade_day,
+            last_day: bars[bars.len() - 1].trade_day,
+            coverage_status: CoverageStatus::Complete,
+            source_binding_digest: binding,
+            evidence_digest: evidence,
+            last_event_seq: 1,
+            created_at: "2026-10-26T00:00:00Z".into(),
+            updated_at: "2026-10-26T00:00:00Z".into(),
+        },
+    )
+    .unwrap();
+    series::insert_bars(c, key, &bars).unwrap();
+}
+
+/// The witness set of the derived-tool tests, one entity per state:
+///
+/// | entity | witness |
+/// |---|---|
+/// | `sz.300114` | GEM, bars every day: `tradable`, limit `known` (invariant band) |
+/// | `sz.000001` | main board, no risk interval: `tradable`, limit `unknown`/`st_unknown` |
+/// | `sz.000631` | bars on day 0 and 4, `unresolved_gap` 1..3: `unknown`/`data_gap` |
+/// | `sz.000004` | no bar on day 1, `confirmed` suspension: `not_tradable`/`suspended` |
+/// | `sh.510050` | ETF (`instrument_class=2`): `unknown`/`not_a_share` |
+/// | `sh.600028` | A+H capital events: market cap `known` |
+/// | `sh.600519` | not in the main table at all: `unknown`/`not_in_master` |
+fn derived_fixture() -> Fixture {
+    use crate::security_master::assembly::Assembly;
+    use crate::security_master::suspensions::SuspensionSet;
+    use crate::security_master::{
+        CapitalEvent, CapitalEventSet, Exchange, SuspensionCertainty, SuspensionInterval,
+        SuspensionReason,
+    };
+    use crate::sqlite_market::{evidence_store, security, suspensions};
+
+    let f = fixture();
+    let days = derived_days();
+    commit_calendar_days(&f, &days);
+
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        let generation = evidence_store::put_evidence(
+            c,
+            crate::compact_market::EvidenceKind::Generation,
+            &json!({"generation": "gen-derived"}),
+        )?;
+        let binding = evidence_store::put_source_binding(
+            c,
+            &crate::compact_market::SourceBinding {
+                generation_id: "gen-derived".into(),
+                generation_manifest_sha256: [0x0b; 32],
+                day_member_sha256: [0x0c; 32],
+                security_event_sha256: [0x0e; 32],
+                evidence_digest: generation,
+            },
+        )?;
+        // The series store validates the whole bundle, so the fixture has to
+        // write a complete `VersionEvidence` (same shape `seed_daily_pair`
+        // publishes), not a stub.
+        let evidence = evidence_store::put_evidence(
+            c,
+            crate::compact_market::EvidenceKind::Version,
+            &serde_json::to_value(crate::compact_market::VersionEvidence {
+                source: "official".into(),
+                coverage_reason: "fixture".into(),
+                unit_currency: units(),
+                adjustment_evidence: crate::market_data::AdjustmentEvidence::confirmed(
+                    "raw", "fixture",
+                ),
+                excluded_bars: None,
+            })
+            .unwrap(),
+        )?;
+
+        let mut seed = 0x20u8;
+        for (entity, indexes, base) in [
+            ("sz.300114", (0..5).collect::<Vec<_>>(), 2000),
+            ("sz.000001", (0..5).collect(), 1000),
+            ("sz.000631", vec![0, 4], 6310),
+            (
+                "sz.000004",
+                (0..5).filter(|index| !(1..=2).contains(index)).collect(),
+                4000,
+            ),
+            ("sh.510050", (0..5).collect(), 3000),
+            ("sh.600028", (0..5).collect(), 1000),
+            // Ex-rights witness: a cat1 event with an allotment component
+            // between the previous close and `as_of` makes the reference price
+            // unverifiable (limit-v2, D-84). It has to be a GEM code: on the
+            // main board the unknown risk status stops the derivation before
+            // the basis is reached.
+            ("sz.300115", (0..5).collect(), 6000),
+        ] {
+            seed += 1;
+            seed_derived_series(c, binding, evidence, entity, &indexes, base, seed);
+        }
+
+        security::replace_security_master(
+            c,
+            &Assembly {
+                rows: vec![
+                    derived_lifecycle(Exchange::Sz, "300114", Some(day(2020, 1, 2)), None, 0),
+                    derived_lifecycle(Exchange::Sz, "000001", Some(day(2020, 1, 2)), None, 0),
+                    derived_lifecycle(Exchange::Sz, "000631", Some(day(2020, 1, 2)), None, 0),
+                    derived_lifecycle(Exchange::Sz, "000004", Some(day(2020, 1, 2)), None, 0),
+                    derived_lifecycle(Exchange::Sh, "510050", Some(day(2020, 1, 2)), None, 2),
+                    derived_lifecycle(Exchange::Sh, "600028", Some(day(2020, 1, 2)), None, 0),
+                    derived_lifecycle(Exchange::Sz, "300115", Some(day(2020, 1, 2)), None, 0),
+                ],
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(days[4]),
+            },
+            binding,
+            "task-master",
+            "derived:security_master",
+        )?;
+
+        // 600028: 1.0e9 float A shares, 1.2e9 company total (the rest is H).
+        security::replace_capital_events(
+            c,
+            &CapitalEventSet {
+                entity: "sh.600028".into(),
+                events: vec![
+                    CapitalEvent::from_raw(
+                        0,
+                        days[0],
+                        9,
+                        [
+                            f32::to_bits(0.0),
+                            f32::to_bits(0.0),
+                            f32::to_bits(100_000.0),
+                            f32::to_bits(120_000.0),
+                        ],
+                    )
+                    .unwrap(),
+                ],
+                excluded: 0,
+                excluded_by_category: Default::default(),
+            },
+            binding,
+            "task-capital",
+            "derived:capital_events",
+        )?;
+
+        let suspension = |code: &str,
+                          start: NaiveDate,
+                          end: NaiveDate,
+                          certainty: SuspensionCertainty,
+                          missing_days: i64,
+                          reason: SuspensionReason| SuspensionInterval {
+            exchange: Exchange::Sz,
+            code: code.into(),
+            start_day: start,
+            end_day: end,
+            certainty,
+            missing_days,
+            reason,
+            known_at: None,
+            source_kind: "fixture".into(),
+            source_record_id: None,
+        };
+        let rows = vec![
+            suspension(
+                "000631",
+                days[1],
+                days[3],
+                SuspensionCertainty::UnresolvedGap,
+                3,
+                SuspensionReason::MissingBarNoEvent,
+            ),
+            suspension(
+                "000004",
+                days[1],
+                days[2],
+                SuspensionCertainty::Confirmed,
+                2,
+                SuspensionReason::ExchangeAnnouncement,
+            ),
+        ];
+        let set = SuspensionSet {
+            confirmed_rows: rows
+                .iter()
+                .filter(|row| row.certainty == SuspensionCertainty::Confirmed)
+                .count(),
+            gap_rows: rows
+                .iter()
+                .filter(|row| row.certainty == SuspensionCertainty::UnresolvedGap)
+                .count(),
+            single_day_gap_rows: rows
+                .iter()
+                .filter(|row| {
+                    row.certainty == SuspensionCertainty::UnresolvedGap && row.missing_days == 1
+                })
+                .count(),
+            multi_day_gap_rows: rows
+                .iter()
+                .filter(|row| {
+                    row.certainty == SuspensionCertainty::UnresolvedGap && row.missing_days > 1
+                })
+                .count(),
+            deferred_beyond_calendar: 0,
+            deferred_samples: Vec::new(),
+            skipped_no_trading_day: 0,
+            skipped_samples: Vec::new(),
+            pending_sources: Vec::new(),
+            rows,
+        };
+        suspensions::replace_suspensions(
+            c,
+            &set,
+            binding,
+            "task-suspensions",
+            "derived:suspensions",
+        )?;
+
+        // 300115: one cat1 event on the last day, with a positive C4
+        // (allotment) factor. The gbbq formula is only about 61% accurate for
+        // allotments, so the reference price cannot be verified and the limit
+        // must be `unknown` + `ex_rights_unverified` (design §3.2, D-84).
+        crate::sqlite_market::derived::replace_adjustment_events(
+            c,
+            &crate::market_data::AdjustmentEventSet {
+                entity: "sz.300115".into(),
+                events: vec![crate::market_data::AdjustmentEvent {
+                    ordinal: 1,
+                    effective_day: days[4],
+                    category: 1,
+                    c_bits: [0; 4],
+                    factors: [
+                        rust_decimal::Decimal::new(10, 0),
+                        rust_decimal::Decimal::new(10, 0),
+                        rust_decimal::Decimal::ZERO,
+                        rust_decimal::Decimal::new(3, 1),
+                    ],
+                    known_at: None,
+                    basis_status: crate::market_data::FactorBasisStatus::Verified,
+                }],
+                excluded: 0,
+                precision: crate::market_data::FactorPrecision::Stock2dp,
+            },
+            binding,
+            "task-events",
+            "item-1",
+        )?;
+
+        crate::sqlite_market::rules::replace_trading_rules(
+            c,
+            &crate::trading_rules::rule_book().unwrap(),
+            binding,
+            "task-rules",
+            "derived:price_limit_rules",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    f
+}
+
+fn tradability_row(answer: &Value, entity: &str) -> Value {
+    let index = answer["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|value| value == entity)
+        .unwrap_or_else(|| panic!("{entity} missing from {answer}"));
+    let mut row = serde_json::Map::new();
+    for (column, values) in answer["columns"].as_object().unwrap() {
+        row.insert(column.clone(), values[index].clone());
+    }
+    Value::Object(row)
+}
+
+#[test]
+fn get_tradability_matches_the_research_functions_row_by_row() {
+    use crate::research::context::ResearchContext;
+    use crate::research::temporal::Temporal;
+    use crate::research::{price_limit, tradability};
+
+    let f = derived_fixture();
+    let as_of = derived_days()[2];
+    let securities = [
+        "sz.300114",
+        "sz.000001",
+        "sz.000631",
+        "sz.000004",
+        "sh.510050",
+        "sh.600519",
+    ];
+    let answer = f
+        .api
+        .call(
+            "get_tradability",
+            json!({"securities": securities, "as_of": as_of.to_string()}),
+        )
+        .unwrap();
+    assert_eq!(answer["layout"], "table");
+    assert_eq!(answer["as_of"], json!(as_of.to_string()));
+    assert_eq!(answer["entities"], json!(securities));
+    // One row per entity, including the ETF and the code with no master row.
+    for column in answer["columns"].as_object().unwrap().values() {
+        assert_eq!(
+            column.as_array().unwrap().len(),
+            securities.len(),
+            "{column}"
+        );
+    }
+
+    // The tool is a view over the research functions: every value must equal
+    // the function's own answer for the same day, not a second derivation.
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.read(|c| {
+        let ctx = ResearchContext::new(c);
+        let temporal = Temporal {
+            as_of,
+            known_at: None,
+        };
+        for entity in securities {
+            let report = tradability::tradability_in(&ctx, entity, temporal).unwrap();
+            let limit = price_limit::price_limit_in(&ctx, entity, temporal).unwrap();
+            let row = tradability_row(&answer, entity);
+            let expected_state = match report.state {
+                tradability::Tradability::Tradable => "tradable",
+                tradability::Tradability::NotTradable(_) => "not_tradable",
+                tradability::Tradability::Unknown(_) => "unknown",
+            };
+            assert_eq!(row["state"], json!(expected_state), "{entity}");
+            assert_eq!(row["reason"], json!(report.reason_code()), "{entity}");
+            assert_eq!(row["limit_state"], json!(limit.state.as_str()), "{entity}");
+            assert_eq!(
+                row["risk_status"],
+                json!(limit.status_class.map_or("unknown", |class| class.as_str())),
+                "{entity}"
+            );
+            let rendered = |units: Option<i64>| match (units, limit.price_scale) {
+                (Some(units), Some(scale)) => {
+                    let divisor = 10_i64.pow(scale);
+                    json!(format!(
+                        "{}.{:0width$}",
+                        units / divisor,
+                        units.abs() % divisor,
+                        width = scale as usize
+                    ))
+                }
+                _ => Value::Null,
+            };
+            assert_eq!(row["limit_up"], rendered(limit.limit_up_units), "{entity}");
+            assert_eq!(
+                row["limit_down"],
+                rendered(limit.limit_down_units),
+                "{entity}"
+            );
+            assert_eq!(
+                row["prev_close"],
+                rendered(limit.prev_close_units),
+                "{entity}"
+            );
+            assert_eq!(
+                row["prev_close_day"],
+                limit
+                    .prev_close_day
+                    .map_or(Value::Null, |day| json!(day.to_string())),
+                "{entity}"
+            );
+            assert_eq!(
+                row["rule_id"],
+                limit.rule_id.as_ref().map_or(Value::Null, |id| json!(id)),
+                "{entity}"
+            );
+            assert_eq!(
+                row["suspension"],
+                report
+                    .suspension
+                    .as_ref()
+                    .map_or(Value::Null, |suspension| {
+                        json!(format!(
+                            "{} {}..{}",
+                            suspension.certainty.as_str(),
+                            suspension.start_day,
+                            suspension.end_day
+                        ))
+                    }),
+                "{entity}"
+            );
+        }
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+
+    // The algorithm labels are the research constants, not copies.
+    assert_eq!(
+        answer["algorithm_versions"],
+        json!({
+            "tradability": crate::research::tradability::ALGORITHM_VERSION,
+            "price_limit": crate::research::price_limit::READ_ALGORITHM_VERSION,
+        })
+    );
+    // `known_at` is not a parameter, and the block says so.
+    assert_eq!(answer["temporal"]["known_at"], Value::Null);
+    assert!(answer["inputs"].as_array().unwrap().iter().any(|input| {
+        input["dataset"] == json!("suspensions") && input["version_id"].is_string()
+    }));
+}
+
+#[test]
+fn get_tradability_answers_every_fail_closed_state() {
+    let f = derived_fixture();
+    // Day 2 (2020-09-09) witnesses the gap and the confirmed suspension.
+    let answer = f
+        .api
+        .call(
+            "get_tradability",
+            json!({
+                "securities": [
+                    "sz.000631", "sz.000004", "sh.510050", "sh.600519"
+                ],
+                "as_of": derived_days()[2].to_string(),
+            }),
+        )
+        .unwrap();
+
+    // Missing bars plus an unresolved gap is a data gap, never a suspension
+    // (AC-M2-8).
+    let gap = tradability_row(&answer, "sz.000631");
+    assert_eq!(gap["state"], json!("unknown"));
+    assert_eq!(gap["reason"], json!("data_gap"));
+    assert_eq!(
+        gap["suspension"],
+        json!(format!(
+            "unresolved_gap {}..{}",
+            derived_days()[1],
+            derived_days()[3]
+        ))
+    );
+
+    // A confirmed suspension is a named event: not tradable.
+    let suspended = tradability_row(&answer, "sz.000004");
+    assert_eq!(suspended["state"], json!("not_tradable"));
+    assert_eq!(suspended["reason"], json!("suspended"));
+
+    // An ETF is not an A share; the tool says so instead of "not listed".
+    let etf = tradability_row(&answer, "sh.510050");
+    assert_eq!(etf["state"], json!("unknown"));
+    assert_eq!(etf["reason"], json!("not_a_share"));
+    assert_eq!(etf["limit_reason"], json!("not_a_share"));
+
+    // A code the main table does not contain still gets a row.
+    let absent = tradability_row(&answer, "sh.600519");
+    assert_eq!(absent["state"], json!("unknown"));
+    assert_eq!(absent["reason"], json!("not_in_master"));
+
+    // Day 4 is the fifth calendar day, so the listing phase is `seasoned` and
+    // the GEM band is knowable even though the risk status is not: every
+    // status class resolves to the same rule from 2020-08-24.
+    let answer = f
+        .api
+        .call(
+            "get_tradability",
+            json!({
+                "securities": ["sz.300114", "sz.000001"],
+                "as_of": derived_days()[4].to_string(),
+            }),
+        )
+        .unwrap();
+
+    let gem = tradability_row(&answer, "sz.300114");
+    assert_eq!(gem["state"], json!("tradable"));
+    assert_eq!(gem["reason"], json!("tradable"));
+    assert_eq!(gem["limit_state"], json!("known"));
+    // The status itself stays unknown: `known` here is the band invariant, and
+    // must not be read as "classified as normal" (design §2.2).
+    assert_eq!(gem["risk_status"], json!("unknown"));
+    assert_eq!(gem["limit_reason"], Value::Null);
+    // Prev close is the previous day's 不复权 close (2003 units at scale 2),
+    // rendered from the series' own scale rather than assumed to be 2 places.
+    assert_eq!(gem["prev_close"], json!("20.03"));
+    assert_eq!(gem["prev_close_day"], json!(derived_days()[3].to_string()));
+    assert!(gem["limit_up"].is_string(), "{gem}");
+    assert!(gem["limit_down"].is_string(), "{gem}");
+
+    // A main-board member with no risk interval: tradable, but the ST band
+    // cannot be ruled out, so the limit is unknown (D-82 Q4: reported as it
+    // is, not filled in with the 10% default).
+    let main = tradability_row(&answer, "sz.000001");
+    assert_eq!(main["state"], json!("tradable"));
+    assert_eq!(main["limit_state"], json!("unknown"));
+    assert_eq!(main["limit_reason"], json!("st_unknown"));
+    assert_eq!(main["limit_up"], Value::Null);
+    assert_eq!(main["limit_down"], Value::Null);
+}
+
+#[test]
+fn get_tradability_reports_ex_rights_unverified_instead_of_a_biased_limit() {
+    let f = derived_fixture();
+    // 300115 has a cat1 event with an allotment component on the day itself,
+    // so the reference price the band is computed from cannot be verified.
+    // The day still has a bar, so the security is tradable; only the limit is
+    // withheld, and it is withheld as `unknown`, never as the stale prev-close
+    // band (design §3.2 / Q3(a), D-84 limit-v2).
+    let answer = f
+        .api
+        .call(
+            "get_tradability",
+            json!({"securities": ["sz.300115"], "as_of": derived_days()[4].to_string()}),
+        )
+        .unwrap();
+    let row = tradability_row(&answer, "sz.300115");
+    assert_eq!(row["state"], json!("tradable"), "{row}");
+    assert_eq!(row["limit_state"], json!("unknown"), "{row}");
+    assert_eq!(row["limit_reason"], json!("ex_rights_unverified"), "{row}");
+    assert_eq!(row["limit_up"], Value::Null);
+    assert_eq!(row["limit_down"], Value::Null);
+    // The previous close is still reported: it exists, it is just not the
+    // basis of a limit.
+    assert_eq!(row["prev_close"], json!("60.03"));
+}
+
+#[test]
+fn get_tradability_says_input_absent_when_suspensions_were_never_written() {
+    // A fresh database has a main table and a calendar but no suspensions
+    // dataset. Every row must be unknown + input_absent: "no row" is not "no
+    // suspension" (G8).
+    let f = fixture();
+    commit_calendar_days(&f, &derived_days());
+    let answer = f
+        .api
+        .call(
+            "get_tradability",
+            json!({"securities": ["sz.000001"], "as_of": "2020-09-09"}),
+        )
+        .unwrap();
+    assert_eq!(answer["columns"]["state"], json!(["unknown"]));
+    assert_eq!(answer["columns"]["reason"], json!(["input_absent"]));
+    assert_eq!(answer["columns"]["limit_state"], json!(["unknown"]));
+    assert_eq!(answer["columns"]["limit_reason"], json!(["input_absent"]));
+    assert!(
+        answer["limitations"][0]
+            .as_str()
+            .unwrap()
+            .contains("input_absent")
+    );
+}
+
+#[test]
+fn get_tradability_and_market_cap_reject_known_at_with_a_pointer_to_get_security_state() {
+    let f = derived_fixture();
+    for (tool, input) in [
+        (
+            "get_tradability",
+            json!({"securities": ["sz.000001"], "as_of": "2020-09-09", "known_at": "2020-09-10"}),
+        ),
+        (
+            "get_market_cap",
+            json!({"securities": ["sh.600028"], "scope": "float_a", "as_of": "2020-09-09",
+                   "known_at": "2020-09-10"}),
+        ),
+    ] {
+        let error = f.api.call(tool, input).unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{tool}");
+        assert!(error.message.contains("known_at is not accepted"), "{tool}");
+        assert!(error.message.contains("get_security_state"), "{tool}");
+    }
+}
+
+#[test]
+fn derived_tools_reject_indices_and_oversized_or_duplicate_batches() {
+    let f = derived_fixture();
+    for tool in ["get_tradability", "get_market_cap"] {
+        let mut input = json!({"securities": ["sh.000300"], "as_of": "2020-09-09"});
+        if tool == "get_market_cap" {
+            input["scope"] = json!("float_a");
+        }
+        let error = f.api.call(tool, input).unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{tool}");
+        assert!(error.message.contains("get_index_bars"), "{tool}");
+
+        // 101 entities: the v2 path's 1..100 rule applies here too.
+        let many: Vec<String> = (0..101)
+            .map(|index| format!("sz.{:06}", 1000 + index))
+            .collect();
+        let mut input = json!({"securities": many, "as_of": "2020-09-09"});
+        if tool == "get_market_cap" {
+            input["scope"] = json!("float_a");
+        }
+        let error = f.api.call(tool, input).unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{tool}");
+        assert!(error.message.contains("1..100"), "{}", error.message);
+
+        let mut input = json!({"securities": ["sz.000001", "sz.000001"]});
+        if tool == "get_market_cap" {
+            input["scope"] = json!("float_a");
+        }
+        let error = f.api.call(tool, input).unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "{tool}");
+        assert!(error.message.contains("duplicate"), "{}", error.message);
+    }
+}
+
+#[test]
+fn get_market_cap_matches_the_research_function_and_names_its_scope() {
+    use crate::research::market_cap::{MarketCapOptions, Reconciliation, ShareScope, market_cap};
+    use crate::research::temporal::Temporal;
+
+    let f = derived_fixture();
+    let as_of = derived_days()[2];
+    let answer = f
+        .api
+        .call(
+            "get_market_cap",
+            json!({"securities": ["sh.600028", "sz.000001"], "scope": "float_a",
+                   "as_of": as_of.to_string()}),
+        )
+        .unwrap();
+    assert_eq!(answer["layout"], "table");
+    assert_eq!(answer["scope"], json!("float_a"));
+    assert_eq!(answer["entities"], json!(["sh.600028", "sz.000001"]));
+
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.read(|c| {
+        let temporal = Temporal {
+            as_of,
+            known_at: None,
+        };
+        for (index, entity) in ["sh.600028", "sz.000001"].into_iter().enumerate() {
+            let expected = market_cap(
+                c,
+                entity,
+                temporal,
+                ShareScope::FloatA,
+                &MarketCapOptions::default(),
+            )
+            .unwrap();
+            let state = answer["columns"]["state"][index].clone();
+            assert_eq!(
+                state,
+                json!(match expected.state {
+                    crate::research::market_cap::MarketCapState::Known => "known",
+                    crate::research::market_cap::MarketCapState::Unknown => "unknown",
+                }),
+                "{entity}"
+            );
+            assert_eq!(
+                answer["columns"]["reason"][index],
+                expected
+                    .reason
+                    .map_or(Value::Null, |reason| json!(reason.as_str())),
+                "{entity}"
+            );
+            // 分 × shares → 元 with two decimals.
+            assert_eq!(
+                answer["columns"]["market_cap"][index],
+                expected.value_units.map_or(Value::Null, |units| {
+                    json!(format!("{}.{:02}", units / 100, units % 100))
+                }),
+                "{entity}"
+            );
+            assert_eq!(
+                answer["columns"]["shares"][index],
+                expected.shares.map_or(Value::Null, |value| json!(value)),
+                "{entity}"
+            );
+            assert_eq!(
+                answer["columns"]["share_event_day"][index],
+                expected
+                    .share_day
+                    .map_or(Value::Null, |day| json!(day.to_string())),
+                "{entity}"
+            );
+            assert_eq!(
+                answer["columns"]["reconciliation"][index],
+                json!(Reconciliation::NotAvailable.as_str()),
+                "{entity}"
+            );
+        }
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+
+    // 600028 has 1.0e9 float shares and closed at 10.02 on day 2.
+    assert_eq!(answer["columns"]["state"][0], json!("known"));
+    assert_eq!(answer["columns"]["shares"][0], json!(1_000_000_000i64));
+    assert_eq!(answer["columns"]["market_cap"][0], json!("10020000000.00"));
+
+    // 000001 has no capital event: unknown, not a stale value.
+    assert_eq!(answer["columns"]["state"][1], json!("unknown"));
+    assert_eq!(answer["columns"]["reason"][1], json!("no_share_event"));
+
+    // `a_share_total` is always unknown and says why.
+    let total = f
+        .api
+        .call(
+            "get_market_cap",
+            json!({"securities": ["sh.600028"], "scope": "a_share_total",
+                   "as_of": as_of.to_string()}),
+        )
+        .unwrap();
+    assert_eq!(total["columns"]["state"], json!(["unknown"]));
+    assert_eq!(
+        total["columns"]["reason"],
+        json!(["a_share_total_not_admitted"])
+    );
+
+    // `company_total` carries the A+B+H caveat.
+    let company = f
+        .api
+        .call(
+            "get_market_cap",
+            json!({"securities": ["sh.600028"], "scope": "company_total",
+                   "as_of": as_of.to_string()}),
+        )
+        .unwrap();
+    assert_eq!(company["columns"]["shares"], json!([1_200_000_000i64]));
+    assert!(
+        company["limitations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|line| line.as_str().unwrap().contains("A+B+H"))
+    );
+    assert_eq!(
+        company["algorithm_versions"],
+        json!({"market_cap": crate::research::market_cap::ALGORITHM_VERSION})
+    );
+}
+
+#[test]
+fn derived_tools_are_not_paginated() {
+    let f = derived_fixture();
+    for tool in ["get_tradability", "get_market_cap"] {
+        let mut input = json!({"securities": ["sz.000001"], "as_of": "2020-09-09"});
+        if tool == "get_market_cap" {
+            input["scope"] = json!("float_a");
+        }
+        for field in ["page_size", "cursor"] {
+            let mut rejected = input.clone();
+            rejected[field] = if field == "page_size" {
+                json!(10)
+            } else {
+                json!("x")
+            };
+            let error = f.api.call(tool, rejected).unwrap_err();
+            assert_eq!(error.code, "invalid_arguments", "{tool}/{field}");
+        }
+        let answer = f.api.call(tool, input).unwrap();
+        assert!(answer.get("next_cursor").is_none(), "{tool}");
+        assert!(answer.get("page_complete").is_none(), "{tool}");
+        assert!(answer.get("snapshot_id").is_none(), "{tool}");
+    }
+}
+
+#[test]
+fn derived_tools_admit_through_the_read_budget() {
+    use crate::data_supply::cursor_cache::CursorLimits;
+    use crate::data_supply::query::Queries;
+    use crate::data_supply::read_limits::{ReadBudget, ReadLimits};
+
+    let mut f = derived_fixture();
+    // A budget that cannot fit anything: the same admission gate the v2 read
+    // path uses (#547). The tool must be refused, not served outside it.
+    let repository = f.api.queries.repository.clone();
+    f.api.queries = Queries::with_limits(
+        repository,
+        &ReadLimits::new(
+            CursorLimits::PRODUCTION,
+            ReadBudget::with_probe(Some(1), || Some(usize::MAX / 4)),
+        ),
+    );
+    for tool in ["get_tradability", "get_market_cap"] {
+        let mut input = json!({"securities": ["sz.000001"], "as_of": "2020-09-09"});
+        if tool == "get_market_cap" {
+            input["scope"] = json!("float_a");
+        }
+        let error = f.api.call(tool, input).unwrap_err();
+        assert_eq!(error.code, "memory_budget_exceeded", "{tool}");
+    }
+}
+
+/// Measurement probe, not a regression gate:
+/// `cargo nextest run --run-ignored only -E 'test(probe_derived_tools)' --no-capture`.
+///
+/// Builds a fixture the size of the production read-model inputs (7.4k main
+/// table rows, ~70k suspension rows, a 300-day calendar, rules) through the
+/// production writers, then reports the peak resident growth and the wall time
+/// of one `get_tradability` call for 1, 10 and 100 entities. `READ_RESERVE` in
+/// `derived_tools.rs` is set from the 100-entity figure.
+#[test]
+#[ignore]
+fn probe_derived_tools_peak_heap_and_latency() {
+    use crate::security_master::assembly::Assembly;
+    use crate::security_master::suspensions::SuspensionSet;
+    use crate::security_master::{
+        Exchange, SuspensionCertainty, SuspensionInterval, SuspensionReason,
+    };
+    use crate::sqlite_market::{evidence_store, security, suspensions};
+    use std::time::Instant;
+
+    fn status_kib(key: &str) -> usize {
+        std::fs::read_to_string("/proc/self/status")
+            .unwrap()
+            .lines()
+            .find(|line| line.starts_with(key))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0)
+            * 1024
+    }
+    fn mib(bytes: usize) -> f64 {
+        bytes as f64 / 1048576.0
+    }
+
+    let f = fixture();
+    // 300 trading days.
+    let mut calendar_days = Vec::new();
+    let mut cursor = day(2019, 1, 2);
+    while calendar_days.len() < 300 {
+        if !matches!(cursor.format("%a").to_string().as_str(), "Sat" | "Sun") {
+            calendar_days.push(cursor);
+        }
+        cursor = cursor.succ_opt().unwrap();
+    }
+    commit_calendar_days(&f, &calendar_days);
+    let as_of = calendar_days[200];
+
+    let MarketBackend::Compact(repo) = &f.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.write(|c| {
+        let generation = evidence_store::put_evidence(
+            c,
+            crate::compact_market::EvidenceKind::Generation,
+            &json!({"generation": "gen-probe"}),
+        )?;
+        let binding = evidence_store::put_source_binding(
+            c,
+            &crate::compact_market::SourceBinding {
+                generation_id: "gen-probe".into(),
+                generation_manifest_sha256: [0x0b; 32],
+                day_member_sha256: [0x0c; 32],
+                security_event_sha256: [0x0e; 32],
+                evidence_digest: generation,
+            },
+        )?;
+        let evidence = evidence_store::put_evidence(
+            c,
+            crate::compact_market::EvidenceKind::Version,
+            &serde_json::to_value(crate::compact_market::VersionEvidence {
+                source: "official".into(),
+                coverage_reason: "probe".into(),
+                unit_currency: units(),
+                adjustment_evidence: crate::market_data::AdjustmentEvidence::confirmed(
+                    "raw", "probe",
+                ),
+                excluded_bars: None,
+            })
+            .unwrap(),
+        )?;
+
+        // 7.4k main-table rows: 4,000 SZ main-board codes and 3,400 SH ones.
+        let mut rows = Vec::new();
+        for index in 1..=4_000u32 {
+            rows.push(derived_lifecycle(
+                Exchange::Sz,
+                &format!("{index:06}"),
+                Some(day(2018, 1, 2)),
+                None,
+                0,
+            ));
+        }
+        for index in 0..3_400u32 {
+            rows.push(derived_lifecycle(
+                Exchange::Sh,
+                &format!("{:06}", 600_000 + index),
+                Some(day(2018, 1, 2)),
+                None,
+                0,
+            ));
+        }
+        security::replace_security_master(
+            c,
+            &Assembly {
+                rows,
+                migrations: Vec::new(),
+                conflicts: Vec::new(),
+                pending_sources: Vec::new(),
+                unresolved: Vec::new(),
+                exchange_as_of: Some(calendar_days[299]),
+            },
+            binding,
+            "task-master",
+            "derived:security_master",
+        )?;
+
+        // ~70k suspension rows: 9 gap intervals per SZ code, one per 30 days.
+        let mut suspension_rows = Vec::new();
+        for index in 1..=4_000u32 {
+            for step in 0..9usize {
+                let start = calendar_days[step * 30 + 10];
+                let end = calendar_days[step * 30 + 12];
+                suspension_rows.push(SuspensionInterval {
+                    exchange: Exchange::Sz,
+                    code: format!("{index:06}"),
+                    start_day: start,
+                    end_day: end,
+                    certainty: SuspensionCertainty::UnresolvedGap,
+                    missing_days: 3,
+                    reason: SuspensionReason::MissingBarNoEvent,
+                    known_at: None,
+                    source_kind: "probe".into(),
+                    source_record_id: None,
+                });
+            }
+        }
+        for index in 0..3_400u32 {
+            for step in 0..9usize {
+                let start = calendar_days[step * 30 + 40];
+                let end = calendar_days[step * 30 + 42];
+                suspension_rows.push(SuspensionInterval {
+                    exchange: Exchange::Sh,
+                    code: format!("{:06}", 600_000 + index),
+                    start_day: start,
+                    end_day: end,
+                    certainty: SuspensionCertainty::UnresolvedGap,
+                    missing_days: 3,
+                    reason: SuspensionReason::MissingBarNoEvent,
+                    known_at: None,
+                    source_kind: "probe".into(),
+                    source_record_id: None,
+                });
+            }
+        }
+        let count = |filter: fn(&SuspensionInterval) -> bool| {
+            suspension_rows.iter().filter(|row| filter(row)).count()
+        };
+        let set = SuspensionSet {
+            confirmed_rows: count(|row| row.certainty == SuspensionCertainty::Confirmed),
+            gap_rows: count(|row| row.certainty == SuspensionCertainty::UnresolvedGap),
+            single_day_gap_rows: count(|row| {
+                row.certainty == SuspensionCertainty::UnresolvedGap && row.missing_days == 1
+            }),
+            multi_day_gap_rows: count(|row| {
+                row.certainty == SuspensionCertainty::UnresolvedGap && row.missing_days > 1
+            }),
+            deferred_beyond_calendar: 0,
+            deferred_samples: Vec::new(),
+            skipped_no_trading_day: 0,
+            skipped_samples: Vec::new(),
+            pending_sources: Vec::new(),
+            rows: suspension_rows,
+        };
+        suspensions::replace_suspensions(
+            c,
+            &set,
+            binding,
+            "task-suspensions",
+            "derived:suspensions",
+        )?;
+        crate::sqlite_market::rules::replace_trading_rules(
+            c,
+            &crate::trading_rules::rule_book().unwrap(),
+            binding,
+            "task-rules",
+            "derived:price_limit_rules",
+        )?;
+
+        // One raw bar on `as_of` for the 100 entities the probe asks about, so
+        // the answer is `tradable` and the price-limit path runs too.
+        let mut seed = 0x30u8;
+        for index in 1..=100u32 {
+            seed = seed.wrapping_add(1);
+            let entity = format!("sz.{index:06}");
+            let close = 1000 + index as i64;
+            let bar = crate::compact_market::CompactBar {
+                trade_day: crate::compact_market::epoch_day(as_of),
+                open_units: close,
+                high_units: close + 10,
+                low_units: close - 10,
+                close_units: close,
+                volume: Some(100),
+                amount: Some("100500.00".into()),
+                r7_raw: Some(7),
+            };
+            let key = series::insert_series(
+                c,
+                &crate::sqlite_market::series::NewSeries {
+                    entity: entity.clone(),
+                    period: crate::market_data::Period::Day,
+                    adjustment: Adjustment::Raw,
+                    instrument_class: crate::market_data::INSTRUMENT_CLASS_STOCK,
+                    price_scale: 2,
+                    content_digest: [seed; 32],
+                    record_count: 1,
+                    first_day: bar.trade_day,
+                    last_day: bar.trade_day,
+                    coverage_status: crate::market_data::CoverageStatus::Complete,
+                    source_binding_digest: binding,
+                    evidence_digest: evidence,
+                    last_event_seq: 1,
+                    created_at: "2026-10-26T00:00:00Z".into(),
+                    updated_at: "2026-10-26T00:00:00Z".into(),
+                },
+            )?;
+            series::insert_bars(c, key, &[bar])?;
+        }
+        Ok(())
+    })
+    .unwrap();
+
+    let entities: Vec<String> = (1..=100).map(|index| format!("sz.{index:06}")).collect();
+    let ask = |count: usize| {
+        let securities: Vec<Value> = entities[..count]
+            .iter()
+            .map(|entity| json!(entity))
+            .collect();
+        json!({"securities": securities, "as_of": as_of.to_string()})
+    };
+
+    // `VmHWM` is a process-wide high-water mark that the fixture build already
+    // pushed up, so the call's own peak is sampled from a watchdog thread:
+    // `RssAnon` every millisecond while the call runs.
+    let sample = |call: &dyn Fn() -> Value| {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let peak = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let watch = {
+            let stop = stop.clone();
+            let peak = peak.clone();
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    peak.fetch_max(status_kib("RssAnon"), std::sync::atomic::Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            })
+        };
+        let before = status_kib("RssAnon");
+        let started = Instant::now();
+        let answer = call();
+        let elapsed = started.elapsed();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        watch.join().unwrap();
+        let peak = peak.load(std::sync::atomic::Ordering::Relaxed);
+        (answer, elapsed, before, peak)
+    };
+
+    for count in [1usize, 10, 100] {
+        // Three runs: the first is cold (the shared inputs are decoded), the
+        // rest show the steady state. The peak is reported for the first run
+        // because that is the one the reserve has to cover.
+        let mut walls = Vec::new();
+        for run in 0..3 {
+            let (answer, elapsed, before, peak) =
+                sample(&|| f.api.call("get_tradability", ask(count)).unwrap());
+            assert_eq!(answer["entities"].as_array().unwrap().len(), count);
+            walls.push(elapsed.as_secs_f64() * 1000.0);
+            if run == 0 {
+                println!(
+                    "get_tradability entities={count:>3}: sampled_peak_growth={:>6.1} MiB \
+                     (rss_anon {} -> {} MiB), response={} B",
+                    mib(peak.saturating_sub(before)),
+                    mib(before),
+                    mib(peak),
+                    serde_json::to_vec(&answer).unwrap().len(),
+                );
+            }
+        }
+        println!(
+            "get_tradability entities={count:>3}: wall ms runs={:?}",
+            walls
+                .iter()
+                .map(|ms| (ms * 10.0).round() / 10.0)
+                .collect::<Vec<_>>()
+        );
+    }
+    println!(
+        "READ_RESERVE = {} B ({:.1} MiB)",
+        crate::data_supply::derived_tools::READ_RESERVE,
+        mib(crate::data_supply::derived_tools::READ_RESERVE)
+    );
+}

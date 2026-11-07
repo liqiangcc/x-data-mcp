@@ -16,8 +16,8 @@ EXPECTED_COMPACT_SCHEMA = 27
 # Registry/code fact (v8 PR-2 added list_catalog_facets: 23 -> 24; refresh R2
 # adds refresh_exchange_sources: 24 -> 25; D-75 PR-1 adds seven narrow read
 # tools: 25 -> 32, research 5 -> 12; PR-1b adds two more: 34, 14; PR-2 adds
-# get_security_history: 35, 15).
-EXPECTED_DATA_TOOLS = 35
+# get_security_history: 35, 15; PR-B adds get_tradability, get_market_cap: 37, 17).
+EXPECTED_DATA_TOOLS = 37
 # Documentation "current" regions describe deployment facts, so stale-claim
 # checks compare against the deployed constants, not the code constants. A
 # sentence that explicitly says it is stating the code fact (代码/未部署) is
@@ -30,7 +30,7 @@ EXPECTED_DATA_TOOLS = 35
 EXPECTED_DEPLOYED_DATA_TOOLS = 16
 EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
 EXPECTED_CODE_OPS_TOOLS = 16
-EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 15, "maint": 9}
+EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 17, "maint": 9}
 EXPECTED_ACQUIRE_TOOLS = 10
 
 # --- deployed data entries (v8 phase 2, D-56) ------------------------------

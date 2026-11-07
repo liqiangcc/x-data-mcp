@@ -510,6 +510,78 @@ impl DataApi {
             },
         })
     }
+
+    /// D-82: derived read-only tools. The whole call runs in one
+    /// `market.read` transaction, so every entity in the batch sees the same
+    /// snapshot, and the shared [`super::read_limits::ReadBudget`] admits the
+    /// call before any table is decoded.
+    fn derived_tool(
+        &self,
+        tool: super::read_tools::ReadTool,
+        input: Value,
+    ) -> Result<Value, super::Error> {
+        use super::read_tools::{
+            MarketCapInput, ReadTool, TradabilityInput, decode, reject_indices, validate_securities,
+        };
+
+        // The tool layer speaks `ApiError`; this handler reports through the
+        // read path's `Error` so the dispatch mapping (invalid_arguments,
+        // integrity_error, memory_budget_exceeded) stays in one place.
+        let invalid = |e: ApiError| Error::Invalid(e.message);
+        super::read_tools::reject_known_at(&input).map_err(invalid)?;
+        let as_of = |explicit: Option<chrono::NaiveDate>| match explicit {
+            Some(day) => Ok(day),
+            None => {
+                use super::query::ReadRepository as _;
+                self.queries
+                    .repository
+                    .last_trading_day_upto(super::query::today())
+            }
+        };
+
+        match tool {
+            ReadTool::Tradability => {
+                let args: TradabilityInput = decode(input).map_err(invalid)?;
+                validate_securities(&args.securities).map_err(invalid)?;
+                reject_indices(&args.securities).map_err(invalid)?;
+                let as_of = as_of(args.as_of)?;
+                // The shared context decodes about 90k rows once for the whole
+                // batch; the reservation covers that decode plus the response.
+                let _permit = self
+                    .queries
+                    .reserve_derived(super::derived_tools::READ_RESERVE)?;
+                self.queries
+                    .repository
+                    .market
+                    .read(|c| super::derived_tools::tradability(c, &args.securities, as_of))
+            }
+            ReadTool::MarketCap => {
+                let args: MarketCapInput = decode(input).map_err(invalid)?;
+                validate_securities(&args.securities).map_err(invalid)?;
+                reject_indices(&args.securities).map_err(invalid)?;
+                let as_of = as_of(args.as_of)?;
+                let scope = match args.scope {
+                    super::read_tools::MarketCapScope::FloatA => {
+                        crate::research::market_cap::ShareScope::FloatA
+                    }
+                    super::read_tools::MarketCapScope::CompanyTotal => {
+                        crate::research::market_cap::ShareScope::CompanyTotal
+                    }
+                    super::read_tools::MarketCapScope::AShareTotal => {
+                        crate::research::market_cap::ShareScope::AShareTotal
+                    }
+                };
+                let _permit = self
+                    .queries
+                    .reserve_derived(super::derived_tools::READ_RESERVE)?;
+                self.queries.repository.market.read(|c| {
+                    super::derived_tools::market_cap_table(c, &args.securities, as_of, scope)
+                })
+            }
+            _ => unreachable!("only Tradability and MarketCap use Handler::Derived"),
+        }
+    }
+
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
         let crate::task_control::RequestOutcome::Task(f) = a.record.outcome else {
             return Err(ApiError::new(
@@ -1370,6 +1442,10 @@ impl DataApi {
                 let mut answer = self.queries.query_v2(query, &self.access).map_err(mapped)?;
                 super::read_tools::add_limitations(&mut answer, notes);
                 Ok(answer)
+            }
+            Handler::Derived(tool) => {
+                // D-82: derived read-only tools call research functions directly.
+                self.derived_tool(tool, input).map_err(mapped)
             }
             Handler::Capabilities => self.capabilities(decode(input)?),
             Handler::Facets => self.catalog_facets(decode(input)?),

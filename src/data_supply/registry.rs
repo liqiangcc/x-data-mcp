@@ -1,8 +1,8 @@
 //! Schema and routing share one descriptor; no advertised handler without a contract.
 use super::read_tools::{
-    self, ColumnarPage, DailyBarsInput, IndexBarsInput, MarketSnapshotInput, PriceLimitRulesInput,
-    ReadTool, SecurityEventsInput, SecurityHistoryInput, SecurityStateInput, TradingCalendarInput,
-    YearlyBarsInput,
+    self, ColumnarPage, DailyBarsInput, IndexBarsInput, MarketCapInput, MarketSnapshotInput,
+    PriceLimitRulesInput, ReadTool, SecurityEventsInput, SecurityHistoryInput, SecurityStateInput,
+    TableReply, TradabilityInput, TradingCalendarInput, YearlyBarsInput,
 };
 use super::wire::*;
 use schemars::{JsonSchema, schema_for};
@@ -36,6 +36,8 @@ pub enum Handler {
     Facets,
     /// Narrow read tools (D-75): one typed input becomes one v2 `Query`.
     Read(super::read_tools::ReadTool),
+    /// Derived read-only tools (D-82): call research functions, assemble table.
+    Derived(super::read_tools::ReadTool),
 }
 /// Which socket serves a tool (v8 design §3.1). The three deployed entries are
 /// static allowlists; `All` is the stdio/dev surface used by `mcp_data` and
@@ -65,6 +67,9 @@ pub const RESEARCH_TOOLS: &[&str] = &[
     "get_security_state",
     "get_security_history",
     "get_security_events",
+    // D-82 (issue-433 PR-B): tradability and market cap read-only tools.
+    "get_tradability",
+    "get_market_cap",
 ];
 /// Ops entry: the daily-sync workflow surface. v9 adds `refresh_exchange_sources`
 /// here and to the Skill's strict allowlist, so the two lists match again.
@@ -692,6 +697,18 @@ pub fn entries() -> Vec<Entry> {
             Handler::Read(ReadTool::SecurityEvents),
             read_tools::SECURITY_EVENTS_DESCRIPTION,
             json!({"securities":["sh.600006"],"event":"capital","start_date":"2025-01-01","end_date":"2025-12-31"}),
+        ),
+        entry::<TradabilityInput, TableReply>(
+            "get_tradability",
+            Handler::Derived(ReadTool::Tradability),
+            read_tools::TRADABILITY_DESCRIPTION,
+            json!({"securities":["sz.000631","sh.600519"],"as_of":"2007-06-01"}),
+        ),
+        entry::<MarketCapInput, TableReply>(
+            "get_market_cap",
+            Handler::Derived(ReadTool::MarketCap),
+            read_tools::MARKET_CAP_DESCRIPTION,
+            json!({"securities":["sz.000002","sh.600028"],"scope":"float_a","as_of":"2026-11-05"}),
         ),
         entry::<YearPresenceQuery, YearPresenceReply>(
             "get_yearly_base_years",

@@ -73,6 +73,8 @@ fn entry_allowlists_cover_every_registered_tool_and_research_is_read_only() {
             "get_security_state",
             "get_security_history",
             "get_security_events",
+            "get_tradability",
+            "get_market_cap",
         ]
     );
     // Bidirectional closure: every research tool is registered, and no
@@ -140,11 +142,12 @@ fn tools_list_stays_within_entry_budgets_without_output_schema() {
     // get_security_history (15 tools) and drops the root `$schema` and `title`
     // from every read input schema, which lowers all three entries: research
     // 18,437 -> 18,094 B, ops 30,748 -> 29,872 B, maint 13,523 -> 13,195 B
-    // (budgets unchanged).
+    // (budgets unchanged). D-82 (issue-433 PR-B) adds get_tradability and
+    // get_market_cap (17 tools), raising the budget to 19,600 B.
     // The research/ops budgets carry that documented surface growth; they are
     // not relaxed for any other reason.
     let budgets = [
-        (EntryKind::Research, 15usize, 18_600usize),
+        (EntryKind::Research, 17usize, 19_600usize),
         (EntryKind::Ops, 16usize, 30_800usize),
         (
             EntryKind::Maint,
@@ -329,8 +332,9 @@ fn capabilities_follow_the_entry_and_match_the_tools_list() {
         // D-75: 1,500 B for 5 tools; the seven narrow read tools add about
         // 700 B (measured 2,199 B for 12 tools). PR-1b adds two more tools
         // (measured 2,438 B for 14). PR-2 adds get_security_history (measured
-        // 2,559 B for 15), so the cap is 2,600.
-        serde_json::to_vec(&compact).unwrap().len() <= 2_600,
+        // 2,559 B for 15), so the cap is 2,600. D-82 PR-B adds get_tradability
+        // and get_market_cap (measured 2,790 B for 17), so the cap is 2,800.
+        serde_json::to_vec(&compact).unwrap().len() <= 2_800,
         "research compact catalog is {} B",
         serde_json::to_vec(&compact).unwrap().len()
     );
