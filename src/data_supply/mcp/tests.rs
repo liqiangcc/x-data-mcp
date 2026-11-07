@@ -2907,6 +2907,310 @@ fn unregistered_risk_warnings_stay_absent_with_a_reason() {
     );
 }
 
+/// Interval rows for the #587 truncation tests. The source kind follows the
+/// real writer (SH announcement events, SZ short-name history); `known_at` is
+/// a fixture capture day.
+fn seed_risk_intervals(
+    f: &Fixture,
+    rows: &[(
+        &str,
+        NaiveDate,
+        Option<NaiveDate>,
+        crate::security_master::RiskStatus,
+    )],
+) {
+    use crate::security_master::coverage::CoverageWindow;
+    use crate::security_master::risk_warnings::RiskWarningSet;
+    use crate::security_master::{Exchange, RiskWarningInterval};
+    use crate::sqlite_market::risk_warnings::RiskWarningWrite;
+
+    let intervals: Vec<RiskWarningInterval> = rows
+        .iter()
+        .map(|(entity, from, to, status)| {
+            let (exchange, code) = entity.split_once('.').unwrap();
+            let exchange = if exchange == "sh" {
+                Exchange::Sh
+            } else {
+                Exchange::Sz
+            };
+            RiskWarningInterval {
+                exchange,
+                code: code.into(),
+                effective_from: *from,
+                effective_to: *to,
+                status: *status,
+                raw_status_code: status.as_str().into(),
+                announced_at: None,
+                known_at: Some(day(2026, 11, 1)),
+                source_kind: if exchange == Exchange::Sh {
+                    "exchange_announcement".into()
+                } else {
+                    "szse_name_history".into()
+                },
+                source_record_id: Some(format!("{entity}|{from}")),
+                source_document_sha256: Some("a".repeat(64)),
+            }
+        })
+        .collect();
+    let set = RiskWarningSet {
+        rows: intervals,
+        coverage: vec![CoverageWindow {
+            source_kind: "szse_name_history".into(),
+            exchange: Exchange::Sz,
+            from: day(1994, 1, 3),
+            to: day(2026, 11, 1),
+            observed: true,
+            rows: rows.len(),
+            reason: "fixture".into(),
+        }],
+        pending_sources: Vec::new(),
+    };
+    f.backend
+        .commit_risk_warnings(&RiskWarningWrite {
+            set: &set,
+            task_id: "task-risk",
+            item_id: "derived:risk_warnings",
+            generation_id: "gen-risk",
+            generation_manifest_sha256: &"51".repeat(32),
+            member_sha256: &"52".repeat(32),
+            security_event_sha256: &"53".repeat(32),
+            generation_evidence: &json!({"generation_id": "gen-risk"}),
+        })
+        .unwrap()
+        .expect("a non-empty set registers its version");
+}
+
+/// #587: an open risk-warning interval stops at the security's delisting date.
+/// The delisting day itself is already outside the security's life
+/// (`member_state` is `Out(AfterDelisting)` from that day on), so neither the
+/// delisting day nor any later day may report a warning. Three SH and three SZ
+/// codes, both entry points.
+#[test]
+fn risk_warnings_open_intervals_stop_at_the_delisting_date() {
+    use crate::security_master::RiskStatus;
+
+    let f = fixture();
+    let delisting = day(2019, 6, 28);
+    let codes = [
+        "sh.600146",
+        "sh.600193",
+        "sh.600301",
+        "sz.000013",
+        "sz.000015",
+        "sz.000047",
+    ];
+    seed_security_master(&f, &codes.map(|entity| (entity, Some(delisting))));
+    seed_risk_intervals(
+        &f,
+        &codes.map(|entity| {
+            (
+                entity,
+                day(2014, 12, 1),
+                None,
+                RiskStatus::DelistingRiskWarning,
+            )
+        }),
+    );
+
+    for entity in codes {
+        let state = |as_of: &str| {
+            f.api
+                .call(
+                    "get_security_state",
+                    json!({"securities": [entity], "fact": "risk_warnings", "as_of": as_of}),
+                )
+                .unwrap()
+        };
+        let before = state("2019-06-27");
+        assert_eq!(before["row_count"], 1, "{entity}: {before}");
+        assert_eq!(
+            before["columns"]["normalized_status"],
+            json!(["delisting_risk_warning"]),
+            "{entity}: {before}"
+        );
+        assert_eq!(
+            before["columns"]["effective_to"],
+            json!(["2019-06-28"]),
+            "{entity}: the open interval is reported up to the delisting date"
+        );
+        for after in ["2019-06-28", "2020-06-30"] {
+            let page = state(after);
+            assert_eq!(page["row_count"], 0, "{entity} at {after}: {page}");
+        }
+
+        // The same record-set filter through `query_data` (single-day window).
+        let query = |as_of: &str| {
+            f.api
+                .call(
+                    "query_data",
+                    json!({
+                        "dataset": "market.risk_warnings",
+                        "contract_version": "v2",
+                        "selection": {"kind": "single", "entity": entity},
+                        "filter": {"kind": "daily", "start_date": as_of,
+                                   "end_date": as_of, "as_of": as_of},
+                        "version": {"kind": "latest_per_entity"}
+                    }),
+                )
+                .unwrap()
+        };
+        assert_eq!(query("2019-06-27")["row_count"], 1, "{entity}");
+        assert_eq!(query("2019-06-28")["row_count"], 0, "{entity}");
+        assert_eq!(query("2020-06-30")["row_count"], 0, "{entity}");
+    }
+}
+
+/// #587: only an open interval of a security with a delisting date is
+/// truncated. A closed interval that ends at or before the delisting date is
+/// unchanged, one that extends past it is cut at the delisting date, a
+/// security without a delisting date keeps its open interval, and a code the
+/// main table does not contain is not guessed at.
+#[test]
+fn risk_warnings_truncate_only_open_intervals_of_delisted_securities() {
+    use crate::security_master::RiskStatus;
+
+    let f = fixture();
+    let delisting = day(2019, 6, 28);
+    seed_security_master(
+        &f,
+        &[
+            ("sh.600146", Some(delisting)), // open -> truncated
+            ("sh.600193", Some(delisting)), // closed before -> unchanged
+            ("sh.600301", Some(delisting)), // closed after -> truncated
+            ("sz.000013", None),            // no delisting date -> unchanged
+        ],
+    );
+    seed_risk_intervals(
+        &f,
+        &[
+            (
+                "sh.600146",
+                day(2014, 12, 1),
+                None,
+                RiskStatus::DelistingRiskWarning,
+            ),
+            (
+                "sh.600193",
+                day(2014, 12, 1),
+                Some(day(2019, 6, 3)),
+                RiskStatus::DelistingRiskWarning,
+            ),
+            (
+                "sh.600301",
+                day(2014, 12, 1),
+                Some(day(2021, 1, 4)),
+                RiskStatus::DelistingRiskWarning,
+            ),
+            (
+                "sz.000013",
+                day(2014, 12, 1),
+                None,
+                RiskStatus::DelistingRiskWarning,
+            ),
+            // Not in the main table: no delisting date to truncate with.
+            (
+                "sz.000015",
+                day(2014, 12, 1),
+                None,
+                RiskStatus::DelistingRiskWarning,
+            ),
+        ],
+    );
+    let state = |entity: &str, as_of: &str| {
+        f.api
+            .call(
+                "get_security_state",
+                json!({"securities": [entity], "fact": "risk_warnings", "as_of": as_of}),
+            )
+            .unwrap()
+    };
+
+    let closed = state("sh.600193", "2019-06-02");
+    assert_eq!(closed["row_count"], 1, "{closed}");
+    assert_eq!(closed["columns"]["effective_to"], json!(["2019-06-03"]));
+    assert_eq!(state("sh.600193", "2019-06-03")["row_count"], 0);
+
+    let late = state("sh.600301", "2019-06-27");
+    assert_eq!(late["row_count"], 1, "{late}");
+    assert_eq!(
+        late["columns"]["effective_to"],
+        json!(["2019-06-28"]),
+        "a closed interval that runs past the delisting date is cut there"
+    );
+    assert_eq!(state("sh.600301", "2019-06-28")["row_count"], 0);
+
+    let unknown = state("sz.000013", "2020-06-30");
+    assert_eq!(unknown["row_count"], 1, "{unknown}");
+    assert!(
+        unknown["columns"].get("effective_to").is_none(),
+        "a security without a delisting date keeps its open end: {unknown}"
+    );
+
+    let absent = state("sz.000015", "2020-06-30");
+    assert_eq!(absent["row_count"], 1, "{absent}");
+}
+
+/// #587: the truncation is a read-time filter, so the registered version and
+/// the exported rows do not move: the export still carries the open interval
+/// with `effective_to = NULL`, and the `version_id` is the same before and
+/// after the truncated answer.
+#[test]
+fn read_time_truncation_leaves_the_export_identity_unchanged() {
+    use crate::security_master::RiskStatus;
+
+    let f = fixture();
+    let delisting = day(2019, 6, 28);
+    seed_security_master(&f, &[("sh.600146", Some(delisting))]);
+    seed_risk_intervals(
+        &f,
+        &[(
+            "sh.600146",
+            day(2014, 12, 1),
+            None,
+            RiskStatus::DelistingRiskWarning,
+        )],
+    );
+
+    let version = |f: &Fixture| {
+        f.backend
+            .read(|c| crate::sqlite_market::derived::read_kind_version(c, "risk_warnings"))
+            .unwrap()
+            .expect("the fixture registers a risk-warnings version")
+            .version_id
+    };
+    // The exporter (`research::read::risk_warning_rows`) reads exactly this
+    // accessor; comparing its rows is comparing the exported interval facts.
+    let export = |f: &Fixture| {
+        f.backend
+            .read(crate::sqlite_market::security::read_risk_warning_intervals)
+            .unwrap()
+    };
+
+    let before = version(&f);
+    let exported_before = export(&f);
+    let page = f
+        .api
+        .call(
+            "get_security_state",
+            json!({"securities": ["sh.600146"], "fact": "risk_warnings",
+                   "as_of": "2020-06-30"}),
+        )
+        .unwrap();
+    assert_eq!(page["row_count"], 0, "{page}");
+
+    assert_eq!(
+        version(&f),
+        before,
+        "the read path does not rewrite the version"
+    );
+    assert_eq!(export(&f), exported_before, "the exported rows do not move");
+    assert_eq!(exported_before.len(), 1);
+    assert_eq!(
+        exported_before[0].effective_to, None,
+        "the export keeps the stored open end"
+    );
+}
+
 /// An unknown `operation` names the tools this entry serves, so the caller
 /// can retry with `operation=query_data`.
 #[test]

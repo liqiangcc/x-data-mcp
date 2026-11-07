@@ -198,6 +198,9 @@ pub enum PriceLimitReason {
     CalendarMissing,
     NonTradingDay,
     NotListed,
+    /// 已退市：`membership = Out(AfterDelisting)`。与「从未上市」分开，答案仍是
+    /// `unknown`（#587）。
+    Delisted,
     NotAShare,
     BoardUnsupported,
     NoSeries,
@@ -221,6 +224,7 @@ impl PriceLimitReason {
             Self::CalendarMissing => "calendar_missing",
             Self::NonTradingDay => "non_trading_day",
             Self::NotListed => "not_listed",
+            Self::Delisted => "delisted",
             Self::NotAShare => "not_a_share",
             Self::BoardUnsupported => "board_unsupported",
             Self::NoSeries => "no_series",
@@ -390,6 +394,10 @@ pub fn price_limit_in(
     };
     match member.membership {
         Membership::In(_) => {}
+        Membership::Out(NotMemberReason::AfterDelisting) => {
+            answer.reason = Some(PriceLimitReason::Delisted);
+            return Ok(answer);
+        }
         Membership::Out(NotMemberReason::NotAShare) => {
             answer.reason = Some(PriceLimitReason::NotAShare);
             return Ok(answer);

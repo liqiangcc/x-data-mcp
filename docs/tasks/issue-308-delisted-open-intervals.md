@@ -136,3 +136,7 @@ SQL
   （`src/research/price_limit.rs:396` 的 `Membership::Out(_) => return Ok(answer)` 分支）。答案不变，
   只改标签，需要读契约的版本决定。
 - 本 PR 不改这两处，也不改 schema。
+
+**后续（2026-11-07）**：#587 按 owner「截断放在 query 过滤阶段」的决定实现了上述两处，口径为
+「退市日排他」（与 `member_state` 的 `Out(AfterDelisting)` 一致），决策见 D-86，读契约见
+[generic-data-v11 §5.7](../contracts/generic-data-v11.md)。

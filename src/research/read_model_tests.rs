@@ -1259,6 +1259,33 @@ fn the_established_not_tradable_and_unknown_reasons_are_unchanged() {
     );
 }
 
+/// #587: a delisted security is `unknown` + `delisted`, not `not_listed`
+/// ("never listed"). The delisting day itself is already outside the
+/// security's life — the same boundary `member_state` and the risk-warning
+/// read face use.
+#[test]
+fn price_limit_separates_delisted_from_never_listed() {
+    let fixture = Fixture::new();
+    let c = fixture.read();
+    let days = days();
+    let reason = |entity: &str, as_of: NaiveDate| {
+        super::price_limit::price_limit(&c, entity, Temporal::effective_only(as_of))
+            .unwrap()
+            .reason_code()
+    };
+    assert_ne!(
+        reason("sz.000003", days[DELIST_DAY - 1]),
+        "delisted",
+        "the day before the delisting date is still in the security's life"
+    );
+    assert_eq!(reason("sz.000003", days[DELIST_DAY]), "delisted");
+    assert_eq!(reason("sz.000003", days[DELIST_DAY + 1]), "delisted");
+    // Before the listing date, and a code the main table does not contain,
+    // keep `not_listed`.
+    assert_eq!(reason("sz.000002", days[1]), "not_listed");
+    assert_eq!(reason("sz.999999", days[0]), "not_listed");
+}
+
 /// issue-433 §5.2: one shared context answers each entity exactly as the
 /// single-entity call does, field by field (state, member, evidence, and the
 /// `temporal` counts), for every fixture witness on every day, with and
