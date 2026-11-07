@@ -315,9 +315,9 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 
 详见 [issue-433-tradability-read](../tasks/issue-433-tradability-read.md) §2、§3、§4。
 
-### 8.1 预算、延迟与内存（实测）
+### 9.1 预算、延迟与内存（实测）
 
-`research` 入口 `tools/list` 实测 **19,264 B / 17 个工具**（无 `outputSchema`），预算 19,600 B（D-82）；紧凑目录 `get_data_capabilities({})` 实测 **2,790 B**，测试上限随之为 2,800 B。测量方式与 §3 相同。
+`research` 入口 `tools/list` 实测 **19,264 B / 17 个工具**（无 `outputSchema`），预算 19,600 B（D-82）；紧凑目录 `get_data_capabilities({})` 实测 **2,790 B**，测试上限随之为 2,800 B。测量方式与 §3 相同。§8.3 里的 `research` 18,197 B 是 #582 当时的读数，本 PR 加两个工具后为 19,264 B。
 
 延迟与内存由 `data_supply::mcp::tests::probe_derived_tools_peak_heap_and_latency` 测（夹具用生产写入器构造：主表 7,400 行、停牌 72,000 行、日历 300 天、规则书）：
 
