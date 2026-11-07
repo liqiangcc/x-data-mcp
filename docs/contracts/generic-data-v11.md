@@ -1,16 +1,16 @@
 # generic-data-v11 契约（读取工具，D-75）
 
-**状态**：**代码面（未部署）**。当前部署仍是 [generic-data-v10](generic-data-v10.md) / compact schema 27（preview.45，vm2-126）。
-本文件记录 D-75（[#525](https://github.com/liqiangcc/x-data-mcp/issues/525)）在 `research` 入口新增的 10 个只读工具，以及 `tools/list` 的 schema 变化。
+**状态**：**已部署**（preview.46，2026-11-07T16:52Z 切到 vm2-126；部署版本 `generic-data-v11` / compact schema 27，`research` 入口 17 项工具）。
+本文件记录 D-75（[#525](https://github.com/liqiangcc/x-data-mcp/issues/525)）在 `research` 入口新增的 10 个只读工具、D-82（[#433](https://github.com/liqiangcc/x-data-mcp/issues/433)）的 `get_tradability`/`get_market_cap`，以及 `tools/list` 的 schema 变化。
 设计与裁决见 [issue-525-read-tools](../tasks/issue-525-read-tools.md)；工具表见 [mcp-tools](../mcp-tools.md)「读取工具」。
-部署时才翻转 Skill 钉值和 `scripts/check_current_facts.py` 的 `EXPECTED_DEPLOYED_CAPABILITY_REVISION`、`EXPECTED_SKILL_CAPABILITY_REVISION`。
+preview.46 部署时已翻转 Skill 钉值和 `scripts/check_current_facts.py` 的 `EXPECTED_DEPLOYED_CAPABILITY_REVISION`、`EXPECTED_SKILL_CAPABILITY_REVISION`。
 
 ## 1. 相对 v10 的增量
 
 | 项 | v10 | v11 |
 |---|---|---|
 | `capability_revision` | `generic-data-v10` | `generic-data-v11` |
-| data 工具数 | ops 16 / research 5 / maint 9 | ops 16 / **research 15** / maint 9 |
+| data 工具数 | ops 16 / research 5 / maint 9 | ops 16 / **research 17** / maint 9（PR-2 后 15，PR-B 加两个派生只读工具后 17） |
 | compact schema | 27 | **不变**（27，没有迁移） |
 | `query_data` 的输入与输出 | | 工具和 `get_security_history` 的读取模式不改变它（见 §4）；但同一修订里有别的 v2 变化，见 §1.1 |
 | `tools/list` 输入 schema | 根上有 `$schema`、`title` | 读 schema 去掉这两项（见 §3） |
@@ -30,7 +30,7 @@
 | 新错误码 `memory_budget_exceeded`（`isError`）：服务接近自身 cgroup 的 `memory.high` 时拒绝读取 | 可以重试或缩小查询；不是“没有数据”。游标不被消耗 | #547，[v8 §4](generic-data-v8.md) |
 | 游标池变成进程级：总 48 MiB、单连接 24 MiB 且 32 条，LRU 淘汰 | 约 5 个以上全市场读者同时翻页时，别的连接可能收到 `invalid/expired cursor`，要重新查询 | #547 |
 | `market.risk_warnings` 的 `coverage_reason` 文案，不再有过时的 `pending`/`#308` 文字 | 只是文本 | #539、#548 |
-| ETF 的 `security_master.effective_from`（D-80）：有 `listing_date` 的 class=2 行取上市日，`known_at` 仍是首次观察日；没有上市日的行不变。A 股行不变。schema 与列不变；主表 `algorithm_version` 升到 `security-master-assembly-v2`，导出 `producer` 随之变化 | `market.security_master`、`universe_intervals` 里 ETF 行的 `effective_from`/`member_from` 变早；`snapshot_id` 随之变；`known_at` 早于首次观察日的查询仍排除并计数。v10 是已部署快照，不改：v10 §1.1「这两个字段是身份观测/退市上界」按旧取值写 | [#509](https://github.com/liqiangcc/x-data-mcp/issues/509)，[M3-2 设计](../tasks/issue-509-m3-2-etf.md) §3.3 |
+| ETF 的 `security_master.effective_from`（D-80）：有 `listing_date` 的 class=2 行取上市日，`known_at` 仍是首次观察日；没有上市日的行不变。A 股行不变。schema 与列不变；主表 `algorithm_version` 升到 `security-master-assembly-v2`，导出 `producer` 随之变化 | `market.security_master`、`universe_intervals` 里 ETF 行的 `effective_from`/`member_from` 变早；`snapshot_id` 随之变；`known_at` 早于首次观察日的查询仍排除并计数。v10 是历史快照，不改：v10 §1.1「这两个字段是身份观测/退市上界」按旧取值写 | [#509](https://github.com/liqiangcc/x-data-mcp/issues/509)，[M3-2 设计](../tasks/issue-509-m3-2-etf.md) §3.3 |
 | `market.risk_warnings` 的开区间按 `security_master.delisting_date` 截断（#587）：`effective_to` 为空且证券有退市日时，返回的有效终点取退市日（排他），`effective_to` 列写截断后的值；退市日当天及之后不再返回该区间。导出、`version_id`、`snapshot_id`、schema、`tools/list` 都不变 | 已退市证券不再在退市后的日子被读成 ST；`get_security_history` 的窗口重叠也按截断后的终点判断 | [#587](https://github.com/liqiangcc/x-data-mcp/issues/587)，[D-86](../decisions.md)、§5.7 |
 | `market.risk_warnings` 的沪市生效日按 D-84 取「公告日当天或其后第一个交易日的下一个交易日」（显式标题日期优先）；实施与撤销同一规则，`known_at` 仍是公告日。无 schema 变化，无 `tools/list` 变化 | 库内 884 行沪市事件整体后移 1–2 个交易日；行内容变化使下次写入的 `version_id`/内容摘要变化；日历覆盖不到的事件暂不写行、状态 `unknown` | [#308](https://github.com/liqiangcc/x-data-mcp/issues/308)、D-84、§5.8 |
 
@@ -285,7 +285,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 
 ## 6. 未验证
 
-线上真实数据未测；本代码面未部署，`tools/list` 字节为本地实测，线上以部署后的读回为准。
+线上真实数据未测；`tools/list` 字节为部署前本地实测，preview.46 线上字节数未单独测量。
 
 ## 6. `table` 布局的行键
 
@@ -333,11 +333,11 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - **错误**（`invalid_arguments`）：`kind` 不是 `stock`/`etf`（含大小写不同、`all`、空串、非字符串），`kind=etf` 带 `industry_code`，空白 `query`，多余字段（`as_of`、`fields`、`include_delisted` 等），游标与请求不匹配。
 - **读路径**：内部过滤 `Filter::FindEtf { code, name_query }` 与 `Filter::History` 同一种做法，`serde(skip_deserializing)` 且 `schemars(skip)`，`query_data` 构造不了（`filter.kind=find_etf` 返回 `invalid_arguments`），也不改 `query_data` 的 schema。它只与 `market.security_names` + `selection.kind=market` 配对，其余组合在 `QueryPlan::new` 里报 `dataset/filter range mismatch`。搜索归一化是 `security_master::names::search_key`，增加了依赖 `unicode-normalization`（0.1，纯 Rust，带 `tinyvec`）。
 - **不变**：`market.security_names` 与 `get_security_state`/`get_security_history` 对 ETF 仍不返回 `exchange_snapshot` 行；`security_names.parquet` 不含 ETF（Q7）。
-- **未验证**：线上真实名单未测（代码面，未部署）；约 1.7 千行 ETF 的内存搜索耗时没有单独测量，每次调用读一遍主表和名称表（与 `market.security_master` 的读法相同）。
+- **未验证**：线上真实名单未测；约 1.7 千行 ETF 的内存搜索耗时没有单独测量，每次调用读一遍主表和名称表（与 `market.security_master` 的读法相同）。
 
 ## 8. `refresh_exchange_sources` 的 `tail` 改为异步（#582）
 
-**状态**：代码面（未部署）。相对 v10 只有一处行为变化，无新工具、无 schema 变化、无迁移。
+**状态**：已随 preview.46 部署。相对 v10 只有一处行为变化，无新工具、无 schema 变化、无迁移。
 
 ### 8.1 变化
 
@@ -375,7 +375,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 生产机与生产库（本任务不访问线上）；「22 分钟」这个绝对值只能按生产实测的每请求成本换算；`status_of` 不补 `revisions`/per-source 行（与 `full` 一致，需要时查库）。
 ## 9. 派生只读工具（D-82 PR-B，代码面）
 
-`research` 入口新增 `get_tradability` 和 `get_market_cap`。状态：代码面（未部署）。
+`research` 入口新增 `get_tradability` 和 `get_market_cap`。状态：已随 preview.46 部署。
 
 | 工具 | 必填 | 可选 | 数据来源 |
 |---|---|---|---|

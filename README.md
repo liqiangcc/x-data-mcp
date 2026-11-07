@@ -43,8 +43,8 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 本机以 systemd 运行已部署的 MCP 拓扑：`x-data-mcp-data` **一个进程服务三个 socket**：
 `mcp.sock` 的 `ops` 入口（编排入口，16 data tools，含只读 `get_yearly_base_years`、
 `plan_market_update`/`run_market_update` 与 `refresh_exchange_sources`，x 与日更 Skill 的连接不变）、
-`research.sock` 的 `research` 入口（只读研究面，工具数 5）、`maint.sock` 的 `maint`
-入口（本机运维，工具数 9，不经隧道）；capability revision `generic-data-v10`，
+`research.sock` 的 `research` 入口（只读研究面，工具数 17）、`maint.sock` 的 `maint`
+入口（本机运维，工具数 9，不经隧道）；capability revision `generic-data-v11`，
 文本模式 `X_DATA_MCP_TEXT_MODE=full`，market 单版本序列：version_id=内容 hex，
 latest-only。另有
 `x-data-mcp-acquire`（10 acquisition tools）。隧道指 `research.sock`（aws-node fallback
@@ -52,8 +52,8 @@ latest-only。另有
 generation 与数据量见
 [docs/STATUS.md](docs/STATUS.md)。
 已部署 schema 27（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 +
-M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027），能力修订 `generic-data-v10`（已部署）。注册
-去重后 25 项 data 工具（`research` 5 / `ops` 16 / `maint` 9，入口之和大于去重总数）；
+M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027），能力修订 `generic-data-v11`（已部署）。注册
+37 项 data 工具（`research` 17 / `ops` 16 / `maint` 9，入口之和 42 大于去重后的 37）；
 显式 `task_sqlite init` 的新库按代码的 schema 建立；工具数量不是稳定契约，客户端仍须以运行
 实例 `tools/list` 与 `get_data_capabilities` 为准。
 
@@ -102,9 +102,8 @@ unsupported-metadata fallback 仍按
 external distribution is not authorized；它不是“服务未运行”的同义词。
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
-（既有库显式 upgrade 的来源版本），已部署实例为 compact schema 25，代码的
-`COMPACT_SCHEMA_VERSION` 是 27（R2 刷新 run 记录之后，M3-2 PR-B 的 ETF 因子事实迁移 027；未部署，
-部署实例仍是 26）。Issue/Epic 中的“v15”是交付规划标签，
+（既有库显式 upgrade 的来源版本），已部署实例为 compact schema 27（2026-11-07 preview.46），
+代码的 `COMPACT_SCHEMA_VERSION` 也是 27。Issue/Epic 中的“v15”是交付规划标签，
 不是 schema 编号。
 
 **历史（2026-09 来源收敛口径，已被 [D-20](docs/decisions.md) 修订）：** 唯一目标链路：官方 base/行业文件、hsjday .day、gbbq 快照 → 本地 QFQ daily →

@@ -73,8 +73,8 @@ plan/run 大任务的进度按 `get_task_progress` 的 `unfinished` keyset 分�
   - `implementation.generation_contract_version` 必须等于 `official-generation-v1`
 - `mcp__x-data-mcp__get_data_capabilities`（按当前 schema 传 `{}`，不得附加
   `contract_version`）：
-  - `capability_revision` 必须等于 `generic-data-v10`
-    （v6 起 market 数据为单版本序列：`version_id` 为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取被取代时报 `stale_version`，写路径 stale base 为 item 级 `needs_verification`（`STALE_BASE:` 前缀），均须重取当前 head 重试，不得静默适配；v5 的 `related_tasks` 口径沿用，只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；v6 的 `generic-data-v6` 断言遇到 v7 即按下一条停止，不得静默适配。v7 新增 `plan_market_update`/`run_market_update`，日更编排见 §3。v8 只改入口/读面/任务面形状，v9 新增 `refresh_exchange_sources`（见 §3.0），两者的 A 股日更顺序与请求字节不变。v10 的增量只在本 Skill 的两处出现：`market.daily` 读面可选 `adjustment`（ETF 必须显式 `raw`，见 §4；A 股省略时与 v9 相同）、`market.daily` 的 plan/run 可选 `scope`（ETF 独立批次见 §3.3a；A 股批次不传 `scope`）。`securities.catalog` 仍只接受 `current_sh_sz_a`。）
+  - `capability_revision` 必须等于 `generic-data-v11`
+    （v6 起 market 数据为单版本序列：`version_id` 为内容 hex，`list_data_versions` 每实体至多一项；显式 pin 读取被取代时报 `stale_version`，写路径 stale base 为 item 级 `needs_verification`（`STALE_BASE:` 前缀），均须重取当前 head 重试，不得静默适配；v5 的 `related_tasks` 口径沿用，只含在途任务与最近 5 个已结束任务，另有 `related_tasks_total` / `related_tasks_truncated`；v6 的 `generic-data-v6` 断言遇到 v7 即按下一条停止，不得静默适配。v7 新增 `plan_market_update`/`run_market_update`，日更编排见 §3。v8 只改入口/读面/任务面形状，v9 新增 `refresh_exchange_sources`（见 §3.0），两者的 A 股日更顺序与请求字节不变。v10 的增量只在本 Skill 的两处出现：`market.daily` 读面可选 `adjustment`（ETF 必须显式 `raw`，见 §4；A 股省略时与 v9 相同）、`market.daily` 的 plan/run 可选 `scope`（ETF 独立批次见 §3.3a；A 股批次不传 `scope`）。`securities.catalog` 仍只接受 `current_sh_sz_a`。v11 只在 `research` 入口新增只读工具（10 个 D-75 读工具 + `get_tradability`/`get_market_cap`），A 股日更的顺序、入口与请求字节不变。）
 
 任一不匹配或缺失 → 停止，报告 `SKILL_CONTRACT_MISMATCH` 与双方实际值。无过滤
 `get_data_capabilities({})` 只用于 revision 握手：v8 起它返回紧凑目录，`schema_digest`、

@@ -28,7 +28,10 @@ EXPECTED_DATA_TOOLS = 37
 # live in the STATUS 服务 table and are checked separately for the deployed
 # instance and for the current code allowlists.
 EXPECTED_DEPLOYED_DATA_TOOLS = 16
-EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
+# Since preview.46 (2026-11-07, vm2-126) the D-75 read tools and the D-82
+# tradability tools are deployed, so the research entry serves 17 tools
+# (it was 5 through preview.45).
+EXPECTED_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 17, "maint": 9}
 EXPECTED_CODE_OPS_TOOLS = 16
 EXPECTED_CODE_ENTRY_TOOLS = {"ops": 16, "research": 17, "maint": 9}
 EXPECTED_ACQUIRE_TOOLS = 10
@@ -46,17 +49,16 @@ ENTRY_ALLOWLIST_CONST = {
     "maint": "MAINT_TOOLS",
 }
 EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v11"
-# The revision the deployed docs/contracts/Skills describe. Since preview.45
-# on vm2-126 (D-74) the deployed contract is v10. The code is ahead at v11
-# (D-75 read tools, not deployed); flip this with the Skills at the deployment
-# that ships v11.
-EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v10"
-# The strict Skills describe the DEPLOYED contract (v10 since preview.45 on
-# vm2-126, D-74). The same deployed revision keys the strict-Skill checks and
-# the stale-deployment-claim check below: the "current" regions describe the
+# The revision the deployed docs/contracts/Skills describe. Since preview.46
+# (2026-11-07 on vm2-126) the deployed contract is v11 (D-75 read tools and
+# D-82 tradability tools); code and deployment are back in sync.
+EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v11"
+# The strict Skills describe the DEPLOYED contract (v11 since preview.46 on
+# vm2-126). The same deployed revision keys the strict-Skill checks and the
+# stale-deployment-claim check below: the "current" regions describe the
 # deployed instance, not the code on main. Flip this constant together with
 # the Skills in the same commit at the next contract switch.
-EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v10"
+EXPECTED_SKILL_CAPABILITY_REVISION = "generic-data-v11"
 
 CURRENT_DOCS = {
     "README.md": "## 当前状态",

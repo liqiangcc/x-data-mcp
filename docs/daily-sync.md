@@ -14,8 +14,8 @@
   socket：`mcp.sock` 的 `ops` 入口（编排入口，16 data tools，含只读
   `get_yearly_base_years`、`plan_market_update`/`run_market_update` 与
   `refresh_exchange_sources`，x 与日更 Skill 的连接不变）、`research.sock` 的 `research` 入口
-  （只读研究面，工具数 5）、`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
-  capability revision `generic-data-v10`（market 单版本序列：version_id=内容 hex，latest-only），
+  （只读研究面，工具数 17）、`maint.sock` 的 `maint` 入口（本机运维，工具数 9，不经隧道）；
+  capability revision `generic-data-v11`（market 单版本序列：version_id=内容 hex，latest-only），
   文本模式 `full`；strict Skill 会话遇 revision 不匹配即停止。日更 Skill 仍连 `mcp.sock`；
   隧道自 2026-11-02 起在 aws-node fallback 上连 `research.sock`（只读研究面）；
   2026-11-05 起日更和主数据生产机是 vm2-126（无 tunnel，D-74），aws-node 冻结为 fallback。
@@ -33,10 +33,10 @@ M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 涨跌停规则原文未接入时仍按 `pending_source` 记录、`trading_rules` 写 0 行。因此日更成功后，M2 数据集的新鲜度与日线同步，
 不需要单独跑任务（详见 [STATUS](STATUS.md)「数据」段的 M2 数据集行）。
 
-已部署实例为 fresh compact schema 27（2026-11-05 preview.45 on vm2-126，D-74；aws-node
+已部署实例为 fresh compact schema 27（2026-11-07 preview.46 on vm2-126，D-74；aws-node
 fallback 为 schema 26；M1 的 schema 22 +
 M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027），三个入口合计
-去重后注册 25 项 data 工具；
+去重后注册 37 项 data 工具（`research` 17 / `ops` 16 / `maint` 9）；
 显式 init 的新库按代码的 schema 建立；`SCHEMA_VERSION=18` 仅为 legacy
 upgrade source schema（既有库升级来源），不是当前部署 schema。
 

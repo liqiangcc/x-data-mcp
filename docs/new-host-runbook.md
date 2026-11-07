@@ -206,6 +206,15 @@ export XDM_TUNNEL_SERVICE=xdm-tunnel-stub.service
    发布的主表带 ETF 行才有成员。
 10. **读回验收**：四个入口 `tools/list` 的工具数和 `get_data_capabilities` 的 `capability_revision` 与 [STATUS](STATUS.md) 一致；
     `source_store replay --scope all --verify-only` 见 §6（`all` 含 `suspensions` 和 `risk_warnings`：主表或日历还没建时它们是 `not_ready`，整次状态为对应的 `*_replay_not_ready`；`risk_warnings` 的 `drift_cause=inputs_changed` 表示日历在写入后推进过；`suspensions` 的 `drift_cause=inputs_changed` 表示库内 bar 日、日历或主表在停牌表写入之后变过，日更重算后应转 `match`）；`task_sqlite check <库>` 通过；`PRAGMA quick_check` 为 `ok`。
+
+    **服务在线时不要直接对生产库跑 `source_store replay --db`。** `--db` 走 `MarketBackend::open` →
+    `DatabaseLease::acquire`，对库文件取排他 flock；`x-data-mcp-data` 正在持锁，命令会以
+    `database_unavailable: … database service already active or lock unavailable` 失败。部署后核对要用
+    **只读一致性快照**（`python3` 的 `sqlite3` 以 `file:…?mode=ro` + `PRAGMA query_only=ON` 打开生产库，
+    `backup()` 到私有临时路径，再对该副本跑 `--verify-only`；副本要 `chmod 600`，用完删除）或停服窗口；
+    不带 `--db` 的 `--verify-only` 只输出 `rebuilt=computed_no_db`，没有比较对象。
+    D-84 R2 上线后到**第一次日更之前**，`risk_warnings` 的 `drift_cause=rows_changed` 是预期（884 行沪市
+    主键整体后移 1–2 个交易日），不是页序回归；同主键 sha 差异（#533）要等日更重写后再确认。
 11. **第一次日更前**：把仓库 `git pull` 到与部署版本匹配的提交。日更 Skill 钉着 `capability_revision`，仓库和运行时不一致会以
     `SKILL_CONTRACT_MISMATCH` 停下（fail-closed，不写坏数据）。日更 agent 的启动方式见 [daily-sync](daily-sync.md)。
 
@@ -229,12 +238,13 @@ export XDM_TUNNEL_SERVICE=xdm-tunnel-stub.service
 ## 6. 已知的预期读数
 
 下面这些在上次迁移和之后的核对里都出现过，原因已查明，不要当故障处理。条件是**原因和范围都对得上**；对不上就是新问题。
+本节所有 `--verify-only` 读数都在只读库快照上得到；服务在线时 `--db` 取不到库租约（见 §4 第 10 步）。
 
 | 读数 | 在哪看到 | 原因 | 什么时候不再是预期 |
 |---|---|---|---|
 | `sh.688827` 缺成员 | 第 5 步那一批 `partially_failed`，错误 `INVALID_MARKET_COMMAND: member absent`；plan 里 `absent=1`、`eligible` 比 catalog 少 1 | 目录里有，官方 `hsjday.zip` 里没有这个成员（2026-11-05 在新旧两代都缺） | 失败实体不止它，或错误不是 `member absent`。官方补上成员后会自己消失 |
 | 86 只 ETF 没有日线 | ETF 首采后 `absent_count`；主表 `security_master` 的 ETF 行比有日线的序列多 | 沪市 526 / 551 / 589 号段在 `hsjday` 里没有成员 | 缺的代码落在这些号段之外；比 86 多出来的先看是不是当天新上市（迁移当天 `sz.158081` 就是，87 只，次日官方 generation 里有了） |
-| `risk_warnings` 的 `replay --verify-only` 报 `drift` | `source_store replay --scope all --verify-only` 中仅 `risk_warnings` 为 `drift`，其余五个 scope 为 `ok` / `match` | 先看 `drift_cause`：`inputs_changed` 表示日历在写入后推进过（D-84），日更重算后应转 `match`；`rows_changed` 才是页序或来源变化。2026-11-05 的旧问题是页序，只有 105 行沪市记录的 `source_document_sha256` 不同 | 其他 scope 也 drift，或 `rows_changed` 无法由重算消除。修复由代码任务处理，见 [决策记录](decisions.md) 和 [STATUS](STATUS.md) |
+| `risk_warnings` 的 `replay --verify-only` 报 `drift` | `source_store replay --scope all --verify-only` 中仅 `risk_warnings` 为 `drift`，其余五个 scope 为 `ok` / `match` | 先看 `drift_cause`。**D-84 R2 上线后到第一次日更前**：沪市 884 行主键整体后移 1–2 个交易日，20 条抽样全是同一 code/状态下起点或终点日期的成对移动，此时 `rows_changed` 是预期。`inputs_changed` 表示日历在写入后推进过，日更重算后应转 `match`。同主键只有 `source_document_sha256` 不同的旧问题（105/884 行）是 #533 的页序差异，要等日更重写后再确认 | 第一次日更后仍 `rows_changed` 且不是 R2 平移；或其他 scope 也 drift |
 
 和旧机比对（可选）：`known_at` 的逐日分布（`security_name_history`、`risk_warning_intervals`）应与旧机一致，旧行不变，新增行只来自新快照；
 `market_series` 的差异只应落在已知的 `REVISION_UNVERIFIED` 实体和新上市实体上。导出 `market_series` 做比较时 `content_digest` 是 BLOB，

@@ -74,7 +74,7 @@ SQLite 文档尚在独立 PR，使用固定链接避免主分支缺文件。合�
 
 | 能力 | 基线事实 | 目标 / 依赖 |
 |---|---|---|
-| MCP | 双 server：data socket 单进程三入口——`ops` 16 data tools（已部署，`generic-data-v10`）、`research`（只读研究面，工具数 5）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道指 `research` 的 `research.sock`（aws-node fallback，2026-11-02 起，Ops-D；vm2-126 无 tunnel，D-74） | 稳定契约与真实客户端验收 |
+| MCP | 双 server：data socket 单进程三入口——`ops` 16 data tools（已部署，`generic-data-v11`）、`research`（只读研究面，工具数 17）、`maint`（本机运维，工具数 9）；acquisition socket 10 acquisition tools，stdio/socket + `mcp_connect` IPC；隧道指 `research` 的 `research.sock`（aws-node fallback，2026-11-02 起，Ops-D；vm2-126 无 tunnel，D-74） | 稳定契约与真实客户端验收 |
 | 任务 | SQLite 持久受理/取消/重试/核实、后台独立 worker 生命周期 | 无已知功能缺口 |
 | 行情 | SQLite fresh compact schema 27（已部署）、逐行行情、单版本序列 + 追加式事件日志 | 性能 gate 裁决 |
 | 原始 .day | 解析、单位/币种证据与官方快照绑定已验收 | 每代重新建立证据 |
@@ -235,7 +235,7 @@ SQLite 原子受理、发布及文件先落盘规则由专项设计定义。一�
 首期仍由用户/Skill 显式发起采集或更新，不加定时调度。长期服务的 background worker 自动执行已受理任务；
 `run_worker_once` 仅为 operator/debug 能力，并通过同一 WorkerGate 与后台执行互斥，正常 AI 编排不得调用。
 
-**工具面按使用者分入口（v8 起，已部署；v9 沿用）**：同一份读取核心上有三个入口——研究（只读 5 个工具）、
+**工具面按使用者分入口（v8 起，已部署；v9–v11 沿用）**：同一份读取核心上有三个入口——研究（只读 17 个工具）、
 编排（日更：16 个工具，含 `refresh_exchange_sources`）、运维/取证（9 个工具），各自一个本机 socket；
 隧道只暴露研究入口（`research.sock`，2026-11-02 起），`mcp.sock` 保留为编排入口。入口是 Adapter 的过滤，不是权限系统，也不拥有业务规则：同一工具在
 不同入口的输出逐字节相同；入口外工具报“未知工具”而不是“禁止”，不泄露存在性。

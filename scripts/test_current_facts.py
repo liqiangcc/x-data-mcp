@@ -125,14 +125,14 @@ class RealDocs(unittest.TestCase):
 
 
 REGION_SCHEMA = 24
-REGION_REVISION = "generic-data-v10"
+REGION_REVISION = "generic-data-v11"
 # Current regions and STATUS state DEPLOYED facts; the registry may be ahead
-# while a code-only contract exists. Since preview.45 on vm2-126 (2026-11-05,
-# D-74) the v10 surface is deployed: the ops entry serves 16 tools, the
-# registry registers 25 across three entries, and deployed == code for the
-# entry counts.
+# while a code-only contract exists. Since preview.46 on vm2-126 (2026-11-07)
+# the v11 surface is deployed: the ops entry serves 16 tools and the research
+# entry 17, the registry registers 37 across three entries, and deployed ==
+# code for the entry counts.
 REGION_DATA_TOOLS = 16
-REGION_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 5, "maint": 9}
+REGION_DEPLOYED_ENTRY_TOOLS = {"ops": 16, "research": 17, "maint": 9}
 REGION_CODE_DATA_TOOLS = 37
 REGION_CODE_ENTRY_TOOLS = {"ops": 16, "research": 17, "maint": 9}
 REGION_ACQUIRE_TOOLS = 10
@@ -195,7 +195,7 @@ class StaleCurrentRegions(unittest.TestCase):
         text = (
             "`capability_revision`：`generic-data-v6` → `generic-data-v7`。\n"
             "`related_tasks` 有界；capability 升到 `generic-data-v5`，Skill 同步更新。\n"
-            "当前部署已是 `generic-data-v10`（自 preview.45 起）。\n"
+            "当前部署已是 `generic-data-v11`（自 preview.46 起）。\n"
         )
         self.assertEqual(region_claims(text), [])
 
@@ -379,7 +379,7 @@ class ContractSnapshots(unittest.TestCase):
             return cf.contract_snapshot_claims(
                 text,
                 schema,
-                REGION_REVISION,
+                cf.EXPECTED_DEPLOYED_CAPABILITY_REVISION,
                 REGION_DATA_TOOLS,
                 REGION_ACQUIRE_TOOLS,
                 code_data_tools=REGION_CODE_DATA_TOOLS,
@@ -537,10 +537,10 @@ class StatusConsistency(unittest.TestCase):
             "| `run/mcp.sock` | 16 |",
             "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
             "（`--entry research`）、`run/maint.sock`（`--entry maint`） "
-            "| 16 / 5 / 9 |",
+            "| 16 / 17 / 9 |",
         )
         self.assertEqual(status_claims(multi), [])
-        wrong = multi.replace("| 16 / 5 / 9 |", "| 16 / 6 / 9 |")
+        wrong = multi.replace("| 16 / 17 / 9 |", "| 16 / 6 / 9 |")
         self.assertEqual(rules(status_claims(wrong)), ["status-service-tool-count"])
         unknown = multi.replace("`--entry maint`", "`--entry devops`")
         self.assertEqual(rules(status_claims(unknown)), ["status-service-entry"])
@@ -583,11 +583,11 @@ class StatusConsistency(unittest.TestCase):
             "| `run/mcp.sock` | 16 |",
             "| `run/mcp.sock`（`--entry ops`）、`run/research.sock`"
             "（`--entry research`）、`run/maint.sock`（`--entry maint`） "
-            "| 16 / 5 / 9 |",
+            "| 16 / 17 / 9 |",
         )
         self.assertEqual(status_claims(multi), [])
-        # 17 matches neither the deployed instance nor the registry.
-        wrong = multi.replace("| 16 / 5 / 9 |", "| 17 / 5 / 9 |")
+        # 5 matches neither the deployed instance nor the registry.
+        wrong = multi.replace("| 16 / 17 / 9 |", "| 16 / 5 / 9 |")
         self.assertEqual(rules(status_claims(wrong)), ["status-service-tool-count"])
 
     def test_code_revision_may_be_ahead_in_a_code_sentence(self):

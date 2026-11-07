@@ -18,13 +18,13 @@
 3. **按用途现在能做什么、哪些结论不可靠**（§4），以及怎么读、有哪些读取上限（§5）。
 
 本文不复述字段 schema：wire 形状由运行时 `get_data_capabilities` 返回，契约增量见
-[generic-data-v10](contracts/generic-data-v10.md)（早期契约见 v7/v8/v9）。本文写的是**语义与证据**，不是协议定义。
+[generic-data-v11](contracts/generic-data-v11.md)（早期契约见 v7/v8/v9/v10）。本文写的是**语义与证据**，不是协议定义。
 
 ### 1.2 权威入口
 
 | 内容 | 权威入口 |
 |---|---|
-| 工具清单、输入输出 schema、调用示例 | 运行时 `get_data_capabilities`（`src/data_supply/registry.rs` 的 `entries()`）；[generic-data-v10](contracts/generic-data-v10.md) |
+| 工具清单、输入输出 schema、调用示例 | 运行时 `get_data_capabilities`（`src/data_supply/registry.rs` 的 `entries()`）；[generic-data-v11](contracts/generic-data-v11.md) |
 | 实体数、日期范围、部署版本、generation、新鲜度 | [STATUS](STATUS.md)（唯一权威；本文只链接） |
 | 单版本存储、`version_id`、事件日志、年线 stale 分类 | [latest-only-storage](latest-only-storage.md) |
 | `.day` 字段、单位与 `r7_raw` 语义 | [day-file](day-file.md)、`evidence/issue-240-r7-analysis/README.md`、`evidence/issue-239-day-volume-amount/README.md` |
@@ -92,7 +92,7 @@
 | 涨跌停规则全部是数据 | 满足（已部署） | 27 行价格规则 + 2 行最小变动单位，改规则不改代码 | §3.2 #12；`src/research/price_limit/tests.rs` |
 | 沪深主板、深创业板 2020-08-24 前无 `normal` | **部分满足** | **沪市**仍是 `unknown`：写入器不写 `normal`，没有 ST 区间的日子状态是 `unknown`，沪市主板的 ST 与非 ST 幅度不同（5% 对 10%），所以派生返回 `unknown`；沪市闭世界不成立（GP29 比对 2004–2024 召回 69.1%），不写 `normal`。**深市**闭世界已实现（下一行），代码已合并未部署；部署前线上仍全部 `unknown` | 审计 §2.3；备忘录 T3；`tasks/gp29-compare-20261106.md` |
 | 深市风险警示闭世界（写 `normal`） | 代码已合并，未部署（D-81） | 深市在简称表覆盖范围内、简称链连续、无 ST/*ST 区间、无 PT/退标记、不在冲突后间隙、主表有该代码且未过退市日的日子写 `normal`；沪市/北交所不写。R1/R4/R5 已合并（#569），闭世界本身见 #578。已知盲区：140 个带 ST 区间的已退市代码不在 GP29 包里，无法验证；22/1,729 个「历史/身份缺口」在 `known_at` 过滤下不可见；5 个区间起点晚 1–2 个交易日 | D-81；#569；#578；备忘录 §1；`tasks/gp29-compare-20261106.md` §5 |
-| 沪市生效日规则 R2 | 代码已合并，未部署（D-84） | 无显式生效日时，生效日 = 公告当日或其后第一个交易日的下一个交易日；实施与撤销同一规则；档位 `OWNER_RISK_ACCEPTED`（规则推断，不是公告原文）。`source_store replay --scope risk_warnings` 读 `--db` 的交易日历；fresh init 无日历时该 scope 为 `not_ready`（`all` 仍退出 0），日历未覆盖的公告行延后写入。`risk-warnings-v8` / `risk-warnings-v5`，`inputs_digest` 记录日历输入 | D-84 R2；[取证摘要](tasks/rigorous-gaps-decisions.md) §11 R2；`tasks/gp29-compare-20261106.md`；`tasks/revoke-effective-20261106.md`；[generic-data-v11 §5.8](contracts/generic-data-v11.md) |
+| 沪市生效日规则 R2 | 已部署（preview.46，2026-11-07；D-84） | 无显式生效日时，生效日 = 公告当日或其后第一个交易日的下一个交易日；实施与撤销同一规则；档位 `OWNER_RISK_ACCEPTED`（规则推断，不是公告原文）。`source_store replay --scope risk_warnings` 读 `--db` 的交易日历；fresh init 无日历时该 scope 为 `not_ready`（`all` 仍退出 0），日历未覆盖的公告行延后写入。`risk-warnings-v8` / `risk-warnings-v5`，`inputs_digest` 记录日历输入 | D-84 R2；[取证摘要](tasks/rigorous-gaps-decisions.md) §11 R2；`tasks/gp29-compare-20261106.md`；`tasks/revoke-effective-20261106.md`；[generic-data-v11 §5.8](contracts/generic-data-v11.md) |
 | 配股除权日涨跌停基准 | **未满足** | 配股（C4>0）返回 `unknown` + `ex_rights_unverified`（公式准确率约61%） | D-84；审计 §2.3；备忘录 T4 |
 | `limit-v2` 2010-09-14 之前官方基准 | 满足（代码已合并未部署） | 2010-09-14 前，当日 bar 的 r7_raw 非 0 且非哨兵/手标记时用官方除权基准价（分） | D-84；#573 |
 | `limit-v2` 2010-09-14 起用公式 | **未满足** | 2010-09-14 起或 r7_raw=0/哨兵时用 gbbq::reference_price；档位 `OWNER_RISK_ACCEPTED`，只经过证伪检验（越界 0.115%），没有官方基准 | D-84；#573；备忘录 T4 |

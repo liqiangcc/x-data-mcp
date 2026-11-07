@@ -5,12 +5,12 @@
 设计任务 [#75](https://github.com/liqiangcc/x-data-mcp/issues/75)；
 [整体设计](design.md)维护架构与业务流程。
 当前部署为双 MCP server：一个 `data_service` 进程服务三个 socket——`mcp.sock` 的 `ops` 入口
-16 data tools（部署面 capability revision 为 `generic-data-v10`；含只读
+16 data tools（部署面 capability revision 为 `generic-data-v11`；含只读
 `get_yearly_base_years`、`plan_market_update`/`run_market_update` 与 `refresh_exchange_sources`，
 文本模式 `full`，market 单版本序列：version_id=内容 hex，latest-only），`research.sock` 的 `research` 入口
-（只读研究面，工具数 5）、`maint.sock` 的 `maint` 入口（仅本机运维使用，不经隧道，工具数 9）；
+（只读研究面，工具数 17）、`maint.sock` 的 `maint` 入口（仅本机运维使用，不经隧道，工具数 9）；
 acquire socket 提供 10 acquisition tools；隧道指 `research.sock`（aws-node fallback 上 2026-11-02 起；vm2-126 生产机无 tunnel，D-74）。
-注册 25 data tools（三个入口；`ops` 16）；已部署实例为 compact schema 27（M1 的 schema 22 +
+注册 37 data tools（三个入口；`ops` 16 / `research` 17 / `maint` 9）；已部署实例为 compact schema 27（M1 的 schema 22 +
 M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027）。
 `market.daily` 前复权价的精度随 schema 22 起的 `qfq-exact-v1` 为**最多 6 位小数**
 （精确有理数链、末次一次舍入，尾随零不补）；部署已到 schema 27，不再有 schema 21 的
@@ -316,11 +316,10 @@ v7 增量（历史记录，代码已实现、部署日随二进制切换生效�
 
 此前逐类别工具、共享结果和组合探索已移到 [历史草案](history/mcp-tools-proposals.md)，仅供追溯，不据此额外注册工具。当前兼容差距与首个任务验收统一见实施基线。
 
-## 读取工具（代码面，未部署）
+## 读取工具（preview.46 已部署）
 
 D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `research` 入口新增窄输入的只读工具（PR-1 的 7 个，PR-1b 再加 `get_security_state`、`get_security_events`，PR-2 再加 `get_security_history`，共 10 个）。
-**状态：代码面（未部署）。** 已部署实例仍是上文所述的 5 个 `research` 工具；这 10 个工具随后续 preview 发布后才出现在 `tools/list`。
-代码的 `capability_revision` 已是 `generic-data-v11`（契约见 [generic-data-v11](contracts/generic-data-v11.md)），部署面仍是 v10。设计与裁决见 [issue-525-read-tools](tasks/issue-525-read-tools.md)。
+**状态：已部署（preview.46，2026-11-07）。** 这 10 个工具已在 `research` 入口的 `tools/list` 里（线上实测 17 个工具）；部署面 `capability_revision` 为 `generic-data-v11`（契约见 [generic-data-v11](contracts/generic-data-v11.md)）。设计与裁决见 [issue-525-read-tools](tasks/issue-525-read-tools.md)。
 `ops`、`maint` 入口不变。
 
 每个工具把窄输入转成现有 `query_data` 的 v2 查询（`latest_per_entity`），由同一条读路径做校验、完整性检查和列式投影，
@@ -368,17 +367,16 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `researc
 此前它用 `chrono::Local::now()`，随主机时区变化：vm2-126 是上海时区、aws-node 是 UTC，UTC 16:00–24:00 之间两台机器的默认 `as_of` 会差一天。
 `query_data` 的事实类数据集不传 `as_of` 时同样受益。
 
-`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：18,094 B（15 个工具），CI 预算 18,600 B（owner 批准，D-75）；
+`research` 入口 `tools/list` 的实测大小（代码面，无 `outputSchema`）：19,264 B（17 个工具，D-82 PR-B 实测），CI 预算 19,600 B（owner 批准，D-82）；preview.46 线上字节数本轮未单独测量；
 每个工具描述不超过 240 B。PR-2 起读工具的输入 schema 去掉根上的 `$schema` 和 `title`（约 80 B/工具），所以 `ops` 实测 29,872 B（预算 30,800）、`maint` 13,195 B（预算 14,500）也比之前小；
 工具清单不变。字节数和测量方式见 [generic-data-v11](contracts/generic-data-v11.md) §3。
 
 本批未包含：`screen_market` 暂不做（D-78：能写脚本的 pi 用 codemode 筛选；#295 保持开放，出现不能写脚本的客户端需求时再提）。
 
-## 派生只读工具（代码面，未部署）
+## 派生只读工具（preview.46 已部署）
 
 D-82 / [#433](https://github.com/liqiangcc/x-data-mcp/issues/433) PR-B：`research` 入口新增 `get_tradability` 和 `get_market_cap`，薄封装 research 层的 `tradability`、`price_limit` 和 `market_cap` 函数。
-**状态：代码面（未部署）。** 随后续 preview 发布后才出现在 `tools/list`。
-代码的 `capability_revision` 已是 `generic-data-v11`（契约见 [generic-data-v11](contracts/generic-data-v11.md)），部署面仍是 v10。设计与裁决见 [issue-433-tradability-read](tasks/issue-433-tradability-read.md)。
+**状态：已部署（preview.46，2026-11-07）。** 这两个工具已在 `research` 入口的 `tools/list` 里；部署面 `capability_revision` 为 `generic-data-v11`（契约见 [generic-data-v11](contracts/generic-data-v11.md)）。设计与裁决见 [issue-433-tradability-read](tasks/issue-433-tradability-read.md)。
 
 两个工具接受 `securities`（1..100）、可选 `as_of`（默认最近交易日），不接受 `known_at`（输入表无知晓时间），不分页。
 响应为 `layout=table`，每个请求的实体一行，包括不在主表、不是 A 股的代码（不静默丢行）；

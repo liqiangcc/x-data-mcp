@@ -7,19 +7,24 @@
 每次部署、迁移或 generation 激活后，执行者在同一个 PR 内更新本文件。
 
 **两台主机（D-74，2026-11-05 owner 裁定）**：日更和主数据的生产机是 **vm2-126**
-（preview.45，schema 27，`generic-data-v10`，无 tunnel）；**aws-node** 保留 tunnel 与
+（preview.46，schema 27，`generic-data-v11`，无 tunnel）；**aws-node** 保留 tunnel 与
 fallback（preview.43，schema 26，`generic-data-v9`，数据冻结、不再跑日更），客户端仍连
 aws-node。vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
 
-最后核实：2026-11-05（vm2-126 preview.45/schema 27/`generic-data-v10` 上线为日更与主数据
-生产机，并于同日 08:40:27Z 完成**第一次生产跨代日更**，最新集中行情日 2026-11-05；
-aws-node preview.43/schema 26/`generic-data-v9` 冻结为 fallback，数据停在 2026-11-04；D-74）。
+最后核实：2026-11-07（vm2-126 preview.46 部署后的只读验收：版本/单元/内存档位/导出预检/读面冒烟
+通过，`research` 入口实测 17 项工具、capability `generic-data-v11`；`risk_warnings` 的 replay drift
+是 D-84 R2 的日期平移，不是 #533 回归；XDM-198。更早的 2026-11-05 部署与第一次生产跨代日更读数
+保留在「数据」段）。
 
-**preview.46 待部署（2026-11-07）**：owner 2026-11-07 批准按推荐发布；本 PR 只做版本号与文档，
-未打 tag、未发 release、未部署。生产事实仍是 preview.45（见下），部署后再在同一 PR 更新本文件。
-推荐内存上限随 preview.46 部署生效：约 7.6 GiB 机器 `MemoryHigh=1G`/`MemoryMax=1536M`/`MemorySwapMax=0`；
-约 1.9 GiB 机器 `448M`/`640M`/`256M`（未实测，低置信）。`MemorySwapMax=0` 时超过 `MemoryMax`
-会被 cgroup OOM 杀掉 data 服务，不是只拒绝读取。
+**preview.46 已部署（2026-11-07T16:52Z）**：vm2-126 已切到 `v0.2.0-preview.46` /
+`c35b425f727fa74ad2cca0f6c9c683213e256b21`（switch 报告
+`/opt/x-data-mcp-preview/reports/preview46-switch-20261107T165152Z.json`：`status=PASS`、
+`rollback_outcome=not_needed`、`previous_release=f6de633d…`）。内存上限生效值
+`MemoryHigh=1G`（1,073,741,824 B）/`MemoryMax=1536M`（1,610,612,736 B）/`MemorySwapMax=0`
+（`systemctl show` 读回），启动日志：
+`read memory budget: refuses new reads above 870 MiB (85% of the cgroup limit 1024 MiB:
+memory.high 1024 MiB, memory.max 1536 MiB)`。`MemorySwapMax=0` 时超过 `MemoryMax`
+会被 cgroup OOM 杀掉 data 服务，不是只拒绝读取；1.9 GiB 机器的档位（`448M`/`640M`/`256M`）仍未实测。
 
 本轮实测来源：
 
@@ -32,6 +37,10 @@ aws-node preview.43/schema 26/`generic-data-v9` 冻结为 fallback，数据停�
   `c642468f…`（2026-11-05T08:40:27Z）、各任务结果与 write-loop、热 generation、
   `market_series`/`series_bars`/库体积/`/opt` 体积，见「数据」段的 vm2 表与
   「2026-11-05 vm2 第一次生产日更」小节；任务记录与查询在仓库外，owner 未复核这些数字。
+- XDM-198 报告（UTC 2026-11-07T16:52–17:05Z，vm2-126 只读验收，报告在仓库外）：preview.46 的版本/单元/
+  内存档位、`source_store replay --verify-only` 对库快照的比较、`export_research --dry-run` 预检与读面冒烟。
+  部署本身来自 `reports/preview46-switch-20261107T165152Z.json`（`status=PASS`）；该报告与本节
+  标为「XDM-198」的行是本轮新增事实。
 - 2026-11-05 vm2 单次实测（preview.45、同代数据、非生产日更样本）：首采/年线/日更形态/
   ETF 批次的 write-loop 与资源读数，全文见 [SLO](SLO.md) 备注。
 - 历史来源（aws-node preview.43 时期，2026-11-02 实测）：
@@ -66,9 +75,9 @@ preview.40 及更早的实测值保留为「历史」对照；本轮未重新测
 | 项 | vm2-126（日更和主数据） | aws-node（fallback + tunnel） |
 |---|---|---|
 | 角色 | 生产：日更与主数据 | fallback 与 tunnel/客户端入口；数据冻结、不再跑日更 |
-| 版本 | `v0.2.0-preview.45`，git_sha `f6de633dffcd04467fd790463291f301223adc72` | 历史（冻结）：`v0.2.0-preview.43`，git_sha `c0ae29500b56a754a5f2d3304b8584f551b94a89` |
-| schema / capability | schema 27 / `generic-data-v10` | 历史（冻结）：schema 26 / `generic-data-v9` |
-| active generation | `c642468f85e29dce79fe4460bda6a8d1175ef60be3c0afd2520cb1c75e7544d6`（2026-11-05T08:40:27Z 激活，上一代 `4c17de16…`）；最新行情日 2026-11-05 | `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；数据停在 2026-11-04 |
+| 版本 | `v0.2.0-preview.46`，git_sha `c35b425f727fa74ad2cca0f6c9c683213e256b21` | 历史（冻结）：`v0.2.0-preview.43`，git_sha `c0ae29500b56a754a5f2d3304b8584f551b94a89` |
+| schema / capability | schema 27 / `generic-data-v11` | 历史（冻结）：schema 26 / `generic-data-v9` |
+| active generation | `2731a664…`（导出预检标为 active/最新代；完整 sha、激活时间与上一代本轮未列出）；最新行情日本轮未列出 | `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；数据停在 2026-11-04 |
 | tunnel | 无（客户端连不到 vm2） | tunnel/data/acquire 三单元仍 active；客户端仍连这里，看不到 ETF 与 11-05 之后的数据 |
 | 到期 | 试用机，约 2027-01-04 到期，到期前要定去向 | — |
 
@@ -78,15 +87,31 @@ preview.40 及更早的实测值保留为「历史」对照；本轮未重新测
 |---|---|---|
 | 主机 | vm2-126（试用机，约 2027-01-04 到期，到期前要定去向；D-74） | owner 2026-11-05 裁定 |
 | 系统/资源 | Ubuntu 24.04.4，kernel 6.8.0-101-generic；2 vCPU AMD EPYC 9754，约 7.6 GiB；时区 Asia/Shanghai，systemd 单元用 `TZ=UTC` | Claude 2026-11-05 只读核实 |
-| 部署版本 | `v0.2.0-preview.45`，二进制 `git_sha f6de633dffcd04467fd790463291f301223adc72` | 同上 |
-| 部署时间 | **2026-11-05T04:18:42→04:18:48Z**，`deploy_phase_g.sh`（报告 `w1-deploy-b` → `reports/preview45-phaseg-deployment.json`）；首次尝试 `FAILED_AT_install_release`（`releases/` 目录缺失，改动发生前失败，`rollback: not_needed`） | 同上 |
-| 数据库 schema | 已部署：schema 27（026 = R2 的 `source_refresh_runs`/成员表与快照索引主键 `(snapshot_id, request_fingerprint)`，027 = M3-2 PR-B 把 `adjustment_events.category` 扩到 1/11 并加逐行 `basis_status`）；库 `state/preview.sqlite` 部署时 **2,124,046,336 B**（第一次生产日更后 2,216,542,208 B，见「数据」段），WAL 当时为 0（已 checkpoint），S2–S12 峰值 16 MiB | 同上、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION` |
-| 构建 | `rustc 1.99.1`，`x86_64-unknown-linux-gnu`，features `export`，`production NOT_PRODUCTION_READY`（`current/manifest.json`） | 同上 |
-| 部署目录 | `/opt/x-data-mcp-preview` 部署时 **3.8 GB**（第一次生产日更后 `/opt` 为 4.5 GB，见「数据」段） | 同上 |
-| 回滚点 | vm2 只有 `f6de633` 一个 release；客户端本来就连 aws-node，vm2 出问题时 aws-node 的 preview.43 继续服务（数据停在 11-04） | 同上 + D-74 |
+| 部署版本 | `v0.2.0-preview.46`，二进制 `git_sha c35b425f727fa74ad2cca0f6c9c683213e256b21` | XDM-198 |
+| 部署时间 | **2026-11-07T16:52Z**（switch 报告窗口 16:51:52→16:52:32Z），`scripts/switch_binary.sh v0.2.0-preview.46 c35b425… --execute`：`status=PASS`、`rollback_outcome=not_needed`、`previous_release=f6de633d…`、P/S1–S7 全 PASS（S2 私有 smoke 32,771 ms，S6 就绪探针 data 三 socket） | `reports/preview46-switch-20261107T165152Z.json`、XDM-198 |
+| 数据库 schema | 已部署：schema 27（026 = R2 的 `source_refresh_runs`/成员表与快照索引主键 `(snapshot_id, request_fingerprint)`，027 = M3-2 PR-B 把 `adjustment_events.category` 扩到 1/11 并加逐行 `basis_status`）；库 `state/preview.sqlite` **2,313,494,528 B**（2026-11-07 只读快照），WAL 当时 0 B | XDM-198、`src/sqlite_tasks.rs` 的 `COMPACT_SCHEMA_VERSION` |
+| cgroup 内存 | data 单元 `MemoryHigh=1G`（1,073,741,824 B）/`MemoryMax=1536M`（1,610,612,736 B）/`MemorySwapMax=0`；启动日志 `read memory budget: refuses new reads above 870 MiB (85% of the cgroup limit 1024 MiB: memory.high 1024 MiB, memory.max 1536 MiB)`。acquire 单元本轮读回三个值都是 `infinity`（本任务只要求核 data 的三个值） | XDM-198 |
+| 构建 | 本轮未列出（preview.45 为 rustc 1.99.1 / `x86_64-unknown-linux-gnu`，历史）；features `export`、`production NOT_PRODUCTION_READY` 未重读 | — |
+| 部署目录 | 本轮未列出（11-05 部署后 3.8 GB，历史） | — |
+| 回滚点 | switch 报告的 `previous_release=f6de633d…`（preview.45）保留；同 schema 27，回滚只需换回二进制（`releases/` 目录清单本轮未核对）。客户端本来就连 aws-node，vm2 出问题时 aws-node 的 preview.43 继续服务（数据停在 11-04） | XDM-198、D-74 |
 | 迁移 | 来源库、generations、`acquire.sqlite`、行业快照目录从 aws-node 克隆；行情库在 vm2 上 fresh init（schema 27），再由 replay 和首采重建；aws-node 的库原地保留 | Claude 2026-11-05 只读核实 |
-| capability | S9 读回 `capability_revision=generic-data-v10` | 同上 |
+| capability | `get_data_capabilities` 读回 `capability_revision=generic-data-v11`、`production_ready=false`、`items=16` | XDM-198 |
 | production_ready | `false`：owner 个人研究、本地使用，未授权对外分发（#71） | `current/manifest.json` 的 `production: NOT_PRODUCTION_READY` |
+
+### 2026-11-07 preview.46 部署后只读验收（XDM-198）
+
+来源为 XDM-198 报告（执行时间 UTC 2026-11-07T16:52–17:05Z，只读；报告在仓库外）。`source_store replay`
+的 `--db` 路径会对库文件取排他 flock（`database lease`），服务在线时不能直接对生产库跑，本轮的比较
+是在库的只读一致性快照上做的（见[新机器部署手册](new-host-runbook.md) §4/§6）。
+
+| 项 | 结果 |
+|---|---|
+| 版本与单元 | `0.2.0-preview.46` / `c35b425…`；data、acquire 均 `active`/`running`；data 的三项 cgroup 上限见上表「cgroup 内存」行 |
+| 只读重放 | exchange `match`（5,882）；security_names `drift`（ETF 名称 1,720 行尚未入库，预期）；suspensions `drift`/`inputs_changed`（预期）；risk_warnings `drift`/`rows_changed`（20/20 条为主键日期 +1–2 个交易日，D-84 R2；见「已知问题」） |
+| 导出预检 | `export_research --dry-run`：`snapshot_id=snapshot-d6280a707ea1b079472eb81c884b2489`、`schema=x-data-mcp.research-snapshot.v5`、`coverage.delisted_series=337`、catalog `catalog-1793852554590130457`（5,225 成员）、14 files planned / 0 written |
+| 能力与工具 | ops 16 / research 17 / maint 9 / acquire 10；`capability_revision=generic-data-v11`、`production_ready=false`、`items=16` |
+| 读面冒烟 | `sh.600000` 7 根 bar；`sh.510050` 不带 `adjustment` → `adjustment_required_for_etf`，`raw` → 7 根 bar，`qfq` → `adjustment_unavailable`（fail-closed） |
+| 未验证 | #533 的同主键 sha 差异（被 D-84 R2 的日期平移掩盖，需 11-09 日更后重跑）；suspensions 的 14 条行级 drift 未逐条归因；acquire 的 cgroup 内存；最新集中行情日与 `series_bars` 本轮未列出 |
 
 ### aws-node 明细（fallback + tunnel；preview.43 冻结，不再跑日更）
 
@@ -204,7 +229,7 @@ PR-6/8/10/12 与 A-1/A-2、A-3、S-6 已把大部分 `pending_source` 接上，�
 | `market.security_master` | 日更 run 的 `derived:security_master` item（TDX `base.dbf` + `infoharbor_spec.cfg` + `gbbq`，再叠加 A-1/A-2 交易所名单） | **5,565** 行；`listed_ever` 去重实体 **5,564**；`listing_date` unknown 0（`listing_source` exchange_list 5,559 / tdx_ssdate 6）；`delisting_date` 有值 **337**（来源全 `exchange_list`）；`listing_conflict` 2 / `delisting_conflict` 15；`issuer_resolution` code_date 5,564 / ambiguous 1；退市原因分类仍全 `unknown`（未接入）；`duplicates_collapsed` 2 组（`000020`、`200020`） |
 | `market.capital_events` | 日线提交的同事务写入（`gbbq` 非 cat1 类别）；全量采集与日更都走这条路径 | **128,338** 行 / 5,558 实体；`category` 2: 4,497、3: 3,741、5: 112,063、7: 18、8: 146、9: 7,569、10: 304 |
 | `market.suspensions` | 日更 run 的 `derived:suspensions` item（A-3 停复牌公告） | **70,626** 段（2026-11-02 重建 run）；历史（preview.41）：79,442 段 = `confirmed` 20,420 + `unresolved_gap` 59,022，另有 4 条 `deferred_beyond_calendar`，耗时 1,839,810 ms |
-| `market.risk_warnings` | 日更 run 的 `derived:risk_warnings` item（#308 历史 ST 写入器） | **1,289 行**（2026-11-02 fresh init 的 `source_store replay --scope risk_warnings` 写入，全部 `known_at=2026-11-01`；SSE 覆盖只到 2000Q1），已登记 `derived_dataset_versions`。**D-68** 分类修复已上线（aws-node 历史）：preview.43 只换二进制（2026-11-02T10:48Z；解析器 `risk-warnings-v5`），11-03 日更首次发布沪市区间（D-68 普查预计区间 884 行、`SameDay*` 冲突 0）；线上读面仍是重放写入的 1,289 行，待 11-03 日更替换。历史：`derived:risk_warnings` 自 preview.42 首次 `full` 起 fail-closed（`sh.600734` 2022-01-29 的 `SameDayActionConflict`，旧规则把预审计说明误判为实施，由 D-68 修复）；第 1 代日更 0 行、`source_invalid: page_count is 0`（#485/#489 随 preview.41 部署） |
+| `market.risk_warnings` | 日更 run 的 `derived:risk_warnings` item（#308 历史 ST 写入器） | **2,174 行**（2026-11-07 只读快照：沪 **884** `exchange_announcement` + 深 **1,290** `szse_name_history`）；`derived_dataset_versions` 的 `risk_warnings` 登记写于 **2026-11-06T09:36:32Z**（preview.45 日更），部署后尚无日更重写该表。**D-68** 分类修复已上线；preview.46 起 **D-84 R2** 把沪市事件生效日改为「公告日当天或其后第一个交易日的下一个交易日」（实施与撤销同规则）。历史：2026-11-02 fresh init 的 `source_store replay --scope risk_warnings` 写入 1,289 行（全部 `known_at=2026-11-01`，SSE 覆盖只到 2000Q1）；`derived:risk_warnings` 自 preview.42 首次 `full` 起 fail-closed（`sh.600734` 2022-01-29 的 `SameDayActionConflict`，旧规则把预审计说明误判为实施，由 D-68 修复）；第 1 代日更 0 行、`source_invalid: page_count is 0`（#485/#489 随 preview.41 部署） |
 | `market.price_limit_rules` | 日更 run 的 `derived:trading_rules` item | **27** 行（`sh`/`sz` 主板、创业板、科创板；`basis_status` 全 `verified`，最早生效日 9,846）+ `min_tick_rules` **2** 行（交易所成对，`verified`） |
 | `market.security_names` | 日更 run 的 `derived:security_names` item（S-6，D-61：仅深交所 `SSGSGMXX`/`tab2` 准入） | **7,344** 行：`interval` 4,261 / `unbounded` 3,083；覆盖窗口 3、`not_observed` 窗口 2；沪市/北交所仍 `NOT_AVAILABLE`；耗时 377,444 ms |
 
@@ -240,7 +265,7 @@ PR-6/8/10/12 与 A-1/A-2、A-3、S-6 已把大部分 `pending_source` 接上，�
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
-| `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 16 / 5 / 9 | capability `generic-data-v10`（ops 16 / research 5 / maint 9 / acquire 10；S9 读回 `generic-data-v10`，Claude 2026-11-05 只读核实；drop-in 与 socket 布局沿用 preview.38 起的单进程三 socket 形态，逐项配置本轮未核实） |
+| `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 16 / 17 / 9 | capability `generic-data-v11`（ops 16 / research 17 / maint 9 / acquire 10；XDM-198 2026-11-07 只读探针，`get_data_capabilities` 读回 `generic-data-v11`；drop-in 与 socket 布局沿用 preview.38 起的单进程三 socket 形态，逐项配置本轮未核实） |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 同上 |
 | `x-data-mcp-tunnel` | — | — | — | **无 tunnel**（D-74：tunnel 暂留 aws-node，客户端连不到 vm2） |
 
@@ -273,39 +298,40 @@ this interval)`（XDM-143 的出站最小间隔）。三个 systemd 单元本轮
 `exec-start.conf` 里并以 `--poll-ms 1000` 结尾（`scripts/data_unit_layout.py` 原样保留尾部参数）。
 回滚步骤见 [v8 切换清单](contracts/v8-switch-checklist.md) §9.7。
 
-工具数与能力版本的 live 只读复核（2026-11-02T06:0xZ，preview.42）：`ops`→`plan_market_update` **16**
-（`tools/list` **30,159 B**）、`research`→`query_data` **5**、`maint`→`compute_metrics` **9**、acquire **10**
-（部署脚本的逐 socket 探针与随后的手工 `tools/list` 一致）。隧道已改连 `research.sock`（Ops-D 已执行），
-启动摘要的 `mcp_target_value` 与 `wait_service_ready.py … --entry research` 都读回 research 面。
-`get_data_capabilities({})` 的 `capability_revision=**generic-data-v9**`、`production_ready=false`。
+工具数与能力版本的 live 只读复核（2026-11-07，preview.46，XDM-198）：`ops` **16**、`research` **17**、
+`maint` **9**、acquire **10**（只读探针的 `initialize` → `tools/list`，不建任务、不写状态）；
+`get_data_capabilities({})` 的 `capability_revision=**generic-data-v11**`、`production_ready=false`。
+preview.46 线上 `tools/list` 字节数本轮未单独测量（代码面 `research` 入口 17 项工具为 19,264 B，
+见 [mcp-tools](mcp-tools.md)）。隧道仍只在 aws-node 上连 `research.sock`（Ops-D 已执行）。
 
-代码（main）注册 37 data tools（含 D-75 的 10 个只读工具与 D-82 的 `get_tradability`/`get_market_cap`，research 入口 17，未部署）：三个入口 `research`/`ops`/`maint` 由
+代码（main）注册 37 data tools（含 D-75 的 10 个只读工具与 D-82 的 `get_tradability`/`get_market_cap`，research 入口 17，已随 preview.46 部署）：三个入口 `research`/`ops`/`maint` 由
 `data_service --entry` 选择，`mcp.sock` 继续作编排入口，`tools/list` 不再内联
 `outputSchema`。preview.38 起生产同时部署三个入口（单进程三 socket，见「服务」表）；
 隧道改指 `research.sock`（Ops-D）已于 2026-11-02 preview.42 部署窗口执行（见「服务」表）；Ops-C 已由 AI 客户端（pi）实测（2026-10-28），
 结论是 `summary` 不能作为 `ops`/`maint` 缺省。代码（PR #447）已按 D-36 的
 「实测不通过就退回」把所有入口的文本模式缺省改为 `full`，`summary` 只作显式选项；
-当前生产仍靠上表的 `X_DATA_MCP_TEXT_MODE=full` 覆盖，代码缺省改动**待随下个 release
-部署**（drop-in 是否删除属部署事项），见
+当前生产仍靠上表的 `X_DATA_MCP_TEXT_MODE=full` 覆盖；代码缺省改动在 main 上（PR #447），
+preview.46 是否已改用代码缺省、drop-in 是否删除属部署事项，本轮未核实，见
 [v8 切换清单](contracts/v8-switch-checklist.md) §2.3 与 §9.6。
 
 ## 数据
 
 ### vm2-126（当前生产：日更和主数据）
 
-Claude 2026-11-05 只读核实（查询与日志在仓库外；本表为第一次生产日更跑完后的读数）：
+XDM-198 2026-11-07 只读验收（查询与报告在仓库外）；标「历史」的行是 2026-11-05 第一次生产日更后的读数：
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| active generation | `c642468f85e29dce79fe4460bda6a8d1175ef60be3c0afd2520cb1c75e7544d6`（2026-11-05T08:40:27Z 激活，上一代 `4c17de16…`，激活请求 `daily-20261105-xdm-accept-bg95dq-activate`）；最新集中行情日 **2026-11-05** | Claude 2026-11-05 只读核实 |
-| 热 generation | **4/6**：1 active（`c642468f…`）+ 3 superseded（`5ac3ef2b…`、`f41c8935…`、`4c17de16…`）；`evidence_only` 17。`5ac3ef2b…` 没被自动退役：`derived_facts_missing`，原因是 vm2 的库是 fresh init，缺这个旧代的派生事实。已知、在观察：按保留规则（`RETAINED_SUPERSEDED=2`）最多稳定在 5/6，不会撞上 6 的上限 | 同上 + `generations/acquire.sqlite`（按 `state` 计数）、`src/acquire/service.rs:40,44` |
-| `market_series` | A 股 **16,348** 条（5,562 实体）、指数 **9** 条、ETF **1,760** 条 | 同上 |
-| `series_bars` | **37,831,020** 行 | 同上 |
-| 数据库 | `state/preview.sqlite` **2,216,542,208 B**（schema 27；WAL 本轮未单独列出） | 同上 |
-| 部署目录 | `/opt` **4.5 GB**（11-05 部署后为 3.8 GB，日更后增长） | 同上 |
-| ETF 缺口 | `security_master` **1,846** 行，**128** 个退市日（沪 82、深 46，部署后读数）；**86** 只无日线：沪市 526/551/589 段（`hsjday` 无成员）；`sz.158081`（2026-11-05 上市）已首采，1 根 bar。A 股 `sh.688827` 仍缺成员 | 同上 |
-| 第一次生产日更 | 见下节「2026-11-05 vm2 第一次生产日更」 | 同上 |
-| catalog / 年线 / 日线明细 / 官方输入 / 内存分项 | 本轮未列出 | — |
+| active generation | `2731a664…`（导出预检的 `generations` 标为 active/最新代；完整 sha、激活时间与上一代本轮未列出）；最新集中行情日本轮未列出 | XDM-198 |
+| 热 generation | **4/6**（**历史**：2026-11-05 时点，1 active `c642468f…` + 3 superseded；2026-11-07 验收未重测）；`evidence_only` 17。`5ac3ef2b…` 没被自动退役：`derived_facts_missing`，原因是 vm2 的库是 fresh init，缺这个旧代的派生事实。按保留规则（`RETAINED_SUPERSEDED=2`）最多稳定在 5/6 | 历史 + `generations/acquire.sqlite`、`src/acquire/service.rs:40,44` |
+| `market_series` | **18,118** 条（2026-11-07 只读快照） | XDM-198 |
+| `series_bars` | 本轮未列出（11-05 为 37,831,020 行，历史） | — |
+| 数据库 | `state/preview.sqlite` **2,313,494,528 B**（schema 27；WAL 0 B） | XDM-198 |
+| 部署目录 | 本轮未列出（11-05 部署后 3.8 GB、日更后 4.5 GB，历史） | — |
+| catalog | `catalog-1793852554590130457`，**5,225** 个成员（导出预检读回） | XDM-198 |
+| ETF 缺口 | 本轮未列出（11-05 读数：主表 1,846 行 ETF、128 个退市日、86 只无日线，历史） | — |
+| 第一次生产日更 | 见下节「2026-11-05 vm2 第一次生产日更」（历史） | 同上 |
+| 年线 / 日线明细 / 官方输入 / 内存分项 | 本轮未列出 | — |
 
 ### 2026-11-05 vm2 第一次生产日更（跨代）
 
@@ -450,8 +476,8 @@ Skill 在有更新日的路径仍未完整验证
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| 最新集中行情日 | **2026-11-05**（active generation `c642468f…`，2026-11-05T08:40:27Z 激活；第一次生产日更） | Claude 2026-11-05 只读核实 |
-| 数据规模 | `market_series` A 股 16,348 条（5,562 实体）+ 指数 9 + ETF 1,760；`series_bars` 37,831,020 行 | 同上 |
+| 最新集中行情日 | 本轮未列出（11-05 为 2026-11-05，历史） | — |
+| 数据规模 | `market_series` **18,118** 条（2026-11-07 只读快照）；`series_bars` 本轮未列出 | XDM-198 |
 | 官方输入 / 任务计数 / 落后交易日明细 | 本轮未单独列出 | — |
 
 ### aws-node（fallback；冻结时点 2026-11-05 实测 + 2026-11-01/02 历史实测）
@@ -484,8 +510,8 @@ Skill 在有更新日的路径仍未完整验证
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| `/opt` | **4.5 GB**（11-05 部署后 3.8 GB；第一次生产日更后） | Claude 2026-11-05 只读核实 |
-| 数据库 | `state/preview.sqlite` **2,216,542,208 B**（schema 27；11-05 部署后为 2,124,046,336 B）；WAL 本轮未单独列出 | 同上 |
+| 数据库 | `state/preview.sqlite` **2,313,494,528 B**（schema 27；2026-11-07 只读快照，WAL 0 B） | XDM-198 |
+| `/opt` | 本轮未列出（11-05 部署后 3.8 GB、日更后 4.5 GB，历史） | — |
 | generations / releases / reports / 内存分项 | 本轮未单独列出 | — |
 
 ### aws-node（fallback；2026-11-01/02 实测，非冻结时点）
@@ -502,7 +528,7 @@ Skill 在有更新日的路径仍未完整验证
 
 ## 进行中
 
-- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**2026-11-05 起日更和主数据生产机换成 vm2-126（D-74，preview.45/schema 27/`generic-data-v10`，无 tunnel），aws-node 的 preview.43 冻结为 fallback**；D-63 的连续 3 次生产跨代日更计数**从 0 重新开始**（aws-node 上 11-02 那 1 次不带过来），从 vm2 第一次生产跨代日更算起，D-69 计数规则不变、也只算生产日更。**2026-11-05 vm2 第一次生产跨代日更已完成：G1 write-loop 175.3 s（D-63 计数 1/3），年线 write-loop 127.9 s（D-69 计数 1/3），细节见「数据」段与 [SLO](SLO.md)。****生产自 preview.38 起是单进程三 socket（`mcp.sock`/`research.sock`/`maint.sock`，见「服务」表），preview.40 与 preview.41 沿用同一形状**；第 1 代日更（XDM-139）是 preview.40 下的首个全量实测，但不作门禁证据（非独占，见「数据」段）。详见 [SLO](SLO.md) 备注与
+- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**2026-11-05 起日更和主数据生产机换成 vm2-126（D-74，preview.45/schema 27/`generic-data-v10`，无 tunnel；2026-11-07 起 preview.46/`generic-data-v11`），aws-node 的 preview.43 冻结为 fallback**；D-63 的连续 3 次生产跨代日更计数**从 0 重新开始**（aws-node 上 11-02 那 1 次不带过来），从 vm2 第一次生产跨代日更算起，D-69 计数规则不变、也只算生产日更。**2026-11-05 vm2 第一次生产跨代日更已完成：G1 write-loop 175.3 s（D-63 计数 1/3），年线 write-loop 127.9 s（D-69 计数 1/3），细节见「数据」段与 [SLO](SLO.md)。****生产自 preview.38 起是单进程三 socket（`mcp.sock`/`research.sock`/`maint.sock`，见「服务」表），preview.40 与 preview.41 沿用同一形状**；第 1 代日更（XDM-139）是 preview.40 下的首个全量实测，但不作门禁证据（非独占，见「数据」段）。详见 [SLO](SLO.md) 备注与
   [DECISIONS](decisions.md) D-52/D-57/D-63/D-69/D-74。
 - **GOAL-008 性能**：PR #323 已于 2026-10-11 squash 合并（`8a446b1`），发布 v0.2.0-preview.31，2026-10-12 部署。
   - 全市场验收（XP-015，perf `3b11231`，aws 私有栈，浅链，53 批，trace-OFF，每负载单次）：年线首次 310.6s、日线跨代 Append 104.2s（合成截断夹具）、年线重聚合 328.3s、日线同代 NoChange 78.0s，write-loop 均 <600s，读回全部 PASS（见 [SLO](SLO.md)）。第三类「保留的真实 mixed Append/Full/fail-closed」**未运行**（retained gen-1 字节永久不可得）；`AGENTS.md` 记载的离线 harness 结果仅作旁证，不作替代。
@@ -515,7 +541,8 @@ Skill 在有更新日的路径仍未完整验证
 
 | 问题 | 影响 | 来源 |
 |---|---|---|
-| `source_store replay --verify-only` 的 `risk_warnings` 报 `drift`（vm2-126）：已查明只有 **105** 行沪市记录的 `source_document_sha256` 不同（`known_at`、日期、状态、事实都相同）；原因是同一公告出现在多个查询页时 replay 与日更派生的页顺序不同：事件按 `(公告 id, 动作, 状态)` 去重、先到的页胜出，日更按标题过滤器（`plans()` 顺序）→ 窗口起点 → 页号读取，replay 按请求指纹文本排序（`END_DATE`、`START_DATE`、`TITLE`），同一公告被记到不同的页。aws-node 上这 884 行沪市记录与 vm2 逐字段相同，所以不是搬迁造成的；**代码已修，待发布**：replay 改用日更的页顺序（`BulletinOrder`），日更路径与已发布行的 `source_document_sha256` 不变；`row_drift` 现在也报主键相同、字段不同的行（前 20 条）；发布后在 vm2-126 重跑 `replay --verify-only` 确认 `match` | `replay --verify-only` 的 risk_warnings 校验报 drift，属已知派生顺序差异，不是数据损坏；`replay`（非 verify）会把这 105 行改写为日更引用的快照，发布前不要在生产库上跑 | Claude 2026-11-05 只读核实 |
+| `source_store replay --verify-only` 的 `risk_warnings` 报 `drift`（vm2-126，**#533**）：**preview.46 已部署**（2026-11-07T16:52Z，`c35b425`）。**D-84 R2 使 884 行沪市主键整体后移，部署后第一次日更前 `replay` 报 `rows_changed` 属预期**：2026-11-07 验收的 20/20 条 drift 都是主键日期 +1–2 个交易日的成对条目（沪 884 行：98 行起点、143 行闭合终点落在非交易日，191 个开区间），没有一条是同主键 sha 差异。#533 的**同主键 `source_document_sha256` 差异**（旧观测 105/884 行）被这次日期平移掩盖，本轮无法确认，**要在 11-09 日更后重跑确认**（用只读快照；服务在线时 `--db` 取不到库租约）。历史：replay 与日更的公告页顺序不同（replay 按请求指纹文本排序，日更按标题过滤器 → 窗口起点 → 页号），代码已改用日更页顺序（`BulletinOrder`） | 不是数据损坏；日更前不要在生产库上跑写模式 `replay`（会把 884 行改成新规则的值） | XDM-198、Claude 2026-11-05 只读核实 |
+| **#308**（沪市风险警示写入器 `derived:risk_warnings`）：保持 **open**；与 #533 同一确认条件——**2026-11-09 日更后**在只读快照上重跑 `source_store replay --verify-only`，确认 884 行沪市区间的生效日与同主键 sha 一致 | 部署后第一次日更前不关闭；日更未跑前不能判断 D-84 R2 平移与 #533 是否都正确 | XDM-198 |
 | 只换二进制（不再每次全新 init）的部署：启动 registry sweep 的耗时随历史任务线性增长（推断），10-23 时已超过 `x-data-mcp-tunnel` 当时 10 秒的就绪等待（`wait-data-service.py`；现为 120s）。两个实测点：**2026-10-23 主机重启后（preview.34，574 个任务，冷 page cache）31.5s**；**2026-10-24T17:25Z preview.35 切换（579 个任务，热 page cache）13.5s**。两点无法区分「任务数」与「缓存冷热」的贡献（推断：后者影响更大），因此「线性增长」本身未得到证实，需专门测量。10-23 那次是首次 `ExecStartPre`（当时 deadline 10s）失败后靠 `Restart=always` 重试成功；10-24T16:56:58Z 起该 deadline 已改为 120s，17:25 切换时一次等到 socket（13.5s），空窗来自 `RestartSec=10` 加就绪时间。缓解（只 sweep 最近 N 天、先开 socket 后台 sweep）会改变「sweep 失败即拒绝启动」的语义，需另行批准。schema 21 的启动检查已改为逐 series 索引点查（S2b F3，不再 loose-scan） | 每次重启/切换首轮必失败，多花一个 `RestartSec`；若重试也失败则长时间不可用 | `journalctl -u x-data-mcp-data/-tunnel`、`stat run/mcp.sock`、`reports/preview35-switch-20261024.json`（`readiness_probe.data_elapsed_ms=13461`） |
 | tunnel 启动竞态与重启把 data 拉起（仓库脚本已修，tunnel unit 仍用 /opt 旁路脚本）：2026-10-23 06:49 那次是 `wait-data-service.py` 的 10s deadline 短于 31.5s 冷启动，首轮 `ExecStartPre` 失败、靠 `Restart=always` 在 10s 后重试成功；`/opt` 内该脚本已于 2026-10-24T16:56:58Z 把 deadline 改为 120s。**2026-11-01 实测的新一面**：tunnel 的 drop-in 带 `Wants=`/`After=x-data-mcp-data.service`，只停 data+acquire 的窗口里 systemd 10 s 后重启 tunnel，并把 data 拉起（10:22:19Z），导致正在跑的 replay 报 `database service already active`；该窗口已改为三单元全停重跑（XDM-159）。仓库脚本的停/起顺序与回滚路径已改为先停 tunnel、最后起它（XDM-160），但**运维文档的窗口步骤必须同步**，不要只按旧文档停 data+acquire。历史：#370（`8e83f22`，2026-10-24 合入 main）新增 `scripts/wait_service_ready.py`，两个部署脚本已调用；tunnel 的 `ExecStartPre` 仍调 `/opt` 上的 `wait-data-service.py`（不在仓库、不受版本控制，D-17 只部分落地） | 重启/切换时的隧道空窗由 `RestartSec=10` + 就绪时间决定；只停两个单元的 >10s 窗口会被 tunnel 重启破解（包括写库任务）；若单元连续失败触到 `StartLimitBurst=5`，会停在 `failed` 需人工介入（未实测，推断） | `journalctl -u x-data-mcp-tunnel`（10-22、10-23、10-24、11-01）、XDM-159 报告、`grep deadline /opt/x-data-mcp-preview/wait-data-service.py`、`systemctl show -p ExecStart --value x-data-mcp-tunnel`、PR #370 |
 | 报告覆盖不均：preview.33 / preview.34 没有报告；preview.35 的是切换后人工整理的（7 条 check 名称、无逐项证据）。自 #296 P1-3 起 `switch_binary.sh --execute` 写机器报告（`--report`，默认 `reports/<short-tag>-switch-<UTC>.json`，含 P 与 S1–S7 逐项 `{step,status,elapsed_ms,evidence}`、探针 JSON 与回滚结果）。本轮已看到该机制生效：preview.40 窗口的 `…003800Z.json` 记了 `status: FAILED` / `failed_at: S2` / `rollback_outcome: not_needed`，重跑的 `…003814Z.json` 全 PASS；preview.39 的 phase-g 报告也是机器产出（含 `archived_db`） | preview.33/34 的 S1–S6 逐项结果永久不可复核，只能引用可观测结果（链接 mtime、单元 uptime、live version）；以后每次切换都有逐项报告 | `ls -l reports/`、`cat reports/preview40-switch-*.json`、`scripts/switch_binary.sh`、`scripts/test_switch_binary.py` |
