@@ -511,459 +511,75 @@ impl DataApi {
         })
     }
 
-    /// D-82: derived tools call research functions and assemble table responses.
+    /// D-82: derived read-only tools. The whole call runs in one
+    /// `market.read` transaction, so every entity in the batch sees the same
+    /// snapshot, and the shared [`super::read_limits::ReadBudget`] admits the
+    /// call before any table is decoded.
     fn derived_tool(
         &self,
         tool: super::read_tools::ReadTool,
         input: Value,
     ) -> Result<Value, super::Error> {
-        use super::read_tools::ReadTool;
+        use super::read_tools::{
+            MarketCapInput, ReadTool, TradabilityInput, decode, reject_indices, validate_securities,
+        };
+
+        // The tool layer speaks `ApiError`; this handler reports through the
+        // read path's `Error` so the dispatch mapping (invalid_arguments,
+        // integrity_error, memory_budget_exceeded) stays in one place.
+        let invalid = |e: ApiError| Error::Invalid(e.message);
+        super::read_tools::reject_known_at(&input).map_err(invalid)?;
+        let as_of = |explicit: Option<chrono::NaiveDate>| match explicit {
+            Some(day) => Ok(day),
+            None => {
+                use super::query::ReadRepository as _;
+                self.queries
+                    .repository
+                    .last_trading_day_upto(super::query::today())
+            }
+        };
+
         match tool {
-            ReadTool::Tradability => self.get_tradability(input),
-            ReadTool::MarketCap => self.get_market_cap(input),
+            ReadTool::Tradability => {
+                let args: TradabilityInput = decode(input).map_err(invalid)?;
+                validate_securities(&args.securities).map_err(invalid)?;
+                reject_indices(&args.securities).map_err(invalid)?;
+                let as_of = as_of(args.as_of)?;
+                // The shared context decodes about 90k rows once for the whole
+                // batch; the reservation covers that decode plus the response.
+                let _permit = self
+                    .queries
+                    .reserve_derived(super::derived_tools::READ_RESERVE)?;
+                self.queries
+                    .repository
+                    .market
+                    .read(|c| super::derived_tools::tradability(c, &args.securities, as_of))
+            }
+            ReadTool::MarketCap => {
+                let args: MarketCapInput = decode(input).map_err(invalid)?;
+                validate_securities(&args.securities).map_err(invalid)?;
+                reject_indices(&args.securities).map_err(invalid)?;
+                let as_of = as_of(args.as_of)?;
+                let scope = match args.scope {
+                    super::read_tools::MarketCapScope::FloatA => {
+                        crate::research::market_cap::ShareScope::FloatA
+                    }
+                    super::read_tools::MarketCapScope::CompanyTotal => {
+                        crate::research::market_cap::ShareScope::CompanyTotal
+                    }
+                    super::read_tools::MarketCapScope::AShareTotal => {
+                        crate::research::market_cap::ShareScope::AShareTotal
+                    }
+                };
+                let _permit = self
+                    .queries
+                    .reserve_derived(super::derived_tools::READ_RESERVE)?;
+                self.queries.repository.market.read(|c| {
+                    super::derived_tools::market_cap_table(c, &args.securities, as_of, scope)
+                })
+            }
             _ => unreachable!("only Tradability and MarketCap use Handler::Derived"),
         }
-    }
-
-    fn get_tradability(&self, input: Value) -> Result<Value, super::Error> {
-        use super::read_tools::{TradabilityInput, decode, reject_indices};
-        use crate::research::context::ResearchContext;
-        use crate::research::temporal::Temporal;
-
-        // Check for known_at before decoding
-        if let Value::Object(ref obj) = input
-            && obj.contains_key("known_at")
-        {
-            return Err(super::Error::Invalid(
-                "known_at is not accepted: A-share inputs lack known_at columns. \
-                 Use get_security_state for facts with known_at."
-                    .to_string(),
-            ));
-        }
-
-        let args: TradabilityInput =
-            decode(input.clone()).map_err(|e| super::Error::Invalid(e.message.clone()))?;
-
-        reject_indices(&args.securities)
-            .map_err(|e| super::Error::Invalid(e.message.clone()))?;
-
-        let as_of = match args.as_of {
-            Some(day) => day,
-            None => {
-                use super::query::ReadRepository as _;
-                self.queries
-                    .repository
-                    .last_trading_day_upto(super::query::today())?
-            }
-        };
-
-        // Read in a transaction
-        let answer = self.queries.repository.market.read(|c| {
-            let ctx = ResearchContext::new(c);
-            let temporal = Temporal {
-                as_of,
-                known_at: None,
-            };
-
-            // Check required input datasets are registered
-            use crate::sqlite_market::derived;
-            let suspensions_version = derived::read_version(
-                c,
-                crate::security_master::suspensions::DATASET_KIND,
-                crate::security_master::suspensions::DATASET_KEY,
-            )?;
-            if suspensions_version.is_none() {
-                // G8: suspensions dataset never written
-                return Ok(self.assemble_tradability_unknown(
-                    &args.securities,
-                    as_of,
-                    "input_absent",
-                    "suspensions dataset not registered",
-                ));
-            }
-
-            let mut states = Vec::new();
-            let mut reasons = Vec::new();
-            let mut suspensions_col = Vec::new();
-            let mut flags = Vec::new();
-            let mut limit_states = Vec::new();
-            let mut limit_reasons = Vec::new();
-            let mut limit_candidates = Vec::new();
-            let mut risk_statuses = Vec::new();
-            let mut limit_ups = Vec::new();
-            let mut limit_downs = Vec::new();
-            let mut prev_closes = Vec::new();
-            let mut prev_close_days = Vec::new();
-            let mut rule_ids = Vec::new();
-
-            for entity in &args.securities {
-                let entity_str = entity.symbol();
-
-                // Call research functions
-                let trad_report =
-                    crate::research::tradability::tradability_in(&ctx, &entity_str, temporal)
-                        .map_err(|e| match e {
-                            crate::research::Error::Integrity(s) => super::Error::Integrity(s),
-                            e => crate::market_storage::Error::Storage(e.to_string()),
-                        })?;
-                let limit_report =
-                    crate::research::price_limit::price_limit_in(&ctx, &entity_str, temporal)
-                        .map_err(|e| match e {
-                            crate::research::Error::Integrity(s) => super::Error::Integrity(s),
-                            e => crate::market_storage::Error::Storage(e.to_string()),
-                        })?;
-
-                states.push(Value::String(trad_report.reason_code().to_string()));
-                reasons.push(Value::String(trad_report.reason_code().to_string()));
-
-                // suspension column
-                if let Some(ref susp) = trad_report.suspension {
-                    suspensions_col.push(Value::String(format!(
-                        "{} {}..{}",
-                        susp.certainty.as_str(),
-                        susp.start_day,
-                        susp.end_day
-                    )));
-                } else {
-                    suspensions_col.push(Value::Null);
-                }
-
-                flags.push(Value::Null);
-
-                // Price limit fields
-                limit_states.push(Value::String(limit_report.reason_code().to_string()));
-                limit_reasons.push(Value::String(limit_report.reason_code().to_string()));
-
-                // Candidates
-                if limit_report.candidates.is_empty() {
-                    limit_candidates.push(Value::Null);
-                } else {
-                    let cands: Vec<String> = limit_report
-                        .candidates
-                        .iter()
-                        .map(|c| match c.band_bp {
-                            Some(bp) => format!("{}bp", bp),
-                            None => "unbounded".to_string(),
-                        })
-                        .collect();
-                    limit_candidates.push(Value::String(cands.join("|")));
-                }
-
-                // Risk status
-                if let Some(ref status) = limit_report.status_class {
-                    risk_statuses.push(Value::String(format!("{:?}", status).to_lowercase()));
-                } else {
-                    risk_statuses.push(Value::String("unknown".to_string()));
-                }
-
-                // Limit prices
-                if let (Some(up), Some(scale)) =
-                    (limit_report.limit_up_units, limit_report.price_scale)
-                {
-                    limit_ups.push(Value::String(format_price(up, scale)));
-                } else {
-                    limit_ups.push(Value::Null);
-                }
-
-                if let (Some(down), Some(scale)) =
-                    (limit_report.limit_down_units, limit_report.price_scale)
-                {
-                    limit_downs.push(Value::String(format_price(down, scale)));
-                } else {
-                    limit_downs.push(Value::Null);
-                }
-
-                // Previous close
-                if let (Some(close), Some(scale)) =
-                    (limit_report.prev_close_units, limit_report.price_scale)
-                {
-                    prev_closes.push(Value::String(format_price(close, scale)));
-                } else {
-                    prev_closes.push(Value::Null);
-                }
-
-                if let Some(day) = limit_report.prev_close_day {
-                    prev_close_days.push(Value::String(day.to_string()));
-                } else {
-                    prev_close_days.push(Value::Null);
-                }
-
-                if let Some(ref rule_id) = limit_report.rule_id {
-                    rule_ids.push(Value::String(rule_id.clone()));
-                } else {
-                    rule_ids.push(Value::Null);
-                }
-            }
-
-            // Collect input versions
-            let inputs: Vec<Value> = Vec::new();
-            // TODO: collect actual input dataset versions
-
-            let datasets_without_known_at =
-                vec!["security_master", "suspensions", "trading_calendar"];
-
-            Ok(serde_json::json!({
-                "tool": "get_tradability",
-                "layout": "table",
-                "snapshot_time": chrono::Utc::now().to_rfc3339(),
-                "as_of": as_of.to_string(),
-                "entities": args.securities.iter().map(|e| e.symbol()).collect::<Vec<_>>(),
-                "columns": {
-                    "state": states,
-                    "reason": reasons,
-                    "suspension": suspensions_col,
-                    "flags": flags,
-                    "limit_state": limit_states,
-                    "limit_reason": limit_reasons,
-                    "limit_candidates": limit_candidates,
-                    "risk_status": risk_statuses,
-                    "limit_up": limit_ups,
-                    "limit_down": limit_downs,
-                    "prev_close": prev_closes,
-                    "prev_close_day": prev_close_days,
-                    "rule_id": rule_ids,
-                },
-                "inputs": inputs,
-                "algorithm_versions": {
-                    "tradability": "tradability-v1",
-                    "price_limit": "limit-v1",
-                },
-                "limitations": [],
-                "temporal": {
-                    "as_of": as_of.to_string(),
-                    "known_at": Value::Null,
-                    "datasets_without_known_at": datasets_without_known_at,
-                },
-            }))
-        })?;
-
-        Ok(answer)
-    }
-
-    fn assemble_tradability_unknown(
-        &self,
-        securities: &[super::wire::Security],
-        as_of: chrono::NaiveDate,
-        reason: &str,
-        _message: &str,
-    ) -> Value {
-        let count = securities.len();
-        serde_json::json!({
-            "tool": "get_tradability",
-            "layout": "table",
-            "snapshot_time": chrono::Utc::now().to_rfc3339(),
-            "as_of": as_of.to_string(),
-            "entities": securities.iter().map(|e| e.symbol()).collect::<Vec<_>>(),
-            "columns": {
-                "state": vec![Value::String("unknown".to_string()); count],
-                "reason": vec![Value::String(reason.to_string()); count],
-                "suspension": vec![Value::Null; count],
-                "flags": vec![Value::Null; count],
-                "limit_state": vec![Value::String("unknown".to_string()); count],
-                "limit_reason": vec![Value::String(reason.to_string()); count],
-                "limit_candidates": vec![Value::Null; count],
-                "risk_status": vec![Value::String("unknown".to_string()); count],
-                "limit_up": vec![Value::Null; count],
-                "limit_down": vec![Value::Null; count],
-                "prev_close": vec![Value::Null; count],
-                "prev_close_day": vec![Value::Null; count],
-                "rule_id": vec![Value::Null; count],
-            },
-            "inputs": [],
-            "algorithm_versions": {
-                "tradability": "tradability-v1",
-                "price_limit": "limit-v1",
-            },
-            "limitations": [],
-            "temporal": {
-                "as_of": as_of.to_string(),
-                "known_at": Value::Null,
-                "datasets_without_known_at": [],
-            },
-        })
-    }
-
-    fn get_market_cap(&self, input: Value) -> Result<Value, super::Error> {
-        use super::read_tools::{MarketCapInput, MarketCapScope, decode, reject_indices};
-        use crate::research::market_cap::{MarketCapOptions, ShareOptions, ShareScope, market_cap};
-        use crate::research::temporal::Temporal;
-
-        // Check for known_at
-        if let Value::Object(ref obj) = input
-            && obj.contains_key("known_at")
-        {
-            return Err(super::Error::Invalid(
-                "known_at is not accepted: A-share inputs lack known_at columns. \
-                 Use get_security_state for facts with known_at."
-                    .to_string(),
-            ));
-        }
-
-        let args: MarketCapInput =
-            decode(input.clone()).map_err(|e| super::Error::Invalid(e.message.clone()))?;
-
-        reject_indices(&args.securities)
-            .map_err(|e| super::Error::Invalid(e.message.clone()))?;
-
-        let as_of = match args.as_of {
-            Some(day) => day,
-            None => {
-                use super::query::ReadRepository as _;
-                self.queries
-                    .repository
-                    .last_trading_day_upto(super::query::today())?
-            }
-        };
-
-        let scope = match args.scope {
-            MarketCapScope::FloatA => ShareScope::FloatA,
-            MarketCapScope::CompanyTotal => ShareScope::CompanyTotal,
-            MarketCapScope::AShareTotal => ShareScope::AShareTotal,
-        };
-
-        // Read in a transaction
-        let answer = self.queries.repository.market.read(|c| {
-            let temporal = Temporal {
-                as_of,
-                known_at: None,
-            };
-
-            let options = MarketCapOptions {
-                shares: ShareOptions {
-                    allow_suspicious: false,
-                    current_float_reference: None,
-                    current_total_reference: None,
-                },
-                // reconciliation is always not_available per task spec
-                exclude_low_confidence: false,
-            };
-
-            let mut states = Vec::new();
-            let mut reasons = Vec::new();
-            let mut market_caps = Vec::new();
-            let mut closes = Vec::new();
-            let mut shares_col = Vec::new();
-            let mut share_event_days = Vec::new();
-            let mut share_event_categories = Vec::new();
-            let mut chain_break_days = Vec::new();
-            let mut reconciliations = Vec::new();
-
-            for entity in &args.securities {
-                let entity_str = entity.symbol();
-
-                let cap =
-                    market_cap(c, &entity_str, temporal, scope, &options).map_err(|e| match e {
-                        crate::research::Error::Integrity(s) => super::Error::Integrity(s),
-                        e => crate::market_storage::Error::Storage(e.to_string()),
-                    })?;
-
-                states.push(Value::String(
-                    match cap.state {
-                        crate::research::market_cap::MarketCapState::Known => "known",
-                        crate::research::market_cap::MarketCapState::Unknown => "unknown",
-                    }
-                    .to_string(),
-                ));
-
-                if let Some(reason) = cap.reason {
-                    reasons.push(Value::String(reason.as_str().to_string()));
-                } else {
-                    reasons.push(Value::String("known".to_string()));
-                }
-
-                // Market cap in yuan (divide cents by 100, format as 2 decimal places)
-                if let Some(value) = cap.value_units {
-                    let yuan = value / 100;
-                    let cents = (value % 100).abs();
-                    market_caps.push(Value::String(format!("{}.{:02}", yuan, cents)));
-                } else {
-                    market_caps.push(Value::Null);
-                }
-
-                // Close price
-                if let (Some(price), Some(scale)) = (cap.price_cents, cap.price_scale) {
-                    closes.push(Value::String(format_price(price, scale)));
-                } else {
-                    closes.push(Value::Null);
-                }
-
-                // Shares
-                if let Some(shares) = cap.shares {
-                    shares_col.push(Value::Number(shares.into()));
-                } else {
-                    shares_col.push(Value::Null);
-                }
-
-                // Share event day
-                if let Some(day) = cap.share_day {
-                    share_event_days.push(Value::String(day.to_string()));
-                } else {
-                    share_event_days.push(Value::Null);
-                }
-
-                // Share event category
-                if let Some(cat) = cap.share_category {
-                    share_event_categories.push(Value::Number(cat.into()));
-                } else {
-                    share_event_categories.push(Value::Null);
-                }
-
-                // Chain break day
-                if let Some(day) = cap.chain_break_day {
-                    chain_break_days.push(Value::String(day.to_string()));
-                } else {
-                    chain_break_days.push(Value::Null);
-                }
-
-                // Reconciliation is always not_available
-                reconciliations.push(Value::String("not_available".to_string()));
-            }
-
-            let inputs: Vec<Value> = Vec::new();
-
-            let datasets_without_known_at = vec!["capital_events", "series_bars"];
-
-            let mut limitations = Vec::new();
-            if scope == ShareScope::CompanyTotal {
-                limitations.push("company_total is A+B+H shares; not A-share-only total");
-            }
-
-            Ok(serde_json::json!({
-                "tool": "get_market_cap",
-                "layout": "table",
-                "snapshot_time": chrono::Utc::now().to_rfc3339(),
-                "as_of": as_of.to_string(),
-                "scope": match scope {
-                    ShareScope::FloatA => "float_a",
-                    ShareScope::CompanyTotal => "company_total",
-                    ShareScope::AShareTotal => "a_share_total",
-                },
-                "entities": args.securities.iter().map(|e| e.symbol()).collect::<Vec<_>>(),
-                "columns": {
-                    "state": states,
-                    "reason": reasons,
-                    "market_cap": market_caps,
-                    "close": closes,
-                    "shares": shares_col,
-                    "share_event_day": share_event_days,
-                    "share_event_category": share_event_categories,
-                    "chain_break_day": chain_break_days,
-                    "reconciliation": reconciliations,
-                },
-                "inputs": inputs,
-                "algorithm_versions": {
-                    "market_cap": "market-cap-v1",
-                },
-                "limitations": limitations,
-                "temporal": {
-                    "as_of": as_of.to_string(),
-                    "known_at": Value::Null,
-                    "datasets_without_known_at": datasets_without_known_at,
-                },
-            }))
-        })?;
-
-        Ok(answer)
     }
 
     fn acceptance(&self, id: &str, a: crate::task_control::Acceptance) -> Result<Value, ApiError> {
@@ -2031,14 +1647,6 @@ fn capability_example(e: &Entry, dataset: Option<Dataset>) -> Value {
         }
     }
     v
-}
-
-/// Format a price value (units) with its scale as a decimal string.
-fn format_price(units: i64, scale: u32) -> String {
-    let divisor = 10_i64.pow(scale);
-    let integer = units / divisor;
-    let fraction = units.abs() % divisor;
-    format!("{}.{:0width$}", integer, fraction, width = scale as usize)
 }
 
 #[cfg(test)]

@@ -420,4 +420,10 @@ D-82 / [#433](https://github.com/liqiangcc/x-data-mcp/issues/433) PR-B：`resear
 {"securities":["sz.000002","sh.600028"],"scope":"float_a","as_of":"2026-11-05"}
 ```
 
-`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：待实测（17 个工具），CI 预算 19,600 B（owner 批准，D-82）。
+`research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：19,264 B（17 个工具），CI 预算 19,600 B（owner 批准，D-82）；
+紧凑目录 `get_data_capabilities({})` 实测 2,790 B（测试上限 2,800 B）。每个工具描述不超过 240 B。
+
+一次 `get_tradability` 调用的实测耗时与内存（夹具：主表 7,400 行、停牌 72,000 行、日历 300 天、规则书；生产写入器构造）：
+1 / 10 / 100 只分别约 207–266 / 159–204 / 258–312 ms；共享加载一次解码约 8.9 MiB 峰值堆，同夹具后续调用 0.0–0.1 MiB。
+整表解码（约 200 ms）主导，单只边际成本不足 1 ms，所以设计里「单只约 1 秒」的估算是没有共享加载时的情形。
+调用按 `derived_tools::READ_RESERVE`（16 MiB）向 `ReadBudget` 预留，超限返回 `memory_budget_exceeded`。

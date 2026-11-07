@@ -314,3 +314,19 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - 指数代码报 `invalid_arguments` 并指向 `get_index_bars`。
 
 详见 [issue-433-tradability-read](../tasks/issue-433-tradability-read.md) §2、§3、§4。
+
+### 8.1 预算、延迟与内存（实测）
+
+`research` 入口 `tools/list` 实测 **19,264 B / 17 个工具**（无 `outputSchema`），预算 19,600 B（D-82）；紧凑目录 `get_data_capabilities({})` 实测 **2,790 B**，测试上限随之为 2,800 B。测量方式与 §3 相同。
+
+延迟与内存由 `data_supply::mcp::tests::probe_derived_tools_peak_heap_and_latency` 测（夹具用生产写入器构造：主表 7,400 行、停牌 72,000 行、日历 300 天、规则书）：
+
+| 实体数 | 一次调用耗时（3 次） | 峰值 RSS-anon 增长 |
+|---|---|---|
+| 1 | 250.9 / 206.7 / 265.6 ms | **8.9 MiB**（冷启动，含共享加载） |
+| 10 | 159.3 / 203.9 / 194.6 ms | 0.0 MiB |
+| 100 | 257.9 / 285.5 / 312.2 ms | 0.1 MiB |
+
+整表解码（约 200 ms、8.9 MiB）主导，单只边际成本不足 1 ms，所以设计 §5.2 估的「单只约 1 秒」在共享加载下不成立。夹具日历 300 天（生产 8,798）、无风险警示行（生产约 1,300），按每行 40 B / 150 B 计增加不足 1 MiB，生产一次调用峰值接近 10 MiB。
+
+调用按 `derived_tools::READ_RESERVE`（**16 MiB**，约实测峰值的 1.6 倍）向 `ReadBudget` 预留；超限返回 `memory_budget_exceeded`，不绕开 #547 的准入（`derived_tools_admit_through_the_read_budget` 覆盖）。

@@ -380,6 +380,54 @@ pub struct MarketCapInput {
     pub as_of: Option<NaiveDate>,
 }
 
+/// The batch shape the derived tools accept, mirroring the v2 path's
+/// `1..=100`, six-digit, no-duplicate rules: those tools do not go through
+/// `QueryPlan`, so nothing else would enforce them.
+pub fn validate_securities(entities: &[Security]) -> Result<(), ApiError> {
+    if entities.is_empty() || entities.len() > 100 {
+        return Err(ApiError::new(
+            "invalid_arguments",
+            format!(
+                "securities must contain 1..100 entities, got {}",
+                entities.len()
+            ),
+        ));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for entity in entities {
+        entity.validate().map_err(|message| {
+            ApiError::new(
+                "invalid_arguments",
+                format!("invalid security {}: {message}", entity.symbol()),
+            )
+        })?;
+        if !seen.insert(entity.clone()) {
+            return Err(ApiError::new(
+                "invalid_arguments",
+                format!("duplicate entity {}", entity.symbol()),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// `get_tradability`/`get_market_cap` do not take `known_at`: none of their
+/// inputs carries a usable A-share knowledge time (design §4), so the parameter
+/// is refused with the reason and a pointer to the tool that does support it,
+/// rather than being ignored or rejected by `deny_unknown_fields`.
+pub fn reject_known_at(input: &Value) -> Result<(), ApiError> {
+    match input.get("known_at") {
+        None | Some(Value::Null) => Ok(()),
+        Some(_) => Err(ApiError::new(
+            "invalid_arguments",
+            "known_at is not accepted: none of this tool's inputs carries a usable \
+             A-share knowledge time, so a known_at filter would exclude every row \
+             instead of bounding the information set. Use get_security_state for \
+             facts that have known_at (risk warnings, suspensions, industry).",
+        )),
+    }
+}
+
 pub fn decode<T: DeserializeOwned>(input: Value) -> Result<T, ApiError> {
     serde_json::from_value(input).map_err(|e| ApiError::new("invalid_arguments", e.to_string()))
 }

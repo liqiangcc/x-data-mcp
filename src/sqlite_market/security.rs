@@ -820,71 +820,20 @@ pub(crate) fn apply_etf_delisting(
     Ok(changed)
 }
 
-/// Run `all` (no parameters) for the whole table, or `one` (`exchange`, `code`)
-/// for one entity, and decode every row with `map`. The two statements select
-/// the same columns in the same order, so a row decodes the same either way.
-fn read_rows<T>(
-    c: &Connection,
-    all: &str,
-    one: &str,
-    entity: Option<&str>,
-    map: impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
-) -> Result<Vec<T>, Error> {
-    match entity {
-        None => c
-            .prepare(all)
-            .map_err(storage)?
-            .query_map([], map)
-            .map_err(storage)?
-            .collect::<Result<_, _>>()
-            .map_err(storage),
-        Some(entity) => {
-            let (exchange, code) = split_entity(entity)?;
-            c.prepare_cached(one)
-                .map_err(storage)?
-                .query_map(params![exchange, code], map)
-                .map_err(storage)?
-                .collect::<Result<_, _>>()
-                .map_err(storage)
-        }
-    }
-}
-
-const MASTER_COLUMNS: &str = "exchange,code,effective_from,effective_to,instrument_class,\
-     issuer_key,issuer_resolution,listing_date,listing_date_tdx,listing_source,b_listing_date,\
-     delisting_date,delisting_date_tdx,delisting_source,delisting_reason_class,\
-     arrangement_start,arrangement_end,listing_conflict,delisting_conflict,known_at";
-
 /// All stored `security_master` intervals, ordered by the row identity.
 /// Used by the read model and by the round-trip tests.
 pub(crate) fn read_security_master(c: &Connection) -> Result<Vec<SecurityLifecycleFact>, Error> {
-    read_security_master_rows(c, None)
-}
-
-/// The intervals of one entity, ordered by `effective_from`. The same decoder
-/// as [`read_security_master`], so a row reads the same either way.
-pub(crate) fn read_security_master_of(
-    c: &Connection,
-    entity: &str,
-) -> Result<Vec<SecurityLifecycleFact>, Error> {
-    read_security_master_rows(c, Some(entity))
-}
-
-fn read_security_master_rows(
-    c: &Connection,
-    entity: Option<&str>,
-) -> Result<Vec<SecurityLifecycleFact>, Error> {
-    let raw = read_rows(
-        c,
-        &format!(
-            "SELECT {MASTER_COLUMNS} FROM security_master ORDER BY exchange,code,effective_from"
-        ),
-        &format!(
-            "SELECT {MASTER_COLUMNS} FROM security_master \
-             WHERE exchange=?1 AND code=?2 ORDER BY effective_from"
-        ),
-        entity,
-        |r| {
+    let mut statement = c
+        .prepare(
+            "SELECT exchange,code,effective_from,effective_to,instrument_class,issuer_key,\
+             issuer_resolution,listing_date,listing_date_tdx,listing_source,b_listing_date,\
+             delisting_date,delisting_date_tdx,delisting_source,delisting_reason_class,\
+             arrangement_start,arrangement_end,listing_conflict,delisting_conflict,\
+             known_at FROM security_master ORDER BY exchange,code,effective_from",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| {
             Ok(RawMasterRow {
                 exchange: r.get(0)?,
                 code: r.get(1)?,
@@ -907,9 +856,13 @@ fn read_security_master_rows(
                 delisting_conflict: r.get(18)?,
                 known_at: r.get(19)?,
             })
-        },
-    )?;
-    raw.into_iter().map(RawMasterRow::into_fact).collect()
+        })
+        .map_err(storage)?;
+    let mut facts = Vec::new();
+    for row in rows {
+        facts.push(row.map_err(storage)?.into_fact()?);
+    }
+    Ok(facts)
 }
 
 struct RawMasterRow {
@@ -1032,9 +985,6 @@ pub(crate) fn read_code_migrations(c: &Connection) -> Result<Vec<CodeMigrationFa
     Ok(migrations)
 }
 
-const RISK_COLUMNS: &str = "exchange,code,effective_from,effective_to,raw_status_code,\
-     normalized_status,announced_at,known_at,source_kind,source_record_id,source_document_sha256";
-
 /// All stored `risk_warning_intervals` rows, ordered by the row identity.
 /// The table has no writer in M2 until #308 admits the production source; the
 /// read model still has to see rows so the fail-closed "no interval = unknown"
@@ -1042,61 +992,31 @@ const RISK_COLUMNS: &str = "exchange,code,effective_from,effective_to,raw_status
 pub(crate) fn read_risk_warning_intervals(
     c: &Connection,
 ) -> Result<Vec<RiskWarningInterval>, Error> {
-    read_risk_warning_rows(c, None)
-}
-
-/// The intervals of one entity, ordered by `effective_from`.
-pub(crate) fn read_risk_warning_intervals_of(
-    c: &Connection,
-    entity: &str,
-) -> Result<Vec<RiskWarningInterval>, Error> {
-    read_risk_warning_rows(c, Some(entity))
-}
-
-type RawRisk = (
-    String,
-    String,
-    i64,
-    Option<i64>,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    String,
-    Option<String>,
-    Option<String>,
-);
-
-fn read_risk_warning_rows(
-    c: &Connection,
-    entity: Option<&str>,
-) -> Result<Vec<RiskWarningInterval>, Error> {
-    let rows: Vec<RawRisk> = read_rows(
-        c,
-        &format!(
-            "SELECT {RISK_COLUMNS} FROM risk_warning_intervals ORDER BY exchange,code,effective_from"
-        ),
-        &format!(
-            "SELECT {RISK_COLUMNS} FROM risk_warning_intervals \
-             WHERE exchange=?1 AND code=?2 ORDER BY effective_from"
-        ),
-        entity,
-        |r| {
+    let mut statement = c
+        .prepare(
+            "SELECT exchange,code,effective_from,effective_to,raw_status_code,\
+             normalized_status,announced_at,known_at,source_kind,source_record_id,\
+             source_document_sha256 FROM risk_warning_intervals \
+             ORDER BY exchange,code,effective_from",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| {
             Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-                r.get(6)?,
-                r.get(7)?,
-                r.get(8)?,
-                r.get(9)?,
-                r.get(10)?,
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
+                r.get::<_, Option<String>>(10)?,
             ))
-        },
-    )?;
+        })
+        .map_err(storage)?;
     let mut intervals = Vec::new();
     for row in rows {
         let (
@@ -1111,7 +1031,7 @@ fn read_risk_warning_rows(
             source_kind,
             source_record_id,
             source_document_sha256,
-        ) = row;
+        ) = row.map_err(storage)?;
         let exchange = Exchange::parse(&exchange)
             .ok_or_else(|| integrity("risk_warning_intervals exchange is unregistered"))?;
         let status = RiskStatus::parse(&normalized_status)
@@ -1225,67 +1145,34 @@ pub(crate) fn read_security_names(c: &Connection) -> Result<Vec<SecurityNameRow>
     Ok(names)
 }
 
-const SUSPENSION_COLUMNS: &str = "exchange,code,start_day,end_day,certainty,missing_days,\
-     reason,known_at,source_kind,source_record_id";
-
 /// All stored `suspension_intervals` rows, ordered by the row identity. The
 /// writer, its validation and the `unresolved_gap` derivation are
 /// [`super::suspensions`] (PR-6); this decoder is shared with both so the
 /// writer and every reader cannot drift on encoding.
 pub(crate) fn read_suspension_intervals(c: &Connection) -> Result<Vec<SuspensionInterval>, Error> {
-    read_suspension_rows(c, None)
-}
-
-/// The intervals of one entity, ordered by `start_day`.
-pub(crate) fn read_suspension_intervals_of(
-    c: &Connection,
-    entity: &str,
-) -> Result<Vec<SuspensionInterval>, Error> {
-    read_suspension_rows(c, Some(entity))
-}
-
-type RawSuspension = (
-    String,
-    String,
-    i64,
-    i64,
-    String,
-    i64,
-    String,
-    Option<String>,
-    String,
-    Option<String>,
-);
-
-fn read_suspension_rows(
-    c: &Connection,
-    entity: Option<&str>,
-) -> Result<Vec<SuspensionInterval>, Error> {
-    let rows: Vec<RawSuspension> = read_rows(
-        c,
-        &format!(
-            "SELECT {SUSPENSION_COLUMNS} FROM suspension_intervals ORDER BY exchange,code,start_day"
-        ),
-        &format!(
-            "SELECT {SUSPENSION_COLUMNS} FROM suspension_intervals \
-             WHERE exchange=?1 AND code=?2 ORDER BY start_day"
-        ),
-        entity,
-        |r| {
+    let mut statement = c
+        .prepare(
+            "SELECT exchange,code,start_day,end_day,certainty,missing_days,reason,\
+             known_at,source_kind,source_record_id FROM suspension_intervals \
+             ORDER BY exchange,code,start_day",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map([], |r| {
             Ok((
-                r.get(0)?,
-                r.get(1)?,
-                r.get(2)?,
-                r.get(3)?,
-                r.get(4)?,
-                r.get(5)?,
-                r.get(6)?,
-                r.get(7)?,
-                r.get(8)?,
-                r.get(9)?,
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, Option<String>>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, Option<String>>(9)?,
             ))
-        },
-    )?;
+        })
+        .map_err(storage)?;
     let mut intervals = Vec::new();
     for row in rows {
         let (
@@ -1299,7 +1186,7 @@ fn read_suspension_rows(
             known_at,
             source_kind,
             source_record_id,
-        ) = row;
+        ) = row.map_err(storage)?;
         let exchange = Exchange::parse(&exchange)
             .ok_or_else(|| integrity("suspension_intervals exchange is unregistered"))?;
         let certainty = SuspensionCertainty::parse(&certainty)
