@@ -285,7 +285,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 
 ## 6. 未验证
 
-线上真实数据未测；`tools/list` 字节为部署前本地实测，preview.46 线上字节数未单独测量。
+线上真实数据未测：preview.46 部署后只做了工具面冒烟（XDM-198 的 `initialize` → `tools/list`，ops 16 / research 17 / maint 9 / acquire 10），没有重核这些工具的数据内容；`tools/list` 字节为部署前本地实测，preview.46 线上字节数未单独测量。
 
 ## 6. `table` 布局的行键
 
@@ -373,7 +373,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 ### 8.5 未覆盖
 
 生产机与生产库（本任务不访问线上）；「22 分钟」这个绝对值只能按生产实测的每请求成本换算；`status_of` 不补 `revisions`/per-source 行（与 `full` 一致，需要时查库）。
-## 9. 派生只读工具（D-82 PR-B，代码面）
+## 9. 派生只读工具（D-82 PR-B，preview.46 已部署）
 
 `research` 入口新增 `get_tradability` 和 `get_market_cap`。状态：已随 preview.46 部署。
 

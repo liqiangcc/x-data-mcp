@@ -67,7 +67,7 @@
 | 时点股票池（A 股） | 满足（已部署） | `universe(as_of=T)` 由主表决定，不看目录；2015-01-05 的成员数 2,595，2015 年以来退市的 256 个都有 bar（2026-10-31 实测） | `src/research/universe.rs`；`src/research/read_model_tests.rs`；#446 评论（XDM-137） |
 | 退市 ETF 身份与退市日 | 满足（已部署） | 128 只退市 ETF 已写入主表，精确退市日由 D-72 提供；沪市公告索引最早 2006-08-04，更早的沪市终止公告不可得；深市「已退市且不在 `hsjday`」的 ETF 未验证（本批只能从 `hsjday` 发现候选） | STATUS「M2/M3 表」（退市 ETF 行数）；D-71、D-72；§3.3 偏差 9 |
 | 代码迁移与复用 | 满足（已部署） | `code_migrations` 109 行（108 candidate、1 confirmed）；导出的 `universe_intervals` 给出 `canonical_entity`/`aliases`，`candidate` 不作去重证据；`strict` 只在库函数里，MCP 与导出都没有开关 | STATUS「M2/M3 表」；`src/` 内无非测试调用 `.strict(` |
-| 研究导出包含退市序列 | 满足（代码已合并未部署） | #545 已修复默认选择为「目录头 ∪ 主表沪深 A 股 ∪ 已发布个股日线序列」，所以不在当前目录的 338 个退市序列进入 `daily_raw`/`daily_qfq`/`factors`。已部署的 preview.45 仍写 `v4`、默认只取目录成员，会漏掉退市股；部署后在真实库上核对 `coverage.delisted_series` | #545、#383、`src/research/read.rs:236-258`；审计 §2.1；备忘录 §10 T9。preview.45 = STATUS「部署」段；部署后核对见审计 §2.1 末段 |
+| 研究导出包含退市序列 | 满足（已部署；preview.46 读面生效） | #545 已修复默认选择为「目录头 ∪ 主表沪深 A 股 ∪ 已发布个股日线序列」，所以不在当前目录的退市序列进入 `daily_raw`/`daily_qfq`/`factors`。preview.46 起导出写 `research-snapshot.v5`；2026-11-07 真实库预检（XDM-198，`--dry-run`）读回 `coverage.delisted_series=337`、`schema=v5`、14 files planned / 0 written，与库内已知缺口一致 | #545、#383、`src/research/read.rs:236-258`；审计 §2.1；XDM-198；STATUS「部署」段 |
 | 86 只现行 ETF 无日线 | 未满足 | 名单有、`hsjday` 无，全部在沪市 `sh526`（7）、`sh551`（12）、`sh589`（67）三个代码段；`hsjday` 在这三段各 0 个成员，源覆盖缺段（原因未验证）。主表照写、`market.daily` 读面按 `absent`/`source_member_absent` 返回 | §3.3 偏差 10 |
 
 #### 1.4.2 按时点正确（有效时间与知识时间）
@@ -77,10 +77,10 @@
 | 不复权价是事实，前复权含未来事件 | 满足（已部署） | `.day` 的 OHLC 本身就是不复权原始价；前复权以最新事件为基准，除权会改写整段历史，只适合固定快照内使用 | §2.2「复权语义」 |
 | 主表、简称、风险警示、停牌、行业都带生效区间 | 满足（已部署） | 六个 M2 数据集与 M3 行业都有 `as_of` 过滤；主表 `effective_from`/`effective_to`、风险警示/停牌/行业的区间列 | `src/research/temporal.rs`；`src/sqlite_supply/m2.rs`；`src/research/universe.rs`；§3.1 |
 | 带 `known_at` 的 A 股股票池 | **未满足** | A 股主表行 `known_at` 为 NULL，带 `known_at` 参数会把所有 A 股行排除并计数。标准回测用不带 `known_at` 的 `universe(as_of)`（有效时间口径）。`known_at` 路径对 A 股未满足 | D-80；审计 §2.2；备忘录 T5 |
-| ETF 的 `effective_from`（区间起点） | 满足（代码已合并未部署） | D-80 裁定：有 `listing_date` 时 `effective_from` 取上市日，`known_at` 仍是首次观察日（拆开生效与知晓）。preview.45 的 1,846 个 ETF 行里 1,845 行 `effective_from` 晚于 `listing_date`，导出的 `universe_intervals` 在 2026-11-05 之前基本没有 ETF 成员。#571 已合并，部署后第一次日更的主表重写才生效 | D-80（修订 D-70）；#571；备忘录 §3；STATUS「部署」段 |
+| ETF 的 `effective_from`（区间起点） | 满足（代码已部署；数据待第一次日更） | D-80 裁定：有 `listing_date` 时 `effective_from` 取上市日，`known_at` 仍是首次观察日（拆开生效与知晓）。preview.46 已含 #571；库内仍是 preview.45 的旧取值：1,846 个 ETF 行里 1,845 行 `effective_from` 晚于 `listing_date`，导出的 `universe_intervals` 在 2026-11-05 之前基本没有 ETF 成员。代码已生效，数据要等第一次日更重写主表（XDM-198 未重算主表） | D-80（修订 D-70）；#571；备忘录 §3；XDM-198；STATUS「部署」段 |
 | 深市 ST 与简称的 `known_at` 从 2026-11-01 起 | **未满足** | 首次包含该行的快照入库日，更早的知识时间不可得。coverage 口径写两句：有效时间历史从来源起点起可用；知识时间 PIT（`known_at` 过滤）从首次采集日 2026-11-01 起可用。之前的日期，带 `known_at` 查询看不到任何深市历史行 | D-66 Q4；§3.1「简称与历史 ST 的知晓时间」 |
 | 股本事件、复权事件、停牌、涨跌停规则无 `known_at` | **未满足** | 这四类数据无知晓时间，带 `known_at` 的市值、停牌、涨跌停查询得不到这些输入，信息集严格回测对它们做不到。如实标 `known_at_coverage: none` | `src/data_supply/wire.rs` 的 `known_at_coverage`；审计 §2.2 |
-| 沪市 ST 生效日（公告没有显式生效日时） | 满足（代码已合并，未部署；D-84） | 生效日 = 公告当日或其后第一个交易日的**下一个交易日**（公告日是交易日 → 下一个交易日；周六 → 周二），有显式标题日期时保留显式日期。规则读库内交易日历，不是周末规则；日历未覆盖到「下一个交易日」的事件不写行、状态保持 `unknown`，等下一次日更。档位 `OWNER_RISK_ACCEPTED`（规则推断，不是公告原文）：实施侧 607/617 配对命中，撤销侧 540/544；2004Q1 起才有事件，2000–2003 永久 `not_observed`。部署后第一次日更把 884 行沪市事件整体后移 1–2 个交易日，`known_at` 仍是公告日 | D-58；D-84 R2；`tasks/gp29-compare-20261106.md`；`tasks/revoke-effective-20261106.md`；§3.3 偏差 2 |
+| 沪市 ST 生效日（公告没有显式生效日时） | 满足（代码已部署；884 行在第一次日更时后移；D-84） | 生效日 = 公告当日或其后第一个交易日的**下一个交易日**（公告日是交易日 → 下一个交易日；周六 → 周二），有显式标题日期时保留显式日期。规则读库内交易日历，不是周末规则；日历未覆盖到「下一个交易日」的事件不写行、状态保持 `unknown`，等下一次日更。档位 `OWNER_RISK_ACCEPTED`（规则推断，不是公告原文）：实施侧 607/617 配对命中，撤销侧 540/544；2004Q1 起才有事件，2000–2003 永久 `not_observed`。preview.46 已部署 R2；库内 884 行沪市事件仍是旧锚定（`effective_from=known_at`），第一次日更会整体后移 1–2 个交易日，`known_at` 仍是公告日（XDM-198 已见主键成对移动，见 STATUS 已知问题） | D-58；D-84 R2；`tasks/gp29-compare-20261106.md`；`tasks/revoke-effective-20261106.md`；XDM-198；§3.3 偏差 2 |
 | 行业从 2026-09-30 起 | **未满足** | 归档最早只到 2026-09-30，更早历史没有快照，`industry_coverage_start` 之前一律 `unknown`；5,235 行 assignment 全部 `unknown_dictionary`（归档快照无同代 `incon.dat`，名称为 `unknown`，代码与区间可用）；早于此日的行业中性化做不到 | #446 评论（XDM-137）；§3.3 偏差 1；STATUS「M2/M3 表」 |
 | 交易日历 | **未满足** | 指数日期并集推导，没有官方休市公告核对；只能证明「不在日历 ⇒ 非交易日」，不能证明「在日历 ⇒ 该证券当日可交易」；标 derived 并带算法版本与输入清单 | §3.3 偏差 3；§3.2 #2 |
 
@@ -90,11 +90,11 @@
 |---|---|---|---|
 | 沪市 2008 年起有 `confirmed` 停牌 | 满足（已部署） | 20,420 段（2026-10-31 首轮验收）；深市没有结构化来源，只有 `unresolved_gap` | STATUS「M2/M3 表」；D-49、D-60 |
 | 涨跌停规则全部是数据 | 满足（已部署） | 27 行价格规则 + 2 行最小变动单位，改规则不改代码 | §3.2 #12；`src/research/price_limit/tests.rs` |
-| 沪深主板、深创业板 2020-08-24 前无 `normal` | **部分满足** | **沪市**仍是 `unknown`：写入器不写 `normal`，没有 ST 区间的日子状态是 `unknown`，沪市主板的 ST 与非 ST 幅度不同（5% 对 10%），所以派生返回 `unknown`；沪市闭世界不成立（GP29 比对 2004–2024 召回 69.1%），不写 `normal`。**深市**闭世界已实现（下一行），代码已合并未部署；部署前线上仍全部 `unknown` | 审计 §2.3；备忘录 T3；`tasks/gp29-compare-20261106.md` |
-| 深市风险警示闭世界（写 `normal`） | 代码已合并，未部署（D-81） | 深市在简称表覆盖范围内、简称链连续、无 ST/*ST 区间、无 PT/退标记、不在冲突后间隙、主表有该代码且未过退市日的日子写 `normal`；沪市/北交所不写。R1/R4/R5 已合并（#569），闭世界本身见 #578。已知盲区：140 个带 ST 区间的已退市代码不在 GP29 包里，无法验证；22/1,729 个「历史/身份缺口」在 `known_at` 过滤下不可见；5 个区间起点晚 1–2 个交易日 | D-81；#569；#578；备忘录 §1；`tasks/gp29-compare-20261106.md` §5 |
+| 沪深主板、深创业板 2020-08-24 前无 `normal` | **部分满足** | **沪市**仍是 `unknown`：写入器不写 `normal`，没有 ST 区间的日子状态是 `unknown`，沪市主板的 ST 与非 ST 幅度不同（5% 对 10%），所以派生返回 `unknown`；沪市闭世界不成立（GP29 比对 2004–2024 召回 69.1%），不写 `normal`。**深市**闭世界已实现（下一行），代码已随 preview.46 部署；数据要等第一次日更重写 `risk_warnings` 后才出现 `normal`，此前线上仍全部 `unknown` | 审计 §2.3；备忘录 T3；`tasks/gp29-compare-20261106.md` |
+| 深市风险警示闭世界（写 `normal`） | 代码已部署，数据待第一次日更（D-81） | 深市在简称表覆盖范围内、简称链连续、无 ST/*ST 区间、无 PT/退标记、不在冲突后间隙、主表有该代码且未过退市日的日子写 `normal`；沪市/北交所不写。R1/R4/R5 已合并（#569），闭世界本身见 #578。已知盲区：140 个带 ST 区间的已退市代码不在 GP29 包里，无法验证；22/1,729 个「历史/身份缺口」在 `known_at` 过滤下不可见；5 个区间起点晚 1–2 个交易日。preview.46 已含 #578；库内仍是旧行，第一次日更重写 `risk_warnings` 后出现 `normal` | D-81；#569；#578；XDM-198；备忘录 §1；`tasks/gp29-compare-20261106.md` §5 |
 | 沪市生效日规则 R2 | 已部署（preview.46，2026-11-07；D-84） | 无显式生效日时，生效日 = 公告当日或其后第一个交易日的下一个交易日；实施与撤销同一规则；档位 `OWNER_RISK_ACCEPTED`（规则推断，不是公告原文）。`source_store replay --scope risk_warnings` 读 `--db` 的交易日历；fresh init 无日历时该 scope 为 `not_ready`（`all` 仍退出 0），日历未覆盖的公告行延后写入。`risk-warnings-v8` / `risk-warnings-v5`，`inputs_digest` 记录日历输入 | D-84 R2；[取证摘要](tasks/rigorous-gaps-decisions.md) §11 R2；`tasks/gp29-compare-20261106.md`；`tasks/revoke-effective-20261106.md`；[generic-data-v11 §5.8](contracts/generic-data-v11.md) |
 | 配股除权日涨跌停基准 | **未满足** | 配股（C4>0）返回 `unknown` + `ex_rights_unverified`（公式准确率约61%） | D-84；审计 §2.3；备忘录 T4 |
-| `limit-v2` 2010-09-14 之前官方基准 | 满足（代码已合并未部署） | 2010-09-14 前，当日 bar 的 r7_raw 非 0 且非哨兵/手标记时用官方除权基准价（分） | D-84；#573 |
+| `limit-v2` 2010-09-14 之前官方基准 | 满足（已部署；preview.46 读面生效） | 2010-09-14 前，当日 bar 的 r7_raw 非 0 且非哨兵/手标记时用官方除权基准价（分）；preview.46 已部署这段分支 | D-84；#573 |
 | `limit-v2` 2010-09-14 起用公式 | **未满足** | 2010-09-14 起或 r7_raw=0/哨兵时用 gbbq::reference_price；档位 `OWNER_RISK_ACCEPTED`，只经过证伪检验（越界 0.115%），没有官方基准 | D-84；#573；备忘录 T4 |
 | 涨跌停规则书未覆盖的历史段 | **未满足** | R7（1996-12-16 前）无规则，返回 `unknown`，不回退到普通档；上市后第 2–5 日（主板 1996-12-16…2023-02-16、创业板 2009-10-30…2020-08-23）返回 `rule_missing`，方案待 owner 裁决；主板首日 44%/36% 段（沪 2013-12-13 起、深 2014-06-13 起）仍 `not_encoded`，同样 `rule_missing`；2023 前的首日无涨跌幅段已编码为 `band_side=none`，返回 `unbounded` | §3.3 偏差 7；§3.2 #12；`tasks/price-limit-rule-gaps.md` |
 | `get_tradability`、`get_market_cap` 工具 | 在办（D-82） | 两个只读工具，薄封装 `research::tradability` 等 | D-82；审计 §3 |
@@ -108,7 +108,7 @@
 |---|---|---|---|
 | 同一数据库状态、同一命令，导出字节相同 | 满足（已部署） | `snapshot_id` 和全部文件（含 `manifest.json`）字节相同；`mode=ro` + `query_only`，期间日更改动会拒绝出清单 | `src/research/tests.rs`；#383 评论 3 |
 | 清单绑定目录版本、序列 `version_id`、来源 generation | 满足（已部署） | 每条序列的 `version_id`、来源 generation 和 manifest sha256 都在 `manifest.json`；交易所来源冻结进来源库，按 sha256 保存，可离线重放 | `src/research/manifest.rs`；`tests/source_store/exchange.rs` |
-| 清单记录二进制版本与算法版本 | 满足（代码已合并未部署） | #545 的 `research-snapshot.v5` 加 `producer` 块（`git_sha` 与 `algorithms`），涨跌停 `limit-v2`、市值 `market-cap-v1` 等读时重算的算法版本才能追溯；preview.45 仍写 `v4`、没有 `producer` | #545；审计 §2.4；备忘录 §4 |
+| 清单记录二进制版本与算法版本 | 满足（已部署；preview.46 起导出写 v5） | #545 的 `research-snapshot.v5` 加 `producer` 块（`git_sha` 与 `algorithms`），涨跌停 `limit-v2`、市值 `market-cap-v1` 等读时重算的算法版本才能追溯。2026-11-07 预检（XDM-198）读回 `producer.git_sha=c35b425f…` 与 `limit-v2`/`market-cap-v1` 等算法版本 | #545；审计 §2.4；XDM-198；备忘录 §4 |
 | 另一台机器逐位复现回测结果 | **未满足** | 不做回测引擎，#549 只比导出文件字节（含 `manifest.json`）；同一二进制导出同一库两次逐字节相同（含 `producer` 后 AC-M1-7）；不同二进制：`snapshot_id` 相同但 `producer.git_sha` 不同，Parquet 文件以 `files[].sha256` 为准 | D-83 #549；审计 §2.4；备忘录 §4；#545 的 `research-snapshot.v5` 契约 |
 | 单版本存储：除权会改写整段前复权历史 | **未满足** | 旧 `version_id` 之后无法再读；复现只能靠保留导出目录；导出保留策略见 D-83 T8（不自动删除，只有 owner 能删，配额暂不设，退役代的导出标为不可替代） | [latest-only-storage](latest-only-storage.md)；D-83 T8；#383 评论 5 |
 | generation 字节在两代之后退役 | **未满足** | 无法从原始官方文件重新派生旧快照，只能靠已登记的派生事实；退役策略 D-65 | STATUS「旧代回收」；D-65 |
@@ -283,7 +283,7 @@ scope 固定为当前沪深 A 股。
 3. **前复权序列的成员**：退市股行情已在库（§3.2 #8），但目录只含当前成员；跨年回测要用 `universe` 与
    `sh_sz_a_listed_ever` 的序列，不能用目录选股（§4.3）。
 4. **可交易性输入不全**：不复权收盘、停牌区间（沪市 2008 起有 `confirmed`，深市只有 `unresolved_gap`）、
-   股本事件、ST 区间（深市 `normal` 代码面已合并、未部署；沪市仍无 `normal`）、涨跌停规则行都已入库，但没有派生读面（审计 §3），
+   股本事件、ST 区间（深市 `normal` 代码已随 preview.46 部署、数据待第一次日更；沪市仍无 `normal`）、涨跌停规则行都已入库，但没有派生读面（审计 §3），
    除权日涨跌停基准不准，深市缺 bar 的日子可交易性是 `unknown`（§3.2 #9、#11、#12）。
 5. **已发布数据里有少量「手日」bar 的 volume 少记 100 倍**：`.day` 在成交量接近 u32 上限时改写
    为「手」并置 `r7_raw=0xC36400xx`。发布路径已修（#381/#382：标记与 VWAP 校验同时成立才换算，
@@ -394,13 +394,13 @@ T 日股票池 `universe(as_of=T)`。
 **历史 ST 写入器（已部署）**：`market.risk_warnings` 不用当前名称推断历史，`unresolved`
 也不伪装成已知区间；默认形态下来源库未配置时写 0 行并记 `pending_source`，生产 strict 下
 缺 store 则失败；都不使用当前值回填。**沪市写入器从不写出 `normal` 区间**，所以没有区间覆盖的
-日期永远是 `unknown`；**深市**（D-81，任务 49，代码已合并未部署）在简称表覆盖范围内、无 ST、
+日期永远是 `unknown`；**深市**（D-81，任务 49，代码已随 preview.46 部署、数据待第一次日更）在简称表覆盖范围内、无 ST、
 简称无 PT/退/`*`、不在冲突后间隙、且主表有该代码未过退市日的日子写 `normal`
-（`validate_set` 只对 `source_kind=szse_name_history` 放行 `normal`）。部署前线上仍全部 `unknown`，
+（`validate_set` 只对 `source_kind=szse_name_history` 放行 `normal`）。数据生效前线上仍全部 `unknown`，
 主板涨跌停因此在非 ST 区间的日子里也是 `unknown`（审计第 2.3 节）。数据量见
 [STATUS](STATUS.md)（本文件不写部署数字）。
 
-**风险警示时点规则（D-81 R1、R4、R5，代码面，未部署）**：契约全文见
+**风险警示时点规则（D-81 R1、R4、R5，preview.46 已部署；数据待第一次日更）**：契约全文见
 [generic-data-v11 §5](contracts/generic-data-v11.md)。(R1) `known_at` 是日期，`known_at = D`
 表示 D 日收盘后才保证已知；收盘后决策用截止 `D`，开盘或盘中决策必须用 `known_at ≤ D-1`
 （上一交易日）。过滤本身不变（`≤`，含当日）。(R4) 一期不支持按更正重放：沪市同一
@@ -410,18 +410,18 @@ T 日股票池 `universe(as_of=T)`。
 （`same_day_conflicts`：数量加前 20 个样本）；`marker_only_unresolved` 在读路径上不是 `normal`。
 算法版本 `risk-warnings-v1` → `v2`，解析器 `v5` → `v6`，内容摘要与 `version_id` 不变，无 schema 变化。
 
-**风险提示标题不再算实施（D-81 GP29 §7，代码面，未部署）**：「存在被实施退市风险警示及暂停上市风险的
+**风险提示标题不再算实施（D-81 GP29 §7，preview.46 已部署；数据待第一次日更）**：「存在被实施退市风险警示及暂停上市风险的
 提示(性)公告」陈述风险存在，不是实施决定，与 `将被`/`可能`/`争取` 同类排除；判定是「`存在` 在第一个
 `实施`/`实行` 之前，且该动词之后仍出现 `风险`」，只在别处提到 `存在` 或 `实施` 在前的真实施公告不受影响。
 取证：14 条沪市公告（全部 2014-12，代码 600076、600146、
 600193、600301、600315、600368、600403、600421、600469、600610、600656、600671、600822、600966）
 此前被判成 `Implement(DelistingRiskWarning)`，GP29 在这些行附近没有 `2/3` 事件；其中 7 个
 （600076、600315、600368、600469、600656、600822、600966）因此一直是开区间，自 2014-12 起约 2,889
-个交易日被读成退市风险警示。部署后第一次日更排除这 14 条，7 个开区间消失，这些代码回到 `unknown`
+个交易日被读成退市风险警示。第一次日更重写时排除这 14 条，7 个开区间消失，这些代码回到 `unknown`
 （不是 `normal`）。算法版本 `risk-warnings-v3` → `v4`（`v3` 已由 #578 的深市 `normal` 占用），解析器
 `v6` → `v7`；重放与日更写入仍逐行相同，除这 14 条外其余行不变；无 schema 变化、无 `tools/list` 变化。
 
-**风险警示开区间按退市日截断（#587，代码面，未部署）**：读面（`get_security_state`、`query_data`、
+**风险警示开区间按退市日截断（#587，preview.46 已部署，读面立即生效）**：读面（`get_security_state`、`query_data`、
 `get_security_history`）在 query 过滤阶段取 `security_master.delisting_date`，把 `effective_to` 为空的开区间
 截到退市日：有效终点 = min(存储的 `effective_to`, 退市日)，返回行的 `effective_to` 写截断后的值。
 **退市日是排他上界**（`as_of >= delisting_date` 不再返回），与 `security_master.effective_to` 的区间终点
@@ -483,7 +483,7 @@ D-66 Q4 原文的 2026-10-31 是 UTC 日期）。两句同时进数据集证据�
 首期验收。
 
 **M3 状态**：PR-1a…PR-12 均已合并并部署（都在 preview.39 内，2026-10-31 phase-g fresh init；
-历史 ST 的首次成功写入要等 XDM-144（#482）、#485、#489 的修复；现行 vm2-126 为 preview.45，
+历史 ST 的首次成功写入要等 XDM-144（#482）、#485、#489 的修复；现行 vm2-126 为 preview.46，
 见 [STATUS](STATUS.md)「数据」段）。
 已部署的能力：
 来源库与重放框架（PR-1a）、M3 引入的 5 张来源库索引表（PR-1，M3 索引表迁移）、交易所来源共用入口
@@ -530,10 +530,10 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 | 6 | 上市日 | 已提供（已部署） | `market.security_master` 用 `base.dbf` 的 `SSDATE` + `infoharbor_spec.cfg` 组装（preview.37 部署）；M3 PR-3 已实现 A-1/A-2 适配器（沪深交易所上市/终止上市名单，只取 A 股，`parser_version=exchange-a1a2-v4`），按「交易所 A-1/A-2 > `SSDATE` > `unknown`」合并，两者不同则 `listing_conflict=1`、取交易所值并保留 `listing_date_tdx`（M2 已有列）；`sz.302132` 的交易所「A股上市日期」是被继承的 2010-08-27，不据此开新区间（区间起点由 confirmed 迁移 2025-02-17 决定）。**已部署**（preview.39 起）：默认/非 ops 形态未配置 `X_DATA_MCP_SOURCE_STORE` 时仍写 `pending_source` 并按 `unknown` 返回；生产形态（`data_service` 的 ops 入口 + compact 后端）未配置或不可读时 `derived:security_master` 以稳定码 `source_store_unconfigured` 失败、run 收尾 `partially_failed`，日线照常、上一版主表仍是 latest。实测（2026-10-31，#446 评论 XDM-137）：5,565 行，`listing_date` 的 `unknown` 为 0（`exchange_list` 5,559、`tdx_ssdate` 6），上市冲突 2 行（含 `sh.600018`）；当前值见 [STATUS](STATUS.md) | 无（D-45/D-46 已准入） | M2/M3 | 满足（`unknown` 0；冲突两侧值保留） |
 | 7 | 退市日 | 部分提供（已部署） | `infoharbor_spec.cfg` 的退市整理期区间（169 行、2013 年起）随主表部署；M3 PR-3 接入 A-2 终止上市名单（沪 `COMPANY_STATUS=3` 且 `STOCK_TYPE∈{1,8}`；沪名单按 `pageHelp.pageSize=2000` 一次取完、`pageCount>1` 则 fail-closed，深 `1793_ssgs` + `selectModule` `main`/`nm`，响应按 `metadata.tabkey="tab2"` 取终止上市块（`tab1` 暂停上市 0 行且 `pagecount=0`，页码/`pagecount`/行数组同取 `tab2`；无 `tab2` 时只接受唯一有非空 `data` 的块，多义 fail-closed）），优先级「交易所 `DELIST_DATE` > 整理期 end > `unknown`」，冲突时 `delisting_conflict=1` 且两值都存（整理期与退市日口径分开）；退市原因 `NOT_AVAILABLE` 一律 `unknown`。**已部署**；默认/非 ops 形态未配置来源库时仍 `pending_source`，生产形态（ops + compact）则以稳定码 `source_store_unconfigured` 失败（日线照常、上一版主表仍是 latest）。实测（2026-10-31，XDM-137）：`delisting_date` 有值 337 行，来源全部 `exchange_list`，`tdx_arrangement` 0；退市冲突 15 行，两侧值都存。其余 5,228 行是在市证券，退市日为空；`sh.600849` 吸收合并只有 candidate 迁移，仍按 `unknown` | 无（D-46 已准入） | M2/M3 | 部分满足（已退市行全有日期；退市原因一律 `unknown`；吸收合并个别无日期） |
 | 8 | 退市股行情 | 已提供（已部署，已首采） | 官方 `hsjday.zip` 保留了目录之外 A 股代码的完整历史（2026-10-26 快照：335 个代码，其中 251 个末根 bar 在 2015 年及以后），跨代不消失。M3 PR-4 已实现 `market.daily` `start_collection` v2 的 `{"kind":"scope","scope":"sh_sz_a_listed_ever"}`：解析 `security_master` 中沪深 A 股且 `has_series=false` 的实体 ∩ 当前 generation 的 `.day` 成员，预算 1..500，跳过无 bar 成员并记入证据；已有 head 的实体跳过。**已部署并已首采**：aws-node 2026-10-31 首采 338/338 成功，vm2 的 fresh init 重建同样执行（STATUS）；之后日更 plan 不会自动纳入新的退市序列，需要操作员显式执行（Skill §3.9）。M3 PR-5 已补齐日更维护面：eligible 集取「当前目录 ∪ 上一版目录成员 ∩ 已首采」，成员核实后移出目录不会丢掉退市日当天的最后几根 bar；每次日更还有一个只读 item `derived:delisted_series_check`，比对 `record_count`/`first_day`/`last_day`/`content_digest`，序列消失或被改写 → `partially_failed` + 实体清单，不自动重建（历史改写走 `republish_data`）。实测 checked 337、unchanged 337（STATUS） | #246（范围）、#446 | M3 | 满足（338 条序列在库；导出默认**不一定**含它们，见审计 §2.1） |
-| 9 | 历史 ST / \*ST | 部分提供（已部署） | 2026-10-28 owner 按市场分档准入（D-58）：**深市** `SSGSGMXX`/`tab2` 的 ST 区间与**沪市**公告索引的状态事件（事件级）为 `APPROVED_SOURCE`；沪市生效日按 D-84 R2 取「公告日当天或其后第一个交易日的下一个交易日」（显式标题日期优先），档位 `OWNER_RISK_ACCEPTED`；日历未覆盖的事件不写行、状态 `unknown`，北交所 `NOT_AVAILABLE`；无公告一律 `unknown`，禁止「无公告 ⇒ 非 ST」。**沪市实际可观测起点是 2004Q1**：公告索引归档始于 2000-01，但 `TITLE=风险警示|特别处理` 在 2000–2003 每年 8 个窗口全为 `pageCount=0`（XDM-151 实测），这 16 个季度永久 `not_observed`，不得写成「2000 年起覆盖」（见 §1.3 与 §3.3 偏差 2）。写入器已实现（PR-10/#467）：整表替换 `risk_warning_intervals` 并登记 `derived_dataset_versions`，`derived:risk_warnings` 日更接入，`source_store replay --scope risk_warnings` 可离线重建（深市简称表按计划声明的 `TABKEY=tab2` 选块，`tab1` 是空块，live 与 replay 同块；解析器 `risk-warnings-v8`：沪市 `pageHelp.data` 是公告分组 `[[正文, 附件…], …]`，逐文档分类后按 `(公告 id, 事件)` 去重；标题分类按 D-68（撤销 A 并/继续实施 B 记 `Implement(B)`；申请/拟/可能/将被/预计/预审计/将消除/争取与第三方专业文件不计入，标题以「公告」（去尾部括号注记）结尾的发行人公告不套第三方守卫；`撤消`/`解除` 同 `撤销`），分页走 `pageHelp.beginPage`/`endPage` + `pageSize=100`，同窗口重复公告 id 判 `truncated`）；空结果记 `not_observed` 并在缺口处切断未闭合区间，不把 0 行当无事件。**已部署**：默认/非 ops 形态未配置 `X_DATA_MCP_SOURCE_STORE` 时写 0 行/`pending_source`，生产形态（ops + compact）未配置或不可读时 `derived:risk_warnings` 以稳定码 `source_store_unconfigured` 失败（run `partially_failed`，日线照常）。写入器**沪市不写 `normal`**：无区间覆盖的日期是 `unknown`；深市自 D-81 任务 49 起在简称表覆盖内写 `normal`（代码已合并未部署，见 §1.4.3）。实测：preview.42 重放后 1,289 行（深市区间 + 沪市事件，`known_at` 最早 2026-11-01）；D-68 修复（preview.43）后沪市记录为 884 行（STATUS「已知问题」，aws-node 与 vm2 相同）；`replay --verify-only` 在 vm2 上对 105 行沪市记录报 `drift`（页序，STATUS「已知问题」） | #308；读面退市日截断见 #587 | M2（沪市 2004Q1 前为硬缺口，见 §3.3 偏差 2） | 部分满足（深市区间 + 沪 2004Q1 起事件级；2004Q1 前/北交所 `unknown`；无 `normal`；开区间在退市日截断，见 §3.1） |
+| 9 | 历史 ST / \*ST | 部分提供（已部署） | 2026-10-28 owner 按市场分档准入（D-58）：**深市** `SSGSGMXX`/`tab2` 的 ST 区间与**沪市**公告索引的状态事件（事件级）为 `APPROVED_SOURCE`；沪市生效日按 D-84 R2 取「公告日当天或其后第一个交易日的下一个交易日」（显式标题日期优先），档位 `OWNER_RISK_ACCEPTED`；日历未覆盖的事件不写行、状态 `unknown`，北交所 `NOT_AVAILABLE`；无公告一律 `unknown`，禁止「无公告 ⇒ 非 ST」。**沪市实际可观测起点是 2004Q1**：公告索引归档始于 2000-01，但 `TITLE=风险警示|特别处理` 在 2000–2003 每年 8 个窗口全为 `pageCount=0`（XDM-151 实测），这 16 个季度永久 `not_observed`，不得写成「2000 年起覆盖」（见 §1.3 与 §3.3 偏差 2）。写入器已实现（PR-10/#467）：整表替换 `risk_warning_intervals` 并登记 `derived_dataset_versions`，`derived:risk_warnings` 日更接入，`source_store replay --scope risk_warnings` 可离线重建（深市简称表按计划声明的 `TABKEY=tab2` 选块，`tab1` 是空块，live 与 replay 同块；解析器 `risk-warnings-v8`：沪市 `pageHelp.data` 是公告分组 `[[正文, 附件…], …]`，逐文档分类后按 `(公告 id, 事件)` 去重；标题分类按 D-68（撤销 A 并/继续实施 B 记 `Implement(B)`；申请/拟/可能/将被/预计/预审计/将消除/争取与第三方专业文件不计入，标题以「公告」（去尾部括号注记）结尾的发行人公告不套第三方守卫；`撤消`/`解除` 同 `撤销`），分页走 `pageHelp.beginPage`/`endPage` + `pageSize=100`，同窗口重复公告 id 判 `truncated`）；空结果记 `not_observed` 并在缺口处切断未闭合区间，不把 0 行当无事件。**已部署**：默认/非 ops 形态未配置 `X_DATA_MCP_SOURCE_STORE` 时写 0 行/`pending_source`，生产形态（ops + compact）未配置或不可读时 `derived:risk_warnings` 以稳定码 `source_store_unconfigured` 失败（run `partially_failed`，日线照常）。写入器**沪市不写 `normal`**：无区间覆盖的日期是 `unknown`；深市自 D-81 任务 49 起在简称表覆盖内写 `normal`（代码已随 preview.46 部署、数据待第一次日更，见 §1.4.3）。实测：preview.42 重放后 1,289 行（深市区间 + 沪市事件，`known_at` 最早 2026-11-01）；D-68 修复（preview.43）后沪市记录为 884 行（STATUS「已知问题」，aws-node 与 vm2 相同）；preview.46 的 replay 校验因 D-84 R2 日期平移报 `rows_changed`，同主键 sha 差异待 11-09 日更后确认（STATUS「已知问题」） | #308；读面退市日截断见 #587 | M2（沪市 2004Q1 前为硬缺口，见 §3.3 偏差 2） | 部分满足（深市区间 + 沪 2004Q1 起事件级；2004Q1 前/北交所 `unknown`；无 `normal`；开区间在退市日截断，见 §3.1） |
 | 10 | 历史行业 | 部分提供（已部署） | 当前行业（catalog 的 TDX 研究行业二级）已随目录部署；**历史区间不再只能从今天起积累**：M3 PR-6 已实现 `derived:industry_snapshot`（每代 `tdxhy.cfg` 落快照 + 区间变更集；`effective_from` 取发布方 `last_modified`，缺失取获取时间；缺同代 `incon.dat` 时名称为 `unknown`；早于最早观测返回 `unknown`）与 owner 归档 A/B 档的 `source_store import` + `replay --scope industry` 回填；PR-7 已实现读面 `market.industry_assignments`（`as_of`/`known_at`、`status=assigned/unknown` 带 `reason`、`source_snapshot_sha256`/`evidence_grade`）。**已部署并已导入归档**：最早只到归档最早快照（实测 2026-09-30；C 档 2026-09-16 只作交叉核对），5,235 行 assignment 全部 `unknown_dictionary`（归档快照没有同代 `incon.dat`，名称为 `unknown`，代码与区间可用）；更早仍 `unknown`，不能用当前行业冒充。替代来源（证监会行业分类）需取证 | #1、#446 | M3 | 部分满足（区间与来源可查；早于积累起点 `unknown`） |
 | 11 | 停牌 | 部分提供（已部署） | 官方文件没有停牌标记，`.day` 也没有占位行。A-3 已由 D-49 准入、2026-10-28 定交付口径（D-60）：沪市 **2008 年起**可实现 `confirmed`（结构化事件表，`endStopDate`=复牌日前一自然日），**深市首期没有 `confirmed`**（无结构化源，`BULLETIN_TYPE` 过滤不可用），只到 `unresolved_gap`；深市缺 bar 的日子可交易性是 `unknown`（§3.3 偏差 6）。PR-11 写入器已部署（preview.39 起），`confirmed` 20,420 段（2026-10-31 首轮验收）；默认/非 ops 形态未配置来源库时只有 `unresolved_gap`，生产形态（ops + compact）缺 store 时 `derived:suspensions` 以稳定码 `source_store_unconfigured` 失败。`confirmed` 的 `known_at` 为空（事件表没有公告日，D-49）。零交易日语义（XDM-134，已部署）：confirmed 区间未完全落在日历 `[first_day,last_day]` 内（含整段在 `last_day` 之后、以及部分越界）→ `deferred_beyond_calendar`，区间在覆盖内但整段无交易日（纯周末/假日）→ `skipped_no_trading_day`；两种情况都**不写行**（表约束 `missing_days>0` 不变，不 clamp、不写部分计数）、item 成功，计数与样例进 item outcome 与 `derived_dataset_versions` evidence；deferred 区间的已覆盖子段仍向 gap 派生解释缺 bar（不写行） | #404（A-3） | M2（标记）/ M3（闭合） | 部分满足（沪市 2008 起 `confirmed`；深市只有缺口） |
-| 12 | 涨跌停 | 部分提供（规则已入库；无读面；主板无 ST 区间时 `unknown`） | 结构随 preview.37 部署（`market.price_limit_rules`，按生效日期管理、每行带 `basis_ref`/`basis_status`）。**A-7 已由 D-44 关闭**（2026-10-26，2026-10-28 复核确认，见 D-59）：规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED` 且标「推断」、R7 `NOT_AVAILABLE`。规则书（R1–R9：27 行涨跌停规则 + 2 行最小变动单位）已作为版本化规则数据入库，日更 `derived:trading_rules` item 写入两表并登记版本（不变为 `no_change`）；已部署，库内 27 + 2 行（STATUS）。**读面：没有**——`limit-v1` 派生只在库函数 `price_limit` 里，MCP 与导出都不暴露（审计 §3），`market.price_limit_rules` 只返回规则行。**D-64（2026-10-29）另补两批数据-only 行**：R2 前段 5 行（1998 起点 `OWNER_RISK_ACCEPTED`：深交所简称表首个 ST 事件 + `.day` 锚定；沪市只有 `.day`，D-58 的沪市 2000 年前 ST 状态仍 `NOT_AVAILABLE`；2006/2011/2013/2020-12 条文段 `APPROVED_SOURCE`）与 R6 首日无涨跌幅 5 行（`band_side=none`，派生 `unbounded` 而不是 `unknown`）。剩余偏差：1996-12-16 前（R7）无规则 → `unknown`；主板首日 44%/36% 段（沪 2013-12-13 起、深 2014-06-13 起）仍 `not_encoded` → `rule_missing`；沪市风险警示股前收 ≤0.10 元的一 tick 例外已由 schema 25 的 `min_band_ticks` 落地（沪 2013-01-01…2023-02-16、沪 2023+ 的两行 ST 与深 2011-02-28…2023-02-16 的 ST 行置 1；深 2023+ 两行因 G-4 原文未取得保持 NULL，极低价仍是已知未编码的百分比结果），`limit-v1` 同时保留 1 tick 价格下限。ST 状态未知时，仅 `status_class='all'` 的板块/时段（创业板 2020-08-24 起、科创板，以及 2023 前的首日无涨跌幅段）有确定值，其余 `unknown`；因为沪市写入器不写 `normal`，沪市主板在没有 ST 区间的日子仍属「状态未知」；深市自 D-81 任务 49 起有 `normal`（代码已合并未部署），部署后深市主板无 ST 区间时给出确定值。**limit-v2（D-84）**：除权日基准价算法。(1) 配股（C4>0）：`unknown` + `ex_rights_unverified`（公式准确率约61%）。(2) 2010-09-14 前，当日 bar 的 r7_raw 非 0 且非哨兵/手标记：官方除权基准价（分）。(3) 其余（2010-09-14 起或 r7_raw=0/哨兵）：gbbq::reference_price 先 HALF_UP 取整到分，再乘涨跌幅，多事件链式；`price_scale<2` 或参考价≤0 返回 `unknown`。(4) 无事件：前收。**2010-09-14 之后的基准是 `OWNER_RISK_ACCEPTED`**：没有官方基准，只经过证伪检验（越界 0.115%），不等于证明。`ex_rights_unverified` 现在只有配股或非正数参考价才出现。`price_limit` 在 `membership=Out(AfterDelisting)` 时原因码为 `delisted`（#587，与 `not_listed` 分开，答案仍是 `unknown`；其余 `Out(_)` 仍是 `not_listed`） | #395（A-7）、#308（ST）、#587 | M2 | 部分满足（规则行已入库；无读面；主板 `unknown` 为主） |
+| 12 | 涨跌停 | 部分提供（规则已入库；无读面；主板无 ST 区间时 `unknown`） | 结构随 preview.37 部署（`market.price_limit_rules`，按生效日期管理、每行带 `basis_ref`/`basis_status`）。**A-7 已由 D-44 关闭**（2026-10-26，2026-10-28 复核确认，见 D-59）：规则文本 `APPROVED_SOURCE`、R1/R3 起点与两处条文缺口 `OWNER_RISK_ACCEPTED` 且标「推断」、R7 `NOT_AVAILABLE`。规则书（R1–R9：27 行涨跌停规则 + 2 行最小变动单位）已作为版本化规则数据入库，日更 `derived:trading_rules` item 写入两表并登记版本（不变为 `no_change`）；已部署，库内 27 + 2 行（STATUS）。**读面：没有**——`limit-v1` 派生只在库函数 `price_limit` 里，MCP 与导出都不暴露（审计 §3），`market.price_limit_rules` 只返回规则行。**D-64（2026-10-29）另补两批数据-only 行**：R2 前段 5 行（1998 起点 `OWNER_RISK_ACCEPTED`：深交所简称表首个 ST 事件 + `.day` 锚定；沪市只有 `.day`，D-58 的沪市 2000 年前 ST 状态仍 `NOT_AVAILABLE`；2006/2011/2013/2020-12 条文段 `APPROVED_SOURCE`）与 R6 首日无涨跌幅 5 行（`band_side=none`，派生 `unbounded` 而不是 `unknown`）。剩余偏差：1996-12-16 前（R7）无规则 → `unknown`；主板首日 44%/36% 段（沪 2013-12-13 起、深 2014-06-13 起）仍 `not_encoded` → `rule_missing`；沪市风险警示股前收 ≤0.10 元的一 tick 例外已由 schema 25 的 `min_band_ticks` 落地（沪 2013-01-01…2023-02-16、沪 2023+ 的两行 ST 与深 2011-02-28…2023-02-16 的 ST 行置 1；深 2023+ 两行因 G-4 原文未取得保持 NULL，极低价仍是已知未编码的百分比结果），`limit-v1` 同时保留 1 tick 价格下限。ST 状态未知时，仅 `status_class='all'` 的板块/时段（创业板 2020-08-24 起、科创板，以及 2023 前的首日无涨跌幅段）有确定值，其余 `unknown`；因为沪市写入器不写 `normal`，沪市主板在没有 ST 区间的日子仍属「状态未知」；深市自 D-81 任务 49 起有 `normal`（代码已随 preview.46 部署、数据待第一次日更），数据生效后深市主板无 ST 区间时给出确定值。**limit-v2（D-84）**：除权日基准价算法。(1) 配股（C4>0）：`unknown` + `ex_rights_unverified`（公式准确率约61%）。(2) 2010-09-14 前，当日 bar 的 r7_raw 非 0 且非哨兵/手标记：官方除权基准价（分）（preview.46 已部署）。(3) 其余（2010-09-14 起或 r7_raw=0/哨兵）：gbbq::reference_price 先 HALF_UP 取整到分，再乘涨跌幅，多事件链式；`price_scale<2` 或参考价≤0 返回 `unknown`。(4) 无事件：前收。**2010-09-14 之后的基准是 `OWNER_RISK_ACCEPTED`**：没有官方基准，只经过证伪检验（越界 0.115%），不等于证明。`ex_rights_unverified` 现在只有配股或非正数参考价才出现。`price_limit` 在 `membership=Out(AfterDelisting)` 时原因码为 `delisted`（#587，与 `not_listed` 分开，答案仍是 `unknown`；其余 `Out(_)` 仍是 `not_listed`） | #395（A-7）、#308（ST）、#587 | M2 | 部分满足（规则行已入库；无读面；主板 `unknown` 为主） |
 | 13 | ETF | 部分提供（已部署：身份、采集、日更、`query_data` 读面；导出 `v4` 含 ETF） | 身份由交易所名录锚定：**SSE `FUND_LIST` + SZSE `1945`（D-70 Q1，`ebs` 仅作报价锚）**；退市 ETF 由 **D-71** 的两个公告索引（沪 `COMMON_PL_JJXX_JJGG_L`、深 `etfNotice_disc`）按「候选 ∩ 公告命中」准入，精确退市日由 **D-72** 的公告 PDF 一次性提取结果提供（生产代码不解析 PDF）；`sh_sz_etf_current` 取最新名单，`sh_sz_etf_listed_ever` 取所有已冻结名单 + 退市公告的并集且移出名单不删行。`.day` 对 ETF 的价格单位是**厘**（3 位小数）、`volume` 是**份**（≥4.29e9 份时改写为手）、gbbq 还有 cat11（份额折算）未进 QFQ；精度/量纲与「A 股字节不变」的逐处改动清单见 [M3-2 设计](tasks/issue-509-m3-2-etf.md) §6。owner 2026-10-26 裁决：作为 `market.daily` 的证券类型、按序列记精度、提供不复权 + cat1/cat11 因子（D-28）；2026-11-03 批准 D-70 并追加 D-71/D-72。**PR-A/A2/B/C/C2/D 均已随 preview.45 部署到 vm2-126（2026-11-05）**：ETF 不复权日线并入 `research-snapshot.v4` 的 `daily_raw`，`universe_intervals` 给出 ETF 的 `last_trade_date`/`delisting_date`。ETF 默认 `universe` 仍是 A 股；新 scope 只对 `market.daily` 生效。**客户端经隧道连的是 aws-node（preview.43），看不到 ETF**（D-74） | #246、#509 | M3-2 | 部分满足（vm2 上身份/退市公告来源 + 不复权日线 + 日更；86 只无日线、无年线、无前复权，偏差见 §3.3 偏差 9/10） |
 | 14 | 财务数据 | 不在范围 | 首期范围是价量 + 股本/市值，不含财务 | #1 | 不在首期 | — |
 | 15 | 分钟线 | 不在范围 | 首期只做日线；`series_bars.trade_day` 是日序号，分钟线要改主键 | #1 | 不在首期 | — |
@@ -577,7 +577,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
    剩余偏差：2004Q1 之前的沪市风险警示区间一律 `unknown`，回测中这些日期应按「未知」剔除或
    单独报告敏感性，不能当成正常交易；2004Q1 起的区间边界依赖 owner-risk 的 D-84 R2 规则
    （真实数据里标题没有显式日期，全部由公告日加交易日历推出），报告里要注明。
-   写入器已部署，但**沪市**没有区间覆盖的日期仍是 `unknown`，从不写 `normal`（审计 §2.3）；深市闭世界代码已合并未部署（§1.4.3）。
+   写入器已部署，但**沪市**没有区间覆盖的日期仍是 `unknown`，从不写 `normal`（审计 §2.3）；深市闭世界代码已随 preview.46 部署、数据待第一次日更（§1.4.3）。
 3. **交易日历的完整性**：目前只有「指数日期并集」一种推导，且只能证明「不在日历 ⇒ 非交易日」，
    不能证明「在日历 ⇒ 该证券当日可交易」。一手证据需交易所年度休市公告；在此之前日历必须标
    derived，并随快照记录输入清单。
@@ -636,14 +636,14 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 
 10. **ETF 数据面（M3-2 首期）**：
 
-    - **ETF 成员区间起点是上市日，不是首次观察日（D-80，代码面未部署）**：preview.45 的主表里
+    - **ETF 成员区间起点是上市日，不是首次观察日（D-80，代码已部署；主表数据待第一次日更）**：preview.45 的主表里
       1,846 个 ETF 行有 1,845 行 `effective_from` 晚于 `listing_date`（1,718 行是 2026-11-05），
       所以导出的 `universe_intervals` 在 2026-11-05 之前基本没有 ETF 成员。D-80 起有 `listing_date`
       的 ETF 行 `effective_from` 取上市日，`known_at` 仍是首次观察日；没有 `listing_date` 的行保持首次
       观察日。A 股行不变。带 `known_at=T` 的查询在 T 早于首次观察日时仍排除 ETF 行并计数（这类
       查询对 ETF 仍不是「当时库里能看到什么」的完整重放）。7 只 `SSDATE` 晚于首根 bar 的 ETF
-      处理不变：不裁剪 bar，也不拿 bar 覆盖上市日。已部署的 preview.45 仍是旧取值，部署后第一次日更
-      的主表重写才生效。
+      处理不变：不裁剪 bar，也不拿 bar 覆盖上市日。preview.46 已含 #571；库内仍是 preview.45 的旧取值，第一次日更
+      重写主表后生效。
     - **86 只现行 ETF 没有日线**：名单有、`hsjday` 无，全部在沪市 `sh526`（7）、`sh551`（12）、
       `sh589`（67）三个代码段；`hsjday` 在这三段各 0 个成员，同期 2026 年上市的 ETF 有 306 只，
       所以不是「新上市滞后」，而是源覆盖缺段（原因未验证）。主表照写、`market.daily` 读面按
@@ -761,14 +761,14 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 
 - **确认没有幸存者偏差的回测**：数据层已有退市股行情和时点主表（§3.2 #6–#8）。默认研究导出此前只取
   目录成员、漏掉不在目录的退市序列（审计 §2.1）；代码已修复（#545，默认选择改为目录 ∪ 主表 A 股 ∪
-  已发布序列，见 §5.3），**等部署后在真实库上确认**（`coverage.delisted_series` 应接近 338 个退市序列，
-  未实测）。在此之前不能把它当作已满足；退市日未知与代码迁移仍有残余。
+  已发布序列，见 §5.3），代码已随 preview.46 部署；2026-11-07 真实库预检（XDM-198）读回 `coverage.delisted_series=337`，
+  与 338 个退市序列的已知缺口一致。退市日未知与代码迁移仍有残余。
 - **严格可交易性回测**：停牌（沪 2008 起）、ST（深市与沪 2004Q1 起）、涨跌停规则三类输入都有，
   但没有派生读面、没有 `normal`、深市无 `confirmed` 停牌、除权日涨跌停基准不准。
-- **逐位可复现的回测**：`export_research` 自 preview.36 起随发布包部署（已部署 `research-snapshot.v4`，代码为 `v5`），
+- **逐位可复现的回测**：`export_research` 自 preview.36 起随发布包部署（preview.46 起已部署 `research-snapshot.v5`），
   但它是**离线命令**、不在 MCP 上（D-39）：要复现必须自己保留导出目录与 `manifest.json`；清单不记录
   二进制版本，派生（涨跌停、市值）读时重算；直读路径（§5.2）仍不绑定版本（审计 §2.4）。
-  代码已补（本节 §5.3 的 `producer`，`research-snapshot.v5`），未部署：已部署的 preview.45 仍写 `v4`、没有 `producer`。
+  preview.46 已部署 `research-snapshot.v5` 的 `producer` 块；2026-11-07 预检（XDM-198）读回 `producer.git_sha` 与算法版本。
 - **参数/口径敏感性**：不复权与前复权两条序列都在库（preview.36 起）；`query_data` 缺省读前复权，
   A 股显式 `adjustment=raw` 读不复权（v10），导出两者都有（§5.3）。
 
@@ -804,7 +804,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 - 脚本只读、无写，不是服务/MCP/契约的一部分，也没有稳定性承诺。
 - 需要可复现结论时，必须自己记录 `market_series.version_id` 与目录版本（§5.3 的清单形状）。
 
-### 5.3 研究快照导出（preview.36 起部署；已部署 `research-snapshot.v4`，含 M3 与 ETF 行，随 preview.45 部署到 vm2-126；代码为 `v5`，未部署）
+### 5.3 研究快照导出（preview.36 起部署；preview.46 起已部署 `research-snapshot.v5`，含 M3/ETF 行与 `producer`；preview.45 及以前为 `v4`）
 
 - **随发布包部署**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
   它；`scripts/build_release.sh` 自 #413 固定 `--features export` 并在打包后断言该命令存在），
@@ -859,13 +859,13 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
   `default_members`），所以不在当前目录的退市股进入 `daily_raw`/`daily_qfq`/`factors`，
   `coverage.delisted_series` 按导出序列里主表有退市日的实体计数。此前的实现只取目录成员，会漏掉
   listed-ever 首采的 338 个退市序列（vm2 preview.45 dry-run：`delisted_series=0`，series 6,984
-  条，库里 A 股实体 5,562 个）。`catalog.member_count` 仍只数目录成员，清单 schema 不变；
+  条，库里 A 股实体 5,562 个；preview.46 预检为 337，XDM-198）。`catalog.member_count` 仍只数目录成员，清单 schema 不变；
   显式 `--entities` 行为不变；显式 `--catalog-version` 仍**只取那一版目录的成员**，是有意的
   「固定目录快照」请求，天然带幸存者偏差，清单里以 `catalog_version` 标明。输入序列列表变了，
   所以同一个库的 `snapshot_id` 与修复前不同；现行成员的序列条目与行内容不变，ETF 不变。
   整表文件（`security_master`、`security_names`、`capital_events`、`risk_warnings`、
   `suspensions`、`universe_intervals`、`industry_assignments`）本来就不按目录过滤，修复前后行集一致。
-- **`v5` 与 `producer`（审计 T7，Refs #383；代码已实现，未部署，已部署的 preview.45 仍写 `v4`）**：
+- **`v5` 与 `producer`（审计 T7，Refs #383；preview.46 已部署，XDM-198 预检读回 `v5` 与 `producer`）**：
   - **两种 `v4` 布局的真实情况**：`research-snapshot.v4` 的字符串在 tag `v0.2.0-preview.42`/`43` 与
     `v0.2.0-preview.44`/`45` 上写出不同的列。preview.42/43：`daily_raw`/`daily_qfq` 11 列、
     `universe_intervals` 7 列；preview.44/45（M3-2 PR-D）：13 列、10 列（追加 `instrument_class`、
@@ -934,7 +934,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 - **实测**：preview.36 部署后全量 daily 导出 119s、900MB（`daily_raw` 16,737,243 行，见
   [STATUS](STATUS.md)）；含 M2 文件的 v2 导出耗时没有回填。v3/v4 新增文件的体积与耗时没有在部署实例上
   测量（STATUS 注明本轮未重跑导出）；夹具层面 v3 不改变既有文件的编码。**默认导出的退市序列：代码已修复
-  （上一条，#545），部署后需在真实库上实测核对 `coverage.delisted_series` 与序列数**（审计 §2.1）。本机校验用
+  （上一条，#545）；2026-11-07 预检已读回 `coverage.delisted_series=337`（XDM-198）**（审计 §2.1）。本机校验用
   `/root` 下的独立 venv（`scripts/export_smoke.py`，CI 里由 `export` job 跑）。
 
 ## 6. 维护规则

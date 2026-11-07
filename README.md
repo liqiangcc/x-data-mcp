@@ -102,7 +102,7 @@ unsupported-metadata fallback 仍按
 external distribution is not authorized；它不是“服务未运行”的同义词。
 
 schema 命名澄清：`SCHEMA_VERSION=18` 仅是 legacy upgrade source schema
-（既有库显式 upgrade 的来源版本），已部署实例为 compact schema 27（2026-11-07 preview.46），
+（既有库显式 upgrade 的来源版本），已部署实例为 compact schema 27（preview.46 未改 schema；27 在更早版本已上线），
 代码的 `COMPACT_SCHEMA_VERSION` 也是 27。Issue/Epic 中的“v15”是交付规划标签，
 不是 schema 编号。
 

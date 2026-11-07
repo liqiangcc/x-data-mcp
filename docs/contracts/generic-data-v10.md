@@ -1,7 +1,7 @@
 # generic-data-v10 契约（M3-2 ETF 身份与 scope 词汇）
 
 **状态**：历史（2026-11-05 随 preview.45 在 vm2-126 部署过；现由 [`generic-data-v11`](generic-data-v11.md) / preview.46 取代）。
-本文件是 v10 快照 / compact schema 27。
+本文件是 v10 快照 / compact schema 27；下文「未部署/代码面」类表述描述 preview.45 时点，不代表当前部署（当前为 v11）。
 本文件记录 M3-2 第一个改 wire 的 PR-A（Refs #509）带来的增量，以及后续 PR-B/PR-C/PR-C2 对同一
 revision 的补充（不再次升 capability revision）。schema 27 由 PR-B 的
 `027_etf_factor_events.sql` 带入（026 为 R2 的 `source_refresh_runs` 等）；aws-node fallback
