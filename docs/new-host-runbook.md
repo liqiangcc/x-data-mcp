@@ -225,7 +225,7 @@ export XDM_TUNNEL_SERVICE=xdm-tunnel-stub.service
 
 - 新机切换前不装 tunnel 的二进制、profile、凭据和真单元，只有 §3 的占位单元。这样新旧两机同一 profile 同时在线在机器层面不可能。
   控制面如何处理同一 tunnel 的两个客户端无法在本地验证，所以按“绝不双在线”设计。
-- 是否在新机装 tunnel 是 owner 的决定（D-74 当时选择先不装，客户端留在旧机）。
+- 是否在新机装 tunnel 是 owner 的决定（D-74 当时选择先不装，客户端留在旧机）。不装 tunnel 时，客户端仍可经 ssh + `mcp_connect` 直连新机的只读 `research.sock`，见[客户端连接](client-connect.md)。
 - 切换顺序（只有 owner 确认后执行）：
   1. 旧机：先停 tunnel，再停 acquire 和 data，并全部 `disable`（否则旧机重启会抢回生产）。文件全部保留。
   2. 新机：确认 data、acquire 在跑；从操作员的受控位置安装 tunnel 二进制、profile（命令是绝对路径

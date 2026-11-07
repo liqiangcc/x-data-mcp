@@ -8,8 +8,9 @@
 
 **两台主机（D-74，2026-11-05 owner 裁定）**：日更和主数据的生产机是 **vm2-126**
 （preview.46，schema 27，`generic-data-v11`，无 tunnel）；**aws-node** 保留 tunnel 与
-fallback（preview.43，schema 26，`generic-data-v9`，数据冻结、不再跑日更），客户端仍连
-aws-node。vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
+fallback（preview.43，schema 26，`generic-data-v9`，数据冻结、不再跑日更），既有客户端仍连
+aws-node 的 tunnel；新客户端可经 ssh + `mcp_connect` 连 vm2 的只读 `research` 入口（[客户端连接](client-connect.md)）。
+vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
 
 最后核实：2026-11-07（vm2-126 preview.46 部署后的只读验收：版本/单元/内存档位/导出预检/读面冒烟
 通过，`research` 入口实测 17 项工具、capability `generic-data-v11`；`risk_warnings` 的 replay drift
@@ -78,7 +79,7 @@ preview.40 及更早的实测值保留为「历史」对照；本轮未重新测
 | 版本 | `v0.2.0-preview.46`，git_sha `c35b425f727fa74ad2cca0f6c9c683213e256b21` | 历史（冻结）：`v0.2.0-preview.43`，git_sha `c0ae29500b56a754a5f2d3304b8584f551b94a89` |
 | schema / capability | schema 27 / `generic-data-v11` | 历史（冻结）：schema 26 / `generic-data-v9` |
 | active generation | `2731a664…`（导出预检标为 active/最新代；完整 sha、激活时间与上一代本轮未列出）；最新行情日本轮未列出 | `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；数据停在 2026-11-04 |
-| tunnel | 无（客户端连不到 vm2） | tunnel/data/acquire 三单元仍 active；客户端仍连这里，看不到 ETF 与 11-05 之后的数据 |
+| tunnel | 无（外部读路径是 ssh + `mcp_connect`，见[客户端连接](client-connect.md)） | tunnel/data/acquire 三单元仍 active；既有客户端仍连这里，看不到 ETF 与 11-05 之后的数据 |
 | 到期 | 试用机，约 2027-01-04 到期，到期前要定去向 | — |
 
 ### vm2-126 明细（当前生产：日更和主数据）
@@ -267,11 +268,11 @@ PR-6/8/10/12 与 A-1/A-2、A-3、S-6 已把大部分 `pending_source` 接上，�
 |---|---|---|---|---|
 | `x-data-mcp-data` | `data_service` | `run/mcp.sock`（`--entry ops`）、`run/research.sock`（`--entry research`）、`run/maint.sock`（`--entry maint`） | 16 / 17 / 9 | capability `generic-data-v11`（ops 16 / research 17 / maint 9 / acquire 10；XDM-198 2026-11-07 只读探针，`get_data_capabilities` 读回 `generic-data-v11`；drop-in 与 socket 布局沿用 preview.38 起的单进程三 socket 形态，逐项配置本轮未核实） |
 | `x-data-mcp-acquire` | `acquire_service` | `run/acquire.sock` | 10 | 同上 |
-| `x-data-mcp-tunnel` | — | — | — | **无 tunnel**（D-74：tunnel 暂留 aws-node，客户端连不到 vm2） |
+| `x-data-mcp-tunnel` | — | — | — | **无 tunnel**（D-74：tunnel 暂留 aws-node；客户端经 ssh + `mcp_connect` 连 `research.sock`，见[客户端连接](client-connect.md)） |
 
 ### aws-node（fallback + tunnel；preview.43 冻结）
 
-以下为 aws-node 三单元在冻结时点的记录；tunnel 仍是客户端唯一入口。
+以下为 aws-node 三单元在冻结时点的记录；tunnel 仍是既有客户端的入口，新客户端走 vm2 的 ssh 路径（见[客户端连接](client-connect.md)）。
 
 | systemd 单元 | 进程 | 入口 | 工具数 | 备注 |
 |---|---|---|---|---|
