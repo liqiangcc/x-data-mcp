@@ -632,7 +632,11 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
    行（PR-D，见 [v10 契约](contracts/generic-data-v10.md) §1.6：`daily_raw` 加 `instrument_class`/
    `no_trade`，`universe_intervals` 给 ETF 同时写 `last_trade_date` 与 `delisting_date`）。
    **客户端经隧道连的是 aws-node（preview.43），看不到 ETF**（D-74），所以 ETF 回测要在 vm2 本机
-   或经导出做；A 股读面和导出不变。
+   或经导出做；A 股读面和导出不变。沪市 82 只退市 ETF 的场内简称由 operator 离线脚本
+   `scripts/extract_etf_short_names.py`（`etf-short-name-v2`，XDM-203）只从终止公告 PDF 的
+   `场内简称`/`基金场内简称` 字段提取：55 只有名称，27 只的 PDF 只有「扩位简称/基金简称/证券简称」，
+   按 D-76 Q4 读面返回 `name_basis: unavailable`；脚本不猜、不截断（长度上限 12 字按证据定），
+   先取 `pdfinfo` 页数，不越过末页。
 
 10. **ETF 数据面（M3-2 首期）**：
 

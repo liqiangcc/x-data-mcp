@@ -8,21 +8,53 @@ an **operator tool**, run once on the machine that holds the frozen PDF bytes
 (vm2). Production Rust code never parses a PDF; it only reads `short_name`
 from the imported CSV.
 
-The script is offline: it reads local files, shells out to `pdftotext`, and
-writes a CSV. It never opens a network connection, never edits the source
-store in place and never guesses a name. For every row it emits the evidence
-columns the Rust importer and the item evidence require:
+The script is offline: it reads local files, shells out to `pdfinfo` and
+`pdftotext`, and writes a CSV. It never opens a network connection, never
+edits the source store in place and never guesses a name. For every row it
+emits the evidence columns the Rust importer and the item evidence require:
 
     doc_sha256             sha256 of the PDF the value came from (D-72 column)
     short_name_page_no     page of the PDF the snippet was found on
-    short_name_snippet     verbatim text the value was extracted from
-    short_name_extractor   this script's version, e.g. "etf-short-name-v1"
+    short_name_snippet     verbatim line the value was extracted from
+    short_name_extractor   this script's version, e.g. "etf-short-name-v2"
 
 When the PDF is missing, `pdftotext` fails, or no 场内简称 is present, the
 three `short_name*` fields are left empty. The name is **not** taken from the
 announcement title's fund full name and is never reconstructed from the code
 or the fund company: the read surface answers `name: null`,
 `name_basis: unavailable` for those ETFs (D-76 Q4).
+
+The v2 rule (XDM-203) is derived from the 82 SSE termination PDFs audited in
+XDM-201 §3:
+
+- A name is read only from an explicit `场内简称：` / `场内简称:` label (also
+  written `基金场内简称：` in that corpus). `扩位简称`, `场内扩位简称`,
+  `基金场内扩位简称`, `基金简称`, `证券简称` and `扩位证券简称` are
+  **different fields** and are never used, not even as a fallback.
+- The value stops at the first line end, punctuation (full- or half-width
+  comma, period, semicolon, parenthesis, bracket, quote, colon, ...) or a
+  layout column gap (two or more spaces). A single space inside a name
+  (`民企 ETF`, `500 医药`) is kept while matching and removed afterwards,
+  matching the search-side normalisation (D-76 Q8). Full-width characters are
+  preserved.
+- A standalone field line (the label begins its line) wins over a label
+  embedded in prose, so a value wrapped across a line (`场内简称：50 等` /
+  `权，扩位简称：…`) loses to the field line `场内简称：50 等权`
+  (XDM-201 §3.3, sh.510430).
+- A capture that still contains a label word (`以下简称`, `本基金`, `扩位`,
+  `简称`, `代码`, `证券`, `基金`, ...) or a fund full name is refused. The
+  length guard is `MAX_NAME_CHARS` (12), derived from the same corpus: the
+  longest real value is 8 characters (`180EWETF`, `180高ETF`) and the
+  exchange `fundAbbr` shape is 2-8 characters. It is a sanity bound, not a
+  display cut: nothing is truncated, an over-long capture is refused and
+  reported.
+
+Pagination (also XDM-203): v1 always probed five pages, so a two-page PDF
+produced `pdftotext exited 99: first page (3) can not be after the last
+page (2)` for every row whose name was not on page 1. v2 asks `pdfinfo` for
+the page count first and never requests a page past it; when `pdfinfo` is
+unavailable it probes page by page and stops at the first failure after
+page 1 (a failure on page 1 is still a real error).
 
 Usage
 -----
@@ -52,7 +84,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-EXTRACTOR_VERSION = "etf-short-name-v1"
+EXTRACTOR_VERSION = "etf-short-name-v2"
+
+# Evidence-derived sanity bound, not a display cut (see the module docstring):
+# the 82-PDF audit's longest value is 8 characters and the exchange `fundAbbr`
+# shape is 2-8. An over-long capture is refused, never truncated.
+MAX_NAME_CHARS = 12
 
 # Columns the D-72 importer requires. `short_name` and friends are added by
 # this script; an input that already has them is re-derived, not appended
@@ -78,16 +115,34 @@ ADDED = (
 )
 SSE_SOURCE_ID = "sse_fund_delist_ann"
 
-# The PDF samples in 取证 §6: `场内简称：民企 ETF`, `场内简称 永赢中证
-# 500ETF`, with an optional colon (full- or half-width) and arbitrary spaces.
-# The capture is deliberately bounded and stops at the line end. 基金简称 is a
-# different, longer name and is never used as a fallback.
-SHORT_NAME_RE = re.compile(r"场内简称\s*[:：]?\s*([^\r\n]{1,40})")
+# `场内简称：民企 ETF`, `场内简称 永赢中证 500ETF`, `基金场内简称：能源行业`.
+# The colon is optional (full- or half-width). The label must not be part of
+# `扩位场内简称` / `基金扩位场内简称`: those are the expanded (扩位) name, a
+# different field, and matching them would fabricate a name from it.
+SHORT_NAME_LABEL_RE = re.compile(
+    r"(?<!扩位)(?<!基金扩位)(?:基金)?场内简称\s*[:：]?\s*"
+)
 
-# A line that is only a fund's full name (a substitution we must not make) or
-# a page header. Requiring the label above is the primary guard; this second
-# check rejects captures that are clearly not an on-exchange short name.
-FULL_NAME_MARKERS = ("证券投资基金", "交易型开放式指数", "基金简称")
+# Where a value ends. Full- and half-width punctuation, plus the layout column
+# gap handled separately in `short_name_candidates`. A single space is *not* a
+# terminator: `民企 ETF` and `500 医药` are one name.
+VALUE_TERMINATORS = "，,。.；;、（）()【】[]{}<>《》「」『』“”\"'‘’：:！!？?…"
+
+# A capture that still contains one of these is not a short name: it is prose
+# or another field's label. Requiring the explicit `场内简称` label is the
+# primary guard; this second check rejects a capture the terminator set did
+# not cut (XDM-201 §3.3).
+REJECT_MARKERS = (
+    "以下简称",
+    "本基金",
+    "扩位",
+    "简称",
+    "代码",
+    "证券",
+    "基金",
+    "交易型开放式",
+    "投资基金",
+)
 
 
 def clean_short_name(raw: str) -> str | None:
@@ -95,19 +150,23 @@ def clean_short_name(raw: str) -> str | None:
 
     ETF short names often contain spaces between Chinese and ASCII
     (`民企 ETF`, `永赢中证 500ETF`). They are removed for the stored name,
-    matching the search-side normalisation (D-76 Q8). A capture that is a fund
-    full name, is empty, or has no ASCII/CJK content is refused.
+    matching the search-side normalisation (D-76 Q8). A capture that still
+    contains prose or another field's label, is empty, exceeds
+    `MAX_NAME_CHARS`, or has no ASCII/CJK content is refused. Valid full-width
+    characters are kept as they are.
     """
     text = raw.strip()
     if not text:
-        return None
-    if any(marker in text for marker in FULL_NAME_MARKERS):
         return None
     # Cut a trailing date/annotation that `pdftotext -layout` sometimes puts
     # on the same line, e.g. `场内简称：民企 ETF    2020-11-13`.
     text = re.split(r"\s{2,}", text, maxsplit=1)[0].strip()
     compact = re.sub(r"\s+", "", text)
-    if not compact or len(compact) > 20:
+    if not compact:
+        return None
+    if any(marker in compact for marker in REJECT_MARKERS):
+        return None
+    if len(compact) > MAX_NAME_CHARS:
         return None
     if not re.search(r"[\w\u4e00-\u9fff]", compact):
         return None
@@ -149,26 +208,103 @@ def page_text(pdf: Path, page: int) -> str:
     return result.stdout.decode("utf-8", "replace")
 
 
+def short_name_candidates(text: str) -> list[tuple[str, str, int]]:
+    """All usable `(name, line, tier)` candidates on one page of text.
+
+    `tier` orders the evidence shapes seen in XDM-201 §3, lowest wins:
+
+        0  standalone field line, value ended by punctuation
+        1  standalone field line, value ended by the line end (may be wrapped)
+        2  label inside prose, value ended by punctuation
+        3  label inside prose, value ended by the line end
+
+    A standalone field line beats prose because a prose `场内简称：50 等` is
+    often wrapped and its continuation (`权，扩位简称：…`) is another field
+    (sh.510430). Within one tier the longest value wins.
+    """
+    candidates: list[tuple[str, str, int]] = []
+    for match in SHORT_NAME_LABEL_RE.finditer(text):
+        line_start = text.rfind("\n", 0, match.start()) + 1
+        standalone = not text[line_start : match.start()].strip()
+        rest = text[match.end() :]
+        stop = len(rest)
+        ended_by_punctuation = False
+        for offset, char in enumerate(rest):
+            if char == "\n" or char in VALUE_TERMINATORS:
+                stop = offset
+                ended_by_punctuation = char != "\n"
+                break
+        raw = rest[:stop]
+        # `pdftotext -layout` separates table columns with two or more spaces.
+        raw = re.split(r"\s{2,}", raw, maxsplit=1)[0]
+        name = clean_short_name(raw)
+        if name is None:
+            continue
+        line_end = text.find("\n", match.end())
+        if line_end < 0:
+            line_end = len(text)
+        line = text[line_start:line_end].strip()
+        tier = (0 if standalone else 2) + (0 if ended_by_punctuation else 1)
+        candidates.append((name, line, tier))
+    return candidates
+
+
 def extract_from_text(text: str) -> tuple[str, str] | None:
-    """Return `(short_name, verbatim snippet)` from one page of text."""
-    for match in SHORT_NAME_RE.finditer(text):
-        line = match.group(0).strip()
-        name = clean_short_name(match.group(1))
-        if name is not None:
-            return name, line
+    """Return `(short_name, verbatim line)` from one page of text."""
+    candidates = short_name_candidates(text)
+    if not candidates:
+        return None
+    name, line, _tier = min(candidates, key=lambda item: (item[2], -len(item[0])))
+    return name, line
+
+
+def page_count(pdf: Path) -> int | None:
+    """PDF page count from `pdfinfo`, or None when it cannot be read."""
+    try:
+        result = subprocess.run(
+            ["pdfinfo", str(pdf)], capture_output=True, check=False
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.decode("utf-8", "replace").splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() != "Pages":
+            continue
+        try:
+            count = int(value.strip())
+        except ValueError:
+            return None
+        return count if count > 0 else None
     return None
 
 
 def extract_pdf(pdf: Path, sha: str, max_pages: int = 5) -> dict[str, str]:
-    """Extract one PDF's short name. Never raises for a missing value."""
+    """Extract one PDF's short name. Never raises for a missing value.
+
+    The scan is bounded by `pdfinfo`'s page count, so a two-page PDF gets two
+    `pdftotext` calls and no `exited 99` error (XDM-201 §9). Without `pdfinfo`
+    the probe stops at the first failure after page 1; a failure on page 1 is a
+    real read error and is raised.
+    """
     empty = {key: "" for key in ADDED}
     # Verify the bytes still match the D-72 doc_sha256: a swapped PDF would
     # silently attach the wrong fund's name to this row.
     digest = hashlib.sha256(pdf.read_bytes()).hexdigest()
     if digest.lower() != sha.lower():
         raise RuntimeError(f"PDF sha256 is {digest}, CSV names {sha}")
-    for page in range(1, max_pages + 1):
-        text = page_text(pdf, page)
+    count = page_count(pdf)
+    last_page = min(max_pages, count) if count is not None else max_pages
+    for page in range(1, last_page + 1):
+        try:
+            text = page_text(pdf, page)
+        except RuntimeError:
+            if count is not None or page == 1:
+                raise
+            # No page count and `pdftotext` failed past page 1: the only
+            # honest reading is that page `page` is past the last page.
+            break
         if not text.strip():
             continue
         found = extract_from_text(text)

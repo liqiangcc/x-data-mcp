@@ -339,7 +339,7 @@ owner 2026-11-05 对 Q1–Q9「全部按推荐」，记为 D-76。下表「推�
 | 项 | 规则 |
 |---|---|
 | 深市 46 只 | 从已冻结 `szse_etf_notice_ann` 公告索引读 `secName`。`etfNotice_disc` 频道还有改名公告，`secName` 是**该公告发布时**的名称（取证 §4/§5），所以名称只取标题含 `终止上市` 的公告：先按 URL 去重，优先正式公告（标题不含 `提示性`），再取公告日最新一份。改名公告永不提供退市名称。若 D-72 的身份 `main` 选中了另一条公告，证据计数 `identity_notice_mismatch`，名称仍取终止公告的值，身份规则不变 |
-| 沪市 82 只 | 索引无简称字段（取证 §4）。沿用 D-72：生产代码**不解析 PDF**。operator 用 `scripts/extract_etf_short_names.py` 离线从终止上市 PDF 提取场内简称，写入提取 CSV 的 `short_name` 列；写入路径只读这一列 |
+| 沪市 82 只 | 索引无简称字段（取证 §4）。沿用 D-72：生产代码**不解析 PDF**。operator 用 `scripts/extract_etf_short_names.py`（`etf-short-name-v2`，XDM-203）离线从终止上市 PDF 提取场内简称，写入提取 CSV 的 `short_name` 列；写入路径只读这一列。v2 规则只认 `场内简称` / `基金场内简称` 标签，值截至行尾、标点或版式列间两空格；`以下简称`、`扩位简称`、`场内扩位简称`、`基金代码`、`基金简称`、`证券简称` 不当名称，无该标签就留空（不猜、不截断，长度上限 12 字按证据定）；先取 `pdfinfo` 页数，不越过末页。XDM-201 §3 的 82 份沪市 PDF 上 v2 得 55 个名称 / 27 个 `unavailable`（v1 只报 53 个，其中 9 个把别的字段截进名称、2 个漏提） |
 | 提不到 | `short_name` 留空；**不猜**，也**不用公告标题里的基金全称**（形态不同，`fundAbbr` 类短名与 `secNameFull` 类扩位简称不是一回事，取证 §2/§6）。读面为 `name: null`、`name_basis: unavailable` |
 | 证据列 | CSV 每行带 `doc_sha256`、`short_name_page_no`、`short_name_snippet`、`short_name_extractor`（提取器版本），并校验 PDF 字节的 sha256 与 `doc_sha256` 一致，防止串行 |
 | `source_kind` / `source_record_id` | `exchange_snapshot`（Q5，不加枚举、不做迁移）；`source_record_id` = `sse_fund_delist_ann:<URL>` 或 `szse_etf_notice_ann:<URL>`，前缀区分公告来源 |
@@ -366,13 +366,17 @@ D-72 的 `etf_delist_extract` CSV 已导入。本 PR **不包含真实 CSV**，�
    ```
 
    脚本只处理 `source_id=sse_fund_delist_ann` 的行，深市行原样保留。输出 CSV 保留 D-72 的全部列，
-   追加 `short_name`、`short_name_page_no`、`short_name_snippet`、`short_name_extractor`。
-   提不到就留空并在 stderr 计数；结束时打印 `rows/sse/named/unavailable/missing_pdf` 汇总。
+   追加 `short_name`、`short_name_page_no`、`short_name_snippet`（取自命中的原样整行）、
+   `short_name_extractor`（`etf-short-name-v2`）。提不到就留空并在 stderr 计数；结束时打印
+   `rows/sse/named/unavailable/missing_pdf` 汇总。脚本需要 `pdftotext` 与 `pdfinfo`（poppler）；
+   没有 `pdfinfo` 时按页探测，第一页之后失败即视为越过末页，不报错。
    单元测试：`python3 -B -m unittest discover -s scripts -p 'test_extract_etf_short_names.py'`
    （合成文本夹具，不需要 PDF 字节）。
 
-3. 核对输出：`named + unavailable + missing_pdf == sse`（82）。`unavailable` 与 `missing_pdf` 的名称
-   就是残余缺口，读面会如实回 `name_basis: unavailable`，不要用基金全称补。
+3. 核对输出：`named + unavailable + missing_pdf == sse`（82）。用 2026-11-04 的 128 份证据包跑
+   `etf-short-name-v2` 的基线是 `named=55 unavailable=27 missing_pdf=0`（沪市），每个名称都能在
+   `short_name_page_no` 指向的页里逐字复核。`unavailable` 与 `missing_pdf` 的名称就是残余缺口，
+   读面会如实回 `name_basis: unavailable`，不要用基金全称、`扩位简称` 或 `基金简称` 补。
 
 4. 用现有 D-72 import 路径把新 CSV 导入来源库（替换旧的提取批次）：
 
@@ -412,6 +416,10 @@ D-72 的 `etf_delist_extract` CSV 已导入。本 PR **不包含真实 CSV**，�
 - `src/source_store/delisted_etf_names_replay_tests.rs`：显式 scope 不在 `--scope all`、无 `--db` 与无主表行时
   `not_ready` 写 0 行、空库 `nothing_selected`、写后 `--verify-only = match`、二次重放幂等、
   A 股名称行与现行 ETF 名称行逐行不变、篡改后 `drift`。
-- `scripts/test_extract_etf_short_names.py`：提取脚本的 17 个单元测试（合成文本与合成 CSV，无 PDF 字节）。
+- `scripts/test_extract_etf_short_names.py`：提取脚本的 39 个单元测试（合成文本与合成 CSV，无 PDF 字节）。
+  XDM-203 的 `V2*` 用例用 XDM-201 §3.3 的真实行内形状覆盖 9 个错误行（`以下简称`、`基金代码`、
+  `扩位简称`、`扩位证券简称`、全角逗号、`、`、行内换行截断）、2 个漏提行（`sh.510110`、
+  `sh.511230`）、标签范围（`基金场内简称` 可用；`场内扩位简称`/`基金场内扩位简称` 等不可用）、
+  长度上限与页边界（两页 PDF 只探测第 1–2 页；无 `pdfinfo` 时第一页后的失败视为末页）。
 
 真实 PDF 字节与真实 CSV 不在本仓库。
