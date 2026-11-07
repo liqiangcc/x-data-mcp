@@ -385,6 +385,11 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 - 不接受 `known_at`：输入表缺少知晓时间列，传了返回 `invalid_arguments`，消息指向 `get_security_state`。
 - 不分页：每次调用读全部请求的实体（最多 100），响应没有 `cursor` 和 `page_complete`。
 - 响应 `layout=table`，列名与类型见设计文档；每个请求的实体一行，包括不在主表的代码和非 A 股代码。
+- `get_tradability` 的列集合：`state`、`reason`、`suspension`、`flags`、`limit_state`、`limit_reason`、`limit_candidates`、`risk_status`、`limit_basis`、`limit_up`、`limit_down`、`prev_close`、`prev_close_day`、`rule_id`。
+  `limit_basis`（#590）取值 `prev_close` / `official_r7` / `reference_price`，与 research 层 `price_limit_in` 的 `LimitBasis` 逐行一致；
+  没有涨跌停价时为 `null`——`limit_state=unknown`（含 `ex_rights_unverified`）、`limit_state=unbounded`、不在主表、非 A 股，
+  以及 suspensions 未登记时 `input_absent` 的那个分支（该分支的列集合与正常分支完全相同，只是 `limit_basis` 也为 `null`）。
+  它与 `state` 相互独立：停牌日（`not_tradable`）若当日涨跌停价可推导，仍给出 basis。
 - `algorithm_versions` 字段列出算法版本（`tradability-v1`、`limit-v2`（`price_limit::READ_ALGORITHM_VERSION`）、`market-cap-v1`，直接取代码常量，不手写）。
 - `temporal` 有 `as_of`、`known_at: null`、`datasets_without_known_at`（列出实际用到的无知晓时间数据集）。
 - 复现：输入数据集版本（`inputs`）加 `algorithm_versions` 决定结果，无 `snapshot_id`。
@@ -394,7 +399,7 @@ x 的 `KlineReader` 固定 `contract_version=v1` + `selection.kind=single`，不
 
 ### 9.1 预算、延迟与内存（实测）
 
-`research` 入口 `tools/list` 实测 **19,264 B / 17 个工具**（无 `outputSchema`），预算 19,600 B（D-82）；紧凑目录 `get_data_capabilities({})` 实测 **2,790 B**，测试上限随之为 2,800 B。测量方式与 §3 相同。§8.3 里的 `research` 18,197 B 是 #582 当时的读数，本 PR 加两个工具后为 19,264 B。
+`research` 入口 `tools/list` 实测 **19,264 B / 17 个工具**（无 `outputSchema`），预算 19,600 B（D-82）；紧凑目录 `get_data_capabilities({})` 实测 **2,790 B**，测试上限随之为 2,800 B。测量方式与 §3 相同。§8.3 里的 `research` 18,197 B 是 #582 当时的读数，本 PR 加两个工具后为 19,264 B。加 `limit_basis` 列（#590）不改工具描述与输入 schema，本 PR 重新实测仍是 **19,264 B / 2,790 B**（两数不变，未上调任何预算）。
 
 延迟与内存由 `data_supply::mcp::tests::probe_derived_tools_peak_heap_and_latency` 测（夹具用生产写入器构造：主表 7,400 行、停牌 72,000 行、日历 300 天、规则书）：
 

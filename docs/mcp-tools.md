@@ -390,12 +390,15 @@ D-82 / [#433](https://github.com/liqiangcc/x-data-mcp/issues/433) PR-B：`resear
 返回每个 A 股在 `as_of` 的可交易状态和当日涨跌停价（若已知）。
 响应列：`state`（`tradable`/`not_tradable`/`unknown`）、`reason`（原因码）、`suspension`（停牌区间字符串或 null）、`flags`（预留）、
 `limit_state`（`known`/`unbounded`/`unknown`）、`limit_reason`、`limit_candidates`（候选规则，格式 `"500bp|1000bp"`）、`risk_status`、
-`limit_up`、`limit_down`、`prev_close`（前收盘，不复权）、`prev_close_day`、`rule_id`。
+`limit_basis`（涨跌停价的依据：`prev_close`/`official_r7`/`reference_price`）、`limit_up`、`limit_down`、`prev_close`（前收盘，不复权）、`prev_close_day`、`rule_id`。
 
+- `limit_basis` 与 research 层 `price_limit_in` 的 `limit_basis` 逐行一致：`prev_close` 是无除权事件时的前收盘，`official_r7` 是 2010-09-14 前的官方参考价（`r7_raw`），`reference_price` 是按 gbbq 公式算出的参考价。
+  没有涨跌停价时（`limit_state=unknown` 含 `ex_rights_unverified`、`unbounded`、不在主表、非 A 股、输入缺失）该列为 `null`，不借前收盘或其它标签填充。
+  它与 `state` 相互独立：停牌日（`not_tradable`）若当日涨跌停价可推导，仍给出 basis——basis 描述当日涨跌停价，不表示订单能成交。
 - `unknown` 不写成可交易。
 - 指数代码报 `invalid_arguments` 并指向 `get_index_bars`。
 - 传了 `known_at` 时显式报错（A 股主表行、停牌、规则等无知晓时间），消息指向 `get_security_state`。
-- `algorithm_versions` 含 `tradability: "tradability-v1"` 和 `price_limit: "limit-v1"`。
+- `algorithm_versions` 含 `tradability: "tradability-v1"` 和 `price_limit: "limit-v2"`。
 - `temporal` 有 `as_of` 和 `known_at: null`、`datasets_without_known_at`。
 
 示例：
@@ -421,7 +424,7 @@ D-82 / [#433](https://github.com/liqiangcc/x-data-mcp/issues/433) PR-B：`resear
 ```
 
 `research` 入口 `tools/list` 的实测大小（本代码版本，无 `outputSchema`）：19,264 B（17 个工具），CI 预算 19,600 B（owner 批准，D-82）；
-紧凑目录 `get_data_capabilities({})` 实测 2,790 B（测试上限 2,800 B）。每个工具描述不超过 240 B。
+紧凑目录 `get_data_capabilities({})` 实测 2,790 B（测试上限 2,800 B）。加 `limit_basis` 列（#590）不改工具描述与输入 schema，两个数都不变（重新实测）。每个工具描述不超过 240 B。
 
 一次 `get_tradability` 调用的实测耗时与内存（夹具：主表 7,400 行、停牌 72,000 行、日历 300 天、规则书；生产写入器构造）：
 1 / 10 / 100 只分别约 207–266 / 159–204 / 258–312 ms；共享加载一次解码约 8.9 MiB 峰值堆，同夹具后续调用 0.0–0.1 MiB。
