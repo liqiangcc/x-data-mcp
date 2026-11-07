@@ -26,7 +26,9 @@
 [通用工具设计](docs/generic-data-tools.md)定义单动作能力边界，
 [每日同步说明](docs/daily-sync.md)记录双 MCP server、generation 状态机和 Skill 编排边界，
 [数据目录](docs/data-catalog.md)说明现在能拿到哪些数据、语义与缺口（供选股/因子/回测使用）。
-[新机器部署手册](docs/new-host-runbook.md)记录克隆、目录骨架、单元、fresh init 后的数据步骤与回滚。
+[新机器部署手册](docs/new-host-runbook.md)记录克隆、目录骨架、单元、fresh init 后的数据步骤与回滚；
+[客户端连接](docs/client-connect.md)记录客户端怎样经 ssh + `mcp_connect` 连 vm2-126 的只读 `research` 入口，
+以及与 aws-node tunnel fallback 的关系。
 SQLite 专项入口由整体设计统一引用。设计目标不表示实现、来源或部署已经验收。
 
 ## 与旧项目的关系
@@ -48,7 +50,8 @@ SQLite 专项入口由整体设计统一引用。设计目标不表示实现、�
 文本模式 `X_DATA_MCP_TEXT_MODE=full`，market 单版本序列：version_id=内容 hex，
 latest-only。另有
 `x-data-mcp-acquire`（10 acquisition tools）。隧道指 `research.sock`（aws-node fallback
-上 2026-11-02 起，Ops-D 已执行；vm2-126 生产机无 tunnel，D-74）。部署版本、socket 路径、
+上 2026-11-02 起，Ops-D 已执行；vm2-126 生产机无 tunnel，D-74）。客户端连接方式（含经 ssh
+直连 vm2 只读 `research` 入口）见[客户端连接](docs/client-connect.md)。部署版本、socket 路径、
 generation 与数据量见
 [docs/STATUS.md](docs/STATUS.md)。
 已部署 schema 27（M1 的 schema 22 + M2 PR-1 的 023 + M2 PR-2 的 024 +
