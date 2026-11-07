@@ -14,6 +14,13 @@ aws-node。vm2 是试用机（约 2027-01-04 到期，到期前要定去向）�
 最后核实：2026-11-05（vm2-126 preview.45/schema 27/`generic-data-v10` 上线为日更与主数据
 生产机，并于同日 08:40:27Z 完成**第一次生产跨代日更**，最新集中行情日 2026-11-05；
 aws-node preview.43/schema 26/`generic-data-v9` 冻结为 fallback，数据停在 2026-11-04；D-74）。
+
+**preview.46 待部署（2026-11-07）**：owner 2026-11-07 批准按推荐发布；本 PR 只做版本号与文档，
+未打 tag、未发 release、未部署。生产事实仍是 preview.45（见下），部署后再在同一 PR 更新本文件。
+推荐内存上限随 preview.46 部署生效：约 7.6 GiB 机器 `MemoryHigh=1G`/`MemoryMax=1536M`/`MemorySwapMax=0`；
+约 1.9 GiB 机器 `448M`/`640M`/`256M`（未实测，低置信）。`MemorySwapMax=0` 时超过 `MemoryMax`
+会被 cgroup OOM 杀掉 data 服务，不是只拒绝读取。
+
 本轮实测来源：
 
 - Claude 2026-11-05 只读核实的部署事实（查询与日志在仓库外；owner 同日只做了 D-74 裁定，
