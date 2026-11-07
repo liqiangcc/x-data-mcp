@@ -54,6 +54,28 @@ pub(crate) fn compact_market_fixture() -> (
     let tasks = crate::sqlite_tasks::SqliteTasks::new(dir.path().join("market.sqlite"));
     tasks.initialize_compact().unwrap();
     std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    // D-84: the SH effective day reads the database calendar. Seed a plain
+    // weekday calendar so announcement fixtures are placeable.
+    {
+        use chrono::Datelike;
+        let connection = rusqlite::Connection::open(tasks.path()).unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        let mut cursor = NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        while cursor <= end {
+            if cursor.weekday().number_from_monday() <= 5 {
+                transaction
+                    .execute(
+                        "INSERT OR IGNORE INTO trading_days(trade_day,sources) VALUES(?1,1)",
+                        [cursor.signed_duration_since(epoch).num_days()],
+                    )
+                    .unwrap();
+            }
+            cursor = cursor.succ_opt().unwrap();
+        }
+        transaction.commit().unwrap();
+    }
     let market = crate::sqlite_market::backend::MarketBackend::open(&tasks).unwrap();
     (dir, market)
 }

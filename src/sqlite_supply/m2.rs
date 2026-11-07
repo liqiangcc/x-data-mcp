@@ -845,8 +845,10 @@ fn risk_warning_description(
 
     let mut limitations = vec![
         "SZ rows are ST intervals from the SZSE short-name table (source start 1994-01-03); \
-         SH rows are announcement events (implement/revoke) whose effective day is the announcement day (OWNER_RISK_ACCEPTED), \
-         not name intervals; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)"
+         SH rows are announcement events (implement/revoke), not name intervals; their effective day is the \
+         trading day after the first trading day on or after the announcement day (D-84, OWNER_RISK_ACCEPTED), \
+         or the explicit title date when present; an event the calendar cannot place yet is deferred and stays \
+         unknown; SH coverage starts no earlier than 2000-01 (the SSE archive start) and BJ is not available (D-58)"
             .to_owned(),
         "a day without a covering row is `unknown`: SZ also stores `normal` intervals inside the short-name coverage where the name is not ST/PT/退, so an uncovered SZ day (before the first name row, after the coverage end, or after a same-day conflict) is `unknown`; for SH every day without a covering announcement is `unknown`, never `normal` (D-58, D-81)"
             .to_owned(),

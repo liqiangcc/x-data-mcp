@@ -179,7 +179,7 @@ export XDM_TUNNEL_SERVICE=xdm-tunnel-stub.service
 操作用日更驱动或 MCP 工具；一步没过就停下排查，不要往下做。写任务的步骤之间不要并行，`full` 期间不要跑其他任务（否则 `full` 的耗时不可归因）。
 
 1. **部署。** `scripts/deploy_phase_g.sh <tag> --dry-run --force-git-transport` 通过后去掉 `--dry-run` 再跑。
-   通过的标志：`status=DEPLOYED`，`source_store_replay.status=ok`（六个 scope；其中 `suspensions` 在 fresh init 是 `not_ready`，因为主表和日历还没建，这是预期的；是 `store_empty` 说明克隆漏了来源库），
+   通过的标志：`status=DEPLOYED`，`source_store_replay.status=ok`（六个 scope；其中 `suspensions` 和 `risk_warnings` 在 fresh init 是 `not_ready`，因为主表/日历还没建，这是预期的；是 `store_empty` 说明克隆漏了来源库），
    `user_version` 等于该提交的 `COMPACT_SCHEMA_VERSION`，data/acquire 的 socket 探针全过。
    `before.schema=0`、`archived_db=null` 是新机的正常值。然后 `systemctl enable` data 和 acquire。
 2. **ETF 退市公告（只在 §1.1 说需要时）。** 停 data、acquire 和 tunnel 单元，`source_store import --format etf-delisting`
@@ -200,7 +200,7 @@ export XDM_TUNNEL_SERVICE=xdm-tunnel-stub.service
 9. **ETF 日线首采**：`sh_sz_etf_current`（分批，上次 500/500/500/131），再 `sh_sz_etf_listed_ever`（128 个退市 ETF）。ETF 要等第 6 步
    发布的主表带 ETF 行才有成员。
 10. **读回验收**：四个入口 `tools/list` 的工具数和 `get_data_capabilities` 的 `capability_revision` 与 [STATUS](STATUS.md) 一致；
-    `source_store replay --scope all --verify-only` 见 §6（`all` 含 `suspensions`：主表或日历还没建时它是 `not_ready`，整次状态为 `suspension_replay_not_ready`；`drift_cause=inputs_changed` 表示库内 bar 日、日历或主表在停牌表写入之后变过，日更重算后应转 `match`）；`task_sqlite check <库>` 通过；`PRAGMA quick_check` 为 `ok`。
+    `source_store replay --scope all --verify-only` 见 §6（`all` 含 `suspensions` 和 `risk_warnings`：主表或日历还没建时它们是 `not_ready`，整次状态为对应的 `*_replay_not_ready`；`risk_warnings` 的 `drift_cause=inputs_changed` 表示日历在写入后推进过；`suspensions` 的 `drift_cause=inputs_changed` 表示库内 bar 日、日历或主表在停牌表写入之后变过，日更重算后应转 `match`）；`task_sqlite check <库>` 通过；`PRAGMA quick_check` 为 `ok`。
 11. **第一次日更前**：把仓库 `git pull` 到与部署版本匹配的提交。日更 Skill 钉着 `capability_revision`，仓库和运行时不一致会以
     `SKILL_CONTRACT_MISMATCH` 停下（fail-closed，不写坏数据）。日更 agent 的启动方式见 [daily-sync](daily-sync.md)。
 
@@ -229,7 +229,7 @@ export XDM_TUNNEL_SERVICE=xdm-tunnel-stub.service
 |---|---|---|---|
 | `sh.688827` 缺成员 | 第 5 步那一批 `partially_failed`，错误 `INVALID_MARKET_COMMAND: member absent`；plan 里 `absent=1`、`eligible` 比 catalog 少 1 | 目录里有，官方 `hsjday.zip` 里没有这个成员（2026-11-05 在新旧两代都缺） | 失败实体不止它，或错误不是 `member absent`。官方补上成员后会自己消失 |
 | 86 只 ETF 没有日线 | ETF 首采后 `absent_count`；主表 `security_master` 的 ETF 行比有日线的序列多 | 沪市 526 / 551 / 589 号段在 `hsjday` 里没有成员 | 缺的代码落在这些号段之外；比 86 多出来的先看是不是当天新上市（迁移当天 `sz.158081` 就是，87 只，次日官方 generation 里有了） |
-| `risk_warnings` 的 `replay --verify-only` 报 `drift` | `source_store replay --scope all --verify-only` 中仅 `risk_warnings` 为 `drift`，其余五个 scope（industry、exchange、generation_facts、security_names、suspensions）为 `ok` / `match` | 同一公告在多个查询页出现时，replay 与日更派生的页顺序不同，引用了不同的快照；2026-11-05 只有 105 行沪市记录的 `source_document_sha256` 不同，日期、状态、`known_at` 都相同。旧机上也一样，不是搬迁造成的 | 其他 scope 也 drift，或差异不是这一个列。修复由代码任务处理，见 [决策记录](decisions.md) 和 [STATUS](STATUS.md) |
+| `risk_warnings` 的 `replay --verify-only` 报 `drift` | `source_store replay --scope all --verify-only` 中仅 `risk_warnings` 为 `drift`，其余五个 scope 为 `ok` / `match` | 先看 `drift_cause`：`inputs_changed` 表示日历在写入后推进过（D-84），日更重算后应转 `match`；`rows_changed` 才是页序或来源变化。2026-11-05 的旧问题是页序，只有 105 行沪市记录的 `source_document_sha256` 不同 | 其他 scope 也 drift，或 `rows_changed` 无法由重算消除。修复由代码任务处理，见 [决策记录](decisions.md) 和 [STATUS](STATUS.md) |
 
 和旧机比对（可选）：`known_at` 的逐日分布（`security_name_history`、`risk_warning_intervals`）应与旧机一致，旧行不变，新增行只来自新快照；
 `market_series` 的差异只应落在已知的 `REVISION_UNVERIFIED` 实体和新上市实体上。导出 `market_series` 做比较时 `content_digest` 是 BLOB，

@@ -23,12 +23,36 @@ fn fixture(name: &str) -> Vec<u8> {
 fn market_db(dir: &Path) -> PathBuf {
     let db = dir.join("market.db");
     SqliteTasks::new(&db).initialize_compact().unwrap();
+    seed_weekdays(&db);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
     }
     db
+}
+
+/// D-84 reads the trading calendar from the database. The fixtures announce in
+/// 2024, so a weekday calendar is enough to place every event.
+fn seed_weekdays(db: &Path) {
+    use chrono::{Datelike, NaiveDate};
+    let connection = rusqlite::Connection::open(db).unwrap();
+    let transaction = connection.unchecked_transaction().unwrap();
+    let mut cursor = NaiveDate::from_ymd_opt(1990, 1, 1).unwrap();
+    let end = NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+    let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    while cursor <= end {
+        if cursor.weekday().number_from_monday() <= 5 {
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO trading_days(trade_day,sources) VALUES(?1,1)",
+                    [cursor.signed_duration_since(epoch).num_days()],
+                )
+                .unwrap();
+        }
+        cursor = cursor.succ_opt().unwrap();
+    }
+    transaction.commit().unwrap();
 }
 
 /// One frozen page as PR-2's freeze path registers it: `store_kind=http_fetch`,
@@ -232,4 +256,128 @@ fn an_incomplete_short_name_page_set_is_snapshot_incomplete() {
         "{report}"
     );
     assert_eq!(interval_rows(&db), published, "the previous version stays");
+}
+
+/// D-84: without a trading calendar the SH effective day cannot be placed. A
+/// standalone replay fails with a stable code and writes no row; inside a
+/// writing `--scope all` (fresh init) it is `not_ready` and the deployment
+/// still succeeds.
+#[test]
+fn a_database_without_a_calendar_is_not_ready_and_writes_no_sh_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("store"));
+    frozen_page(
+        &store,
+        "sse_bulletin",
+        &fixture("sse-bulletins.json"),
+        SSE_BULLETIN_PARSER_VERSION,
+        BULLETIN_WINDOW,
+        "2026-10-30T02:00:00Z",
+    );
+    {
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection.execute("DELETE FROM trading_days", []).unwrap();
+    }
+
+    let (code, report) = cli(store.root(), Some(&db), "replay", "risk_warnings");
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["status"], "risk_warnings_replay_not_ready");
+    let scope = &report["scopes"][0];
+    assert_eq!(scope["status"], "risk_warnings_replay_not_ready");
+    assert_eq!(scope["rebuilt"], "not_rebuilt");
+    assert!(scope["summary"].is_null());
+    assert_eq!(interval_rows(&db), 0);
+
+    // A fresh-init `all` must not fail the deployment for the missing calendar.
+    let (code, report) = cli(store.root(), Some(&db), "replay", "all");
+    assert_eq!(code, 0, "{report}");
+    assert_eq!(report["status"], "ok");
+    let risk = report["scopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|scope| scope["scope"] == "risk_warnings")
+        .unwrap();
+    assert_eq!(risk["status"], "not_ready");
+    assert!(
+        risk["not_ready_reason"]
+            .as_str()
+            .unwrap()
+            .contains("calendar"),
+        "{risk}"
+    );
+    assert_eq!(interval_rows(&db), 0);
+
+    // Verifying that database compares nothing, so it keeps the stable failing
+    // code and a non-zero exit.
+    let (code, report) = cli(store.root(), Some(&db), "verify", "risk_warnings");
+    assert_eq!(code, 1, "{report}");
+    assert_eq!(report["status"], "risk_warnings_replay_not_ready");
+}
+
+/// D-84: an announcement on the calendar's last day has no next trading day
+/// yet, so no row is written; when the calendar advances, the same store writes
+/// the row on the new day. This is the "do not guess" half of the rule.
+#[test]
+fn an_announcement_past_the_calendar_end_waits_for_the_next_trading_day() {
+    use chrono::NaiveDate;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = market_db(dir.path());
+    let store = SourceStore::new(dir.path().join("store"));
+    let body = r#"{"pageHelp":{"beginPage":1,"endPage":1,"pageNo":1,"pageSize":100,
+      "pageCount":1,"total":1,"data":[[{"SSEDATE":"2024-05-06","SECURITY_CODE":"600002",
+      "TITLE":"示例二关于公司股票被实施其他风险警示的公告",
+      "ORG_BULLETIN_ID":"d84-last-day"}]]}}"#
+        .as_bytes();
+    frozen_page(
+        &store,
+        "sse_bulletin",
+        body,
+        SSE_BULLETIN_PARSER_VERSION,
+        BULLETIN_WINDOW,
+        "2026-10-30T02:00:00Z",
+    );
+    let epoch = |day: NaiveDate| {
+        day.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days()
+    };
+    {
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute(
+                "DELETE FROM trading_days WHERE trade_day >= ?1",
+                [epoch(NaiveDate::from_ymd_opt(2024, 5, 7).unwrap())],
+            )
+            .unwrap();
+    }
+
+    let (code, report) = cli(store.root(), Some(&db), "replay", "risk_warnings");
+    assert_eq!(code, 0, "{report}");
+    assert_eq!(report["scopes"][0]["rebuilt"], "rebuilt");
+    assert_eq!(interval_rows(&db), 0, "no next trading day, no row");
+
+    {
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute(
+                "INSERT INTO trading_days(trade_day,sources) VALUES(?1,1)",
+                [epoch(NaiveDate::from_ymd_opt(2024, 5, 7).unwrap())],
+            )
+            .unwrap();
+    }
+    let (code, report) = cli(store.root(), Some(&db), "replay", "risk_warnings");
+    assert_eq!(code, 0, "{report}");
+    assert_eq!(report["scopes"][0]["rebuilt"], "rebuilt");
+    assert_eq!(interval_rows(&db), 1, "the row appears on the new day");
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    let from: i64 = connection
+        .query_row(
+            "SELECT effective_from FROM risk_warning_intervals WHERE exchange='sh' AND code='600002'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(from, epoch(NaiveDate::from_ymd_opt(2024, 5, 7).unwrap()));
 }

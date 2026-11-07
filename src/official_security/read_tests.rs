@@ -68,6 +68,28 @@ fn day(year: i32, month: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, day).expect("valid day")
 }
 
+/// Insert a weekday-only trading calendar directly. D-84 only needs
+/// `trading_days`; the derived registration is irrelevant to the rule.
+fn seed_weekdays(path: &std::path::Path, from: NaiveDate, to: NaiveDate) {
+    use chrono::Datelike;
+    let connection = rusqlite::Connection::open(path).unwrap();
+    let transaction = connection.unchecked_transaction().unwrap();
+    let mut cursor = from;
+    while cursor <= to {
+        if cursor.weekday().number_from_monday() <= 5 {
+            let epoch = cursor.signed_duration_since(day(1970, 1, 1)).num_days();
+            transaction
+                .execute(
+                    "INSERT OR IGNORE INTO trading_days(trade_day,sources) VALUES(?1,1)",
+                    [epoch],
+                )
+                .unwrap();
+        }
+        cursor = cursor.succ_opt().unwrap();
+    }
+    transaction.commit().unwrap();
+}
+
 /// The observation time of the frozen pages: a *past* date, so a test that
 /// forgets the refresh run cannot pass by accident.
 const OBSERVED_AT: &str = "2026-10-30T02:00:00Z";
@@ -93,6 +115,10 @@ impl Scenario {
         let tasks = SqliteTasks::new(dir.path().join("market.sqlite"));
         tasks.initialize_compact().unwrap();
         std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        // D-84: the SH effective day reads the database calendar. Seed a plain
+        // weekday calendar so the fixture announcements are placeable; tests
+        // that need a holiday or an empty calendar seed/delete their own.
+        seed_weekdays(tasks.path(), day(1990, 1, 1), day(2026, 12, 31));
         let market = MarketBackend::open(&tasks).unwrap();
         Self {
             _dir: dir,
@@ -997,6 +1023,7 @@ fn an_announcement_on_several_query_pages_cites_the_same_page_in_replay_and_the_
             member_sha256: &member,
             security_event_sha256: &event,
             generation_evidence: &evidence,
+            replay_inputs_digest: None,
         })
         .unwrap();
     let Scenario {
@@ -1017,13 +1044,16 @@ fn an_announcement_on_several_query_pages_cites_the_same_page_in_replay_and_the_
     assert_eq!(scope.summary.as_deref(), Some(daily_digest.as_str()));
     assert_eq!(scope.database, Some("match"), "{scope:?}");
     assert!(scope.drift.is_empty(), "{:?}", scope.drift);
-    // And without a database the rebuilt digest is the same one.
+    // Without a database the SH effective day has no calendar to read (D-84),
+    // so the SH rows are deferred and the summary is smaller; equivalence is a
+    // `--db` property.
     let computed = replay(
         &store,
         &ReplayRequest::new(Some(Scope::RiskWarnings), false, None),
     )
     .unwrap();
-    assert_eq!(
+    assert_eq!(computed.scopes[0].rebuilt, "computed_no_db");
+    assert_ne!(
         computed.scopes[0].summary.as_deref(),
         Some(daily_digest.as_str())
     );
@@ -1093,6 +1123,7 @@ fn commit_daily(scenario: &Scenario, set: &crate::security_master::risk_warnings
             member_sha256: &member,
             security_event_sha256: &event,
             generation_evidence: &evidence,
+            replay_inputs_digest: None,
         })
         .unwrap();
 }
@@ -1138,15 +1169,15 @@ fn a_same_day_conflict_isolates_its_code_and_replay_writes_the_same_rows() {
         .expect("the conflicting code is written");
     assert_eq!(sh.iter().filter(|row| row.code == "600001").count(), 1);
     assert_eq!(conflict.status, RiskStatus::MarkerOnlyUnresolved);
-    assert_eq!(conflict.effective_from, day(2024, 5, 6));
-    assert_eq!(conflict.effective_to, Some(day(2024, 5, 7)));
+    assert_eq!(conflict.effective_from, day(2024, 5, 7));
+    assert_eq!(conflict.effective_to, Some(day(2024, 5, 8)));
     let ordinary = sh
         .iter()
         .find(|row| row.code == "600002")
         .expect("the other code is published");
     assert_eq!(ordinary.status, RiskStatus::OtherRiskWarning);
-    assert_eq!(ordinary.effective_from, day(2024, 5, 8));
-    assert_eq!(ordinary.effective_to, Some(day(2024, 6, 3)));
+    assert_eq!(ordinary.effective_from, day(2024, 5, 9));
+    assert_eq!(ordinary.effective_to, Some(day(2024, 6, 4)));
 
     let evidence = admitted.evidence();
     assert_eq!(evidence["same_day_conflicts"]["count"], 1);
@@ -1156,9 +1187,9 @@ fn a_same_day_conflict_isolates_its_code_and_replay_writes_the_same_rows() {
     );
     assert_eq!(
         evidence["same_day_conflicts"]["sample"][0]["day"],
-        "2024-05-06"
+        "2024-05-07"
     );
-    assert_eq!(evidence["parser_version"], "risk-warnings-v7");
+    assert_eq!(evidence["parser_version"], "risk-warnings-v8");
 
     let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
     commit_daily(&scenario, &admitted.set);
@@ -1183,7 +1214,8 @@ fn a_same_day_conflict_isolates_its_code_and_replay_writes_the_same_rows() {
         &ReplayRequest::new(Some(Scope::RiskWarnings), false, None),
     )
     .unwrap();
-    assert_eq!(
+    assert_eq!(computed.scopes[0].rebuilt, "computed_no_db");
+    assert_ne!(
         computed.scopes[0].summary.as_deref(),
         Some(daily_digest.as_str())
     );
@@ -1245,7 +1277,7 @@ fn replay_does_not_refuse_a_date_only_a_superseded_answer_states() {
         .iter()
         .find(|row| row.exchange == Exchange::Sh)
         .unwrap();
-    assert_eq!(row.effective_from, day(2024, 5, 7));
+    assert_eq!(row.effective_from, day(2024, 5, 8));
     let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
     commit_daily(&scenario, &admitted.set);
     let Scenario {
@@ -1364,17 +1396,9 @@ fn a_sz_normal_dataset_replays_row_for_row_and_needs_the_database() {
     );
     let daily_digest = crate::compact_market::digest_hex(&dataset_digest(&admitted.set.rows));
 
-    // The digest without the normal rows: what a replay with no database (and
-    // therefore no delisting dates) can produce.
-    let without_normal: Vec<_> = admitted
-        .set
-        .rows
-        .iter()
-        .filter(|row| row.status != RiskStatus::Normal)
-        .cloned()
-        .collect();
-    let no_db_digest = crate::compact_market::digest_hex(&dataset_digest(&without_normal));
-    assert_ne!(daily_digest, no_db_digest, "normal rows change the digest");
+    // A replay without a database has no delisting dates (no SZ normal rows)
+    // and no calendar (no announcement-anchored SH rows, D-84), so its digest
+    // cannot equal the daily item's.
 
     commit_daily(&scenario, &admitted.set);
     let Scenario {
@@ -1411,17 +1435,18 @@ fn a_sz_normal_dataset_replays_row_for_row_and_needs_the_database() {
         );
     }
 
-    // Without a database the replay has no main table, so it writes no normal
-    // rows: the digest is the no-database digest, not the daily one.
+    // Without a database the replay has no main table and no calendar, so it
+    // writes neither the normal rows nor the announcement-anchored SH rows.
     let computed = replay(
         &store,
         &ReplayRequest::new(Some(Scope::RiskWarnings), false, None),
     )
     .unwrap();
-    assert_eq!(
+    assert_eq!(computed.scopes[0].rebuilt, "computed_no_db");
+    assert_ne!(
         computed.scopes[0].summary.as_deref(),
-        Some(no_db_digest.as_str()),
-        "without a database the normal rows are not computed"
+        Some(daily_digest.as_str()),
+        "without a database the normal and SH rows are not computed"
     );
 }
 
