@@ -1,8 +1,14 @@
-"""Unit tests for the offline SSE ETF short-name extractor (PR-4).
+"""Unit tests for the offline SSE ETF short-name extractor (PR-4, XDM-203).
 
 All fixtures are synthetic text or synthetic files in a tempdir: no PDF bytes
 and no network are needed. The extraction rule must never substitute a fund's
 full name from an announcement title, and an unavailable name must stay empty.
+
+The `V2*` cases are the real line shapes from the XDM-201 §3 audit of the 82
+SSE termination PDFs: the nine wrong v1 names (prose, 以下简称, 基金代码,
+扩位简称, full-width comma, 、, a wrapped line) and the two names v1 missed
+(sh.510110, sh.511230), plus the page-boundary bug where v1 probed page 3 of a
+two-page PDF.
 """
 
 import csv
@@ -10,6 +16,7 @@ import hashlib
 import importlib.util
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("extract_etf_short_names.py")
@@ -222,6 +229,215 @@ class ProcessCsv(unittest.TestCase):
         self.assertEqual(out[0]["short_name"], "")
         self.assertEqual(out[0]["short_name_page_no"], "")
         self.assertEqual(list(out[0].keys()), header)
+
+
+class V2WrongNamePatterns(unittest.TestCase):
+    """The nine v1 names that packed another field into the short name.
+
+    Each fixture is the line shape recorded in XDM-201 §3.3 for that entity.
+    """
+
+    def assert_name(self, text, expected):
+        found = mod.extract_from_text(text)
+        self.assertIsNotNone(found, text)
+        self.assertEqual(found[0], expected, text)
+        return found
+
+    def test_510120_stops_before_yixiajiancheng(self):
+        self.assert_name(
+            "指数证券投资基金（基金代码：510120，场内简称：非周 ETF，以下简称：本基金）的基金",
+            "非周ETF",
+        )
+
+    def test_515500_stops_before_yixiajiancheng(self):
+        self.assert_name(
+            "式指数证券投资基金（基金代码：515500，场内简称：长三角 LX，以下简称：本基金）的",
+            "长三角LX",
+        )
+
+    def test_516680_stops_before_quoted_yixiajiancheng(self):
+        self.assert_name(
+            "基金（代码：516680，场内简称：有色金属，以下简称“本基金”）的基金管理",
+            "有色金属",
+        )
+
+    def test_510450_stops_before_fund_code(self):
+        self.assert_name(
+            "2、基金简称：180 高 ETF，场内简称：180 高 ETF，基金代码：510450",
+            "180高ETF",
+        )
+
+    def test_511280_stops_before_expanded_name_parenthesis(self):
+        self.assert_name(
+            "基金场内简称：中期信用（扩位证券简称：中期信用 ETF）",
+            "中期信用",
+        )
+
+    def test_516480_stops_before_expanded_name_label(self):
+        self.assert_name(
+            "式指数证券投资基金（基金代码：516480，场内简称：新材料基，扩位简称：新材料 ETF 基",
+            "新材料基",
+        )
+
+    def test_512300_stops_at_the_ideographic_comma(self):
+        self.assert_name(
+            "交易型开放式指数证券投资基金（代码：512300，场内简称：500 医药、医药 ETF 基金，以",
+            "500医药",
+        )
+
+    def test_515620_drops_the_trailing_full_width_comma(self):
+        self.assert_name(
+            "建信中证800交易型开放式指数证券投资基金（代码：515620，场内简称：ZZ800，",
+            "ZZ800",
+        )
+
+    def test_510430_prefers_the_field_line_over_a_wrapped_prose_value(self):
+        # The prose value wraps: the raw text has `50 等` then `权，扩位简称：
+        # 50 等权 ETF）`, so a first-match capture yields `50等`. The field
+        # line further down is the complete value.
+        text = (
+            "等权重交易型开放式指数证券投资基金（基金代码：510430，场内简称：50 等\n"
+            "权，扩位简称：50 等权 ETF）\n"
+            "场内简称：50 等权\n"
+            "扩位简称：50 等权 ETF\n"
+        )
+        self.assert_name(text, "50等权")
+
+
+class V2MissedNamePatterns(unittest.TestCase):
+    """The two real names v1 left empty (XDM-201 §3.3).
+
+    v1 refused both because the prose capture ran past 20 characters; the fix
+    is the punctuation cut, not a bigger limit.
+    """
+
+    def test_510110_name_inside_prose_is_found(self):
+        text = (
+            "券投资基金（基金代码：510110，场内简称：周期 ETF，以下简称：本基金）的基金管理人\n"
+            "基金简称 ：周期 ETF\n"
+        )
+        found = mod.extract_from_text(text)
+        self.assertEqual(found[0], "周期ETF")
+        self.assertIn("场内简称：周期 ETF", found[1])
+
+    def test_511230_name_inside_prose_is_found(self):
+        text = (
+            "资基金（基金代码：511230，场内简称：周期债，以下简称：本基金）的基金管理人海富通\n"
+            "基金简称 ：周期债\n"
+        )
+        found = mod.extract_from_text(text)
+        self.assertEqual(found[0], "周期债")
+
+
+class V2LabelScope(unittest.TestCase):
+    """Only the on-exchange 场内简称 label provides a name."""
+
+    def test_fund_inside_label_is_accepted(self):
+        # sh.510610 / sh.510620 / sh.512790 write `基金场内简称：`.
+        text = "基金场内简称：能源行业\n基金简称：能源行业ETF\n"
+        self.assertEqual(mod.extract_from_text(text)[0], "能源行业")
+
+    def test_expanded_labels_are_never_a_name(self):
+        for label in (
+            "扩位简称",
+            "场内扩位简称",
+            "基金扩位简称",
+            "基金场内扩位简称",
+            "证券简称",
+            "扩位证券简称",
+            "基金简称",
+        ):
+            with self.subTest(label=label):
+                self.assertIsNone(mod.extract_from_text(f"{label}：沪深300低波ETF\n"))
+
+    def test_expanded_labels_in_the_corpus_leave_the_name_unavailable(self):
+        # sh.512270 / sh.512860 / sh.516400 style pages: only 扩位 labels.
+        self.assertIsNone(
+            mod.extract_from_text(
+                "基金场内扩位简称：沪深300低波ETF\n扩位简称：沪深300低波ETF\n"
+            )
+        )
+
+    def test_full_width_characters_are_preserved(self):
+        self.assertEqual(mod.extract_from_text("场内简称：沪深３００ETF\n")[0], "沪深３００ETF")
+
+    def test_name_length_bound_comes_from_evidence(self):
+        self.assertEqual(mod.MAX_NAME_CHARS, 12)
+        self.assertEqual(mod.extract_from_text("场内简称：" + "中" * 12 + "\n")[0], "中" * 12)
+        self.assertIsNone(mod.extract_from_text("场内简称：" + "中" * 13 + "\n"))
+
+    def test_prose_label_word_inside_the_value_is_refused(self):
+        # A capture the punctuation cut did not terminate must be refused, not
+        # stored as a name.
+        self.assertIsNone(
+            mod.extract_from_text("场内简称：有色金属以下简称本基金\n")
+        )
+
+
+class V2PageBoundary(unittest.TestCase):
+    """Never ask `pdftotext` for a page past the last page (XDM-201 §9)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        body = b"%PDF-1.4 synthetic\n"
+        self.sha = hashlib.sha256(body).hexdigest()
+        self.pdf = Path(self.tmp.name) / f"{self.sha}.pdf"
+        self.pdf.write_bytes(body)
+
+    def test_page_count_parses_pdfinfo(self):
+        class Result:
+            returncode = 0
+            stdout = b"Title: x\nPages:          2\nEncrypted: no\n"
+
+        with unittest.mock.patch.object(mod.subprocess, "run", return_value=Result()):
+            self.assertEqual(mod.page_count(self.pdf), 2)
+
+    def test_page_count_is_none_when_pdfinfo_fails(self):
+        class Result:
+            returncode = 1
+            stdout = b""
+
+        with unittest.mock.patch.object(mod.subprocess, "run", return_value=Result()):
+            self.assertIsNone(mod.page_count(self.pdf))
+
+    def test_two_page_pdf_is_not_probed_past_its_last_page(self):
+        calls = []
+
+        def fake_page_text(pdf, page):
+            calls.append(page)
+            return "关于XX证券投资基金终止上市的公告\n"
+
+        with unittest.mock.patch.object(mod, "page_count", return_value=2), \
+                unittest.mock.patch.object(mod, "page_text", side_effect=fake_page_text):
+            found = mod.extract_pdf(self.pdf, self.sha)
+        self.assertEqual(found["short_name"], "")
+        self.assertEqual(calls, [1, 2])
+
+    def test_probe_without_pdfinfo_stops_at_the_first_failure_after_page_one(self):
+        calls = []
+
+        def fake_page_text(pdf, page):
+            calls.append(page)
+            if page > 2:
+                raise RuntimeError(
+                    "pdftotext exited 99: first page (3) can not be after the last page (2)"
+                )
+            return "关于XX证券投资基金终止上市的公告\n"
+
+        with unittest.mock.patch.object(mod, "page_count", return_value=None), \
+                unittest.mock.patch.object(mod, "page_text", side_effect=fake_page_text):
+            found = mod.extract_pdf(self.pdf, self.sha)
+        self.assertEqual(found["short_name"], "")
+        self.assertEqual(calls, [1, 2, 3])
+
+    def test_failure_on_page_one_is_still_an_error(self):
+        with unittest.mock.patch.object(mod, "page_count", return_value=None), \
+                unittest.mock.patch.object(
+                    mod, "page_text", side_effect=RuntimeError("pdftotext exited 1")
+                ):
+            with self.assertRaises(RuntimeError):
+                mod.extract_pdf(self.pdf, self.sha)
 
 
 if __name__ == "__main__":
