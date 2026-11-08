@@ -447,3 +447,87 @@ mod tests {
         assert_eq!(derived[0].close_units, 4_111_000);
     }
 }
+
+#[cfg(test)]
+mod perf {
+    //! Backfill cost measurement for #607 PR-C requirement 6. Ignored by
+    //! default; run with
+    //! `cargo test --lib --release etf_forward_backfill_cost -- --ignored --nocapture`.
+    use super::tests_support::*;
+    use super::*;
+
+    #[test]
+    #[ignore = "measurement, not a gate"]
+    fn etf_forward_backfill_cost() {
+        // Two history lengths: ~10 trading years and ~20, so the linearity
+        // of the per-ETF cost is visible rather than assumed.
+        for bars_per_etf in [2_500usize, 5_000] {
+            const ETFS: usize = 1_632;
+            let bars = synthetic_bars(bars_per_etf);
+            let events = synthetic_events(12);
+            let start = std::time::Instant::now();
+            let derived = derive_forward_bars("sz.159919", &bars, &events).unwrap();
+            let per_etf = start.elapsed();
+            assert_eq!(derived.len(), bars_per_etf);
+            let total = per_etf * ETFS as u32;
+            let one_bar = std::mem::size_of::<CompactBar>();
+            let peak_bytes =
+                bars_per_etf * (one_bar + std::mem::size_of::<crate::day_file::RawDayRecord>());
+            println!(
+                "ETF forward backfill: bars={bars_per_etf} per_etf={per_etf:?} \
+                 extrapolated_{ETFS}_etfs={total:?} \
+                 per_etf_bar_bytes={peak_bytes} (one ETF at a time)"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_support {
+    use super::*;
+    use chrono::{Datelike as _, NaiveDate};
+
+    pub(super) fn synthetic_bars(count: usize) -> Vec<CompactBar> {
+        let first = NaiveDate::from_ymd_opt(2015, 1, 5).unwrap();
+        (0..count)
+            .map(|index| {
+                // Weekdays only, so the fixture looks like a trading calendar.
+                let mut day = first + chrono::Days::new(index as u64);
+                while matches!(day.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) {
+                    day = day + chrono::Days::new(1);
+                }
+                let li = 40_000 + (index as i64 % 97) * 3;
+                CompactBar {
+                    trade_day: compact_market::epoch_day(day),
+                    open_units: li,
+                    high_units: li + 12,
+                    low_units: li - 9,
+                    close_units: li + 4,
+                    volume: Some(1_000_000),
+                    amount: Some("1.5".into()),
+                    r7_raw: Some(0),
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn synthetic_events(count: usize) -> Vec<crate::etf_qfq::EtfEvent> {
+        (0..count)
+            .map(|index| {
+                // One event per ~400 trading days, alternating the two
+                // categories — the shape of a real ETF's factor history.
+                let year = 2016 + index as u32;
+                let (category, c1, c3) = if index % 2 == 0 {
+                    (crate::etf_qfq::ETF_CATEGORY_CASH, "0.05", "0")
+                } else {
+                    (crate::etf_qfq::ETF_CATEGORY_SCALE, "0", "1.02")
+                };
+                crate::etf_qfq::etf_event(
+                    year * 10_000 + 630,
+                    category,
+                    crate::etf_qfq::etf_factors(c1, "0", c3, "0").unwrap(),
+                )
+            })
+            .collect()
+    }
+}
