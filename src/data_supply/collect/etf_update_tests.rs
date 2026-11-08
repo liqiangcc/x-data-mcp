@@ -1831,6 +1831,27 @@ fn etf_forward_store_cost() {
         })
         .collect();
 
+    let db_path = env.tasks.path().to_path_buf();
+    let wal_path = db_path.with_extension("db-wal");
+    let size_of = |path: &std::path::Path| -> i64 {
+        std::fs::metadata(path)
+            .map(|m| m.len() as i64)
+            .unwrap_or_default()
+    };
+    let (db_before, wal_before) = (size_of(&db_path), size_of(&wal_path));
+    let rss_kb = |label: &str| -> i64 {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let value = status
+            .lines()
+            .find(|line| line.starts_with("VmHWM:"))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or_default();
+        let _ = label;
+        value
+    };
+    let peak_before = rss_kb("before");
+
     let start = std::time::Instant::now();
     let MarketBackend::Compact(repo) = &env.backend else {
         panic!("fixture must open the compact backend");
@@ -1903,6 +1924,8 @@ fn etf_forward_store_cost() {
     })
     .unwrap();
     let store = start.elapsed();
+    let (db_after, wal_after) = (size_of(&db_path), size_of(&wal_path));
+    let peak_after = rss_kb("after");
     let total = ETFS * BARS;
     println!(
         "ETF forward store: etfs={ETFS} bars_per_etf={BARS} total_bars={total} \
@@ -1910,6 +1933,17 @@ fn etf_forward_store_cost() {
         store / total as u32,
         store / ETFS as u32,
         (store / ETFS as u32) * 1_632,
+    );
+    println!(
+        "ETF forward store growth: db={}->{} bytes (delta {}) wal={}->{} bytes (delta {}) \
+         bytes_per_bar={:.1} peak_rss_kb={peak_before}->{peak_after}",
+        db_before,
+        db_after,
+        db_after - db_before,
+        wal_before,
+        wal_after,
+        wal_after - wal_before,
+        (db_after - db_before) as f64 / total as f64,
     );
 }
 #[test]
