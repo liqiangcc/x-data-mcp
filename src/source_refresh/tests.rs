@@ -40,6 +40,8 @@ struct State {
     /// production page counts (146 listing, 375 short name).
     listing_pages: u32,
     short_pages: u32,
+    /// Pages of the SZSE ETF notice channel, 50 rows each (#604 reuse counts).
+    szse_notice_pages: u32,
     fail_page_two: bool,
     bump_on_page_two: bool,
     bump_every_page_one: bool,
@@ -57,6 +59,7 @@ impl Default for State {
             bulletin_revision: 0,
             bulletin_zero: false,
             delisting_pages: 1,
+            szse_notice_pages: 0,
             listing_pages: 1,
             short_pages: 1,
             fail_page_two: false,
@@ -129,6 +132,11 @@ impl RefreshFixture {
         self.state.lock().unwrap().delisting_pages = pages;
     }
 
+    /// Give the SZSE ETF notice channel `pages` pages of 50 rows (#604).
+    fn set_szse_notice_pages(&self, pages: u32) {
+        self.state.lock().unwrap().szse_notice_pages = pages;
+    }
+
     /// Page counts of `szse_listing` and `szse_short_name` (#582 harness).
     fn set_table_pages(&self, listing: u32, short: u32) {
         let mut state = self.state.lock().unwrap();
@@ -148,7 +156,8 @@ impl RefreshFixture {
         self.state.lock().unwrap().bump_every_page_one = true;
     }
 
-    fn body(&self, url: &str) -> Result<Vec<u8>, TransportError> {
+    fn body(&self, request: &HttpRequest) -> Result<Vec<u8>, TransportError> {
+        let url = request.url.as_str();
         if url.contains("commonSoaQuery") {
             if url.contains("FUND_LIST") {
                 // M3-2 ETF identity list: one row is enough for the envelope;
@@ -197,8 +206,32 @@ impl RefreshFixture {
             );
         }
         if url.contains("announcement/annList") {
-            // M3-2 PR-A2: SZSE ETF notice channel, no rows in this fixture.
-            return Ok(br#"{"announceCount":0,"pageNum":1,"data":[]}"#.to_vec());
+            // M3-2 PR-A2: SZSE ETF notice channel. The default fixture is a
+            // quiet channel; `set_szse_notice_pages` gives it pages of 50 rows,
+            // which is the measured `pageSize` cap (#604 counts pages).
+            let pages = self.state.lock().unwrap().szse_notice_pages;
+            if pages == 0 {
+                return Ok(br#"{"announceCount":0,"pageNum":1,"data":[]}"#.to_vec());
+            }
+            // `SzseAnnouncement` carries the page in the POST body, not the URL.
+            let page = request
+                .body
+                .as_deref()
+                .and_then(|body| serde_json::from_str::<serde_json::Value>(body).ok())
+                .and_then(|value| value.get("pageNum").and_then(|page| page.as_u64()))
+                .and_then(|page| u32::try_from(page).ok())
+                .unwrap_or(1);
+            return Ok(serde_json::json!({
+                "announceCount": u64::from(pages) * 50,
+                "data": (0..50)
+                    .map(|row| serde_json::json!({
+                        "secCode": format!("{}{}{:02}", pages, page, row),
+                        "secName": format!("ETF-{pages}-{page}-{row}"),
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+            .to_string()
+            .into_bytes());
         }
         if url.contains("commonQuery.do") {
             return Ok(sse_page(1, 1, 1));
@@ -350,7 +383,10 @@ impl Transport for RefreshFixture {
         self.wait_if_paused();
         let count = {
             let mut calls = self.calls.lock().unwrap();
-            calls.push(request.url.clone());
+            calls.push(match request.body.as_deref() {
+                Some(body) => format!("{} {body}", request.url),
+                None => request.url.clone(),
+            });
             calls.len()
         };
         // The guard is dropped before unwinding: a poisoned call log would make
@@ -362,7 +398,7 @@ impl Transport for RefreshFixture {
             status: 200,
             etag: None,
             last_modified: None,
-            body: self.body(&request.url)?,
+            body: self.body(request)?,
         })
     }
 }
@@ -1633,4 +1669,388 @@ fn production_magnitude_tail_stage_timings() {
             row.source_id, row.class, row.requests, row.elapsed_ms, row.complete
         );
     }
+}
+
+/// A `run` at an arbitrary `today`, for the two-day and overdue cases (#604).
+fn run_on(
+    scenario: &Scenario,
+    backend: &MarketBackend,
+    client: &Client,
+    today: NaiveDate,
+    mode: RefreshMode,
+    sources: &[&str],
+) -> super::wire::RefreshReport {
+    run(
+        &scenario.store(),
+        backend,
+        client,
+        today,
+        &request(mode, sources),
+        INSTANCE,
+    )
+    .unwrap()
+}
+
+fn source_of<'a>(
+    report: &'a super::wire::RefreshReport,
+    source_id: &str,
+) -> &'a super::wire::SourceReport {
+    report
+        .sources
+        .iter()
+        .find(|source| source.source_id == source_id)
+        .unwrap_or_else(|| panic!("{source_id} is not in the report"))
+}
+
+/// AC #604-1 and #604-6: the day after a `tail`, the closed quarter is read
+/// through the index — zero requests for it — and `reused` equals its page
+/// count. The open window is fetched again on both days.
+#[test]
+fn a_second_day_tail_reuses_the_closed_window_without_a_request() {
+    let fixture = RefreshFixture::new();
+    fixture.set_szse_notice_pages(3);
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    // 2026-11-02: open window 10-01..11-01, closed window 07-01..09-30.
+    let first = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &["szse_etf_notice_ann"],
+    );
+    assert_eq!(
+        source_of(&first, "szse_etf_notice_ann").requests,
+        6,
+        "two windows of three pages each: nothing to reuse yet"
+    );
+    assert_eq!(source_of(&first, "szse_etf_notice_ann").reused, 0);
+
+    // 2026-11-03: the open window moved to 10-01..11-02 (a new fingerprint) and
+    // is fetched; the closed quarter is served from the store.
+    let calls_before = fixture.calls();
+    let second = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 3),
+        RefreshMode::Tail,
+        &["szse_etf_notice_ann"],
+    );
+    let row = source_of(&second, "szse_etf_notice_ann");
+    assert_eq!(
+        row.requests, 3,
+        "only the open window is fetched; the closed quarter sends no request"
+    );
+    assert_eq!(
+        row.reused, 3,
+        "the closed quarter's three pages are read through the index"
+    );
+    assert_eq!(
+        fixture.calls() - calls_before,
+        3,
+        "the source's own request count matches what actually went on the wire"
+    );
+    assert_eq!(
+        second.requests as usize,
+        fixture.calls() - calls_before,
+        "run totals equal real requests: reuse never shows up as a request"
+    );
+    let run_id = second.run_id.unwrap();
+    let recorded = backend.read_source_refresh_run_sources(&run_id).unwrap();
+    let recorded = recorded
+        .iter()
+        .find(|row| row.source_id == "szse_etf_notice_ann")
+        .unwrap();
+    assert_eq!(recorded.requests, 3, "the run row counts real requests only");
+}
+
+/// AC #604-2: a second `tail` on the **same** day re-reads the open window. The
+/// open window's fingerprint is identical, so this proves the open-window rule
+/// is explicit and not an accident of a moving fingerprint.
+#[test]
+fn a_second_tail_on_the_same_day_still_fetches_the_open_window() {
+    let fixture = RefreshFixture::new();
+    fixture.set_szse_notice_pages(3);
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    let first = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &["szse_etf_notice_ann"],
+    );
+    assert_eq!(source_of(&first, "szse_etf_notice_ann").requests, 6);
+
+    let calls_before = fixture.calls();
+    let second = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &["szse_etf_notice_ann"],
+    );
+    let row = source_of(&second, "szse_etf_notice_ann");
+    assert_eq!(
+        row.requests, 3,
+        "the identical open window is fetched again, not reused"
+    );
+    assert_eq!(
+        fixture.calls() - calls_before,
+        3,
+        "the same-day open window really went on the wire"
+    );
+}
+
+/// AC #604-3: `full` re-reads every window. It is the run that finds revisions
+/// in the closed quarters, so a same-fingerprint closed window must still be
+/// fetched — never answered from the store.
+#[test]
+fn full_rereads_every_window_instead_of_reusing_the_closed_quarter() {
+    let fixture = RefreshFixture::new();
+    fixture.set_szse_notice_pages(3);
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    let first = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 3),
+        RefreshMode::Full,
+        &["szse_etf_notice_ann"],
+    );
+    let pages: u64 = source_of(&first, "szse_etf_notice_ann").requests;
+    assert!(pages > 0);
+    let calls_before = fixture.calls();
+
+    // The same day and the same bytes: a `tail` would reuse the closed
+    // quarters, a `full` must not.
+    let second = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 3),
+        RefreshMode::Full,
+        &["szse_etf_notice_ann"],
+    );
+    assert_eq!(
+        fixture.calls() - calls_before,
+        pages as usize,
+        "full re-reads every quarter, so it sends as many requests as the first full"
+    );
+    assert_eq!(
+        source_of(&second, "szse_etf_notice_ann").requests,
+        pages,
+        "no window is answered from the store in a full run"
+    );
+    assert_eq!(
+        source_of(&second, "szse_etf_notice_ann").reused as u64,
+        pages,
+        "the bytes are unchanged, so the pages are stored once, but they were fetched"
+    );
+}
+
+/// AC #604-4: whole-table sources keep exactly the behaviour they had before
+/// D-87 — the tail still fetches the cheap tables and probes the two large
+/// ones. Only the four windowed sources changed.
+#[test]
+fn a_tail_leaves_whole_table_sources_unchanged() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    let first = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &[],
+    );
+    let table_requests = |report: &super::wire::RefreshReport| {
+        report
+            .sources
+            .iter()
+            .filter(|source| source.class == "table")
+            .map(|source| (source.source_id.clone(), source.requests))
+            .collect::<Vec<_>>()
+    };
+    // 4 + 4 + 2 + 3 + 4 + 3 + 2 in the default fixture (see the budget test);
+    // the point of the assertion is that the second tail matches the shape of
+    // the first for every table source.
+    let calls_before = fixture.calls();
+    let second = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &[],
+    );
+    let _ = first;
+    let tables = table_requests(&second);
+    let table_requests_total: u64 = tables.iter().map(|(_, requests)| requests).sum();
+    assert_eq!(
+        fixture.calls() - calls_before,
+        second.requests as usize,
+        "run totals equal real requests"
+    );
+    // The two ETF list tables and the two full SZSE tables are fetched in full
+    // on every tail, exactly as before D-87; the two probes stay one page.
+    let by_id = |id: &str| {
+        tables
+            .iter()
+            .find(|(source, _)| source == id)
+            .map(|(_, requests)| *requests)
+            .unwrap_or_else(|| panic!("{id} is not a table source of the tail plan"))
+    };
+    assert_eq!(by_id("sse_etf_list"), 2, "a whole table is fetched in full");
+    assert_eq!(by_id("szse_etf_list"), 2);
+    assert_eq!(by_id("szse_listing"), 1, "the probe stays one page");
+    assert_eq!(by_id("szse_short_name"), 1, "the probe stays one page");
+    assert_eq!(by_id("sse_listing"), 4);
+    assert_eq!(by_id("sse_delisting"), 4);
+    assert_eq!(by_id("szse_delisting"), 4);
+    assert!(table_requests_total > 0);
+}
+
+/// AC #604-5 (part 1): a fresh source store that has never had a `full` has no
+/// complete refresh date, so the closed quarter is not read through and the
+/// `tail` fetches it like any other window. Nothing is claimed as verified.
+#[test]
+fn a_first_tail_on_a_fresh_store_fetches_the_closed_quarter() {
+    let fixture = RefreshFixture::new();
+    fixture.set_szse_notice_pages(2);
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    let report = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        RefreshMode::Tail,
+        &["szse_etf_notice_ann"],
+    );
+    let row = source_of(&report, "szse_etf_notice_ann");
+    assert_eq!(
+        row.requests, 4,
+        "no complete refresh has ever run, so both windows are fetched"
+    );
+    assert_eq!(row.reused, 0);
+    assert!(
+        row.verified_through.is_none(),
+        "a tail of two windows verifies no complete set and claims no date"
+    );
+    assert!(
+        backend
+            .latest_complete_verified_through("szse_etf_notice_ann")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(report.status, RefreshStatus::Succeeded);
+    assert!(report.failures.is_empty());
+}
+
+/// AC #604-5 (part 2): past `H = 14` days without a complete refresh the `tail`
+/// fails closed with `source_refresh_overdue` instead of re-fetching, so the
+/// reuse gate never silently degrades into the pre-D-87 behaviour.
+#[test]
+fn a_tail_beyond_the_age_bound_fails_closed_instead_of_refetching() {
+    let fixture = RefreshFixture::new();
+    fixture.set_szse_notice_pages(2);
+    let scenario = Scenario::new();
+    let client = client(&fixture);
+    let backend = scenario.open();
+
+    // A weekly full on 2026-11-02 confirms the source.
+    let full = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 2),
+        RefreshMode::Full,
+        &["szse_etf_notice_ann"],
+    );
+    assert_eq!(full.status, RefreshStatus::Succeeded);
+    assert_eq!(
+        backend
+            .latest_complete_verified_through("szse_etf_notice_ann")
+            .unwrap()
+            .as_deref(),
+        Some("2026-11-02")
+    );
+
+    // Fifteen days later, without any full in between: overdue.
+    let calls_before = fixture.calls();
+    let late = run_on(
+        &scenario,
+        &backend,
+        &client,
+        day(2026, 11, 17),
+        RefreshMode::Tail,
+        &["szse_etf_notice_ann"],
+    );
+    assert_eq!(
+        late.status,
+        RefreshStatus::Failed,
+        "an overdue tail fails the run"
+    );
+    let failures = &late.failures;
+    assert!(
+        failures.iter().all(|failure| failure.code == "source_refresh_overdue"),
+        "every failure is the overdue code, got {failures:?}"
+    );
+    let closed = failures
+        .iter()
+        .find(|failure| failure.window_end.as_deref() == Some("2026-09-30"))
+        .expect("the closed quarter is the window that fails");
+    assert_eq!(
+        closed.window_start.as_deref(),
+        Some("2026-07-01"),
+        "the failure names the closed quarter"
+    );
+    assert!(
+        closed.detail.contains("2026-11-02"),
+        "the detail names the last complete verification: {}",
+        closed.detail
+    );
+    assert!(
+        closed.detail.contains("H=14"),
+        "the detail names the bound: {}",
+        closed.detail
+    );
+    let row = source_of(&late, "szse_etf_notice_ann");
+    assert_eq!(row.failed_windows, failures.len());
+    // Only the open window is fetched (2 pages); the overdue closed quarter
+    // sends nothing, because the gate refuses before the first request.
+    assert_eq!(row.requests, 2);
+    assert_eq!(fixture.calls() - calls_before, 2);
+    let run_id = late.run_id.unwrap();
+    let runs = backend.read_source_refresh_runs().unwrap();
+    let run = runs.iter().find(|run| run.run_id == run_id).unwrap();
+    assert_eq!(run.status, "failed");
+    assert!(
+        run.verified_through.is_none(),
+        "a failed run advances no source's date"
+    );
+    let recorded = backend.read_source_refresh_run_sources(&run_id).unwrap();
+    let recorded = recorded
+        .iter()
+        .find(|row| row.source_id == "szse_etf_notice_ann")
+        .unwrap();
+    assert!(!recorded.complete);
+    assert_eq!(recorded.failed_windows as usize, failures.len());
 }

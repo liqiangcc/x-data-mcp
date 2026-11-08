@@ -1389,3 +1389,28 @@ fn reuse_evidence_uses_the_design_date_rule() {
     assert_eq!(merged.verified_through.as_deref(), Some("2026-10-01"));
     assert_eq!(merged.selected_by.len(), 2);
 }
+
+/// #604 / D-87: "closed" is a rule about the window's end day, not a
+/// consequence of the open window's fingerprint moving every day. A window is
+/// closed when it ended before the running day's natural quarter began.
+#[test]
+fn a_window_is_closed_only_before_the_current_quarter() {
+    let today = NaiveDate::from_ymd_opt(2026, 11, 2).unwrap();
+    let day = |text: &str| NaiveDate::parse_from_str(text, "%Y-%m-%d").unwrap();
+    assert_eq!(
+        reuse::quarter_start(today),
+        day("2026-10-01"),
+        "the running day's quarter starts on the first of October"
+    );
+    // The previous natural quarter: closed.
+    assert!(reuse::window_closed(day("2026-09-30"), today));
+    // The open window ends the day before `today` but belongs to this quarter.
+    assert!(!reuse::window_closed(day("2026-11-01"), today));
+    // A quarter boundary: the last day of Q3 is closed on the first day of Q4.
+    let first_of_quarter = day("2026-10-01");
+    assert!(reuse::window_closed(day("2026-09-30"), first_of_quarter));
+    assert!(!reuse::window_closed(
+        day("2026-09-30"),
+        day("2026-09-30")
+    ));
+}

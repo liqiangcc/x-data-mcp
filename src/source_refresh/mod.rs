@@ -813,6 +813,12 @@ fn refresh_source(
                                 // is still in the source store, but it selects
                                 // no row, so it is not a run member.
                                 stats.unobserved += 1;
+                                // It is still a selected page: a quiet closed
+                                // window served from the store is reuse evidence
+                                // (#604), so the counts travel even though no
+                                // member is recorded.
+                                stats.snapshots += outcome.snapshots.len();
+                                stats.reused += outcome.reused;
                             } else {
                                 record_outcome(
                                     accumulator,
