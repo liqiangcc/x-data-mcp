@@ -49,7 +49,7 @@
 | AC-M2-7 | ST 状态缺失的日期请求涨跌停，返回 `unknown`（或显式 `ambiguous` + 候选集），不按 10% 算 | 主板：`unknown` + `st_unknown` + `limit_candidates`。创业板 2020-08-24 起、科创板：规则行与状态无关，返回 `known`，`status` 仍是 `unknown` | **要改**：现文字对这两类板块不成立。设计 §8.5 已写这个例外（`status_class='all'`），AC 漏了。改为「规则随状态变化的板块/时段返回 `unknown`；规则与状态无关的返回确定值，且状态仍标 `unknown`」 |
 | AC-M2-8 | `sz000631` 2006-04-28…2009-06-04 请求可交易性：`tradable=unknown` + `unresolved_gap`，不返回 `suspended` | `state=unknown`，`reason=data_gap`，`suspension` 列写 `unresolved_gap` 和区间 | **建议澄清**：`unresolved_gap` 是停牌区间的 `certainty`，可交易性的原因码是 `data_gap`（设计 §7.4）。另外 `data-catalog.md` §3.3 偏差 6 写「深市全域可交易性是 `unknown`」，而函数对有 bar 的深市日返回 `tradable`（夹具测试 `read_model_tests.rs:1012`）。应改成「深市缺 bar 的日子是 `unknown`」 |
 | AC-M2-9 | 6 个板块×时段的规则来自规则表且有 `basis_ref`；`high == limit_up` 的命中率不低于基线 | 工具给 `rule_id`，`basis_ref` 用 `get_price_limit_rules` 按 `rule_id` 查（每行约 400 B，不放进每个实体行）。命中率不是读面的事 | **要拆**：「规则来自规则表」由工具兑现。「命中率」是单独的验证任务，基线在仓库外，且除权日会偏（G5） |
-| AC-M2-10 | 规则变更只改数据 | 工具读规则表，响应带 `rules_version` | 不用改（`price_limit/tests.rs:688` 已覆盖） |
+| AC-M2-10 | 规则变更只改数据 | 工具读规则表；规则集版本由响应的 `inputs` 里 `price_limit_rules` 的 `version_id` 给出，与 `get_price_limit_rules` 的 `versions[0].version_id` 相同；research 层的 `PriceLimitReport.rules_version` 不单独上 wire | **本次改动**：原文写「响应带 `rules_version`」，与实际 wire 不符。2026-11-08 生产只读核对（preview.46）实测两个工具的响应都没有 `rules_version` 字段，契约 v11 §9 以 `inputs` 为准（「复现：输入数据集版本（`inputs`）加 `algorithm_versions` 决定结果」），`research` 的 `tools/list` 余量也不足再加一列 |
 | AC-M2-11 | 与导出物化值逐行相等 | D-78 不导出派生值，这条没有对象 | **要改**（#433 第 6 项已列）：「同输入版本和同算法版本给出同结果」 |
 | AC-M2-12 | 工具数、dataset、wire 形状不变；`as_of`/`known_at` 被拒 | 已过时：M2 数据集接受这两个参数，工具数在涨 | **要改**（#433 第 6 项已列） |
 
