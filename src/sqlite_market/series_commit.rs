@@ -278,13 +278,17 @@ fn check_binding(c: &Connection, w: &Commit) -> Result<(), Error> {
 /// Marks the item finished and advances the task counters — the same task
 /// bookkeeping the v19 results path ran (`task_revision` CAS is inside
 /// the tasks UPDATE).
-fn finish_item_and_task(c: &Connection, w: &Commit, task_revision: i64) -> Result<(), Error> {
+pub(crate) fn finish_item_and_task(
+    c: &Connection,
+    w: &Commit,
+    task_revision: i64,
+) -> Result<(), Error> {
     finish_item_row(c, w)?;
     finish_task_row_and_terminal(c, w, task_revision)
 }
 /// The item-row half of item completion — a narrow row write the deferred
 /// (chunked) path still performs per item.
-fn finish_item_row(c: &Connection, w: &Commit) -> Result<(), Error> {
+pub(crate) fn finish_item_row(c: &Connection, w: &Commit) -> Result<(), Error> {
     let outcome_json = result_outcome_json(w.result_id, "market_update")?;
     let changed = c
         .execute(
@@ -358,7 +362,7 @@ fn check_bars(bars: &[CompactBar]) -> Result<(), Error> {
 /// Item bookkeeping a commit performs at its end. A paired daily item
 /// defers it until both 口径 have been written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ItemFinish {
+pub(crate) enum ItemFinish {
     /// Finish the item row and the task row (per-item paths).
     ItemAndTask,
     /// Finish the item row only; the caller persists the task head once per
@@ -514,9 +518,14 @@ fn write_entity_facts(
     Ok(())
 }
 
-/// ETF first-publication commit (M3-2 PR-B): one 不复权 series at
-/// `instrument_class=2, price_scale=3`, plus the category-1/11 facts in the
-/// same transaction. There is no forward series to finish as a pair.
+/// ETF update commit (M3-2 PR-B, extended by #607 PR-C): one 不复权 series at
+/// `instrument_class=2, price_scale=3`, the category-1/11 facts, and — in the
+/// same transaction — the derived 前复权 series (`instrument_class=2,
+/// adjustment=2, price_scale=6`).
+///
+/// The derivation is not filtered by 核对 records: see
+/// [`super::etf_forward`] for why the write side must not depend on
+/// evidence that can arrive later than the market row.
 pub(crate) fn commit_etf_tx(
     c: &Connection,
     w: &Commit,
@@ -545,7 +554,13 @@ pub(crate) fn commit_etf_tx(
             task_revision: event.task_revision as u64,
         });
     }
-    let receipt = commit_series_inner(c, w, finish, series::SeriesShape::etf(Adjustment::Raw))?;
+    // The factor digest is read before the facts are replaced so the
+    // derivation can tell a factor-only revision from a bar-only append.
+    let factors_before = super::etf_forward::factor_digest(c, w.entity)?;
+    // The 不复权 half leaves the item open (`ItemFinish::None`) so the derived
+    // 前复权 commit can pass the same `check_binding` gate; the item is
+    // finished once, after both halves, by `finish_pair`.
+    let receipt = commit_series_inner(c, w, ItemFinish::None, series::SeriesShape::etf(Adjustment::Raw))?;
     let head = series::read_series_adjusted(c, w.entity, w.period, Adjustment::Raw)?
         .ok_or_else(|| integrity("ETF commit lost its raw head"))?;
     write_entity_facts(
@@ -557,6 +572,18 @@ pub(crate) fn commit_etf_tx(
         w.task_id,
         w.item_id,
     )?;
+    let factors_changed = super::etf_forward::factor_digest(c, w.entity)? != factors_before;
+    let raw_changed = !matches!(w.change, SeriesChange::NoChange | SeriesChange::Metadata);
+    super::etf_forward::commit_etf_forward_tx(c, w, raw_changed, factors_changed)?;
+    match finish {
+        ItemFinish::ItemAndTask => finish_item_and_task(
+            c,
+            w,
+            i64::try_from(receipt.task_revision).map_err(|_| integrity("task revision out of range"))?,
+        )?,
+        ItemFinish::ItemRowOnly => finish_item_row(c, w)?,
+        ItemFinish::None => {}
+    }
     Ok(receipt)
 }
 
@@ -772,7 +799,7 @@ fn commit_raw_side(
     Ok(())
 }
 
-fn commit_series_inner(
+pub(crate) fn commit_series_inner(
     c: &Connection,
     w: &Commit,
     finish: ItemFinish,

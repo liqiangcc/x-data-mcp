@@ -1139,6 +1139,9 @@ pub(crate) mod rules;
 // module.
 pub(crate) mod series;
 pub(crate) mod series_commit;
+// #607 PR-C: ETF 前复权 derivation. Consumed by `series_commit::commit_etf_tx`
+// and its tests; no read path touches it.
+pub(crate) mod etf_forward;
 #[allow(dead_code)]
 pub(crate) mod suspensions;
 pub(crate) mod update;

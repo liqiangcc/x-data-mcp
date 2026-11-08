@@ -1254,3 +1254,109 @@ fn etf_capital_events_read_only_capital_categories() {
         "{factor_only}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #607 PR-C — the derived 前复权 series
+// ---------------------------------------------------------------------------
+
+impl Env {
+    /// Head facts of an entity's daily series at one 口径, if it exists.
+    fn forward_head(&self, entity: &str, adjustment: Adjustment) -> Option<(String, i64, i64)> {
+        self.backend
+            .read(|c| {
+                Ok(
+                    series::read_series_adjusted(c, entity, Period::Day, adjustment)?
+                        .map(|row| (row.version_id, row.record_count, row.last_day)),
+                )
+            })
+            .unwrap()
+    }
+    /// Every stored bar of a series at one 口径, oldest first, as
+    /// `(date, open, high, low, close)` price units.
+    fn bars(
+        &self,
+        entity: &str,
+        adjustment: Adjustment,
+    ) -> Vec<(i64, i64, i64, i64, i64)> {
+        self.backend
+            .read(|c| {
+                let row = series::read_series_adjusted(c, entity, Period::Day, adjustment)?
+                    .expect("series row");
+                Ok(series::all_bars(c, row.series_key)?
+                    .into_iter()
+                    .map(|bar| {
+                        (
+                            bar.trade_day,
+                            bar.open_units,
+                            bar.high_units,
+                            bar.low_units,
+                            bar.close_units,
+                        )
+                    })
+                    .collect())
+            })
+            .unwrap()
+    }
+    /// Number of `market_events` rows of one entity at one 口径 — used to prove
+    /// an append happened without a rewrite.
+    fn event_kinds(&self, entity: &str, adjustment: Adjustment) -> Vec<(&'static str, i64)> {
+        self.backend
+            .read(|c| {
+                let mut statement = c
+                    .prepare(
+                        "SELECT kind, count(*) FROM market_events \
+                         WHERE entity=?1 AND period=?2 AND adjustment=?3 GROUP BY kind \
+                         ORDER BY kind",
+                    )
+                    .unwrap();
+                let rows = statement
+                    .query_map(
+                        rusqlite::params![entity, 1i64, adjustment.code()],
+                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
+                    )
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                Ok(rows
+                    .into_iter()
+                    .map(|(kind, count)| (Box::leak(kind.into_boxed_str()) as &'static str, count))
+                    .collect())
+            })
+            .unwrap()
+    }
+}
+
+#[test]
+fn etf_forward_series_is_built_inside_the_first_collection_transaction() {
+    // First backfill: the 不复权 collection also creates the 前复权 series,
+    // with the same bar count and the shape design §4.1 names.
+    let env = setup();
+    let raw = env
+        .forward_head("sz.159919", Adjustment::Raw)
+        .expect("raw series");
+    let adj = env
+        .forward_head("sz.159919", Adjustment::Forward)
+        .expect("forward series");
+    assert_eq!(raw.1, adj.1, "forward row count mirrors raw");
+    assert_eq!(raw.2, adj.2, "forward last_day mirrors raw");
+    let shape = env
+        .backend
+        .read(|c| {
+            let row = series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Forward)?
+                .expect("forward series");
+            Ok((row.instrument_class, row.adjustment.code(), row.price_scale))
+        })
+        .unwrap();
+    // `instrument_class=2` (ETF), `adjustment=1` (`Adjustment::Forward`'s
+    // stored code — design §4.1 draws it as "2", the code's value is 1),
+    // `price_scale=6` (1e-6 元).
+    assert_eq!(
+        shape,
+        (
+            crate::market_data::INSTRUMENT_CLASS_ETF,
+            Adjustment::Forward.code(),
+            6
+        )
+    );
+}
+
