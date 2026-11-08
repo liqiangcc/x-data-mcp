@@ -94,7 +94,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let service = AcquireService::open_with_retire_gate(&positional[0], source, retire_gate)?;
     let lease = Arc::new(DatabaseLease::acquire(&service.db_path())?);
-    let endpoint = Endpoint::bind(&positional[1], &lease)?;
+    // Handlers first (#599): the socket below is connectable right after bind,
+    // so "connectable" must already imply "a stop is handled orderly" instead
+    // of killing the process by default action.
     let gate = Arc::new(WorkerGate::default());
     let stopping = Arc::new(AtomicBool::new(false));
     // SAFETY: handler only stores a lock-free atomic; no allocation/I/O/locks.
@@ -108,6 +110,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err(std::io::Error::last_os_error().into());
         }
     }
+    let endpoint = Endpoint::bind(&positional[1], &lease)?;
     let monitor = {
         let stopping = stopping.clone();
         std::thread::spawn(move || {

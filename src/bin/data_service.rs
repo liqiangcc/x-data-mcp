@@ -203,14 +203,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Committed-state closure checks for latest-only market storage
     // (SPEC-LATEST-ONLY §3.5; no-op on schemas <21).
     backend.series_startup_check()?;
-    // Bind every socket after the one-time startup checks. Any failure is
-    // fail-closed: already-bound endpoints drop (removing their socket files)
-    // and the process exits without serving a partial surface.
-    let mut endpoints = Vec::new();
-    for (offset, entry) in entries.iter().copied().enumerate() {
-        let endpoint = Endpoint::bind(std::path::Path::new(&positional[offset + 1]), &lease)?;
-        endpoints.push((endpoint, entry));
-    }
+    // Install the stop handlers before any socket is bound (#599): a socket is
+    // connectable right after bind, and clients take "connectable" as
+    // "ready, so stop it now". With the handlers installed afterwards a stop
+    // arriving in that window killed the process by default action instead of
+    // the orderly stop below. During the startup checks above a stop still
+    // terminates immediately, which is the previous behaviour.
     let gate = Arc::new(WorkerGate::default());
     let stopping = Arc::new(AtomicBool::new(false));
     // SAFETY: handler only stores a lock-free atomic; no allocation/I/O/locks.
@@ -223,6 +221,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         {
             return Err(std::io::Error::last_os_error().into());
         }
+    }
+    // Bind every socket after the one-time startup checks. Any failure is
+    // fail-closed: already-bound endpoints drop (removing their socket files)
+    // and the process exits without serving a partial surface.
+    let mut endpoints = Vec::new();
+    for (offset, entry) in entries.iter().copied().enumerate() {
+        let endpoint = Endpoint::bind(std::path::Path::new(&positional[offset + 1]), &lease)?;
+        endpoints.push((endpoint, entry));
     }
     let monitor = {
         let stopping = stopping.clone();
