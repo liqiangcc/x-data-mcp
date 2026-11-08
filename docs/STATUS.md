@@ -12,10 +12,9 @@ fallback（preview.43，schema 26，`generic-data-v9`，数据冻结、不再跑
 aws-node 的 tunnel；新客户端可经 ssh + `mcp_connect` 连 vm2 的只读 `research` 入口（[客户端连接](client-connect.md)）。
 vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
 
-最后核实：2026-11-07（vm2-126 preview.46 部署后的只读验收：版本/单元/内存档位/导出预检/读面冒烟
-通过，`research` 入口实测 17 项工具、capability `generic-data-v11`；`risk_warnings` 的 replay drift
-是 D-84 R2 的日期平移，不是 #533 回归；XDM-198。更早的 2026-11-05 部署与第一次生产跨代日更读数
-保留在「数据」段）。
+最后核实：2026-11-08（VM2 只读查询：2026-11-06 vm2 第二次生产跨代日更的 generation、8 个 task 与 write-loop
+、当日 `tail`/`full`、11-07 无日更；只读为 `python3 sqlite3` 的 `file:…?mode=ro`（含 WAL）。更早的
+2026-11-07 preview.46 只读验收（XDM-198）、2026-11-05 部署与第一次生产跨代日更读数保留在「数据」段）。
 
 **preview.46 已部署（2026-11-07T16:52Z）**：vm2-126 已切到 `v0.2.0-preview.46` /
 `c35b425f727fa74ad2cca0f6c9c683213e256b21`（switch 报告
@@ -38,6 +37,12 @@ memory.high 1024 MiB, memory.max 1536 MiB)`。`MemorySwapMax=0` 时超过 `Memor
   `c642468f…`（2026-11-05T08:40:27Z）、各任务结果与 write-loop、热 generation、
   `market_series`/`series_bars`/库体积/`/opt` 体积，见「数据」段的 vm2 表与
   「2026-11-05 vm2 第一次生产日更」小节；任务记录与查询在仓库外，owner 未复核这些数字。
+- VM2 只读查询（2026-11-08，`python3 sqlite3` 的 `file:…?mode=ro`，含 WAL，不停服务不写库）核实的
+  **第二次生产跨代日更**（vm2-126，跨代）：active generation 切到 `2731a664…`
+  （2026-11-06T08:49:30Z，上一代 `c642468f…`，激活请求 `daily-sync-20261106-activate-g2pqjr`）、
+  当天 8 个 task 的项数/结果分类/write-loop、当日 `tail`（3 段，无 `full`）、11-07 无日更记录，
+  见「数据」段的 vm2 表与「2026-11-06 vm2 第二次生产日更」小节；SQL 与原始输出摘要见本任务的 PR 正文，
+  owner 未复核这些数字。
 - XDM-198 报告（UTC 2026-11-07T16:52–17:05Z，vm2-126 只读验收，报告在仓库外）：preview.46 的版本/单元/
   内存档位、`source_store replay --verify-only` 对库快照的比较、`export_research --dry-run` 预检与读面冒烟。
   部署本身来自 `reports/preview46-switch-20261107T165152Z.json`（`status=PASS`）；该报告与本节
@@ -78,7 +83,7 @@ preview.40 及更早的实测值保留为「历史」对照；本轮未重新测
 | 角色 | 生产：日更与主数据 | fallback 与 tunnel/客户端入口；数据冻结、不再跑日更 |
 | 版本 | `v0.2.0-preview.46`，git_sha `c35b425f727fa74ad2cca0f6c9c683213e256b21` | 历史（冻结）：`v0.2.0-preview.43`，git_sha `c0ae29500b56a754a5f2d3304b8584f551b94a89` |
 | schema / capability | schema 27 / `generic-data-v11` | 历史（冻结）：schema 26 / `generic-data-v9` |
-| active generation | `2731a664…`（导出预检标为 active/最新代；完整 sha、激活时间与上一代本轮未列出）；最新行情日本轮未列出 | `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；数据停在 2026-11-04 |
+| active generation | `2731a664546921b8c43b81744ba53dd0a86682c89668f2be640a63e8c65bfc54`（2026-11-06T08:49:30Z 激活，上一代 `c642468f…`；完整 sha、激活时间与上一代见「数据」段，来源 VM2 只读查询 2026-11-08）；最新行情日 2026-11-06 | `4c17de16…`（2026-11-04T10:19:18Z 激活，与 vm2 同一代）；数据停在 2026-11-04 |
 | tunnel | 无（外部读路径是 ssh + `mcp_connect`，见[客户端连接](client-connect.md)） | tunnel/data/acquire 三单元仍 active；既有客户端仍连这里，看不到 ETF 与 11-05 之后的数据 |
 | 到期 | 试用机，约 2027-01-04 到期，到期前要定去向 | — |
 
@@ -323,7 +328,9 @@ XDM-198 2026-11-07 只读验收（查询与报告在仓库外）；标「历史�
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| active generation | `2731a664…`（导出预检的 `generations` 标为 active/最新代；完整 sha、激活时间与上一代本轮未列出）；最新集中行情日本轮未列出 | XDM-198 |
+| active generation | `2731a664546921b8c43b81744ba53dd0a86682c89668f2be640a63e8c65bfc54`（2026-11-06T08:49:30Z 激活，上一代 `c642468f…`，激活请求 `daily-sync-20261106-activate-g2pqjr`）；最新集中行情日本轮未列出 | VM2 只读查询 2026-11-08；XDM-198 |
+| active generation（完整） | 完整 sha `2731a664546921b8c43b81744ba53dd0a86682c89668f2be640a63e8c65bfc54`，2026-11-06T08:49:30.017197549Z 激活（`generations.updated_at` 08:49:30.024Z），上一代 `c642468f85e29dce79fe4460bda6a8d1175ef60be3c0afd2520cb1c75e7544d6`（现 `superseded`），激活请求 `daily-sync-20261106-activate-g2pqjr`（`expected_previous=c642468f…`，`VERIFIED_COMPATIBLE`、`reused=false`）；采集请求 `daily-sync-20261106-acq-bij3gv`（acquire 117.2 s，574,682,696 B）；manifest：base 16,612,084 B / gbbq 6,152,170 B / hsjday 551,918,442 B（`Last-Modified` Fri, 06 Nov 2026 07:58:47 GMT） | VM2 只读查询（`generations/active-generation.json`、`acquire.sqlite` 的 `generations`/`requests`/`request_outcomes`/`acquisition_tasks`，2026-11-08） |
+| 最新行情日 | **2026-11-06**（`trading_days.trade_day` 最大 20763；12,078 条日线序列 `last_day=20763`） | VM2 只读查询 2026-11-08 |
 | 热 generation | **4/6**（**历史**：2026-11-05 时点，1 active `c642468f…` + 3 superseded；2026-11-07 验收未重测）；`evidence_only` 17。`5ac3ef2b…` 没被自动退役：`derived_facts_missing`，原因是 vm2 的库是 fresh init，缺这个旧代的派生事实。按保留规则（`RETAINED_SUPERSEDED=2`）最多稳定在 5/6 | 历史 + `generations/acquire.sqlite`、`src/acquire/service.rs:40,44` |
 | `market_series` | **18,118** 条（2026-11-07 只读快照） | XDM-198 |
 | `series_bars` | 本轮未列出（11-05 为 37,831,020 行，历史） | — |
@@ -332,6 +339,7 @@ XDM-198 2026-11-07 只读验收（查询与报告在仓库外）；标「历史�
 | catalog | `catalog-1793852554590130457`，**5,225** 个成员（导出预检读回） | XDM-198 |
 | ETF 缺口 | 本轮未列出（11-05 读数：主表 1,846 行 ETF、128 个退市日、86 只无日线，历史） | — |
 | 第一次生产日更 | 见下节「2026-11-05 vm2 第一次生产日更」（历史） | 同上 |
+| 第二次生产日更（跨代） | 见下节「2026-11-06 vm2 第二次生产日更（跨代）」 | VM2 只读查询 2026-11-08 |
 | 年线 / 日线明细 / 官方输入 / 内存分项 | 本轮未列出 | — |
 
 ### 2026-11-05 vm2 第一次生产日更（跨代）
@@ -350,6 +358,35 @@ XDM-198 2026-11-07 只读验收（查询与报告在仓库外）；标「历史�
 
 运行观察：执行这次日更的模型（SWE 2 Flash）提前结束并漏了步骤，经提示后走完。这是一次运行观察，
 不是对该模型的结论。
+
+### 2026-11-06 vm2 第二次生产日更（跨代）
+
+来源均为 VM2 只读查询（2026-11-08，`python3 sqlite3` 的 `file:…?mode=ro`，含 WAL；不停服务、不写库；
+SQL 与原始输出摘要在本任务的 PR 正文）。这是 vm2-126 上第二次有新 generation 激活的生产日更：
+`c642468f…` → `2731a664…`（08:49:30Z 激活），数据到 **2026-11-06**。当天共 8 个 task，窗口内没有其他数据任务。
+write-loop 取 D-63 口径的 `created_at` → `last_progress_at`。
+
+| 项 | 任务 | 项数 | 结果 | write-loop |
+|---|---|---|---|---|
+| G1：A 股 `run_market_update`（不带 `scope`） | `task-e7c1a907…` | 5,241 | 5,231 成功，10 个 `REVISION_UNVERIFIED`（`partially_failed`） | **154.3 s** |
+| 年线 | `task-6970fa8e…` | 5,196 | 5,196/5,196 成功 | **89.6 s** |
+| 同 10 只重推 | `task-0471bbcf…` | 33 | 23 成功，10 项仍 `REVISION_UNVERIFIED`（`partially_failed`） | 38.0 s |
+| 同 10 只显式区间补写 | `task-45e859d8…` | 10 | 10/10 成功 | 4.1 s |
+| ETF 批次 | `task-c8fee63e…` | 1,632 | 1,632/1,632 成功 | 26.5 s |
+| `sz.158076` 首采 | `task-670debf9…` | 1 | 1/1 成功 | 0.5 s |
+| 年线补推 | `task-bf22a99a…` | 6 | 6/6 成功 | 0.5 s |
+| 年线显式补推 | `task-19c08ffd…` | 28 | 28/28 成功 | 1.1 s |
+
+G1 的 10 个失败项均为 `INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: RevisionUnverified([…])`：
+`sh.600894`、`sh.603279`、`sh.605338`、`sz.000650`、`sz.002275`、`sz.002864`、`sz.300741`、
+`sz.301099`、`sz.301215`、`sz.301300`；同 10 只的显式区间任务与年线任务均成功。
+当天跑了 `tail`（09:17:02–09:36:05Z 连续 3 段，均 `succeeded`，未触发整表），**没有跑 `full`**，
+所以没有 G2 的 `full` 读数。
+计数结论：生产主机、有新 generation 激活、G1 不带 `scope`、write-loop 154.3 s <600 s 四条均满足，
+D-63 计数 → **2/3**；年线 89.6 s 同样满足 D-69 的条件，计数 → **2/3**（细节见 [SLO](SLO.md)）。
+
+运行观察：当天第一次启动时 pi 1.3.0 没展开 `/skill:`，提示词缺 Skill 正文，09:16Z 续跑补完 §3.3、
+ETF 批次和 §3.6（#586）；这是编排问题，不影响 G1 的任务记录。
 
 ### aws-node（fallback；数据冻结于 2026-11-04，不再跑日更）
 
@@ -529,7 +566,7 @@ Skill 在有更新日的路径仍未完整验证
 
 ## 进行中
 
-- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**2026-11-05 起日更和主数据生产机换成 vm2-126（D-74，preview.45/schema 27/`generic-data-v10`，无 tunnel；2026-11-07 起 preview.46/`generic-data-v11`），aws-node 的 preview.43 冻结为 fallback**；D-63 的连续 3 次生产跨代日更计数**从 0 重新开始**（aws-node 上 11-02 那 1 次不带过来），从 vm2 第一次生产跨代日更算起，D-69 计数规则不变、也只算生产日更。**2026-11-05 vm2 第一次生产跨代日更已完成：G1 write-loop 175.3 s（D-63 计数 1/3），年线 write-loop 127.9 s（D-69 计数 1/3），细节见「数据」段与 [SLO](SLO.md)。****生产自 preview.38 起是单进程三 socket（`mcp.sock`/`research.sock`/`maint.sock`，见「服务」表），preview.40 与 preview.41 沿用同一形状**；第 1 代日更（XDM-139）是 preview.40 下的首个全量实测，但不作门禁证据（非独占，见「数据」段）。详见 [SLO](SLO.md) 备注与
+- **SLO 门禁**：第 1 行（同代无变化 `update_data`，write-loop <600s）**2026-10-28 已解除临时豁免**（D-54 解除，见 D-57）：XDM-84 实测同代无待更新 87.6s、同代全量 5,238 item **573.4s <600s**（main `0f3fe25`，单进程三 socket，w=1，2 vCPU，load average 4–8、最高 8.12，非完全独占，含 research 并发；全量口径用显式 `end_date` 构造，见 [SLO](SLO.md) 备注）。第 2 行（跨代有变化，<600s）仍按 D-52 **临时豁免中**：同次实测跨代全量 **734.0s** 高于 600s，acquire 切代 VmHWM 33.3 MiB。两项门槛本身不变；这些时间来自非独占窗口，只作相对比较。**2026-11-05 起日更和主数据生产机换成 vm2-126（D-74，preview.45/schema 27/`generic-data-v10`，无 tunnel；2026-11-07 起 preview.46/`generic-data-v11`），aws-node 的 preview.43 冻结为 fallback**；D-63 的连续 3 次生产跨代日更计数**从 0 重新开始**（aws-node 上 11-02 那 1 次不带过来），从 vm2 第一次生产跨代日更算起，D-69 计数规则不变、也只算生产日更。**2026-11-05 vm2 第一次生产跨代日更已完成：G1 write-loop 175.3 s（D-63 计数 1/3），年线 write-loop 127.9 s（D-69 计数 1/3）；2026-11-06 vm2 第二次生产跨代日更：G1 write-loop 154.3 s（D-63 计数 → 2/3），年线 write-loop 89.6 s（D-69 计数 → 2/3）**（VM2 只读查询 2026-11-08），细节见「数据」段与 [SLO](SLO.md)。****生产自 preview.38 起是单进程三 socket（`mcp.sock`/`research.sock`/`maint.sock`，见「服务」表），preview.40 与 preview.41 沿用同一形状**；第 1 代日更（XDM-139）是 preview.40 下的首个全量实测，但不作门禁证据（非独占，见「数据」段）。详见 [SLO](SLO.md) 备注与
   [DECISIONS](decisions.md) D-52/D-57/D-63/D-69/D-74。
 - **GOAL-008 性能**：PR #323 已于 2026-10-11 squash 合并（`8a446b1`），发布 v0.2.0-preview.31，2026-10-12 部署。
   - 全市场验收（XP-015，perf `3b11231`，aws 私有栈，浅链，53 批，trace-OFF，每负载单次）：年线首次 310.6s、日线跨代 Append 104.2s（合成截断夹具）、年线重聚合 328.3s、日线同代 NoChange 78.0s，write-loop 均 <600s，读回全部 PASS（见 [SLO](SLO.md)）。第三类「保留的真实 mixed Append/Full/fail-closed」**未运行**（retained gen-1 字节永久不可得）；`AGENTS.md` 记载的离线 harness 结果仅作旁证，不作替代。
