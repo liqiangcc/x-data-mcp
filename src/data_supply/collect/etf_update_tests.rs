@@ -1318,11 +1318,7 @@ impl Env {
     }
     /// Every stored bar of a series at one 口径, oldest first, as
     /// `(date, open, high, low, close)` price units.
-    fn bars(
-        &self,
-        entity: &str,
-        adjustment: Adjustment,
-    ) -> Vec<(i64, i64, i64, i64, i64)> {
+    fn bars(&self, entity: &str, adjustment: Adjustment) -> Vec<(i64, i64, i64, i64, i64)> {
         self.backend
             .read(|c| {
                 let row = series::read_series_adjusted(c, entity, Period::Day, adjustment)?
@@ -1355,10 +1351,9 @@ impl Env {
                     )
                     .unwrap();
                 let rows = statement
-                    .query_map(
-                        rusqlite::params![entity, 1i64, adjustment.code()],
-                        |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
-                    )
+                    .query_map(rusqlite::params![entity, 1i64, adjustment.code()], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                    })
                     .unwrap()
                     .collect::<Result<Vec<_>, _>>()
                     .unwrap();
@@ -1387,8 +1382,9 @@ fn etf_forward_series_is_built_inside_the_first_collection_transaction() {
     let shape = env
         .backend
         .read(|c| {
-            let row = series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Forward)?
-                .expect("forward series");
+            let row =
+                series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Forward)?
+                    .expect("forward series");
             Ok((row.instrument_class, row.adjustment.code(), row.price_scale))
         })
         .unwrap();
@@ -1405,7 +1401,6 @@ fn etf_forward_series_is_built_inside_the_first_collection_transaction() {
     );
 }
 
-
 #[test]
 fn etf_forward_append_only_writes_the_new_tail() {
     // `sh510050` gains one 不复权 bar and its factors do not move: the derived
@@ -1419,7 +1414,11 @@ fn etf_forward_append_only_writes_the_new_tail() {
 
     let view = env.plan("market.daily", Some("sh_sz_etf_current"));
     let task = env.run("run-etf-append", &view, Some("sh_sz_etf_current"));
-    assert!(succeeded(&task, "sh.510050"), "{}", error_of(&task, "sh.510050"));
+    assert!(
+        succeeded(&task, "sh.510050"),
+        "{}",
+        error_of(&task, "sh.510050")
+    );
 
     let after = env.bars("sh.510050", Adjustment::Forward);
     assert_eq!(after.len(), 4, "the new 不复权 bar is mirrored");
@@ -1457,7 +1456,11 @@ fn etf_forward_factor_change_rewrites_the_whole_series() {
     env.advance_to(Generation::Fifth, "req-fifth", &third);
     let view = env.plan("market.daily", Some("sh_sz_etf_current"));
     let task = env.run("run-etf-factor", &view, Some("sh_sz_etf_current"));
-    assert!(succeeded(&task, "sz.159919"), "{}", error_of(&task, "sz.159919"));
+    assert!(
+        succeeded(&task, "sz.159919"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
 
     let after = env.bars("sz.159919", Adjustment::Forward);
     assert_eq!(after.len(), before.len(), "no new bar, same bar count");
@@ -1482,7 +1485,11 @@ fn etf_forward_no_change_leaves_the_series_untouched() {
     env.advance_to(Generation::Third, "req-third", &second);
     let view = env.plan("market.daily", Some("sh_sz_etf_current"));
     let task = env.run("run-etf-nochange", &view, Some("sh_sz_etf_current"));
-    assert!(succeeded(&task, "sz.159919"), "{}", error_of(&task, "sz.159919"));
+    assert!(
+        succeeded(&task, "sz.159919"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
     assert_eq!(env.forward_head("sz.159919", Adjustment::Forward), before);
 }
 
@@ -1542,7 +1549,11 @@ fn etf_forward_rerun_of_the_same_input_keeps_every_version() {
     env.advance_to(Generation::Third, "req-third", &second);
     let view = env.plan("market.daily", Some("sh_sz_etf_current"));
     let first = env.run("run-etf-idem-1", &view, Some("sh_sz_etf_current"));
-    assert!(succeeded(&first, "sz.159919"), "{}", error_of(&first, "sz.159919"));
+    assert!(
+        succeeded(&first, "sz.159919"),
+        "{}",
+        error_of(&first, "sz.159919")
+    );
     let after_first = env.forward_head("sz.159919", Adjustment::Forward);
     let raw_after_first = env.forward_head("sz.159919", Adjustment::Raw);
 
@@ -1559,7 +1570,10 @@ fn etf_forward_rerun_of_the_same_input_keeps_every_version() {
         after_first,
         "the same input must keep the same 前复权 version"
     );
-    assert_eq!(env.forward_head("sz.159919", Adjustment::Raw), raw_after_first);
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Raw),
+        raw_after_first
+    );
 }
 
 #[test]
@@ -1572,13 +1586,19 @@ fn etf_raw_series_stays_byte_identical_next_to_the_derived_one() {
     let shape = env
         .backend
         .read(|c| {
-            let row =
-                series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Raw)?
-                    .expect("raw series");
+            let row = series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Raw)?
+                .expect("raw series");
             Ok((row.instrument_class, row.price_scale, row.adjustment.code()))
         })
         .unwrap();
-    assert_eq!(shape, (crate::market_data::INSTRUMENT_CLASS_ETF, 3, Adjustment::Raw.code()));
+    assert_eq!(
+        shape,
+        (
+            crate::market_data::INSTRUMENT_CLASS_ETF,
+            3,
+            Adjustment::Raw.code()
+        )
+    );
     // 41.780 / 41.86 / 41.953 元 at 厘 precision — untouched by the derivation.
     assert_eq!(
         raw.iter().map(|b| b.4).collect::<Vec<_>>(),

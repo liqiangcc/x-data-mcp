@@ -560,7 +560,12 @@ pub(crate) fn commit_etf_tx(
     // The 不复权 half leaves the item open (`ItemFinish::None`) so the derived
     // 前复权 commit can pass the same `check_binding` gate; the item is
     // finished once, after both halves, by `finish_pair`.
-    let receipt = commit_series_inner(c, w, ItemFinish::None, series::SeriesShape::etf(Adjustment::Raw))?;
+    let receipt = commit_series_inner(
+        c,
+        w,
+        ItemFinish::None,
+        series::SeriesShape::etf(Adjustment::Raw),
+    )?;
     let head = series::read_series_adjusted(c, w.entity, w.period, Adjustment::Raw)?
         .ok_or_else(|| integrity("ETF commit lost its raw head"))?;
     write_entity_facts(
@@ -579,7 +584,8 @@ pub(crate) fn commit_etf_tx(
         ItemFinish::ItemAndTask => finish_item_and_task(
             c,
             w,
-            i64::try_from(receipt.task_revision).map_err(|_| integrity("task revision out of range"))?,
+            i64::try_from(receipt.task_revision)
+                .map_err(|_| integrity("task revision out of range"))?,
         )?,
         ItemFinish::ItemRowOnly => finish_item_row(c, w)?,
         ItemFinish::None => {}

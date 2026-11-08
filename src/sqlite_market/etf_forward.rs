@@ -102,9 +102,7 @@ pub(crate) fn plan_etf_forward(
                 .filter(|bar| bar.trade_day > head.last_day)
                 .collect();
             if tail.is_empty() {
-                return Err(integrity(
-                    "ETF 不复权 append produced no new 前复权 bar",
-                ));
+                return Err(integrity("ETF 不复权 append produced no new 前复权 bar"));
             }
             Ok(ForwardPlan::Append(tail))
         }
@@ -128,12 +126,9 @@ fn derive_forward_bars(
         .iter()
         .map(raw_record_of)
         .collect::<Result<_, Error>>()?;
-    let adjusted = crate::etf_qfq::etf_forward_adjust_exact(
-        &records,
-        events,
-        compact_market::PRICE_SCALE_QFQ,
-    )
-    .map_err(|e| integrity(format!("ETF forward chain failed for {entity}: {e}")))?;
+    let adjusted =
+        crate::etf_qfq::etf_forward_adjust_exact(&records, events, compact_market::PRICE_SCALE_QFQ)
+            .map_err(|e| integrity(format!("ETF forward chain failed for {entity}: {e}")))?;
     if adjusted.len() != raw_bars.len() {
         return Err(integrity("ETF forward chain changed the bar count"));
     }
@@ -216,10 +211,7 @@ fn forward_bar(raw: &CompactBar, adj: &QfqBar) -> Result<CompactBar, Error> {
 /// `effective_day` is carried through as the epoch day encoded to
 /// `yyyymmdd`, which is the form [`crate::etf_qfq::EtfEvent`] keys on and the
 /// same 生效日 the A-share chain uses.
-fn read_etf_events(
-    c: &Connection,
-    entity: &str,
-) -> Result<Vec<crate::etf_qfq::EtfEvent>, Error> {
+fn read_etf_events(c: &Connection, entity: &str) -> Result<Vec<crate::etf_qfq::EtfEvent>, Error> {
     use chrono::Datelike as _;
     let stored = super::derived::read_adjustment_events(c, entity)?;
     stored
@@ -227,9 +219,7 @@ fn read_etf_events(
         .map(|event| {
             let day = event.effective_day;
             Ok(crate::etf_qfq::EtfEvent {
-                effective_day: day.year() as u32 * 10000
-                    + day.month() * 100
-                    + day.day(),
+                effective_day: day.year() as u32 * 10000 + day.month() * 100 + day.day(),
                 category: event.category,
                 factors: event.factors,
             })
@@ -378,7 +368,12 @@ mod tests {
     fn sz_159919_cash_event_lands_on_4044900_units_in_storage() {
         // 4.111 元 − 0.661/10 = 4.0449 元, stored as 4,044,900 units.
         let bars = [compact(day(2025, 3, 28), 4_111)];
-        let events = [event(20250331, crate::etf_qfq::ETF_CATEGORY_CASH, "0.661", "0")];
+        let events = [event(
+            20250331,
+            crate::etf_qfq::ETF_CATEGORY_CASH,
+            "0.661",
+            "0",
+        )];
         let derived = derive_forward_bars("sz.159919", &bars, &events).unwrap();
         assert_eq!(derived[0].close_units, 4_044_900);
         // volume/amount/r7 pass through byte for byte.
@@ -407,15 +402,47 @@ mod tests {
             compact(day(2025, 3, 31), 4_111),
             compact(day(2025, 4, 1), 4_111),
         ];
-        let events = [event(20250331, crate::etf_qfq::ETF_CATEGORY_CASH, "0.661", "0")];
+        let events = [event(
+            20250331,
+            crate::etf_qfq::ETF_CATEGORY_CASH,
+            "0.661",
+            "0",
+        )];
         let derived = derive_forward_bars("sz.159919", &bars, &events).unwrap();
-        assert_eq!(forward_units(&derived), vec![
-            (bars[0].trade_day, 4_044_900, 4_044_900, 4_044_900, 4_044_900),
-            (bars[1].trade_day, 4_044_900, 4_044_900, 4_044_900, 4_044_900),
-            // E itself and everything after it are untouched.
-            (bars[2].trade_day, 4_111_000, 4_111_000, 4_111_000, 4_111_000),
-            (bars[3].trade_day, 4_111_000, 4_111_000, 4_111_000, 4_111_000),
-        ]);
+        assert_eq!(
+            forward_units(&derived),
+            vec![
+                (
+                    bars[0].trade_day,
+                    4_044_900,
+                    4_044_900,
+                    4_044_900,
+                    4_044_900
+                ),
+                (
+                    bars[1].trade_day,
+                    4_044_900,
+                    4_044_900,
+                    4_044_900,
+                    4_044_900
+                ),
+                // E itself and everything after it are untouched.
+                (
+                    bars[2].trade_day,
+                    4_111_000,
+                    4_111_000,
+                    4_111_000,
+                    4_111_000
+                ),
+                (
+                    bars[3].trade_day,
+                    4_111_000,
+                    4_111_000,
+                    4_111_000,
+                    4_111_000
+                ),
+            ]
+        );
     }
 
     #[test]
@@ -424,7 +451,12 @@ mod tests {
         // identical input giving identical bars is what makes a rerun
         // idempotent. Nothing else in the path can move the id.
         let bars = [compact(day(2025, 3, 28), 4_111)];
-        let events = [event(20250331, crate::etf_qfq::ETF_CATEGORY_CASH, "0.661", "0")];
+        let events = [event(
+            20250331,
+            crate::etf_qfq::ETF_CATEGORY_CASH,
+            "0.661",
+            "0",
+        )];
         let first = derive_forward_bars("sz.159919", &bars, &events).unwrap();
         let again = derive_forward_bars("sz.159919", &bars, &events).unwrap();
         assert_eq!(first, again);
