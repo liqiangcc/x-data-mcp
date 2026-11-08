@@ -48,6 +48,17 @@ use crate::market_storage::Error;
 use crate::qfq::QfqBar;
 
 /// What the derived 前复权 series must do for this item.
+/// What the 不复权 commit did, in the three shapes the derivation cares about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RawMutation {
+    /// Tail extension.
+    Append,
+    /// Non-prefix rewrite or first publication: the whole series is new.
+    Rewrite,
+    /// `NoChange` / `Metadata`: no bar moved.
+    Still,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ForwardPlan {
     /// 不复权 and factors both stand still: the derived series is already right.
@@ -62,9 +73,12 @@ pub(crate) enum ForwardPlan {
 /// Derive the 前复权 bars of `entity` from its stored 不复权 series and stored
 /// factor facts, and decide what the derived series needs.
 ///
-/// `raw_changed` says whether this item wrote new 不复权 rows: `Append` when it
-/// did, `NoChange`/`Metadata` when it did not. `factors_changed` says whether
-/// the factor digest moved (see [`factor_digest`]).
+/// `raw_change` is the 不复权 commit's own kind, because "wrote new bars" is not
+/// a boolean (#607 PR-C review r1 item 2): an `Append` may extend the derived
+/// series, while a `Replace` is a non-prefix rewrite of the 不复权 series and
+/// must rewrite the derived one too — the stored prefix is no longer the
+/// 不复权 prefix, so keeping it would strand stale bytes. `factors_changed`
+/// says whether the factor digest moved (see [`factor_digest`]).
 ///
 /// The derived bars are computed over the **whole** 不复权 series, because an
 /// event only ever moves the prefix before it; the plan then keeps only the
@@ -73,41 +87,81 @@ pub(crate) enum ForwardPlan {
 pub(crate) fn plan_etf_forward(
     c: &Connection,
     entity: &str,
-    raw_changed: bool,
+    raw_change: &series_commit::SeriesChange<'_>,
     factors_changed: bool,
 ) -> Result<ForwardPlan, Error> {
+    let kind = match raw_change {
+        series_commit::SeriesChange::Append { .. } => RawMutation::Append,
+        series_commit::SeriesChange::Replace { .. }
+        | series_commit::SeriesChange::FirstPublish { .. } => RawMutation::Rewrite,
+        series_commit::SeriesChange::NoChange | series_commit::SeriesChange::Metadata => {
+            RawMutation::Still
+        }
+        // Yearly is rejected by the ETF commit path before this point; naming
+        // it keeps the match exhaustive instead of silently treating a yearly
+        // change as "still".
+        series_commit::SeriesChange::Yearly { .. } => {
+            return Err(integrity("a yearly change cannot reach the ETF daily path"));
+        }
+    };
+    let (appends, still) = match kind {
+        RawMutation::Append => (true, false),
+        RawMutation::Rewrite => (false, false),
+        RawMutation::Still => (false, true),
+    };
     let raw_head = series::read_series_adjusted(c, entity, Period::Day, Adjustment::Raw)?
         .ok_or_else(|| integrity("ETF forward derivation lost its 不复权 head"))?;
     let forward_head = series::read_series_adjusted(c, entity, Period::Day, Adjustment::Forward)?;
     // Nothing moved anywhere: the stored derived series is already the answer.
-    if !raw_changed && !factors_changed && forward_head.is_some() {
+    if still && !factors_changed && forward_head.is_some() {
         return Ok(ForwardPlan::Unchanged);
     }
-    let raw_bars = series::all_bars(c, raw_head.series_key)?;
+    // An append can only move the tail, and the derivation is a per-bar fold
+    // over the factor barriers, so only the bars at or before the stored head
+    // ever need reading again — they cannot have changed. A rewrite or a first
+    // derivation has to see the whole series (#607 PR-C review r1 item 3).
+    let raw_bars = match (appends, &forward_head) {
+        (true, Some(head)) => {
+            series::bars_in_range(c, raw_head.series_key, head.last_day + 1, i64::MAX)?
+        }
+        _ => series::all_bars(c, raw_head.series_key)?,
+    };
     if raw_bars.is_empty() {
         return Err(integrity("ETF 不复权 series carries no bars"));
     }
     let events = read_etf_events(c, entity)?;
     let derived = derive_forward_bars(entity, &raw_bars, &events)?;
-    match (raw_changed, factors_changed, forward_head) {
-        // A factor change moves every earlier bar, so the series is rebuilt.
-        (_, true, Some(_)) => Ok(ForwardPlan::Replace(derived)),
-        // First derivation for this entity.
-        (_, _, None) => Ok(ForwardPlan::Replace(derived)),
-        // New 不复权 bars only: the derived tail follows them, the prefix the
-        // append cannot have changed stays byte-identical.
-        (true, false, Some(head)) => {
-            let tail: Vec<CompactBar> = derived
-                .into_iter()
-                .filter(|bar| bar.trade_day > head.last_day)
-                .collect();
-            if tail.is_empty() {
+    match plan_kind(appends, factors_changed, forward_head.is_some()) {
+        ForwardPlanKind::Append => {
+            // The bars read for the append arm are already the tail, so the
+            // derived set here is exactly what the append writes.
+            if derived.is_empty() {
                 return Err(integrity("ETF 不复权 append produced no new 前复权 bar"));
             }
-            Ok(ForwardPlan::Append(tail))
+            Ok(ForwardPlan::Append(derived))
         }
-        (false, false, Some(_)) => Ok(ForwardPlan::Unchanged),
+        ForwardPlanKind::Replace => Ok(ForwardPlan::Replace(derived)),
     }
+}
+
+/// Whether the derived series can be extended, must be rebuilt, or stands.
+///
+/// Only an `Append` onto a stored head with an unchanged factor digest can keep
+/// the stored prefix. Everything else rebuilds it: a factor change moves the
+/// prefix, a 不复权 `Replace` is no longer the prefix we stored, and a first
+/// derivation has nothing stored yet. The caller returns `Unchanged` before
+/// reaching here when neither the bars nor the factors moved.
+fn plan_kind(appends: bool, factors_changed: bool, has_forward_head: bool) -> ForwardPlanKind {
+    match (appends, factors_changed, has_forward_head) {
+        (true, false, true) => ForwardPlanKind::Append,
+        _ => ForwardPlanKind::Replace,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForwardPlanKind {
+    Append,
+    Replace,
 }
 
 /// Forward-adjust the stored 不复权 bars over the stored factor facts.
@@ -249,10 +303,10 @@ pub(crate) fn factor_digest(c: &Connection, entity: &str) -> Result<compact_mark
 pub(crate) fn commit_etf_forward_tx(
     c: &Connection,
     raw: &series_commit::Commit<'_>,
-    raw_changed: bool,
+    raw_change: &series_commit::SeriesChange<'_>,
     factors_changed: bool,
 ) -> Result<(), Error> {
-    let plan = plan_etf_forward(c, raw.entity, raw_changed, factors_changed)?;
+    let plan = plan_etf_forward(c, raw.entity, raw_change, factors_changed)?;
     let forward_head =
         series::read_series_adjusted(c, raw.entity, Period::Day, Adjustment::Forward)?;
     // The plan's own kind decides the shared commit kind; the bars are moved
@@ -477,6 +531,27 @@ mod tests {
         let bars = [compact(day(2025, 3, 28), 4_111)];
         let derived = derive_forward_bars("sz.159919", &bars, &[]).unwrap();
         assert_eq!(derived[0].close_units, 4_111_000);
+    }
+
+    /// `raw_changed` as a boolean cannot distinguish an append from a
+    /// non-prefix rewrite (#607 PR-C review r1 item 2). The plan must rewrite
+    /// the derived series for a rewrite, and only extend it for an append onto
+    /// an unchanged stored head.
+    #[test]
+    fn only_a_tail_append_onto_a_stored_head_can_extend_the_series() {
+        // Append, no factor change, stored head: the one extendable shape.
+        assert_eq!(plan_kind(true, false, true), ForwardPlanKind::Append);
+        // A rewrite looks like "changed" to a boolean, but it is not the prefix
+        // we stored, so the derived series is rebuilt.
+        assert_eq!(plan_kind(false, false, true), ForwardPlanKind::Replace);
+        // A factor change moves every earlier bar.
+        assert_eq!(plan_kind(true, true, true), ForwardPlanKind::Replace);
+        assert_eq!(plan_kind(false, true, true), ForwardPlanKind::Replace);
+        // First derivation: nothing stored to extend.
+        assert_eq!(plan_kind(true, false, false), ForwardPlanKind::Replace);
+        assert_eq!(plan_kind(false, false, false), ForwardPlanKind::Replace);
+        assert_eq!(plan_kind(true, true, false), ForwardPlanKind::Replace);
+        assert_eq!(plan_kind(false, true, false), ForwardPlanKind::Replace);
     }
 }
 

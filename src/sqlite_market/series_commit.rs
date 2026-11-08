@@ -578,8 +578,7 @@ pub(crate) fn commit_etf_tx(
         w.item_id,
     )?;
     let factors_changed = super::etf_forward::factor_digest(c, w.entity)? != factors_before;
-    let raw_changed = !matches!(w.change, SeriesChange::NoChange | SeriesChange::Metadata);
-    super::etf_forward::commit_etf_forward_tx(c, w, raw_changed, factors_changed)?;
+    super::etf_forward::commit_etf_forward_tx(c, w, &w.change, factors_changed)?;
     match finish {
         ItemFinish::ItemAndTask => finish_item_and_task(
             c,
