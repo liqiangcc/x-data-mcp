@@ -2998,20 +2998,12 @@ fn task_facts_series(
     // surface admits it only in PR-D). So a stored ETF forward event must not
     // hijack the projection: the item is still projected through its raw
     // event, exactly as before the derived series existed.
-    let publishes_forward = |entity: &str| -> Result<bool, Error> {
-        Ok(crate::sqlite_market::series::resolve_read_shape(
-            c,
-            entity,
-            crate::sqlite_market::series::ReadSeriesKind::Daily,
-            Some(crate::market_data::Adjustment::Raw),
-        )?
-        .is_some_and(|shape| shape.instrument_class == crate::market_data::INSTRUMENT_CLASS_STOCK))
-    };
+    let mut basis = crate::sqlite_market::series::PublishBasis::new(c);
     let mut forward_items: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for row in &events {
         if row.1 == 1
             && row.2 == crate::market_data::Adjustment::Forward.code()
-            && publishes_forward(&row.0)?
+            && basis.publishes_forward(&row.0)?
         {
             forward_items.insert(row.5.clone());
         }

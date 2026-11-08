@@ -374,15 +374,46 @@ fn read_series_row(
         .transpose()
 }
 
-/// The current forward-adjusted series row for one (entity, period); `None`
-/// when never published. Kept as the qfq convenience head — the storage
-/// predicate itself is parameterized (`read_series_adjusted`).
+/// The current forward-adjusted **stock** series row for one (entity,
+/// period); `None` when never published. Kept as the qfq convenience head —
+/// the storage predicate itself is parameterized (`read_series_adjusted`).
+///
+/// Restricted to `instrument_class=0` on purpose (#607 PR-C review r1 item 1).
+/// Before the ETF 前复权 series existed, `adjustment=1` rows were stocks only
+/// (an index stores `Raw`), so "the forward row" and "the stock forward row"
+/// were the same query. Every ETF now has a derived forward row, so the
+/// unfiltered query would quietly start answering ETF callers with a series
+/// the read face has not admitted yet. On pre-PR-C data this predicate is
+/// exactly the old one.
 pub(crate) fn read_series(
     c: &Connection,
     entity: &str,
     period: Period,
 ) -> Result<Option<SeriesRow>, Error> {
-    read_series_adjusted(c, entity, period, Adjustment::Forward)
+    read_series_stock(c, entity, period, Adjustment::Forward)
+}
+
+/// [`read_series_adjusted`] at one 口径, restricted to the stock 品种. This is
+/// the shape every legacy "default Forward" lookup means.
+pub(crate) fn read_series_stock(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+    adjustment: Adjustment,
+) -> Result<Option<SeriesRow>, Error> {
+    read_series_row(
+        c,
+        &format!(
+            "SELECT {SERIES_COLUMNS} FROM market_series WHERE entity=?1 AND period=?2 \
+             AND adjustment=?3 AND instrument_class=?4"
+        ),
+        params![
+            entity,
+            super::compact_repo::period_code(period),
+            adjustment.code(),
+            crate::market_data::INSTRUMENT_CLASS_STOCK
+        ],
+    )
 }
 
 /// The current series row for one `(entity, period, adjustment)` — schema 22
@@ -626,6 +657,51 @@ fn validate_expected_shape(
         }
     }
     Ok(())
+}
+
+/// Whether a daily security's **published** 口径 is forward — i.e. whether its
+/// task-surface evidence (and its configurable "default Forward" lookup) is the
+/// forward series rather than the raw one.
+///
+/// This is the single predicate behind `task_facts_series` and
+/// `verification`'s per-item evidence choice (#607 PR-C review r1 items 1 and
+/// 8). Answering it per event row would cost two queries per row — a 5,200-item
+/// daily task would do ~10,000 lookups — so callers build a [`PublishBasis`]
+/// cache from the distinct entities they see.
+///
+/// The answer depends only on `security_master.instrument_class`: stocks
+/// publish forward, ETFs publish raw until PR-D admits their derived series,
+/// and indexes have no forward series at all.
+pub(crate) fn publishes_forward(c: &Connection, entity: &str) -> Result<bool, Error> {
+    Ok(
+        resolve_read_shape(c, entity, ReadSeriesKind::Daily, Some(Adjustment::Raw))?
+            .is_some_and(|shape| shape.instrument_class == INSTRUMENT_CLASS_STOCK),
+    )
+}
+
+/// Per-entity memo of [`publishes_forward`], built once per task projection.
+pub(crate) struct PublishBasis<'a> {
+    c: &'a Connection,
+    memo: std::collections::BTreeMap<String, bool>,
+}
+
+impl<'a> PublishBasis<'a> {
+    pub(crate) fn new(c: &'a Connection) -> Self {
+        Self {
+            c,
+            memo: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// The entity's published-口径 answer, computed at most once per entity.
+    pub(crate) fn publishes_forward(&mut self, entity: &str) -> Result<bool, Error> {
+        if let Some(answer) = self.memo.get(entity) {
+            return Ok(*answer);
+        }
+        let answer = publishes_forward(self.c, entity)?;
+        self.memo.insert(entity.to_owned(), answer);
+        Ok(answer)
+    }
 }
 
 /// The series the public (MCP) read surface resolves. It shares

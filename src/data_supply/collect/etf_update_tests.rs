@@ -1617,3 +1617,177 @@ fn etf_raw_series_stays_byte_identical_next_to_the_derived_one() {
     assert_eq!(rows.len(), 3);
     assert_eq!(close_of(&rows[0]), "41.78");
 }
+
+// ---------------------------------------------------------------------------
+// #607 PR-C review r1 item 1 — the stored 前复权 series must not be visible to
+// any read or maintenance surface that does not know about it.
+// ---------------------------------------------------------------------------
+
+impl Env {
+    /// Delete every derived 前复权 row, reproducing the pre-PR-C store while
+    /// keeping every other byte of the fixture. The series rows, their bars,
+    /// their events and their evidence all go, because a real pre-PR-C store
+    /// had none of them.
+    fn drop_etf_forward_series(&self) {
+        let MarketBackend::Compact(repo) = &self.backend else {
+            panic!("fixture must open the compact backend");
+        };
+        repo.tx(|c| {
+                let keys: Vec<i64> = c
+                    .prepare(
+                        "SELECT series_key FROM market_series WHERE adjustment=?1 AND instrument_class=?2",
+                    )
+                    .unwrap()
+                    .query_map(
+                        rusqlite::params![
+                            Adjustment::Forward.code(),
+                            crate::market_data::INSTRUMENT_CLASS_ETF
+                        ],
+                        |r| r.get(0),
+                    )
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                for key in keys {
+                    c.execute("DELETE FROM series_bars WHERE series_key=?1", [key])
+                        .unwrap();
+                    c.execute("DELETE FROM market_series WHERE series_key=?1", [key])
+                        .unwrap();
+                }
+                c.execute(
+                    "DELETE FROM market_events WHERE period=1 AND adjustment=?1 AND entity IN \
+                     (SELECT entity FROM security_master WHERE instrument_class=?2)",
+                    rusqlite::params![
+                        Adjustment::Forward.code(),
+                        crate::market_data::INSTRUMENT_CLASS_ETF
+                    ],
+                )
+                .unwrap();
+                Ok::<(), crate::market_storage::Error>(())
+            })
+            .unwrap();
+    }
+
+    /// Every read/maintenance surface that accepts an ETF, rendered to JSON so
+    /// two stores can be compared byte for byte.
+    fn etf_surface_snapshot(&self, task_id: &str) -> Vec<(&'static str, serde_json::Value)> {
+        let daily = |code: &str| {
+            self.api
+                .call(
+                    "query_data",
+                    json!({
+                        "dataset": "market.daily",
+                        "contract_version": "v1",
+                        "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+                        "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
+                        "version": {"kind": "latest_per_entity"},
+                        "adjustment": "raw",
+                        "page_size": 100
+                    }),
+                )
+                .unwrap()
+        };
+        let versions = |code: &str| {
+            self.api
+                .call(
+                    "list_data_versions",
+                    json!({
+                        "dataset": "market.daily",
+                        "contract_version": "v1",
+                        "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+                        "adjustment": "raw",
+                    }),
+                )
+                .unwrap()
+        };
+        let availability = |code: &str| {
+            self.api
+                .call(
+                    "get_data_availability",
+                    json!({
+                        "dataset": "market.daily",
+                        "contract_version": "v1",
+                        "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+                        "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
+                        "adjustment": "raw",
+                    }),
+                )
+                .unwrap()
+        };
+        vec![
+            ("market.daily raw 159919", daily("159919")),
+            ("market.daily raw 159922", daily("159922")),
+            ("versions 159919", versions("159919")),
+            ("versions 159922", versions("159922")),
+            ("availability 159919", availability("159919")),
+            ("availability 159922", availability("159922")),
+            (
+                "get_task_progress",
+                self.api
+                    .call("get_task_progress", json!({"task_id": task_id}))
+                    .unwrap(),
+            ),
+            (
+                "get_task",
+                self.api
+                    .call("get_task", json!({"task_id": task_id}))
+                    .unwrap(),
+            ),
+        ]
+    }
+}
+
+#[test]
+fn a_stored_etf_forward_series_changes_no_read_or_maintenance_surface() {
+    // The fixture runs once with the derived 前复权 series present and once
+    // with it deleted. Every surface an ETF can reach must render identically:
+    // PR-C added storage, not delivery.
+    let with_series = setup();
+    let second = with_series.advance_generation();
+    let third = with_series.advance_to(Generation::Third, "req-third", &second);
+    with_series.advance_to(Generation::Fifth, "req-fifth", &third);
+    let view = with_series.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = with_series.run("run-surface", &view, Some("sh_sz_etf_current"));
+    let present = with_series.etf_surface_snapshot(&task.task.task_id);
+    // The derived rows really are there, otherwise this test proves nothing.
+    for entity in ["sz.159919", "sz.159922"] {
+        assert!(
+            with_series
+                .forward_head(entity, Adjustment::Forward)
+                .is_some(),
+            "{entity} must have a derived 前复权 series in this arm"
+        );
+    }
+
+    // Same store, derived rows removed: the pre-PR-C shape.
+    with_series.drop_etf_forward_series();
+    for entity in ["sz.159919", "sz.159922"] {
+        assert!(
+            with_series
+                .forward_head(entity, Adjustment::Forward)
+                .is_none(),
+            "{entity} 前复权 series must be gone in this arm"
+        );
+    }
+    let absent = with_series.etf_surface_snapshot(&task.task.task_id);
+
+    // Strip the only two fields that legitimately differ between two
+    // invocations of the same store: the wall-clock query time and the
+    // snapshot id built from it.
+    fn volatile_free(value: &serde_json::Value) -> serde_json::Value {
+        let mut value = value.clone();
+        if let Some(map) = value.as_object_mut() {
+            map.remove("query_time");
+            map.remove("snapshot_id");
+            map.remove("snapshot_time");
+        }
+        value
+    }
+    for ((name, a), (_, b)) in present.iter().zip(absent.iter()) {
+        assert_eq!(
+            volatile_free(a),
+            volatile_free(b),
+            "surface {name} differs once the 前复权 rows exist"
+        );
+    }
+}
