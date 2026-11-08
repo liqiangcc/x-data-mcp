@@ -3,25 +3,28 @@
 用途有两个：
 
 1. **现在**：从生产库的不复权日线（`series_bars`）和 gbbq 因子
-   （`adjustment_events`）独立算出 ETF 前复权序列，检查每个生效日 X 前后
+   （`adjustment_events`）独立算出 ETF 前复权序列，检查每个除权除息日 E 前后
    有没有 ±2×/±5×/±10× 的假跳空。D-89 第 4 条的连续性验收门槛。
 2. **以后**：PR-C 把前复权序列落库后，用 `--compare` 逐值比对 Rust 的结果。
    没有给出输入时明确报 `NOT_RUN`，不静默通过。
 
-## 语义（照 D-91 与 D-92，本脚本不自行解释）
+## 语义（2026-11-08 审核第 1 轮更正）
+
+> **D-91 第 (1) 条的 R→X 语义不成立。** `adjustment_events.effective_day` 按
+> 1970-01-01 解码后就是**除权除息日 E**，不是权益登记日；D-91 那套「R 之后第一根
+> bar 才是 X」的说法，来自取证表把事件日早解了一天。本脚本按 E 直接实现。
 
 - **价格单位**：库里存的是 `raw` 整数，价格 = `raw / 1000`，单位是元。
-- **事件日 R**：`adjustment_events.effective_day` 是 gbbq 的日期，对 ETF 而言是
-  **权益登记日**。**生效日 X** 是 R 之后的第一根 bar 的日期
-  （等价说法：R 之后第一个交易日）。
-- **套用范围**：日期**早于 X** 的 bar（**含 R 当天**）套用该事件。
-  因为 bar 只存在于交易日，`bar_date < X` 与 `bar_date <= R` 选出同一批 bar；
-  本实现用 `X > bar_date`（bar 严格早于 X）。
+- **事件日 E**：`adjustment_events.effective_day`，即**除权除息日**。
+- **套用范围**：只作用于日期**严格早于 E** 的 bar（`bar_date < E`）。
+  **E 当天及之后的 bar 不调整**；E 落在周末/节假日也不改日期。
 - **变换**：cat11 为 `p / c3`；cat1 为 `p − c1 / 10`。`c1` 是每 10 份派发的现金（元/10 份），
-  `c3` 是折算比（新价 = 旧价 / c3）。同一个 X 上的多个事件**先 cat11 后 cat1**。
-- **复合**：每根 bar 把它之后的全部事件按 X 从早到晚复合，最后只做**一次**
+  `c3` 是折算比（新价 = 旧价 / c3）。同一个 E 上的多个事件**先 cat11 后 cat1**；
+  不同 E 的事件按时间先后复合。
+- **复合**：每根 bar 把它之前的全部事件复合，最后只做**一次**
   HALF_UP，保留 6 位小数。
-- **边界**：首根 bar 之前的事件、X 之后已经没有 bar 的事件，都不影响任何 bar。
+- **边界**：首根 bar 之前的事件、末根 bar 之后（即 E 晚于最后一根 bar）的事件，
+  都不影响任何 bar。
 
 ## 只读约束
 
@@ -147,60 +150,65 @@ def daily_return(prev, curr):
 
 
 class Event:
-    """一个 gbbq 事件：权益登记日 R、类别、因子。"""
+    """一个 gbbq 事件：除权除息日 E、类别、因子。
 
-    __slots__ = ("registration_day", "category", "c1", "c3", "effective_day")
+    `adjustment_events.effective_day` 就是**除权除息日 E**（按 1970-01-01 解码），
+    不是权益登记日。事件只作用于日期**严格早于 E** 的 bar；E 当天及之后不调整。
+    E 落在周末也不改日期。
+    """
 
-    def __init__(self, registration_day, category, c1, c3, effective_day=None):
-        self.registration_day = registration_day
+    __slots__ = ("ex_day", "category", "c1", "c3")
+
+    def __init__(self, ex_day, category, c1, c3):
+        self.ex_day = ex_day
         self.category = category
         self.c1 = Decimal(c1)
         self.c3 = Decimal(c3)
-        # X：R 之后的第一根 bar 的日期。由 `assign_effective_days` 填。
-        self.effective_day = effective_day
 
     def transform(self):
         return (self.category, self.c1, self.c3)
 
     def __repr__(self):
         return (
-            f"Event(R={self.registration_day}, X={self.effective_day}, "
+            f"Event(E={self.ex_day}, "
             f"cat={self.category}, c1={self.c1}, c3={self.c3})"
         )
 
 
-def assign_effective_days(events, bar_days):
-    """按 D-91 给每个事件定 X：R 之后的第一根 bar 的日期。
+def split_barriers(events, bar_days):
+    """把事件分成三组：作用于序列的、首根 bar 之前的、末根 bar 之后的。
 
-    `bar_days` 是该实体**已有 bar 的日期**，升序。用 bar 而不是 `trading_days`
-    是因为「X 之后没有 bar 的事件不影响任何 bar」，用 bar 定 X 天然满足这一条。
-    R 本身停在周末/节假日时，X 自动落到下一根 bar。
+    `bar_days` 是该实体**已有 bar 的日期**，升序。
 
-    返回 (可见事件, 越界事件)：
-    - 可见事件：X 存在的事件（它们至少影响一根 bar，或者 X 之后还有 bar）；
-    - 越界事件：X 不存在（R 之后已经没有 bar），不影响任何 bar。
+    - 首根 bar 之前（`E <= bar_days[0]`）：没有任何 bar 早于 E，不对任何 bar 生效；
+    - 作用于序列（`bar_days[0] < E <= bar_days[-1]`）：E 之前有 bar，会改变序列；
+    - 末根 bar 之后（`E > bar_days[-1]`）：**所有 bar 都早于 E，全部被调整**，
+      与旧 R→X 语义不同；它不会在其后产生新的检查点。
+
+    返回 (可见, 首根前, 末根后)。`可见` 同时包含后两组——它们都能改变序列。
     """
-    import bisect
-
-    visible, out_of_range = [], []
+    if not bar_days:
+        return [], list(events), []
+    first, last = bar_days[0], bar_days[-1]
+    visible, before_first, after_last = [], [], []
     for event in events:
-        index = bisect.bisect_right(bar_days, event.registration_day)
-        if index >= len(bar_days):
-            event.effective_day = None
-            out_of_range.append(event)
+        if event.ex_day <= first:
+            before_first.append(event)
             continue
-        event.effective_day = bar_days[index]
         visible.append(event)
-    return visible, out_of_range
+        if event.ex_day > last:
+            after_last.append(event)
+    return visible, before_first, after_last
 
 
 def chain_for_bar(bar_day, events):
-    """返回某根 bar 之后（bar_date < X）的全部事件，按复合次序排列。
+    """返回作用于某根 bar 的全部事件，按复合次序排列。
 
-    次序：X 从早到晚；同一个 X 上先 cat11 后 cat1（D-91 / D-90 F 的构造性约定）。
+    只选 `bar_day < E` 的事件（严格早于除权日）。
+    次序：E 从早到晚；同一个 E 上先 cat11 后 cat1。
     """
-    selected = [e for e in events if e.effective_day is not None and e.effective_day > bar_day]
-    selected.sort(key=lambda e: (e.effective_day, 0 if e.category == 11 else 1))
+    selected = [e for e in events if e.ex_day > bar_day]
+    selected.sort(key=lambda e: (e.ex_day, 0 if e.category == 11 else 1))
     return [e.transform() for e in selected]
 
 
@@ -278,20 +286,21 @@ def load_raw_bars(conn, entity):
 def analyse_entity(entity, bar_days, bar_raws, events):
     """算一只 ETF 的连续性检查结论（纯函数，便于测试）。
 
-    对每个 X（生效日）看**前后各 1 日**：X 前一根 bar 记为 prev，X 当根 bar
-    记为 curr。分别用不复权和前复权收盘价算收益，再判断前复权收益是否落在
-    2×/5×/10× 的邻域里（假跳空）。
+    对每个除权除息日 E 看**前后各 1 日**：E 前一根 bar 记为 prev，E 当根 bar
+    记为 curr（E 落周末时 curr 是 E 之后的第一根 bar）。分别用不复权和前复权
+    收盘价算收益，再判断前复权收益是否落在 2×/5×/10× 的邻域里（假跳空）。
 
     返回一个 dict，键与报告 JSON 一致。
     """
-    visible, out_of_range = assign_effective_days(events, bar_days)
+    visible, before_first, after_last = split_barriers(events, bar_days)
     if not bar_days:
         return {
             "entity": entity,
             "status": "no_bars",
             "event_count": len(events),
-            "visible_event_count": len(visible),
-            "out_of_range_event_count": len(out_of_range),
+            "visible_event_count": 0,
+            "before_first_bar_count": len(events),
+            "after_last_bar_count": 0,
             "note": "库里没有不复权日线",
             "checks": [],
             "false_gaps": 0,
@@ -302,8 +311,12 @@ def analyse_entity(entity, bar_days, bar_raws, events):
             "status": "no_events",
             "event_count": len(events),
             "visible_event_count": 0,
-            "out_of_range_event_count": len(out_of_range),
-            "note": "无事件",
+            "before_first_bar_count": len(before_first),
+            "after_last_bar_count": len(after_last),
+            "note": (
+                "无事件" if not events
+                else f"事件 {len(events)} 个但全在首根 bar 之前，不改变序列"
+            ),
             "checks": [],
             "false_gaps": 0,
         }
@@ -314,27 +327,32 @@ def analyse_entity(entity, bar_days, bar_raws, events):
     index_of = {day: i for i, day in enumerate(bar_days)}
 
     checks = []
-    for effective_day in sorted({e.effective_day for e in visible}):
-        curr = index_of[effective_day]
+    for ex_day in sorted({e.ex_day for e in visible}):
+        # E 当天有 bar 时用当天；E 落在周末/节假日时用 E 之后的第一根 bar。
+        curr = index_of[ex_day] if ex_day in index_of else _first_index_after(bar_days, ex_day)
+        if curr is None:
+            continue
         prev = curr - 1
-        on_this_day = [e for e in visible if e.effective_day == effective_day]
+        on_this_day = [e for e in visible if e.ex_day == ex_day]
         check = {
-            "effective_day": effective_day,
+            "ex_day": ex_day,
+            "observed_day": bar_days[curr],
             "categories": sorted({e.category for e in on_this_day}),
             "event_count": len(on_this_day),
             "prev_day": bar_days[prev] if prev >= 0 else None,
             "raw_return": None,
             "qfq_return": None,
+            "ratio": None,
             "false_gap": None,
         }
-        # X 之前没有 bar 时无法算收益：这是「首根 bar 之前的事件」的正常情形。
+        # 首根 bar 上无法算收益（没有前一根）。
         if prev >= 0:
             raw_prev, raw_curr = raw_close[prev], raw_close[curr]
             qfq_prev, qfq_curr = qfq_close[prev], qfq_close[curr]
             check["raw_return"] = _str_or_none(daily_return(raw_prev, raw_curr))
             check["qfq_return"] = _str_or_none(daily_return(qfq_prev, qfq_curr))
-            hit = is_false_gap(qfq_prev, qfq_curr)
-            check["false_gap"] = hit
+            check["ratio"] = _str_or_none(_ratio(qfq_prev, qfq_curr))
+            check["false_gap"] = is_false_gap(qfq_prev, qfq_curr)
         checks.append(check)
 
     false_gaps = sum(1 for c in checks if c["false_gap"])
@@ -343,7 +361,8 @@ def analyse_entity(entity, bar_days, bar_raws, events):
         "status": "ok",
         "event_count": len(events),
         "visible_event_count": len(visible),
-        "out_of_range_event_count": len(out_of_range),
+        "before_first_bar_count": len(before_first),
+        "after_last_bar_count": len(after_last),
         "note": None,
         "bar_count": len(bar_days),
         "first_day": bar_days[0],
@@ -359,6 +378,24 @@ def analyse_entity(entity, bar_days, bar_raws, events):
 
 def _str_or_none(value):
     return None if value is None else str(value)
+
+
+def _ratio(prev, curr):
+    """前复权相邻两日的价格比 `curr / prev`（保留 12 位小数，供人工核对）。"""
+    if prev is None or curr is None or prev == 0:
+        return None
+    with localcontext() as ctx:
+        ctx.prec = 40
+        value = curr / prev
+    return value.quantize(Decimal("0.000000000001"), rounding=ROUND_HALF_UP)
+
+
+def _first_index_after(bar_days, day):
+    """`bar_days` 中第一个严格晚于 `day` 的下标；没有则 None。"""
+    import bisect
+
+    index = bisect.bisect_right(bar_days, day)
+    return index if index < len(bar_days) else None
 
 
 def compare_with_rust(report, compare_path):
@@ -429,7 +466,8 @@ def run(conn, entities, compare_path=None):
                     "status": "no_bars",
                     "event_count": len(events),
                     "visible_event_count": 0,
-                    "out_of_range_event_count": len(events),
+                    "before_first_bar_count": len(events),
+                    "after_last_bar_count": 0,
                     "note": "库里没有不复权日线",
                     "checks": [],
                     "false_gaps": 0,
@@ -442,11 +480,10 @@ def run(conn, entities, compare_path=None):
         "tool": "check_etf_qfq_continuity",
         "semantics": {
             "price_unit": "raw/1000 元",
-            "event_date": "权益登记日 R（adjustment_events.effective_day）",
-            "effective_day": "X = R 之后第一根 bar 的日期",
-            "applies_to": "bar_date < X（含 R 当天）",
+            "event_date": "除权除息日 E（adjustment_events.effective_day，按 1970-01-01 解码）",
+            "applies_to": "bar_date < E（严格早于除权日）；E 当天及之后不调整",
             "transform": "cat11 = p / c3；cat1 = p - c1/10",
-            "order": "同一个 X 上先 cat11 后 cat1",
+            "order": "同一个 E 上先 cat11 后 cat1；不同 E 按时间先后",
             "rounding": "最后一次 HALF_UP，保留 6 位小数",
             "false_gap_rule": (
                 f"|qfq_ratio| 落在 "
@@ -495,7 +532,7 @@ def format_summary(report):
     lines = []
     for result in report["entities"]:
         if result["status"] == "no_events":
-            lines.append(f"{result['entity']}: 无事件")
+            lines.append(f"{result['entity']}: {result['note']}")
             continue
         if result["status"] == "no_bars":
             lines.append(f"{result['entity']}: 无数据（库里没有不复权日线）")
@@ -503,7 +540,8 @@ def format_summary(report):
         lines.append(
             f"{result['entity']}: 事件 {result['event_count']} 个"
             f"（可见 {result['visible_event_count']}，"
-            f"越界 {result['out_of_range_event_count']}），"
+            f"首根前 {result['before_first_bar_count']}，"
+            f"末根后 {result['after_last_bar_count']}），"
             f"假跳空 {result['false_gaps']} 个"
         )
     summary = report["summary"]

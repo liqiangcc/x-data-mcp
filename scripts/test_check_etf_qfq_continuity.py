@@ -33,6 +33,12 @@ DAY_20241201 = 20057  # 周日（R）
 DAY_20241202 = 20058  # 周一（X）
 DAY_20241203 = 20059  # 周二
 DAY_20240101 = 19723  # 2024-01-01，首根 bar 之前
+DAY_20241219 = 20076  # 2024-12-19（周四）
+DAY_20241220 = 20077  # 2024-12-20（周五，sz.159830 的 E）
+DAY_20241223 = 20080  # 2024-12-23（周一）
+DAY_20250328 = 20175  # 2025-03-28（周五）
+DAY_20250331 = 20178  # 2025-03-31（周一，sz.159919 的 E）
+DAY_20250401 = 20179  # 2025-04-01（周二）
 
 
 class TransformTest(unittest.TestCase):
@@ -96,78 +102,67 @@ class OrderTest(unittest.TestCase):
 
 
 class ChainOrderingTest(unittest.TestCase):
-    """`chain_for_bar` 的选取与排序。"""
+    """`chain_for_bar` 的选取与排序（事件日 E，只作用于早于 E 的 bar）。"""
 
-    def _event(self, r, cat, c1="0", c3="1", x=None):
-        event = mod.Event(r, cat, c1, c3)
-        event.effective_day = x
-        return event
-
-    def test_same_x_orders_cat11_before_cat1_even_if_cat1_is_earlier_in_r(self):
-        cat1 = self._event(DAY_20241130, 1, c1="1.292", x=DAY_20241202)
-        cat11 = self._event(DAY_20241201, 11, c3="2.5", x=DAY_20241202)
+    def test_same_ex_day_orders_cat11_before_cat1(self):
+        # sz.159922 的 cat11 记在 E=2024-12-01，cat1 记在 E=2024-12-02，不是同一个 E；
+        # 同一个 E 上同时有两类时才走这一条。这里构造成同一个 E 验证次序。
+        cat1 = mod.Event(DAY_20241202, 1, "1.292", "0")
+        cat11 = mod.Event(DAY_20241202, 11, "0", "2.5")
         chain = mod.chain_for_bar(DAY_20241129, [cat1, cat11])
         self.assertEqual([c for c, _, _ in chain], [11, 1])
 
-    def test_events_are_ordered_by_x_ascending(self):
-        later = self._event(DAY_20241201, 1, c1="1", x=DAY_20241202)
-        earlier = self._event(DAY_20241129, 11, c3="2", x=DAY_20241129 + 0)
-        earlier.effective_day = DAY_20241129 + 1
-        chain = mod.chain_for_bar(DAY_20241129 - 1, [later, earlier])
-        self.assertEqual(len(chain), 2)
+    def test_events_are_ordered_by_ex_day_ascending(self):
+        later = mod.Event(DAY_20241203, 1, "1", "0")
+        earlier = mod.Event(DAY_20241202, 11, "0", "2")
+        chain = mod.chain_for_bar(DAY_20241129, [later, earlier])
+        self.assertEqual([c for c, _, _ in chain], [11, 1])
 
 
-class EffectiveDayTest(unittest.TestCase):
-    """X = R 之后的第一根 bar（D-91 §1）。"""
+class ExDayTest(unittest.TestCase):
+    """事件日 E 的语义：除权除息日，只作用于严格早于 E 的 bar。"""
 
-    def test_registration_day_on_a_saturday_moves_x_to_the_next_bar(self):
-        # sz.159922 的 cat11 记在 2024-11-30（周六），下一根 bar 是 2024-12-02（周一）。
+    def test_bars_strictly_before_e_are_adjusted(self):
         bars = [DAY_20241129, DAY_20241202, DAY_20241203]
-        event = mod.Event(DAY_20241130, 11, "0", "2.5")
-        visible, out_of_range = mod.assign_effective_days([event], bars)
-        self.assertEqual(len(visible), 1)
-        self.assertEqual(visible[0].effective_day, DAY_20241202)
-        self.assertEqual(out_of_range, [])
-
-    def test_registration_day_on_a_sunday_moves_x_to_the_next_bar(self):
-        # sz.159922 的 cat1 记在 2024-12-01（周日），X 同为 2024-12-02。
-        bars = [DAY_20241129, DAY_20241202, DAY_20241203]
-        event = mod.Event(DAY_20241201, 1, "1.292", "0")
-        visible, _ = mod.assign_effective_days([event], bars)
-        self.assertEqual(visible[0].effective_day, DAY_20241202)
-
-    def test_registration_day_on_a_trading_day_means_x_is_the_next_day(self):
-        # R 当天有 bar 时，事件不套用在 R 当天（D-91：含 R 当天套用，因为 R < X）。
-        bars = [DAY_20241202, DAY_20241203]
-        event = mod.Event(DAY_20241202, 1, "0.5", "0")
-        visible, _ = mod.assign_effective_days([event], bars)
-        self.assertEqual(visible[0].effective_day, DAY_20241203)
-
-    def test_event_after_the_last_bar_affects_nothing(self):
-        bars = [DAY_20241129, DAY_20241202]
-        event = mod.Event(DAY_20241203, 1, "0.5", "0")
-        visible, out_of_range = mod.assign_effective_days([event], bars)
-        self.assertEqual(visible, [])
-        self.assertEqual(len(out_of_range), 1)
-        self.assertIsNone(out_of_range[0].effective_day)
-
-    def test_event_before_the_first_bar_applies_to_no_bar(self):
-        # R 在首根 bar 之前 → X 就是首根 bar，`X > bar_date` 对首根 bar 不成立，
-        # 因此没有任何 bar 套用它（D-91：首根 bar 之前的事件不影响序列）。
-        bars = [DAY_20241202, DAY_20241203]
-        event = mod.Event(DAY_20240101, 11, "0", "10")
-        visible, _ = mod.assign_effective_days([event], bars)
-        self.assertEqual(visible[0].effective_day, DAY_20241202)
-        self.assertEqual(mod.chain_for_bar(bars[0], visible), [])
-
-    def test_event_applies_to_bars_strictly_before_x(self):
-        bars = [DAY_20241129, DAY_20241202, DAY_20241203]
-        event = mod.Event(DAY_20241130, 11, "0", "2.5")
-        visible, _ = mod.assign_effective_days([event], bars)
+        event = mod.Event(DAY_20241202, 11, "0", "2.5")
+        visible, _, _ = mod.split_barriers([event], bars)
         self.assertEqual(len(mod.chain_for_bar(DAY_20241129, visible)), 1)
-        # R 当天与 X 当天都不套用（bar_date < X 严格）。
+
+    def test_the_ex_day_itself_is_not_adjusted(self):
+        bars = [DAY_20241129, DAY_20241202, DAY_20241203]
+        event = mod.Event(DAY_20241202, 11, "0", "2.5")
+        visible, _, _ = mod.split_barriers([event], bars)
         self.assertEqual(mod.chain_for_bar(DAY_20241202, visible), [])
         self.assertEqual(mod.chain_for_bar(DAY_20241203, visible), [])
+
+    def test_ex_day_on_a_weekend_is_not_moved(self):
+        # E 落在周日（2024-12-01）时不改日期：只影响早于 12-01 的 bar，
+        # 12-02 那根 bar 不受这个事件影响。
+        bars = [DAY_20241129, DAY_20241202, DAY_20241203]
+        event = mod.Event(DAY_20241201, 11, "0", "2.5")
+        visible, _, _ = mod.split_barriers([event], bars)
+        self.assertEqual(visible[0].ex_day, DAY_20241201)
+        self.assertEqual(len(mod.chain_for_bar(DAY_20241129, visible)), 1)
+        self.assertEqual(mod.chain_for_bar(DAY_20241202, visible), [])
+
+    def test_event_on_or_before_the_first_bar_applies_to_no_bar(self):
+        # E <= 首根 bar：没有任何 bar 早于 E，所以不套用到任何 bar。
+        bars = [DAY_20241202, DAY_20241203]
+        event = mod.Event(DAY_20241202, 11, "0", "10")
+        visible, before_first, _ = mod.split_barriers([event], bars)
+        self.assertEqual(visible, [])
+        self.assertEqual(len(before_first), 1)
+        self.assertEqual(mod.chain_for_bar(bars[0], [event]), [])
+
+    def test_event_after_the_last_bar_still_adjusts_every_bar_before_it(self):
+        # E 晚于末根 bar：所有 bar 都严格早于 E，因此全部被调整（不是「不影响」）。
+        # 这是 E 语义与旧 R→X 语义的关键区别，单独守住。
+        bars = [DAY_20241129, DAY_20241202]
+        event = mod.Event(DAY_20241203, 1, "0.5", "0")
+        visible, _, after_last = mod.split_barriers([event], bars)
+        self.assertEqual(len(visible), 1)
+        self.assertEqual(len(after_last), 1)
+        self.assertEqual(len(mod.chain_for_bar(bars[-1], [event])), 1)
 
 
 class RoundingTest(unittest.TestCase):
@@ -228,33 +223,75 @@ class FalseGapTest(unittest.TestCase):
 
 
 class ContinuityFixtureTest(unittest.TestCase):
-    """构造一个假跳空，证明脚本能抓到（`analyse_entity` 端到端）。"""
+    """除权除息日的整条链用例（`analyse_entity` 端到端）。
+
+    这两条是审核第 1 轮点名要的锚定用例，bar 与 E 都取自生产库的真实取值。
+    """
+
+    def test_sz159922_double_factor_chain_on_the_bar_before_the_ex_day(self):
+        # E=2024-12-01（周日，cat11 c3=2.5）与 E=2024-12-02（周一，cat1 c1=1.292）。
+        # 2024-11-29 那根 bar 的收盘 6.159 同时早于这两个 E，两次都套用：
+        # 6.159 / 2.5 − 0.1292 = 2.3344。
+        bar_days = [DAY_20241129, DAY_20241202, DAY_20241203]
+        bar_raws = [
+            (6159, 6159, 6159, 6159),
+            (2374, 2374, 2374, 2374),
+            (2371, 2371, 2371, 2371),
+        ]
+        events = [
+            mod.Event(DAY_20241201, 11, "0", "2.5"),
+            mod.Event(DAY_20241202, 1, "1.292", "0"),
+        ]
+        qfq = mod.adjust_series(bar_days, bar_raws, events)
+        self.assertEqual(qfq[0][3], Decimal("2.334400"))
+        # E 当天及之后不再套用 12-01 的事件；12-02 的 cat1 在此之后也不再套用。
+        self.assertEqual(qfq[1][3], Decimal("2.374000"))
+
+    def test_sz159919_cash_dividend_on_the_bar_before_the_ex_day(self):
+        # E=2025-03-31，前一根 bar 2025-03-28 收 4.111：4.111 − 0.661/10 = 4.044900。
+        # 3-31 当天（4.020）不调整。
+        bar_days = [DAY_20250328, DAY_20250331, DAY_20250401]
+        bar_raws = [
+            (4111, 4111, 4111, 4111),
+            (4020, 4020, 4020, 4020),
+            (4030, 4030, 4030, 4030),
+        ]
+        events = [mod.Event(DAY_20250331, 1, "0.661", "0")]
+        qfq = mod.adjust_series(bar_days, bar_raws, events)
+        self.assertEqual(qfq[0][3], Decimal("4.044900"))
+        self.assertEqual(qfq[1][3], Decimal("4.020000"))
+        self.assertEqual(qfq[2][3], Decimal("4.030000"))
 
     def test_a_planted_double_gap_is_detected(self):
-        # 两根 bar：R=DAY_20241130（周六）→ X=DAY_20241202。
-        # cat11 的 c3=0.5 会把 X 之前的 bar 抬到 2×，正好落进 2× 邻域。
+        # 构造的假跳空：E=2024-12-02，c3=0.5 把前一根 bar 抬到 2×，
+        # 而 E 当天不复权价没动，于是前复权序列在 E 处出现 2× 断点。
         bar_days = [DAY_20241129, DAY_20241202, DAY_20241203]
         bar_raws = [(1000, 1000, 1000, 1000), (1000, 1000, 1000, 1000), (1000, 1000, 1000, 1000)]
-        event = mod.Event(DAY_20241130, 11, "0", "0.5")
+        event = mod.Event(DAY_20241202, 11, "0", "0.5")
         result = mod.analyse_entity("sz.999999", bar_days, bar_raws, [event])
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["false_gaps"], 1)
         hit = [c for c in result["checks"] if c["false_gap"]]
         self.assertEqual(len(hit), 1)
-        self.assertEqual(hit[0]["effective_day"], DAY_20241202)
+        self.assertEqual(hit[0]["ex_day"], DAY_20241202)
         self.assertEqual(hit[0]["false_gap"], 2)
-        # 不复权收益是 0（价格没动），说明跳空完全来自复权。
         self.assertEqual(Decimal(hit[0]["raw_return"]), Decimal("0"))
         self.assertEqual(mod.decide_exit_code({
             "summary": {"false_gaps": 1},
             "compare": {"status": "NOT_RUN"},
         }), mod.EXIT_FALSE_GAP)
 
-    def test_a_clean_series_has_no_false_gap(self):
-        bar_days = [DAY_20241129, DAY_20241202, DAY_20241203]
-        bar_raws = [(3000, 3000, 3000, 3000), (2900, 2900, 2900, 2900), (2910, 2910, 2910, 2910)]
-        event = mod.Event(DAY_20241130, 11, "0", "1.1111111")
-        result = mod.analyse_entity("sz.999998", bar_days, bar_raws, [event])
+    def test_a_consistent_ex_day_has_no_false_gap(self):
+        # raw 在 E 当天就完成折算（5.722 → 6.120），前复权后两根 bar 连续，
+        # 不应报假跳空。取自 sz.159830 2024-12-20 的真实取值。
+        bar_days = [DAY_20241219, DAY_20241220, DAY_20241223]
+        bar_raws = [
+            (5722, 5722, 5722, 5722),
+            (6120, 6120, 6120, 6120),
+            (6180, 6180, 6180, 6180),
+        ]
+        event = mod.Event(DAY_20241220, 11, "0", "0.9358405")
+        result = mod.analyse_entity("sz.159830", bar_days, bar_raws, [event])
         self.assertEqual(result["false_gaps"], 0)
         self.assertEqual(
             mod.decide_exit_code(
