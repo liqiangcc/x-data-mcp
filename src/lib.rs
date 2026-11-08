@@ -16,7 +16,6 @@ pub mod official_market;
 pub mod official_security;
 mod progress_trace;
 pub mod publish;
-pub mod qfq;
 pub mod security_master;
 mod stage_trace;
 pub mod storage;
@@ -26,6 +25,8 @@ pub mod worker;
 pub mod yearly;
 
 pub mod day_file;
+pub mod etf_qfq;
+pub mod qfq;
 
 pub mod query;
 
