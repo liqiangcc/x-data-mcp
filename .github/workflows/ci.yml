@@ -53,6 +53,12 @@ jobs:
         run: python3 -B -m unittest discover -s scripts -p 'test_eval_read_tools.py'
       - name: ETF short-name extractor (synthetic text, no PDF bytes, no network)
         run: python3 -B -m unittest discover -s scripts -p 'test_extract_etf_short_names.py'
+      - name: ETF QFQ reference implementation and continuity check (pure functions, no database)
+        run: python3 -B -m unittest discover -s scripts -p 'test_check_etf_qfq_continuity.py'
+      - name: ETF factor-check record builder (fixtures only, no real database, no source store)
+        run: python3 -B -m unittest discover -s scripts -p 'test_etf_factor_checks_build.py'
+      - name: ETF factor-check weekly verify (fake fetcher, text fixtures, no PDF, no network)
+        run: python3 -B -m unittest discover -s scripts -p 'test_etf_factor_checks_verify.py'
       - run: cargo fmt --check
       - if: steps.scope.outputs.rust == 'true'
         run: cargo clippy --all-targets --all-features --locked -- -D warnings

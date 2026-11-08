@@ -310,6 +310,100 @@ pub(crate) fn read_adjustment_events(
     Ok(events)
 }
 
+/// One stored factor fact together with the digest of the evidence bundle it
+/// was written with (the `adjustment_events.evidence_digest` column).
+///
+/// `#607` PR-B (D-92 Q2 (c)) binds an ETF factor-check record to the **stored
+/// evidence** of the event it checks, not to the factor-set version id:
+/// `evidence_digest` is the column `migrations/tasks/027_etf_factor_events.sql`
+/// already has, it exists per row, and it cannot be recomputed from the factor
+/// values alone (which is exactly what makes a changed event a changed key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StoredAdjustmentEvent {
+    pub event: AdjustmentEvent,
+    /// Content digest of the evidence bundle the row was written with.
+    pub evidence_digest: Digest,
+}
+
+/// Every stored factor fact of `entity` in ordinal order, each with its
+/// evidence digest. This is the read side of the #607 PR-B blocking decision;
+/// it deliberately selects `evidence_digest` where [`read_adjustment_events`]
+/// does not, and it is read-only.
+pub(crate) fn read_adjustment_events_with_evidence(
+    c: &Connection,
+    entity: &str,
+) -> Result<Vec<StoredAdjustmentEvent>, Error> {
+    let mut statement = c
+        .prepare(
+            "SELECT ordinal,effective_day,category,c_bits_1,c_bits_2,c_bits_3,c_bits_4,\
+             c1,c2,c3,c4,known_at,basis_status,evidence_digest FROM adjustment_events \
+             WHERE entity=?1 ORDER BY ordinal",
+        )
+        .map_err(storage)?;
+    let rows = statement
+        .query_map(params![entity], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?,
+                r.get::<_, i64>(6)?,
+                r.get::<_, String>(7)?,
+                r.get::<_, String>(8)?,
+                r.get::<_, String>(9)?,
+                r.get::<_, String>(10)?,
+                r.get::<_, Option<String>>(11)?,
+                r.get::<_, String>(12)?,
+                r.get::<_, Vec<u8>>(13)?,
+            ))
+        })
+        .map_err(storage)?;
+    let mut events = Vec::new();
+    for row in rows {
+        let raw = row.map_err(storage)?;
+        let day = compact_market::epoch_date(raw.1).map_err(integrity)?;
+        let known_at = match raw.11 {
+            Some(text) => Some(
+                NaiveDate::parse_from_str(&text, "%Y-%m-%d")
+                    .map_err(|_| integrity("known_at is not a date"))?,
+            ),
+            None => None,
+        };
+        let mut factors = [rust_decimal::Decimal::ZERO; 4];
+        for (slot, text) in factors.iter_mut().zip([raw.7, raw.8, raw.9, raw.10]) {
+            *slot = text
+                .parse()
+                .map_err(|_| integrity("stored factor is not a decimal"))?;
+        }
+        let evidence_digest: Digest = raw
+            .13
+            .as_slice()
+            .try_into()
+            .map_err(|_| integrity("evidence_digest column is not 32 bytes"))?;
+        events.push(StoredAdjustmentEvent {
+            event: AdjustmentEvent {
+                ordinal: raw.0,
+                effective_day: day,
+                category: u8::try_from(raw.2).map_err(|_| integrity("category out of range"))?,
+                c_bits: [
+                    u32::try_from(raw.3).map_err(|_| integrity("c_bits_1 out of range"))?,
+                    u32::try_from(raw.4).map_err(|_| integrity("c_bits_2 out of range"))?,
+                    u32::try_from(raw.5).map_err(|_| integrity("c_bits_3 out of range"))?,
+                    u32::try_from(raw.6).map_err(|_| integrity("c_bits_4 out of range"))?,
+                ],
+                factors,
+                known_at,
+                basis_status: FactorBasisStatus::parse(&raw.12)
+                    .ok_or_else(|| integrity("stored factor basis_status is unregistered"))?,
+            },
+            evidence_digest,
+        });
+    }
+    Ok(events)
+}
+
 /// Whether `entity` has a category-1 (A-share ex-rights/ex-dividend) event with
 /// `after < effective_day <= up_to`. Indexed by `adjustment_events_entity_day`;
 /// category 11 (ETF share conversion) is not looked at.

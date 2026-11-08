@@ -86,13 +86,17 @@ PR-1a 在 maint socket 工具与等价 CLI 之间选择了 **CLI**
 
 ```text
 source_store replay --store <dir> \
-  [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
+  [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|\
+delisted_etf_names|etf_factor_checks|all] \
   [--db <market.sqlite>] [--verify-only]
 source_store verify --store <dir> \
-  [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|all] \
+  [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|\
+delisted_etf_names|etf_factor_checks|all] \
   [--db <market.sqlite>]
 source_store import --store <dir> --index <archive-index.jsonl> --blobs <dir> \
   [--tiers A,B] [--kind industry|exchange] [--batch <id>] [--dry-run]
+source_store import --store <dir> --index <checks.csv|checks.jsonl> \
+  [--format etf-factor-checks|etf-factor-checks-jsonl] [--batch <id>] [--dry-run]
 source_store register-generation-member --store <dir> \
   --generation <manifest sha256> --generation-dir <installed generation dir>
 source_store exempt --db <market.sqlite> --generation <manifest sha256> \
@@ -123,6 +127,8 @@ source_store exempt --db <market.sqlite> --generation <manifest sha256> \
 拼出退市名称，只替换 `security_name_history` 的 `exchange_snapshot` 子集；无 `--db`
 或库里没有 class-2 主表行时 fail-closed 报 `delisted_etf_names_not_ready`，写 0 行。
 详见 [ETF 名称设计](tasks/etf-name-search.md) §9。
+`etf_factor_checks`（`#607` PR-B）同样**不在 `--scope all` 里**：它只从冻结记录
+重算校验摘要，不写任何行情表，见 §6.1。
 `rebuilt` 取值：
 `nothing_selected`（该 scope 在清单里没有匹配记录，什么都没算、没写）、
 `skeleton_no_op`、`computed_no_db`（算出了摘要但没有 `--db`）、`rebuilt`（已写库）、
@@ -366,6 +372,80 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
 导入同时写 `imported_at`（本次导入时间）。行业区间回填的 `known_at` 取它而不是
 归档的历史获取时间——否则等于声称当时已经用上了这份数据（设计 §5.2）；重复导入
 命中 `already_present`，清单里保留第一次的 `imported_at`，重放因此稳定。
+
+## 6.1 ETF 因子核对记录（`etf-factor-checks-v1`）
+
+`#607` PR-B（[D-92](decisions.md) Q2 (c)）把 ETF 每个 `(entity, ordinal)` 事件的
+核对结论按内容寻址登记进来源库，**不改行情库 schema**——这是 (c) 的全部意义
+（[ETF 前复权设计](tasks/issue-607-etf-qfq.md) §3.2.1/§3.2.2）。记录本身是证据，
+不是行情数据；本 scope 也只读，不写市场库。
+
+记录格式（权威定义在代码 `src/source_store/etf_factor_checks.rs` 的
+`EtfFactorCheck`，字段顺序即规范 JSON 顺序，sha256 是 id）：
+
+| 字段 | 含义 |
+|---|---|
+| `record_version` | 恒为 `etf-factor-checks-v1` |
+| `entity` / `ordinal` | 核对对象：`sh.510180` 这样的实体 + `adjustment_events.ordinal` |
+| `effective_day` / `category` | 事件生效日（`YYYY-MM-DD`）与类别（只允许 `1` / `11`） |
+| `check_status` | `verified_official` / `verified_announcement` / `no_effect` / `unverified` |
+| `basis` | `official_qss` / `announcement` / `none`（`verified_*` 必须与之一致） |
+| `basis_ref` / `evidence_url` / `evidence_sha256` | 证据的身份、URL 与字节 sha256 |
+| `announced_value` / `gbbq_value` | 公告值或官方值 / 被核对的 gbbq 因子值 |
+| `price_delta` / `within_one_tick` | 复权价差（元）与 D-92 的 1 tick 判定 |
+| `checked_at` | 核对日期 |
+| `evidence_digest` | 该事件当前因子事实的 `adjustment_events.evidence_digest`（hex） |
+
+- **写入**：`source_store import --format etf-factor-checks`（CSV，需要表头）或
+  `--format etf-factor-checks-jsonl`。清单行是 `source_id=etf_factor_checks`、
+  `store_kind=archive_import`、`parser_version=etf-factor-checks-v1`、
+  `origin=etf-factor-checks:<record sha256>`，所以同一内容重复导入是
+  `already_present`，**不写 blob、不追加清单行**。
+- **只追加**：后来的结论是**新记录**（新 sha256），旧记录不删。读取方按
+  `(entity, ordinal, evidence_digest)` 取 `checked_at` 最新的那条。
+- **首次导入的转换脚本**：`scripts/etf_factor_checks_build.py`
+  （`convert --events-v3 <csv> --db <market db> --out <jsonl> [--report <json>]
+  [--overrides <json>]`）
+  把阶段 1 的取证表转成本格式的记录。行情库只读（`file:…?mode=ro`），匹配键是库里的
+  `(entity, effective_day, category)` ↔ 取证表的 `(entity, X_day, cat)`（取证表的 `day`
+  列比 E 早一天），`ordinal` / `evidence_digest` 一律从库里读；v3 判 `unverified` 的
+  事件按 D-92 的 1 tick 再判一次，**作用在同一根 bar 上的复合事件合并核对**
+  （同一个 E 的写 `same_E_composite`；E 不同但 `X_day` 相同的写 `same_bar_composite`，
+  按 E 先后依次套用，官方 `qss` 取那根 bar 当天的值）；对不上的一条不跳过，
+  全部写进报告并阻断对应实体。**它只生成文件，不写来源库**：真正的首次导入是部署后
+  另派的运维任务，需要 owner 批准。
+- **`--overrides <json>`**：逐条**带公告原文片段**的人工裁定，用来补 v3 只保存了解析
+  后数值、没有原文的情形。每条写 `entity` / `ordinal` / `effective_day` / `category`、
+  `announced`（cat1 给 `c1`，cat11 给 `c3`）、`basis_ref`（人看的依据，例如
+  「D-92 裁定，#607 2026-11-08 评论」）与 `snippet`（原文照抄）。裁定**只提供公告值，
+  不提供判定**：价差仍按 D-92 的 1 tick 判，不够就照旧 `unverified`。文件形状见
+  `scripts/testdata/etf_factor_overrides_d92.json`；没用到的裁定会写进报告的
+  `overrides.unused`（键写错不能被静默忽略）。
+- **公告写法解析**是通用纯函数（`parse_announcement_text` / `parse_decimal`），
+  `convert` 与每周 `verify` 共用：全角数字与全角点先归一化（`４２．２８` → 42.28）；
+  「每 10 份…元」「每份…元」「N：M 拆分/折算」「N：M 合并」都按
+  `新价 = 旧价 / (新/旧)` 折算成 c3，方向词与数值矛盾时拒绝（不猜）。
+- **每周 `verify`**：`scripts/etf_factor_checks_build.py verify --db <db>
+  [--existing <jsonl|来源库目录>] --out <新记录 jsonl> --report <json>
+  [--max-requests N] [--dry-run] [--since <date>]`。只处理
+  `(entity, ordinal, evidence_digest)` 在既有记录里没有的 ETF cat1/cat11 事件；官方
+  日行情（深市 `1815_stock`）与公告（沪市 `COMMON_PL_JJXX_JJGG_L` / 深市公告索引）都
+  走可替换的 `Fetcher` 接口，网络请求有硬上限（默认 300，重试也计入）、间隔 ≥ 1 s、
+  退避 ≥ 30 s、最多重试 1 次；核不上的事件记 `unverified` 并写原因，**不跳过**。
+  `--dry-run` 只列计划（条数与 URL 模板），不建连接。
+- **`--dry-run`**：跑完全部校验，只读（`registered_keys` 走共享锁），不写 manifest
+  也不写 blob。
+- **fail-closed 逐行**：缺字段、`check_status` 不认识、sha256 形状不对、
+  `verified_*` 缺 basis 或复用错误的 basis，该行进 `skipped_unverified`
+  （`reason=invalid_record`）且不登记；其余行照常导入并计入报告。
+- **replay**：`--scope etf_factor_checks`（**不在 `--scope all` 里**，它是只读证据）
+  逐条读回校验 blob sha256、再从内容重算记录 id，任一不符即 `record_invalid`；
+  通过后报告 `records`、`summary` 与 `etf_checks_digest`（用于判定的核对记录集合的
+  摘要，供响应/manifest 复现判定）。它从不算、也不写市场上任何表
+  （`database=not_compared`）。
+- **阻断判定**在 `src/source_store/etf_factor_gate.rs`（纯函数）与
+  `etf_factor_loader.rs`（只读装载 + `(entity, evidence_digest)` 判定缓存）；
+  本批 PR 不接入读面，接入在 PR-C/PR-D。
 
 ## 7. 部署钩子
 
