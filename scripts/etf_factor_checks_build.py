@@ -169,6 +169,12 @@ EXIT_NEEDS_REVIEW = 3
 
 ENTITY_RE = re.compile(r"^(sh|sz|bj)\.(\d{6})$")
 DECIMAL_RE = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)$")
+
+#: 全角数字/标点在公告里很常见；先把它们折成半角再解析（`４２．２８` → `42.28`）。
+FULLWIDTH_TRANSLATION = str.maketrans(
+    "０１２３４５６７８９．，：；（）％＋－＝　",
+    "0123456789.,:;()%+-= ",
+)
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -235,9 +241,24 @@ def decimal_text(value, quantize=None):
     return text
 
 
+def normalize_fullwidth(text):
+    """全角数字与全角标点 → 半角（`４２．２８` → `42.28`）。
+
+    公告原文里两种写法都有，VM2-23 把 `42．28` 读成 42.0 就是漏了这一步。数字、
+    小数点、正负号、千分位与括号都要折，否则 `parse_decimal` 会把它当成非法值。
+    """
+    if not text:
+        return text
+    return text.translate(FULLWIDTH_TRANSLATION)
+
+
 def parse_decimal(value, what):
-    """`value` 是空串时返回 None，否则必须是十进制数。"""
-    text = (value or "").strip()
+    """`value` 是空串时返回 None，否则必须是十进制数。
+
+    全角写法先归一化（`４２．２８` → `42.28`），否则 `Decimal` 直接抛异常。
+    """
+    text = normalize_fullwidth((value or "").strip())
+    text = text.replace("−", "-").replace("－", "-").replace(",", "")
     if not text:
         return None
     try:
@@ -445,6 +466,180 @@ def fetch_events(conn, selected, entities):
 
 
 # ---------------------------------------------------------------------------
+# 人工裁定（`--overrides`）
+# ---------------------------------------------------------------------------
+
+
+class Override:
+    """一条人工裁定：这条事件的公告值、依据与原文片段。
+
+    它只给**公告说的数**，不给判定：判定仍由 D-92 的 1 tick 规则做。字段：
+
+    - `entity` / `ordinal` / `effective_day` / `category`：定位事件（四个都要对）；
+    - `announced`：`{"c1": <元/10 份>}`（cat1）或 `{"c3": <折算比>}`（cat11）；
+    - `basis_ref`：人看的依据，例如「D-92 裁定，#607 2026-11-08 评论」；
+    - `snippet`：公告原文片段（照抄，用来复核读出来的数）；
+    - `evidence_url` / `evidence_sha256`：可选，给了就写进记录的公告证据。
+    """
+
+    __slots__ = (
+        "entity",
+        "ordinal",
+        "effective_day",
+        "category",
+        "announced",
+        "basis_ref",
+        "snippet",
+        "evidence_url",
+        "evidence_sha256",
+        "note",
+    )
+
+    def __init__(self, **fields):
+        for slot in self.__slots__:
+            setattr(self, slot, fields.get(slot))
+        self.announced = fields.get("announced") or {}
+
+    def key(self):
+        return (self.entity, self.ordinal, self.effective_day, self.category)
+
+    def as_dict(self):
+        return {
+            "entity": self.entity,
+            "ordinal": self.ordinal,
+            "effective_day": self.effective_day,
+            "category": self.category,
+            "announced": {
+                key: decimal_text(value, DELTA_SCALE)
+                for key, value in sorted(self.announced.items())
+            },
+            "basis_ref": self.basis_ref,
+            "snippet": self.snippet,
+        }
+
+
+def load_overrides(path):
+    """读人工裁定 JSON → `{(entity, ordinal, effective_day, category): Override}`。
+
+    文件形状是一个 `{"overrides": [...]}` 对象或直接一个数组。每一行都要能过校验：
+    实体形状、`ordinal >= 0`、`category in (1, 11)`、日期合法、`announced` 里有与
+    类别对应的数（cat1 给 `c1`，cat11 给 `c3`）、`basis_ref` 与 `snippet` 非空。
+    不合格就抛 `InputError`——人工裁定是「人工签字」的东西，不能含糊。
+
+    同一个键出现两次是错误（哪条说了算不能靠顺序）。
+    """
+    if not path:
+        return {}
+    if not os.path.exists(path):
+        raise InputError(f"--overrides 文件不存在：{path}")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InputError(f"--overrides 读不了：{exc}") from exc
+    rows = payload.get("overrides") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        raise InputError("--overrides 需要 {'overrides': [...]} 对象或数组")
+    overrides = {}
+    for index, raw in enumerate(rows, start=1):
+        if not isinstance(raw, dict):
+            raise InputError(f"--overrides 第 {index} 条不是对象")
+        entity = str(raw.get("entity") or "")
+        if not ENTITY_RE.match(entity):
+            raise InputError(
+                f"--overrides 第 {index} 条 entity {entity!r} 不是 <sh|sz|bj>.<6 位>"
+            )
+        try:
+            ordinal = int(raw.get("ordinal"))
+        except (TypeError, ValueError) as exc:
+            raise InputError(f"--overrides 第 {index} 条 ordinal 不是整数") from exc
+        if ordinal < 0:
+            raise InputError(f"--overrides 第 {index} 条 ordinal 不能为负")
+        category = raw.get("category")
+        if category not in (1, 11):
+            raise InputError(f"--overrides 第 {index} 条 category {category!r} 不是 1 或 11")
+        effective_day = str(raw.get("effective_day") or "")
+        if parse_day(effective_day) is None:
+            raise InputError(
+                f"--overrides 第 {index} 条 effective_day {effective_day!r} 不是 YYYY-MM-DD"
+            )
+        announced_raw = raw.get("announced")
+        if not isinstance(announced_raw, dict):
+            raise InputError(f"--overrides 第 {index} 条缺 announced 对象")
+        announced = {}
+        field = "c1" if category == 1 else "c3"
+        if field not in announced_raw:
+            raise InputError(
+                f"--overrides 第 {index} 条 category={category} 需要 announced.{field}"
+            )
+        for name, value in announced_raw.items():
+            if name not in ("c1", "c3"):
+                raise InputError(f"--overrides 第 {index} 条 announced 不支持字段 {name!r}")
+            parsed = parse_decimal(str(value), f"--overrides[{index}].announced.{name}")
+            if parsed is None:
+                raise InputError(f"--overrides 第 {index} 条 announced.{name} 为空")
+            if name == "c3" and parsed == 0:
+                raise InputError(f"--overrides 第 {index} 条 announced.c3 不能为 0")
+            announced[name] = parsed
+        basis_ref = str(raw.get("basis_ref") or "").strip()
+        if not basis_ref:
+            raise InputError(f"--overrides 第 {index} 条缺 basis_ref")
+        snippet = str(raw.get("snippet") or "").strip()
+        if not snippet:
+            raise InputError(f"--overrides 第 {index} 条缺 snippet（公告原文片段）")
+        evidence_sha256 = str(raw.get("evidence_sha256") or "").strip().lower()
+        if evidence_sha256 and not SHA256_RE.match(evidence_sha256):
+            raise InputError(
+                f"--overrides 第 {index} 条 evidence_sha256 不是 64 位小写 hex"
+            )
+        override = Override(
+            entity=entity,
+            ordinal=ordinal,
+            effective_day=effective_day,
+            category=int(category),
+            announced=announced,
+            basis_ref=basis_ref,
+            snippet=snippet,
+            evidence_url=str(raw.get("evidence_url") or "").strip(),
+            evidence_sha256=evidence_sha256,
+            note=str(raw.get("note") or "").strip(),
+        )
+        if override.key() in overrides:
+            raise InputError(f"--overrides 第 {index} 条与前面的键重复：{override.key()}")
+        overrides[override.key()] = override
+    return overrides
+
+
+def apply_overrides(db_events, pairs, overrides):
+    """把裁定挂到 v3 行上；返回 `(used_keys, unused_keys)`。
+
+    键是 `(entity, ordinal, effective_day, category)`，`ordinal` 与 `effective_day`
+    只有库里读出来的事件才有（v3 没有 `ordinal` 列），所以要先配对再用。
+
+    未用到的裁定要报出来：它可能是键写错了（ordinal 或 E 不对），静默忽略等于
+    让人以为自己签过字。
+    """
+    used = set()
+    for event in db_events:
+        row = pairs.get(event_key(event))
+        if row is None:
+            continue
+        key = (
+            event["entity"],
+            event["ordinal"],
+            event["effective_day"],
+            event["category"],
+        )
+        override = overrides.get(key)
+        if override is None:
+            continue
+        row["override"] = override
+        used.add(key)
+    unused = sorted(set(overrides) - used)
+    return used, unused
+
+
+# ---------------------------------------------------------------------------
 # 匹配
 # ---------------------------------------------------------------------------
 
@@ -609,7 +804,15 @@ def announced_factor(row):
 
     cat1 用 `ann_amount_per10`（元/10 份，与 c1 同口径），没有时用 `ann_amount`；
     cat11 用 `ann_ratio`（折算比，`新价 = 旧价 / ratio`）。
+
+    人工裁定（`--overrides`，见 [`load_overrides`]）优先：它带原文片段，比 v3 的
+    一列解析结果更可信。
     """
+    override = row.get("override")
+    if override is not None:
+        factor = override_factor(override, row["category"])
+        if factor is not None:
+            return factor
     category = row["category"]
     if category == 1:
         text = row.get("ann_amount_per10") or row.get("ann_amount") or ""
@@ -618,10 +821,37 @@ def announced_factor(row):
             return None
         return (1, value, Decimal(0))
     if category == 11:
+        # v3 只有解析后的一个数，没有原文。写的是「N:M 拆分/合并」的那些，方向
+        # 由 [`_parse_ratio`] 按原文判定（N:M 即「新：旧」，N/M 就是 c3）；v3 里
+        # 存的是解析结果，所以只在它有原文片段时才能纠正——否则保持原值。
+        text = row.get("ann_ratio_text") or ""
+        if text.strip():
+            ratio, _note = _parse_ratio(normalize_fullwidth(text))
+            if ratio is not None:
+                return (11, Decimal(0), ratio)
         value = parse_decimal(row.get("ann_ratio") or "", "ann_ratio")
         if value is None or value == 0:
             return None
         return (11, Decimal(0), value)
+    return None
+
+
+def override_factor(override, category):
+    """人工裁定 → `(category, c1, c3)`；裁定没有这个类别时返回 None。
+
+    裁定里只写「公告说的数」，两个类别都按同一口径表达（见 [`load_overrides`]）。
+    """
+    announced = override.announced if hasattr(override, "announced") else override.get(
+        "announced", {}
+    )
+    if category == 1:
+        if "c1" not in announced:
+            return None
+        return (1, announced["c1"], Decimal(0))
+    if category == 11:
+        if "c3" not in announced:
+            return None
+        return (11, Decimal(0), announced["c3"])
     return None
 
 
@@ -787,6 +1017,28 @@ def _same_ex_day_groups(events):
     return grouped
 
 
+def _bar_groups(events, rows_by_key):
+    """按「E 之后的第一根 bar」（v3 的 `X_day`）分组。
+
+    为什么不是按 E 分组：两条事件的 E 可以不同（`sz.159922` 的 cat11 在周日
+    2024-12-01、cat1 在周一 2024-12-02），但它们作用在**同一根 bar** 上，官方
+    `qss` 是两笔合起来的结果。按 E 分组会把它们拆成两条单事件，谁都核不上。
+
+    `rows_by_key` 是 `{event_key(event): v3 row}`；没有 v3 行的事件按自己的 E 当分组键
+    （它是这一组里唯一的事件，分组不影响结果）。
+    """
+    grouped = defaultdict(list)
+    for event in events:
+        row = rows_by_key.get(event_key(event))
+        # 分组键 = 这条事件作用到的第一根 bar：v3 的 X_day，没有就用 E。
+        bar_day = (row or {}).get("X_day") or event["effective_day"]
+        grouped[(event["entity"], bar_day)].append(event)
+    for group in grouped.values():
+        # 同一个 bar 上：E 早的先做（不同 E 的复合按时间先后），E 相同先 cat11。
+        group.sort(key=lambda item: (item["effective_day"], item["category"] != 11, item["ordinal"]))
+    return grouped
+
+
 def _evidence_fields(record, evidence):
     if evidence is None:
         return
@@ -803,7 +1055,9 @@ def build_records(db_events, v3_rows, checked_at):
     ordinal)` 排序，`report` 是可以直接写文件的 dict。
     """
     pairs, unmatched = match_events(db_events, v3_rows)
-    groups = _same_ex_day_groups(db_events)
+    # 复合核对按「E 之后的第一根 bar」分组：不同 E 但作用在同一根 bar 上的事件
+    # 也要合并（`sz.159922` 的 cat11 E=周日 + cat1 E=周一），否则两条都核不上。
+    bar_groups = _bar_groups(db_events, pairs)
     warnings = {
         "official_delta_over_tick": [],
         "no_prev_close": [],
@@ -856,7 +1110,8 @@ def build_records(db_events, v3_rows, checked_at):
                     "basis_status": event.get("basis_status"),
                 }
             )
-        group = groups[(event["entity"], event["effective_day"])]
+        bar_day = (row.get("X_day") or event["effective_day"])
+        group = bar_groups[(event["entity"], bar_day)]
         group_rows = [pairs.get(event_key(item)) for item in group]
         group_events = [
             item
@@ -970,6 +1225,9 @@ def _decide(event, row, record, factor, group_events, group_rows, warnings):
     # 5) v3 的 unverified：按 D-92 的 1 tick 再判一次。
     evidence = announcement_evidence(row)
     _evidence_fields(record, evidence)
+    override = row.get("override")
+    if override is not None:
+        return _decide_with_override(event, row, record, factor, override, prev_close, warnings)
     announced = announced_factor(row)
     record["announced_value"] = _announced_text(row)
     if evidence is None:
@@ -1004,7 +1262,19 @@ def _decide(event, row, record, factor, group_events, group_rows, warnings):
 
 
 def _decide_composite(event, row, record, group_events, group_rows, prev_close, warnings):
-    """同一个 E 上的多个事件：合并成一次调整后再核对（D-91 §2）。"""
+    """作用在同一根 bar 上的多个事件：合并成一次调整后再核对（D-91 §2）。
+
+    D-91 §2 定的是「同一个 E 上先 cat11 后 cat1」。生产数据里还有另一种复合：
+    两条事件的 E 不同（`sz.159922` 的 cat11 E=2024-12-01 周日、cat1 E=2024-12-02
+    周一），但都作用在**同一根 bar**（`X_day` = 2024-12-02）上——官方当天的 `qss`
+    是两笔合起来的结果，所以必须合并核对。`compose_price` 对 `(category, c1, c3)`
+    序列按给定次序复合，调用方已把 `group_events` 按 `(E, 类别)` 排好。
+
+    复合的依据写进 `basis_ref`：`same_E_composite`（E 相同）或
+    `same_bar_composite`（E 不同、作用在同一根 bar）。
+    """
+    same_day = len({item["effective_day"] for item in group_events}) == 1
+    label = "same_E_composite" if same_day else "same_bar_composite"
     official_texts = {item.get("official_qss", "") for item in group_rows if item}
     prev_closes = {item.get("prev_close", "") for item in group_rows if item}
     prev = prev_close
@@ -1012,7 +1282,10 @@ def _decide_composite(event, row, record, group_events, group_rows, prev_close, 
         prev = parse_decimal(next(iter(prev_closes)), "prev_close")
     elif len(prev_closes) > 1:
         prev = None
-    evidence = official_evidence(row, event["effective_day"])
+    # 官方证据是**那根 bar** 当天的 qss，不是某一条事件自己的 E：复合组里 E 可能
+    # 不同（`sz.159922` 的 cat11 在周日），qss 只在 bar 上有。
+    bar_day = row.get("X_day") or event["effective_day"]
+    evidence = official_evidence(row, bar_day)
     factors = [gbbq_factor(item) for item in group_events]
     official = None
     if len(official_texts) == 1:
@@ -1022,13 +1295,13 @@ def _decide_composite(event, row, record, group_events, group_rows, prev_close, 
         record["basis"] = "official_qss" if evidence is not None else "none"
         if evidence is not None:
             _evidence_fields(record, evidence)
-            record["basis_ref"] = record["basis_ref"] + ";same_E_composite;unusable"
+            record["basis_ref"] = record["basis_ref"] + f";{label};unusable"
         else:
-            record["basis_ref"] = "same_E_composite;no_official_qss"
-        return "同 E 复合：官方 qss / 前收 / 因子缺失，合并结果无法锚定"
+            record["basis_ref"] = f"{label};no_official_qss"
+        return f"{label}：官方 qss / 前收 / 因子缺失，合并结果无法锚定"
     record["basis"] = "official_qss"
     _evidence_fields(record, evidence)
-    record["basis_ref"] = record["basis_ref"] + ";same_E_composite"
+    record["basis_ref"] = record["basis_ref"] + f";{label}"
     record["announced_value"] = next(iter(official_texts))
     delta = official - compose_price(prev, factors)
     record["price_delta"] = decimal_text(delta, DELTA_SCALE)
@@ -1036,7 +1309,7 @@ def _decide_composite(event, row, record, group_events, group_rows, prev_close, 
     if record["within_one_tick"]:
         record["check_status"] = "verified_official"
         return (
-            "同 E 复合（先 cat11 后 cat1）："
+            f"{label}（按 E 先后复合）："
             f"官方 {decimal_text(official)} − 合并价 = {decimal_text(delta, DELTA_SCALE)}"
         )
     record["check_status"] = "unverified"
@@ -1046,10 +1319,55 @@ def _decide_composite(event, row, record, group_events, group_rows, prev_close, 
             "ordinal": event["ordinal"],
             "effective_day": event["effective_day"],
             "price_delta": record["price_delta"],
-            "reason": "同 E 复合的合并结果与官方 qss 不符",
+            "reason": f"{label}：合并结果与官方 qss 不符",
         }
     )
-    return f"同 E 复合：|Δ|={decimal_text(abs(delta), DELTA_SCALE)} > 0.001"
+    return f"{label}：|Δ|={decimal_text(abs(delta), DELTA_SCALE)} > 0.001"
+
+
+def _decide_with_override(event, row, record, factor, override, prev_close, warnings):
+    """人工裁定：用裁定给的公告值走 D-92 的 1 tick 判定。
+
+    裁定替代的是「公告值是什么」，**不是**判定本身。价差仍按
+    `用 gbbq 因子算出的复权价 − 用公告值算出的复权价` 计算，`|Δ| <= 0.001` 才通过。
+
+    - 公告证据：裁定给了 `evidence_url` + `evidence_sha256` 就用它，
+      否则保留 v3 行的公告证据；
+    - `basis_ref` 除了证据标签，还写上裁定的依据（例如 D-92 的文档与日期），
+      这样复核时能一眼看出「这个数不是脚本自己读出来的」。
+    """
+    basis_ref = override.basis_ref
+    record["evidence_url"] = override.evidence_url or record.get("evidence_url", "")
+    record["evidence_sha256"] = override.evidence_sha256 or record.get("evidence_sha256", "")
+    record["basis"] = "announcement" if record["evidence_sha256"] else "none"
+    record["announced_value"] = _announced_text(row)
+    announced = announced_factor(row)
+    head = (record.get("basis_ref") or market_label(event["entity"])).split(";")[0]
+    if record["basis"] == "none":
+        record["basis_ref"] = f"{head};D-92 one-tick;override:{basis_ref};no_announcement_bytes"
+    else:
+        record["basis_ref"] = f"{head};D-92 one-tick;override:{basis_ref}"
+    if announced is None or factor is None or prev_close is None:
+        record["check_status"] = "unverified"
+        record["basis_ref"] += ";D-92 not_applicable"
+        warnings["no_prev_close"].append(
+            {
+                "entity": event["entity"],
+                "ordinal": event["ordinal"],
+                "effective_day": event["effective_day"],
+                "reason": "人工裁定：公告值 / gbbq 因子 / 前收缺失，D-92 判不了",
+            }
+        )
+        return "人工裁定：D-92 判不了（公告值、gbbq 因子或前收缺失）"
+    delta = compose_price(prev_close, [factor]) - compose_price(prev_close, [announced])
+    record["price_delta"] = decimal_text(delta, DELTA_SCALE)
+    record["within_one_tick"] = within_one_tick(delta)
+    if record["within_one_tick"]:
+        record["check_status"] = "verified_announcement"
+        return f"人工裁定 + D-92 通过：|Δ|={decimal_text(abs(delta), DELTA_SCALE)} <= 0.001"
+    record["check_status"] = "unverified"
+    record["basis_ref"] += ";D-92 failed"
+    return f"人工裁定 + D-92 不通过：|Δ|={decimal_text(abs(delta), DELTA_SCALE)} > 0.001"
 
 
 def _announced_text(row):
@@ -1060,6 +1378,12 @@ def _announced_text(row):
     `ann_ratio`。v3 的这列偶尔带 `20.150000000000002` 这样的浮点尾巴，收到 12 位
     小数再写，免得记录里的数字看起来像精度丢失。
     """
+    override = row.get("override")
+    if override is not None:
+        factor = override_factor(override, row["category"])
+        if factor is not None:
+            _category, c1, c3 = factor
+            return decimal_text(c1 if row["category"] == 1 else c3, DELTA_SCALE)
     text = (
         (row.get("ann_amount_per10") or row.get("ann_amount") or "")
         if row["category"] == 1
@@ -1508,11 +1832,6 @@ def fetch_official_rows(budget, entity, effective_day):
 # ---------------------------------------------------------------------------
 # verify：公告文本解析（纯函数，测试用 `scripts/testdata/` 的夹具）
 # ---------------------------------------------------------------------------
-
-#: 全角数字/标点在公告里很常见；先把它们折成半角再解析。
-FULLWIDTH_TRANSLATION = str.maketrans(
-    "０１２３４５６７８９．，：；（）％　", "0123456789.,:;()% "
-)
 
 DAY_RE = re.compile(r"(20\d{2}|19\d{2})\s*[-年/.]\s*(\d{1,2})\s*[-月/.]\s*(\d{1,2})")
 DECIMAL_TEXT = r"\d+(?:\.\d+)?"
@@ -2673,11 +2992,16 @@ def _verify_report(
 # ---------------------------------------------------------------------------
 
 
-def convert(events_v3_path, db_path, checked_at=None, allow_unmatched=False):
-    """跑完整转换：返回 `(records, report)`，不写文件。"""
+def convert(events_v3_path, db_path, checked_at=None, allow_unmatched=False, overrides_path=None):
+    """跑完整转换：返回 `(records, report)`，不写文件。
+
+    `overrides_path` 是 `--overrides` 的人工裁定 JSON：逐条「带原文片段」的裁定，
+    只给公告说的数，判定仍走 D-92。
+    """
     checked_at = checked_at or datetime.now(timezone.utc).date().isoformat()
     if parse_day(checked_at) is None:
         raise InputError(f"--checked-at {checked_at!r} 不是 YYYY-MM-DD")
+    overrides = load_overrides(overrides_path)
     v3_rows, v3_warnings = load_events_v3(events_v3_path)
     conn = open_read_only(db_path)
     try:
@@ -2686,6 +3010,8 @@ def convert(events_v3_path, db_path, checked_at=None, allow_unmatched=False):
         db_events = fetch_events(conn, selected, entities)
     finally:
         conn.close()
+    pairs, _unmatched = match_events(db_events, v3_rows)
+    used_overrides, unused_overrides = apply_overrides(db_events, pairs, overrides)
     records, report = build_records(db_events, v3_rows, checked_at)
     report["warnings"].update(v3_warnings)
     not_etf = sorted({row["entity"] for row in v3_rows} - etf_entities)
@@ -2695,6 +3021,17 @@ def convert(events_v3_path, db_path, checked_at=None, allow_unmatched=False):
         ]
     report["inputs"] = {"events_v3": os.path.abspath(events_v3_path), "db": os.path.abspath(db_path)}
     report["allow_unmatched"] = allow_unmatched
+    report["overrides"] = {
+        "path": os.path.abspath(overrides_path) if overrides_path else None,
+        "loaded": len(overrides),
+        "used": [
+            overrides[key].as_dict() for key in sorted(used_overrides)
+        ],
+        # 没用到的裁定要报出来：可能是键写错了，静默忽略等于让人以为签过字。
+        "unused": [
+            overrides[key].as_dict() for key in unused_overrides
+        ],
+    }
     return records, report
 
 
@@ -2737,6 +3074,13 @@ def main(argv=None):
         "--allow-unmatched",
         action="store_true",
         help="有 unmatched 时仍以 0 退出（报告照写）",
+    )
+    convert_parser.add_argument(
+        "--overrides",
+        help=(
+            "人工裁定 JSON（带公告原文片段的逐条裁定）；只给公告说的数，"
+            "判定仍走 D-92"
+        ),
     )
     verify_parser = subparsers.add_parser(
         "verify",
@@ -2784,7 +3128,11 @@ def main(argv=None):
 
     try:
         records, report = convert(
-            args.events_v3, args.db, args.checked_at, args.allow_unmatched
+            args.events_v3,
+            args.db,
+            args.checked_at,
+            args.allow_unmatched,
+            args.overrides,
         )
     except InputError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False))
