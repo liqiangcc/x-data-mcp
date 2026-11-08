@@ -67,6 +67,10 @@ pub enum Error {
     ExactPriceOutOfRange,
     #[error("GBBQ exact chain: target scale is outside 0..=6")]
     ExactScaleOutOfRange,
+    #[error("ETF forward-adjustment: category {category} has no verified transform")]
+    EtfUnsupportedCategory { category: u8 },
+    #[error("ETF forward-adjustment: category {category} factor is not a usable number")]
+    EtfDegenerateFactor { category: u8 },
 }
 
 /// Validate the observed container shape while preserving every encrypted
@@ -241,6 +245,9 @@ pub fn reference_price(prev_close: Decimal, c: &[Decimal; 4]) -> Decimal {
 /// grow without limit.
 const EXACT_CHAIN_MAX_BITS: u64 = 4096;
 
+/// `.day` price divisor for A-share bars (fen → yuan); ETF 厘 use 1000.
+const PRICE_DIVISOR_FEN: u32 = 100;
+
 /// Exact affine transform `T(x) = (pa * x + 100 * pb) / (100 * den)` over yuan,
 /// held as three integers with `den > 0` and `gcd(pa, pb, den) = 1`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +274,32 @@ impl ExactAffine {
             pa: &next.pa * &self.pa,
             pb: &next.pa * &self.pb + &next.pb * &self.den,
             den: &next.den * &self.den,
+        }
+        .reduced()
+    }
+
+    /// `T(x) = x * num / den` from exact integers (ETF 份额折算, cat11).
+    /// Sign is normalized onto the denominator and the triple is reduced, so
+    /// two spellings of the same rational compare equal. The A-share chain
+    /// never calls this; it is the ETF path's way into the same exact algebra.
+    pub fn scale_by(num: &BigInt, den: &BigInt) -> Result<Self, Error> {
+        Self {
+            pa: num.clone(),
+            pb: BigInt::from(0u32),
+            den: den.clone(),
+        }
+        .reduced()
+    }
+
+    /// `T(x) = x + offset` with `offset` an exact rational `num / den`
+    /// (ETF 每 10 份派现, cat1: `-c1 / 10`).
+    pub fn translate(num: &BigInt, den: &BigInt) -> Result<Self, Error> {
+        // `x + num/den` == `(den*x + num) / den`: numerator and denominator are
+        // the same `den`, and only the offset differs.
+        Self {
+            pa: den.clone(),
+            pb: num.clone(),
+            den: den.clone(),
         }
         .reduced()
     }
@@ -327,10 +360,45 @@ impl ExactUnits {
     /// zero. Fails closed when the value leaves the i64 range the storage layer
     /// can represent (a 6dp series stores `price * 10^6`).
     pub fn units(&self, price_cents: u32) -> Result<i64, Error> {
-        let numerator = &self.pa * BigInt::from(price_cents) + &self.pb;
-        let quotient = &numerator / &self.den;
-        let remainder = &numerator - &quotient * &self.den;
-        let rounded = if &remainder.abs() * 2u32 >= self.den {
+        self.round(&(&self.pa * BigInt::from(price_cents) + &self.pb))
+    }
+
+    /// [`ExactUnits::units`] for a `.day` integer measured in 厘 instead of fen
+    /// (`price_divisor = 1000`): one 厘 is `1/10` fen. The HALF_UP still happens
+    /// **once**, at `scale`, on the real value.
+    pub fn units_at(&self, price_units: u32, price_divisor: u32) -> Result<i64, Error> {
+        self.round_milli(
+            price_units,
+            &BigInt::from(price_divisor / PRICE_DIVISOR_FEN),
+        )
+    }
+
+    /// [`ExactUnits::round`] for a `.day` integer measured in 厘 instead of fen
+    /// (`price_divisor = 1000`).
+    ///
+    /// `units` computes `round((pa*fen + pb) / den)` with the price already in
+    /// fen. A 厘 integer `x` is `x/factor` fen, so the same value is
+    /// `round((pa*x/factor + pb) / den)` = `round((pa*x + factor*pb) / (factor*den))`
+    /// — one HALF_UP, on the real value, with the tenth kept exact inside the
+    /// division.
+    fn round_milli(&self, x: u32, factor: &BigInt) -> Result<i64, Error> {
+        let numerator = &self.pa * BigInt::from(x) + &self.pb * factor;
+        let denominator = &self.den * factor;
+        self.round_by(&numerator, &denominator)
+    }
+
+    /// One HALF_UP-away-from-zero division by `den`, shared by every entry point
+    /// so the single-rounding rule cannot drift between them.
+    fn round(&self, numerator: &BigInt) -> Result<i64, Error> {
+        self.round_by(numerator, &self.den)
+    }
+
+    /// HALF_UP away from zero: `round(numerator / denominator)`, the one place a
+    /// price is ever rounded.
+    fn round_by(&self, numerator: &BigInt, denominator: &BigInt) -> Result<i64, Error> {
+        let quotient = numerator / denominator;
+        let remainder = numerator - &quotient * denominator;
+        let rounded = if &remainder.abs() * 2u32 >= *denominator {
             if numerator.is_negative() {
                 quotient - 1u32
             } else {

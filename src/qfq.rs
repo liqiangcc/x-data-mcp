@@ -221,43 +221,28 @@ pub fn forward_adjust_exact(
     events: &[Event],
     scale: u32,
 ) -> Result<Vec<QfqBar>, gbbq::Error> {
-    gbbq::check_price_scale(scale)?;
-    let mut dated: Vec<(u32, [Decimal; 4])> = Vec::with_capacity(events.len());
-    for event in events {
-        dated.push((event.date_raw, event.factors()?));
-    }
-    dated.sort_by_key(|(date, _)| *date);
-
-    let mut chains: Vec<Option<gbbq::ExactUnits>> = (0..=dated.len()).map(|_| None).collect();
-    let mut k = 0usize;
-    let mut last_bar_date = 0u32;
-    let mut out = Vec::with_capacity(bars.len());
-    for bar in bars {
-        let bar_date = ymd(bar.date);
-        k = if bar_date >= last_bar_date {
-            k + dated[k..].partition_point(|(date, _)| *date <= bar_date)
-        } else {
-            dated.partition_point(|(date, _)| *date <= bar_date)
-        };
-        last_bar_date = bar_date;
-        if chains[k].is_none() {
-            let chain = gbbq::exact_compose_chain(dated[k..].iter().map(|(_, factors)| *factors))?;
-            chains[k] = Some(chain.units(scale)?);
-        }
-        let chain = chains[k].as_ref().expect("chain filled above");
-        out.push(QfqBar {
-            date: bar.date,
-            open: exact_price(chain, bar.ohlc_raw[0], scale)?,
-            high: exact_price(chain, bar.ohlc_raw[1], scale)?,
-            low: exact_price(chain, bar.ohlc_raw[2], scale)?,
-            close: exact_price(chain, bar.ohlc_raw[3], scale)?,
-            chain_event_count: dated.len() - k,
-            amount_float32_bits: bar.amount_float32_bits,
-            volume_raw: bar.volume_raw,
-            r7_raw: bar.r7_raw,
-        });
-    }
-    Ok(out)
+    // A-share barriers: one per event, keyed by the gbbq event date itself
+    // (strictly-after semantics, frozen #54) and carrying the 2dp
+    // `gbbq::exact_event_transform`. The skeleton below is shared with the ETF
+    // path, so both series get the same suffix memoization, the same strict
+    // comparison and the same single rounding.
+    let barriers: Vec<(u32, gbbq::ExactAffine)> = events
+        .iter()
+        .map(|event| {
+            Ok((
+                event.date_raw,
+                gbbq::exact_event_transform(&event.factors()?)?,
+            ))
+        })
+        .collect::<Result<_, gbbq::Error>>()?;
+    forward_adjust_chained(
+        bars,
+        &barriers,
+        scale,
+        PRICE_DIVISOR_CENTS,
+        |(day, _)| *day,
+        |(_, transform)| transform.clone(),
+    )
 }
 
 /// Reference implementation of [`forward_adjust_exact`]: the direct per-bar
@@ -271,40 +256,23 @@ pub fn forward_adjust_exact_reference(
     events: &[Event],
     scale: u32,
 ) -> Result<Vec<QfqBar>, gbbq::Error> {
-    gbbq::check_price_scale(scale)?;
-    let mut dated: Vec<(u32, [Decimal; 4])> = Vec::with_capacity(events.len());
-    for event in events {
-        dated.push((event.date_raw, event.factors()?));
-    }
-    dated.sort_by_key(|(date, _)| *date);
-
-    let mut out = Vec::with_capacity(bars.len());
-    for bar in bars {
-        let bar_date = ymd(bar.date);
-        let chain = gbbq::exact_compose_chain(
-            dated
-                .iter()
-                .filter(|(date, _)| *date > bar_date)
-                .map(|(_, factors)| *factors),
-        )?
-        .units(scale)?;
-        out.push(QfqBar {
-            date: bar.date,
-            open: exact_price(&chain, bar.ohlc_raw[0], scale)?,
-            high: exact_price(&chain, bar.ohlc_raw[1], scale)?,
-            low: exact_price(&chain, bar.ohlc_raw[2], scale)?,
-            close: exact_price(&chain, bar.ohlc_raw[3], scale)?,
-            chain_event_count: dated.iter().filter(|(date, _)| *date > bar_date).count(),
-            amount_float32_bits: bar.amount_float32_bits,
-            volume_raw: bar.volume_raw,
-            r7_raw: bar.r7_raw,
-        });
-    }
-    Ok(out)
-}
-
-fn exact_price(chain: &gbbq::ExactUnits, cents: u32, scale: u32) -> Result<Decimal, gbbq::Error> {
-    Ok(Decimal::new(chain.units(cents)?, scale))
+    let barriers: Vec<(u32, gbbq::ExactAffine)> = events
+        .iter()
+        .map(|event| {
+            Ok((
+                event.date_raw,
+                gbbq::exact_event_transform(&event.factors()?)?,
+            ))
+        })
+        .collect::<Result<_, gbbq::Error>>()?;
+    forward_adjust_chained_reference(
+        bars,
+        &barriers,
+        scale,
+        PRICE_DIVISOR_CENTS,
+        |(day, _)| *day,
+        |(_, transform)| transform.clone(),
+    )
 }
 
 /// Displayed event-day 昨结 marks for a security's events, queryable per
@@ -339,4 +307,168 @@ pub fn event_day_marks(
             })
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Shared exact skeleton (#607 PR-A)
+//
+// The A-share contract (`#54`) and the ETF contract (D-89/D-91) differ in two
+// places only: which transform each event contributes, and — for ETFs — which
+// day the event becomes effective (R → X, plus the same-X merge). Everything
+// else is one algorithm: take the barriers strictly after a bar, compose them
+// oldest→newest over exact rationals, round once. That algorithm lives here, so
+// the two series cannot drift apart in the parts they share.
+// ---------------------------------------------------------------------------
+
+/// `.day` price divisor for A-share bars (fen → yuan).
+/// `.day` price divisor for A-share bars: fen → yuan. ETF 厘 use 1000.
+pub(crate) const PRICE_DIVISOR_CENTS: u32 = 100;
+
+/// Anything that reduces to the exact affine chain — a 2dp A-share event
+/// transform and an ETF merged barrier both do.
+pub trait ExactTransform {
+    fn to_affine(&self) -> gbbq::ExactAffine;
+}
+
+impl ExactTransform for gbbq::ExactAffine {
+    fn to_affine(&self) -> gbbq::ExactAffine {
+        self.clone()
+    }
+}
+
+/// Compose barriers into one transform, oldest→newest. Same fold order the
+/// per-bar chain uses, exposed for callers that need the composed single-event
+/// (or same-day merged) adjustment itself.
+pub fn compose_barriers<T: ExactTransform>(
+    barriers: &[T],
+) -> Result<gbbq::ExactAffine, gbbq::Error> {
+    let mut chain = gbbq::ExactAffine::identity();
+    for barrier in barriers {
+        chain = chain.then(&barrier.to_affine())?;
+    }
+    Ok(chain)
+}
+
+/// The shared exact skeleton behind [`forward_adjust_exact`] and the ETF path
+/// (`crate::etf_qfq`): map each bar to the chain of the barriers strictly after
+/// it, round once at `scale`, keep `amount`/`volume` verbatim.
+///
+/// A barrier is one `(effective_day, transform)` pair. Barriers may arrive in
+/// any order; the chain for a bar composes every barrier with
+/// `effective_day > bar_date`, oldest→newest — the same strict comparison the
+/// frozen #54 contract uses, so the event's own day marks the first unadjusted
+/// bar. A caller with several events on one day pre-composes them into one
+/// barrier (ETF same-`E` merge, cat11 before cat1).
+///
+/// `price_divisor` is the `.day` price unit: `100` for A-share fen
+/// ([`PRICE_DIVISOR_CENTS`]), `1000` for ETF 厘
+/// (`crate::etf_qfq::ETF_PRICE_DIVISOR`).
+pub fn forward_adjust_chained<E, T, D, F>(
+    bars: &[RawDayRecord],
+    barriers: &[E],
+    scale: u32,
+    price_divisor: u32,
+    day_of: D,
+    transform_of: F,
+) -> Result<Vec<QfqBar>, gbbq::Error>
+where
+    D: Fn(&E) -> u32,
+    F: Fn(&E) -> T,
+    T: ExactTransform,
+{
+    gbbq::check_price_scale(scale)?;
+    let mut sorted: Vec<(&E, u32)> = barriers.iter().map(|b| (b, day_of(b))).collect();
+    sorted.sort_by_key(|(_, day)| *day);
+
+    // One chain per distinct barrier suffix, exactly like the A-share path: one
+    // fold per boundary, not one per bar.
+    let mut chains: Vec<Option<gbbq::ExactUnits>> = (0..=sorted.len()).map(|_| None).collect();
+    let mut k = 0usize;
+    let mut last_bar_date = 0u32;
+    let mut out = Vec::with_capacity(bars.len());
+    for bar in bars {
+        let bar_date = ymd(bar.date);
+        k = if bar_date >= last_bar_date {
+            k + sorted[k..].partition_point(|(_, day)| *day <= bar_date)
+        } else {
+            sorted.partition_point(|(_, day)| *day <= bar_date)
+        };
+        last_bar_date = bar_date;
+        if chains[k].is_none() {
+            let suffix: Vec<T> = sorted[k..].iter().map(|(b, _)| transform_of(b)).collect();
+            chains[k] = Some(compose_barriers(&suffix)?.units(scale)?);
+        }
+        let chain = chains[k].as_ref().expect("chain filled above");
+        out.push(QfqBar {
+            date: bar.date,
+            open: chained_price(chain, bar.ohlc_raw[0], scale, price_divisor)?,
+            high: chained_price(chain, bar.ohlc_raw[1], scale, price_divisor)?,
+            low: chained_price(chain, bar.ohlc_raw[2], scale, price_divisor)?,
+            close: chained_price(chain, bar.ohlc_raw[3], scale, price_divisor)?,
+            chain_event_count: sorted.len() - k,
+            amount_float32_bits: bar.amount_float32_bits,
+            volume_raw: bar.volume_raw,
+            r7_raw: bar.r7_raw,
+        });
+    }
+    Ok(out)
+}
+
+/// Per-bar reference of [`forward_adjust_chained`]: direct filter + exact fold,
+/// with no suffix memoization. Equal to the fast path by construction; this
+/// oracle guards the suffix-index bookkeeping, not the arithmetic.
+pub fn forward_adjust_chained_reference<E, T, D, F>(
+    bars: &[RawDayRecord],
+    barriers: &[E],
+    scale: u32,
+    price_divisor: u32,
+    day_of: D,
+    transform_of: F,
+) -> Result<Vec<QfqBar>, gbbq::Error>
+where
+    D: Fn(&E) -> u32,
+    F: Fn(&E) -> T,
+    T: ExactTransform,
+{
+    gbbq::check_price_scale(scale)?;
+    let mut sorted: Vec<(&E, u32)> = barriers.iter().map(|b| (b, day_of(b))).collect();
+    sorted.sort_by_key(|(_, day)| *day);
+    let mut out = Vec::with_capacity(bars.len());
+    for bar in bars {
+        let bar_date = ymd(bar.date);
+        let suffix: Vec<T> = sorted
+            .iter()
+            .filter(|(_, day)| *day > bar_date)
+            .map(|(b, _)| transform_of(b))
+            .collect();
+        let chain = compose_barriers(&suffix)?.units(scale)?;
+        out.push(QfqBar {
+            date: bar.date,
+            open: chained_price(&chain, bar.ohlc_raw[0], scale, price_divisor)?,
+            high: chained_price(&chain, bar.ohlc_raw[1], scale, price_divisor)?,
+            low: chained_price(&chain, bar.ohlc_raw[2], scale, price_divisor)?,
+            close: chained_price(&chain, bar.ohlc_raw[3], scale, price_divisor)?,
+            chain_event_count: suffix.len(),
+            amount_float32_bits: bar.amount_float32_bits,
+            volume_raw: bar.volume_raw,
+            r7_raw: bar.r7_raw,
+        });
+    }
+    Ok(out)
+}
+
+/// One bar price, rounded once HALF_UP at `scale` from the exact chain.
+///
+/// `gbbq::ExactUnits::units` reads its price as fen (`raw / 100`). A-share
+/// `.day` integers are fen, so they enter verbatim. ETF `.day` integers are 厘,
+/// a tenth of a fen; passing the `.day` divisor into `units_at` folds that into
+/// the chain, so its **single** HALF_UP happens on the real value.
+fn chained_price(
+    chain: &gbbq::ExactUnits,
+    raw: u32,
+    scale: u32,
+    price_divisor: u32,
+) -> Result<Decimal, gbbq::Error> {
+    let units = chain.units_at(raw, price_divisor)?;
+    Ok(Decimal::new(units, scale))
 }
