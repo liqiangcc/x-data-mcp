@@ -32,7 +32,9 @@ use super::bind::{self, SnapshotBinding};
 use super::freeze::{FrozenBytes, FrozenSnapshot, freeze_bytes, record_snapshots};
 use super::index::SnapshotRow;
 use super::request::{DateFormat, ExchangeRequest, PagingFormat, Segment};
-use super::reuse::{self, ReuseEvidence, ReusePolicyTable, SelectedBy, SelectedPage};
+use super::reuse::{
+    self, ReuseEvidence, ReusePolicyTable, SelectedBy, SelectedPage, WindowReuse,
+};
 use super::transport::{Client, HttpRequest};
 use super::validate::{self, EmptyPolicy, FailureClass, PageEnvelope, PageSet, ZeroPolicy};
 use super::{BasisStatus, SourceId, default_headers};
@@ -370,6 +372,12 @@ pub struct Entry<'a> {
     /// registered and every rule off, so an `Entry` that is not told otherwise
     /// fetches exactly as before.
     reuse: ReusePolicyTable,
+    /// Whether a **closed** window of a windowed source may be read through the
+    /// index (#604 / D-87). `false` is the pre-existing behaviour: every window
+    /// is fetched. `true` is the `tail`'s intent; it only takes effect for a
+    /// rule that is enabled and for windows [`reuse::window_closed`] calls
+    /// closed — the open window and every `full` still fetch.
+    reuse_closed_windows: bool,
 }
 
 impl<'a> Entry<'a> {
@@ -384,6 +392,7 @@ impl<'a> Entry<'a> {
             today: crate::calendar::shanghai_today(),
             cache: None,
             reuse: ReusePolicyTable::declared(),
+            reuse_closed_windows: false,
         }
     }
 
@@ -399,6 +408,18 @@ impl<'a> Entry<'a> {
     /// read-through reuse without changing the default.
     pub fn with_reuse_policies(mut self, reuse: ReusePolicyTable) -> Self {
         self.reuse = reuse;
+        self
+    }
+
+    /// Declare that this acquisition is a `tail`: the **closed** windows of a
+    /// windowed source may be read through the index when their request
+    /// fingerprint already holds frozen bytes (#604 / D-87).
+    ///
+    /// The open window is always fetched ([`reuse::window_closed`]), and a
+    /// `full` never calls this, so the weekly full still re-reads every quarter
+    /// to find revisions. Off by default, which is the pre-#604 behaviour.
+    pub fn reusing_closed_windows(mut self) -> Self {
+        self.reuse_closed_windows = true;
         self
     }
 
@@ -560,7 +581,7 @@ impl<'a> Entry<'a> {
                     },
                     hit.envelope.clone(),
                 ),
-                None => match self.reuse_page(plan, &fingerprint)? {
+                None => match self.reuse_page(plan, window, &fingerprint)? {
                     Some((state, envelope)) => (state, envelope),
                     None => {
                         let mut headers = default_headers(plan.source_id);
@@ -839,20 +860,35 @@ impl<'a> Entry<'a> {
 
     /// Read-through reuse of one page (design §5.2).
     ///
-    /// Returns `None` when the rule is off or the fingerprint was never seen:
-    /// the caller then fetches. When the index holds a snapshot for this exact
-    /// request, its bytes are read back with `read_verified` (a missing or
-    /// tampered blob is `source_store_corrupt`) and parsed again — the index row
-    /// is never used as the parsed result. A selected snapshot older than the
-    /// rule's `H` fails closed with `source_refresh_overdue` instead of serving
-    /// increasingly stale bytes (§5.1).
+    /// Returns `None` when the rule is off, when this window must be fetched
+    /// anyway ([`reuse::window_reuse`]: the open window, or a `full`), or when
+    /// the fingerprint was never seen: the caller then fetches. When the index
+    /// holds a snapshot for this exact request, its bytes are read back with
+    /// `read_verified` (a missing or tampered blob is `source_store_corrupt`)
+    /// and parsed again — the index row is never used as the parsed result. A
+    /// selected snapshot older than the rule's `H` fails closed with
+    /// `source_refresh_overdue` instead of serving increasingly stale bytes
+    /// (§5.1).
     fn reuse_page(
         &self,
         plan: &AcquisitionPlan,
+        window: Option<Segment>,
         fingerprint: &str,
     ) -> Result<Option<(PageState, PageEnvelope)>, AcquireError> {
         let policy = self.reuse.for_source(plan.source_id);
         if !policy.enabled.is_enabled() {
+            return Ok(None);
+        }
+        // A whole table (or a probe) has no window to call open or closed: its
+        // reuse decision stays entirely with the rule.
+        if let Some(window) = window
+            && reuse::window_reuse(
+                policy,
+                window.end(),
+                self.today,
+                self.reuse_closed_windows,
+            ) == WindowReuse::Fetch
+        {
             return Ok(None);
         }
         let rows = self

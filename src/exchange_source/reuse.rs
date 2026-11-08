@@ -32,7 +32,7 @@
 //!   confirmed unchanged. Without a refresh run (R2) it falls back
 //!   conservatively to the oldest selected `as_of`, never to "today".
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use super::SourceId;
@@ -415,6 +415,83 @@ impl ReuseEvidence {
                 .collect(),
         }
     }
+}
+
+/// First day of the natural quarter `date` falls in.
+pub fn quarter_start(date: NaiveDate) -> NaiveDate {
+    let month = ((date.month() - 1) / 3) * 3 + 1;
+    NaiveDate::from_ymd_opt(date.year(), month, 1).expect("a quarter start is a valid date")
+}
+
+/// How much of one window may be served from the store (#604 / D-87).
+///
+/// Only windowed sources can be reused per window, and only the windows that
+/// are **closed** (see [`window_closed`]): the design's `L = 1` closed quarter
+/// is re-read every day by the tail even though the exchange can only revise it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowReuse {
+    /// This window may be read through the index when its request fingerprint
+    /// already holds frozen bytes.
+    ClosedWindow,
+    /// This window is fetched, even on a fingerprint hit. Used for the open
+    /// window (whose bounds move every day, so its bytes must be re-read) and
+    /// for `full`, the weekly run whose purpose is to find revisions in the
+    /// closed windows (§5.1 `P = 7`).
+    Fetch,
+}
+
+impl WindowReuse {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClosedWindow => "closed_window",
+            Self::Fetch => "fetch",
+        }
+    }
+}
+
+/// Whether a window is a **closed** natural quarter relative to `today`.
+///
+/// D-87's rule, stated instead of inferred from the fingerpint: a window is
+/// closed when its end day is before the first day of `today`'s natural
+/// quarter, i.e. the quarter the window belongs to has already finished.
+/// The window builders (`etf_delisting::windows`, `a3::windows`,
+/// `quarter_segments`) end the open window at `today - 1`, so "ended before my
+/// own quarter began" is exactly the older window `trim_tail` keeps. A window
+/// that runs into the current quarter — the open window, or the last segment of
+/// a quarter truncated by `today` — is open and always fetched.
+///
+/// This deliberately does not rely on "the open window's fingerprint changes
+/// every day and therefore never hits the index": that would be a statement
+/// about the calendar, not about which window the run intends to re-read, and
+/// it stops holding the day the first run of a quarter uses the same bounds
+/// twice.
+pub fn window_closed(window_end: NaiveDate, today: NaiveDate) -> bool {
+    window_end < quarter_start(today)
+}
+
+/// Which reuse a window may use, given the source's rule, the window's end day
+/// and whether the run re-reads the window anyway.
+///
+/// `reuse_closed_windows` is the caller's statement of *intent*: it is `true`
+/// only for a `tail` of a windowed source. `full` passes `false` because it
+/// re-reads every quarter to find revisions, and the open window is fetched
+/// even under `tail`.
+pub fn window_reuse(
+    policy: ReusePolicy,
+    window_end: NaiveDate,
+    today: NaiveDate,
+    reuse_closed_windows: bool,
+) -> WindowReuse {
+    if !policy.enabled.is_enabled() || policy.class != ReuseClass::Window {
+        return WindowReuse::Fetch;
+    }
+    if !reuse_closed_windows {
+        return WindowReuse::Fetch;
+    }
+    if !window_closed(window_end, today) {
+        return WindowReuse::Fetch;
+    }
+    WindowReuse::ClosedWindow
 }
 
 /// The latest indexed snapshot of one canonical request (§5.2).

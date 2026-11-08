@@ -526,10 +526,14 @@ fn tail_stays_within_budget_and_members_survive_a_restart() {
         &[],
     );
     assert_eq!(second.status, RefreshStatus::Succeeded);
+    // D-87: the four window sources contribute their open window only, so the
+    // three window sources that are one page per window drop from two requests
+    // to one and `sse_bulletin` (two plans) from four to two.
     assert_eq!(
-        second.requests, 28,
-        "probes must not refetch whole tables; the two ETF lists are tables and do, \
-         and the two announcement sources add their two tail windows each"
+        second.requests, 23,
+        "probes must not refetch whole tables; the two ETF lists are tables and do; \
+         each window source fetches only its open window because the closed quarter \
+         is read through the index"
     );
     let short = second
         .sources
@@ -689,6 +693,10 @@ fn a_window_revision_is_recorded() {
         "a two-window tail verifies no complete source"
     );
     fixture.set_bulletin_revision(1);
+    // D-87: a `tail` re-reads the closed quarter only through the index, so a
+    // revision inside it is not seen here; only the open window is fetched and
+    // only its two plans can be found changed. The weekly `full` is what finds
+    // closed-quarter revisions (see `full_run_rereads_every_window`).
     let second = run_refresh(
         &fixture,
         &scenario,
@@ -697,9 +705,9 @@ fn a_window_revision_is_recorded() {
         RefreshMode::Tail,
         &["sse_bulletin"],
     );
-    assert_eq!(second.requests, 4);
-    assert_eq!(second.changed, 4);
-    assert_eq!(second.revisions.len(), 4);
+    assert_eq!(second.requests, 2, "only the open window is fetched");
+    assert_eq!(second.changed, 2, "the open window's two plans changed");
+    assert_eq!(second.revisions.len(), 2);
     for revision in &second.revisions {
         assert_ne!(revision.previous_snapshot_id, revision.snapshot_id);
         assert!(revision.window_start.is_some());
@@ -707,8 +715,17 @@ fn a_window_revision_is_recorded() {
     }
     let run_id = second.run_id.unwrap();
     let members = backend.read_source_refresh_run_members(&run_id).unwrap();
-    assert_eq!(members.len(), 4);
-    assert!(members.iter().all(|member| member.changed));
+    assert_eq!(members.len(), 4, "both windows stay run members");
+    // A `full` then notices the closed-quarter revision.
+    let third = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client,
+        RefreshMode::Full,
+        &["sse_bulletin"],
+    );
+    assert_eq!(third.changed, 4, "full re-reads the closed quarter too");
 }
 
 #[test]
