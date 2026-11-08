@@ -1067,7 +1067,10 @@ fn a_multi_window_run_reuses_every_quarter_and_merges_the_evidence() {
     let reused = {
         let backend = open(&db);
         let entry = Entry::new(&store, &backend, &client)
-            .with_reuse_policies(reuse_on(SourceId::SseBulletin));
+            .with_reuse_policies(reuse_on(SourceId::SseBulletin))
+            // #604: closed windows are reused only when the caller declares a
+            // `tail`; a `full` never does.
+            .reusing_closed_windows();
         entry
             .acquire_windows(&plan, &[first, second], "beginDate", "endDate")
             .unwrap()
@@ -1359,4 +1362,117 @@ fn etf_identity_lists_are_indexed_and_replay_matches() {
     let verify = cli(&store, &db, "verify");
     assert_eq!(verify["scopes"][0]["database"], "match");
     assert_eq!(verify["scopes"][0]["snapshots"], 2);
+}
+
+/// #604 / AC-7: a closed window read through the index re-parses the verified
+/// bytes and compares the counts against the index row. A row whose count no
+/// longer matches its bytes is `source_store_corrupt`, not a silent selection.
+#[test]
+fn a_closed_window_whose_index_count_disagrees_with_its_bytes_fails_closed() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![Ok(ok(sse_body(1, 1, 1, 1), "q1"))]);
+    let client = client(&fixture);
+    let window = Segment::parse("2000-01-01", "2000-03-31").unwrap();
+    let plan = plan(SourceId::SseBulletin, "https://example.invalid/bulletin");
+
+    let snapshot_id = {
+        let backend = open(&db);
+        let outcome = Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-02"))
+            .acquire_window(&plan, window, "beginDate", "endDate")
+            .unwrap();
+        assert_eq!(outcome.snapshots.len(), 1);
+        outcome.snapshots[0].row.snapshot_id.clone()
+    };
+    assert_eq!(fixture.calls(), 1);
+
+    // Alter the index row behind the store's back: the bytes still verify, but
+    // they no longer agree with the recorded page count.
+    {
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        connection
+            .execute(
+                "UPDATE exchange_source_snapshots SET row_count=row_count+1 WHERE snapshot_id=?1",
+                rusqlite::params![snapshot_id],
+            )
+            .unwrap();
+    }
+
+    let error = {
+        let backend = open(&db);
+        Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-02"))
+            .with_reuse_policies(reuse_on(SourceId::SseBulletin))
+            .reusing_closed_windows()
+            .acquire_window(&plan, window, "beginDate", "endDate")
+            .unwrap_err()
+    };
+    assert_eq!(error.code(), "source_store_corrupt");
+    assert_eq!(
+        fixture.calls(),
+        1,
+        "an inconsistent index row is not refetched: the gate fails closed"
+    );
+}
+
+/// #604 / AC-7: a closed window's bytes that no longer parse fail closed with
+/// the parser's own code, again without a request.
+#[test]
+fn a_closed_window_whose_bytes_no_longer_parse_fails_closed() {
+    let scenario = Scenario::new();
+    let store = scenario.store();
+    let db = scenario.db();
+    let fixture = Fixture::new(vec![Ok(ok(sse_body(1, 1, 1, 1), "q1"))]);
+    let client = client(&fixture);
+    let window = Segment::parse("2000-01-01", "2000-03-31").unwrap();
+    let plan = plan(SourceId::SseBulletin, "https://example.invalid/bulletin");
+
+    let snapshot_id = {
+        let backend = open(&db);
+        let outcome = Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-02"))
+            .acquire_window(&plan, window, "beginDate", "endDate")
+            .unwrap();
+        outcome.snapshots[0].row.snapshot_id.clone()
+    };
+    // Rewrite the blob *and* the row's sha so `read_verified` still passes: the
+    // failure must come from re-parsing, not from the byte digest.
+    let body = b"{\"pageHelp\":{\"pageNo\":1}".to_vec();
+    std::fs::write(store.blob_path(&snapshot_id), &body).unwrap();
+    {
+        let connection = rusqlite::Connection::open(&db).unwrap();
+        let digest = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(&body);
+            hasher
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        };
+        connection
+            .execute(
+                "UPDATE exchange_source_snapshots SET snapshot_id=?1, store_sha256=?2 WHERE snapshot_id=?3",
+                rusqlite::params![digest, digest.as_bytes(), snapshot_id],
+            )
+            .unwrap();
+        let new_path = store.blob_path(&digest);
+        std::fs::rename(store.blob_path(&snapshot_id), &new_path).unwrap();
+    }
+
+    let error = {
+        let backend = open(&db);
+        Entry::new(&store, &backend, &client)
+            .with_today(day("2026-11-02"))
+            .with_reuse_policies(reuse_on(SourceId::SseBulletin))
+            .reusing_closed_windows()
+            .acquire_window(&plan, window, "beginDate", "endDate")
+            .unwrap_err()
+    };
+    assert_eq!(error.code(), "source_invalid");
+    assert!(error.to_string().contains("no longer parses"), "{error}");
+    assert_eq!(fixture.calls(), 1);
 }

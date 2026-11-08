@@ -74,6 +74,7 @@ pub use request::{
 pub use reuse::{
     Enabled, MAX_AGE_DAYS, REFRESH_PERIOD_DAYS, ReuseClass, ReuseEvidence, ReusePolicy,
     ReusePolicyTable, SelectedBy, SelectedPage, SnapshotSelection, TAIL_CLOSED_QUARTERS, TailScope,
+    WindowReuse, quarter_start, window_closed, window_reuse,
 };
 pub use select::{AsOf, Freshness, FrozenPage, Reader, SelectError, SourceRead};
 pub use transport::{

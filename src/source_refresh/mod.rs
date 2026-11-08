@@ -39,8 +39,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDate;
 
 use crate::exchange_source::{
-    AcquireError, AcquisitionOutcome, Client, Entry, FrozenSnapshot, SnapshotRow, SourceId,
-    TransportError, validate,
+    AcquireError, AcquisitionOutcome, Client, Enabled, Entry, FrozenSnapshot, ReuseClass,
+    ReusePolicyTable, SnapshotRow, SourceId, TransportError, validate,
 };
 use crate::market_storage::Error as StorageError;
 use crate::security_master::risk_warnings::SzNameChange;
@@ -467,6 +467,22 @@ fn count(value: u64) -> Result<usize, RefreshError> {
     })
 }
 
+/// The reuse rules a `tail` runs under (#604 / D-87).
+///
+/// Only the four windowed sources are enabled: their `L = 1` closed quarter is
+/// re-read every day although the exchange can only revise it. Whole-table and
+/// probe sources keep the shipped table unchanged, so their `tail` behaviour is
+/// exactly what it was before D-87.
+pub fn tail_reuse_policies() -> ReusePolicyTable {
+    let mut table = ReusePolicyTable::declared();
+    for source in crate::exchange_source::SourceId::ALL {
+        if table.for_source(source).class == ReuseClass::Window {
+            table = table.with_enabled(source, Enabled::Yes);
+        }
+    }
+    table
+}
+
 /// The acquisition of an already opened run.
 fn execute(
     store: &SourceStore,
@@ -485,6 +501,16 @@ fn execute(
     let previous = PreviousSnapshots::load(backend)?;
 
     let entry = Entry::new(store, backend, client).with_today(today);
+    let entry = if mode == RefreshMode::Tail {
+        entry
+            .with_reuse_policies(tail_reuse_policies())
+            .reusing_closed_windows()
+    } else {
+        // D-87: `full` re-reads every quarter on purpose. It is the run that
+        // finds revisions in the closed windows, so it must never be answered
+        // from the store.
+        entry
+    };
     let mut accumulator = Accumulator::default();
     let mut sources = Vec::with_capacity(plans.len());
     let mut elapsed = Vec::with_capacity(plans.len());
@@ -787,6 +813,12 @@ fn refresh_source(
                                 // is still in the source store, but it selects
                                 // no row, so it is not a run member.
                                 stats.unobserved += 1;
+                                // It is still a selected page: a quiet closed
+                                // window served from the store is reuse evidence
+                                // (#604), so the counts travel even though no
+                                // member is recorded.
+                                stats.snapshots += outcome.snapshots.len();
+                                stats.reused += outcome.reused;
                             } else {
                                 record_outcome(
                                     accumulator,
