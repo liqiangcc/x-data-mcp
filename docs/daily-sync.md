@@ -379,6 +379,18 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
   在本进程后台线程（客户端断开不影响）；用 `refresh_exchange_sources({"status_of":run_id})`
   轮询到 `succeeded`/`failed` 再继续。`running` 期间的计数是 0，不是进度。`tail` 只覆盖开窗
   与上一自然季度，不能单独让闸门长期通过。`full` 放低峰（周末候选）。
+- **每周 `full` 是硬性步骤（D-87，自部署 D-87 的版本起生效）**：`tail` 会**复用**窗口类来源
+  （`szse_etf_notice_ann`、`sse_bulletin`、`sse_suspension`、`sse_fund_delist_ann`）的**已关闭
+  窗口**（上一自然季度）——这些窗口的字节已经冻结过、请求指纹不变，`tail` 直接读穿来源库，
+  不再发请求（按 1 s/请求算，`szse_etf_notice_ann` 从约 181 个请求降到约 50 个，见 #603/#604）。
+  代价是**这些窗口里的修订只有 `full` 能发现**，所以每周一次 `full` 从「建议」变为
+  **日更 operator 的硬性步骤**：跳过它，已关闭季度的修订（公告改标题、停牌更正）不会被发现。
+  **开窗照常抓取**：`tail` 对当前季度窗口一律重新请求，同一天跑两次 `tail` 也是两次抓取。
+- **超过 `H = 14` 天没跑 `full`，`tail` 会 fail-closed**：复用的年龄闸门是「该来源最近一次
+  `complete=1` 的 `succeeded` run 的 `verified_through`」，超过 14 天时已关闭窗口的抓取项以
+  `source_refresh_overdue` 记失败（**不**退化为重抓），run 状态 `failed`，`detail` 里写明
+  最后确认日、`H=14` 和处理办法。此时先跑 `refresh_exchange_sources {"mode":"full"}`
+  （返回 `refresh_already_running` 就轮询那个 run 到 `succeeded`），再重跑当天的 `tail`。
 - 返回 `refresh_already_running`：已有运行中的刷新（`tail` 与 `full` 互斥），读
   `details.run_id` 并轮询**那个** run 到终态，不要再起新 run。
 - 预算：`tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设

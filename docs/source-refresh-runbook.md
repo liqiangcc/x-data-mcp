@@ -119,6 +119,17 @@ for row in con.execute("""
   至少有一个来源完整”，不能拿它当某个窗口源已完整。窗口源在 `tail` 里只看了两个窗口
   （该来源行 `complete=0`），它的 H=14 天闸门读的是 `source_refresh_run_sources` 里该来源
   `complete=1` 的最新日期；fresh init 后必须先有一次成功的 `full`，四个同源 item 才有输入。
+- **同一来源的 `requests` 不再等于窗口页数（D-87，自部署 D-87 的版本起生效）**：`tail` 对窗口
+  类来源（`szse_etf_notice_ann`、`sse_bulletin`、`sse_suspension`、`sse_fund_delist_ann`）的
+  **已关闭窗口**（上一自然季度）读穿来源库，`requests` 只计真正发出的请求；复用页数在该来源
+  的 `reused` 与 `AcquireEvidence` 的 `reused`/`fetched` 里（`selected_by=reuse`）。同一来源的
+  `reused` 大于 0、`requests` 只剩开窗的页数，是**正常**读数，不是漏抓。**开窗一律抓取**，
+  `full` 任何窗口都不复用（每周 `full` 是发现已关闭季度修订的唯一途径，属于硬性步骤）。
+- **`source_refresh_overdue` 不变，但触发条件更容易命中**：复用的年龄闸门是该来源最近一次
+  `complete=1` 的 `succeeded` run 的 `verified_through`，超过 `H=14` 天时已关闭窗口的抓取项
+  直接记失败（`detail` 写明最后确认日与 `H=14`，**不**退化为重抓），run 为 `failed`。处理办法：
+  先跑一次 `{"mode":"full"}`（`refresh_already_running` 就轮询那个 run 到 `succeeded`），再重跑
+  当天的 `tail`。**每周 `full` 因此是硬性步骤**，跳过它就会在两周后表现为 `tail` 失败。
 - **失败读取**：`source_refresh_runs.detail` 是失败列表 JSON（`source_id`、窗口、
   `code`、`detail`）；per-source 的 `failed_windows`/`unobserved_windows` 分别表示失败窗口与
   已观测的 0 行窗口（后者是覆盖 gap，不是失败）。不要用 `update_data` 补来源数据，也不要
