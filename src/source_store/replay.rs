@@ -158,6 +158,10 @@ pub const NOTHING_SELECTED: &str = "nothing_selected";
 /// fail-closed like `suspension_replay_not_ready`: a partial page set would
 /// rebuild a name history (and ST intervals) that the source never published.
 pub const SNAPSHOT_INCOMPLETE: &str = "snapshot_incomplete";
+/// `#607` PR-B: the ETF factor-check records were re-validated from the store.
+/// The scope is read-only evidence (D-92 Q2 (c)): it writes no market row, so
+/// its verdict is a recomputed summary plus the `etf_checks_digest`.
+pub const COMPUTED_ETF_FACTOR_CHECKS: &str = "computed_no_db";
 
 /// Source id of the frozen SZSE `SSGSGMXX`/`tab2` short-name table (PR-2).
 const SZSE_SHORT_NAME_SOURCE_ID: &str = "szse_short_name";
@@ -187,6 +191,9 @@ pub enum Scope {
     /// database's `security_master`, which a fresh-init `--scope all` does
     /// not have yet.
     DelistedEtfNames,
+    /// `#607` PR-B: ETF factor-check records. Read-only evidence, so it rebuilds
+    /// no table; `--verify-only` re-validates every record's sha256 and fields.
+    EtfFactorChecks,
 }
 
 impl Scope {
@@ -215,6 +222,7 @@ impl Scope {
             "security_names" => Some(Self::SecurityNames),
             "suspensions" => Some(Self::Suspensions),
             "delisted_etf_names" => Some(Self::DelistedEtfNames),
+            "etf_factor_checks" => Some(Self::EtfFactorChecks),
             _ => None,
         }
     }
@@ -228,6 +236,7 @@ impl Scope {
             Self::SecurityNames => "security_names",
             Self::Suspensions => "suspensions",
             Self::DelistedEtfNames => "delisted_etf_names",
+            Self::EtfFactorChecks => "etf_factor_checks",
         }
     }
 
@@ -283,6 +292,11 @@ impl Scope {
                     | "etf_delist_extract"
                     | "etf_delist_pdf"
             ),
+            // `#607` PR-B: only this scope owns check records. They are
+            // `archive_import` blobs, so the coarse `exchange` selector above
+            // must not claim them; its `source_id` prefix test does not match
+            // `etf_factor_checks`, and this arm makes the ownership explicit.
+            Self::EtfFactorChecks => record.source_id == super::etf_factor_checks::CHECKS_SOURCE_ID,
         }
     }
 }
@@ -389,6 +403,11 @@ pub struct ScopeReport {
     /// it, so other scopes' reports stay byte-identical.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delisted_etf_names: Option<serde_json::Value>,
+    /// `#607` PR-B: the `etf_checks_digest` of the check records this scope
+    /// validated (design §3.2.2 "复现"). Absent for every other scope, so their
+    /// reports stay byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etf_checks_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -504,7 +523,10 @@ fn run(
         };
         let mut rebuilt = if matches!(
             *scope,
-            Scope::SecurityNames | Scope::Suspensions | Scope::DelistedEtfNames
+            Scope::SecurityNames
+                | Scope::Suspensions
+                | Scope::DelistedEtfNames
+                | Scope::EtfFactorChecks
         ) && selected.is_empty()
         {
             // "No matching record" is not "rebuilt": the fresh-init table is
@@ -527,6 +549,7 @@ fn run(
         let mut suspension_counts = (None, None, None, None, None);
         let mut not_ready_reason = None;
         let mut delisted_etf_names = None;
+        let mut etf_check_digest = None;
         if *scope == Scope::Industry && status == "ok" {
             match rebuild_industry(store, request) {
                 Ok(outcome) => {
@@ -809,6 +832,36 @@ fn run(
                 }
             }
         }
+        if *scope == Scope::EtfFactorChecks && status == "ok" {
+            match super::etf_factor_checks::replay_scope(store, &selected) {
+                Ok(outcome) => {
+                    rebuilt = outcome.rebuilt;
+                    summary = outcome.summary;
+                    database_verdict = outcome.database;
+                    snapshot_count = outcome.records;
+                    etf_check_digest = outcome.etf_checks_digest;
+                    for issue in outcome.problems {
+                        problems.push(issue);
+                    }
+                    if outcome.status != "ok" {
+                        status = outcome.status;
+                    }
+                }
+                Err(error) => {
+                    status = "etf_factor_checks_rebuild_failed";
+                    problems.push(BlobProblem {
+                        sha256: String::new(),
+                        source_id: super::etf_factor_checks::CHECKS_SOURCE_ID.to_string(),
+                        reason: "etf_factor_checks_rebuild_failed",
+                        expected: format!(
+                            "a readable store of {} records",
+                            super::etf_factor_checks::CHECKS_VERSION
+                        ),
+                        actual: error,
+                    });
+                }
+            }
+        }
         scope_reports.push(ScopeReport {
             scope: scope.name(),
             status,
@@ -836,6 +889,7 @@ fn run(
             etf_rows,
             not_ready_reason,
             delisted_etf_names,
+            etf_checks_digest: etf_check_digest,
         });
     }
     let selected_all: Vec<&ManifestRecord> = records
