@@ -1409,8 +1409,5 @@ fn a_window_is_closed_only_before_the_current_quarter() {
     // A quarter boundary: the last day of Q3 is closed on the first day of Q4.
     let first_of_quarter = day("2026-10-01");
     assert!(reuse::window_closed(day("2026-09-30"), first_of_quarter));
-    assert!(!reuse::window_closed(
-        day("2026-09-30"),
-        day("2026-09-30")
-    ));
+    assert!(!reuse::window_closed(day("2026-09-30"), day("2026-09-30")));
 }

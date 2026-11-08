@@ -32,9 +32,7 @@ use super::bind::{self, SnapshotBinding};
 use super::freeze::{FrozenBytes, FrozenSnapshot, freeze_bytes, record_snapshots};
 use super::index::SnapshotRow;
 use super::request::{DateFormat, ExchangeRequest, PagingFormat, Segment};
-use super::reuse::{
-    self, ReuseEvidence, ReusePolicyTable, SelectedBy, SelectedPage, WindowReuse,
-};
+use super::reuse::{self, ReuseEvidence, ReusePolicyTable, SelectedBy, SelectedPage, WindowReuse};
 use super::transport::{Client, HttpRequest};
 use super::validate::{self, EmptyPolicy, FailureClass, PageEnvelope, PageSet, ZeroPolicy};
 use super::{BasisStatus, SourceId, default_headers};
@@ -882,12 +880,8 @@ impl<'a> Entry<'a> {
         // A whole table (or a probe) has no window to call open or closed: its
         // reuse decision stays entirely with the rule.
         if let Some(window) = window
-            && reuse::window_reuse(
-                policy,
-                window.end(),
-                self.today,
-                self.reuse_closed_windows,
-            ) == WindowReuse::Fetch
+            && reuse::window_reuse(policy, window.end(), self.today, self.reuse_closed_windows)
+                == WindowReuse::Fetch
         {
             return Ok(None);
         }

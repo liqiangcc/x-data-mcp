@@ -1473,9 +1473,6 @@ fn a_closed_window_whose_bytes_no_longer_parse_fails_closed() {
             .unwrap_err()
     };
     assert_eq!(error.code(), "source_invalid");
-    assert!(
-        error.to_string().contains("no longer parses"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("no longer parses"), "{error}");
     assert_eq!(fixture.calls(), 1);
 }

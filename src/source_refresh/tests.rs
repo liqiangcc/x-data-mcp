@@ -1765,7 +1765,10 @@ fn a_second_day_tail_reuses_the_closed_window_without_a_request() {
         .iter()
         .find(|row| row.source_id == "szse_etf_notice_ann")
         .unwrap();
-    assert_eq!(recorded.requests, 3, "the run row counts real requests only");
+    assert_eq!(
+        recorded.requests, 3,
+        "the run row counts real requests only"
+    );
 }
 
 /// AC #604-2: a second `tail` on the **same** day re-reads the open window. The
@@ -2010,7 +2013,9 @@ fn a_tail_beyond_the_age_bound_fails_closed_instead_of_refetching() {
     );
     let failures = &late.failures;
     assert!(
-        failures.iter().all(|failure| failure.code == "source_refresh_overdue"),
+        failures
+            .iter()
+            .all(|failure| failure.code == "source_refresh_overdue"),
         "every failure is the overdue code, got {failures:?}"
     );
     let closed = failures
