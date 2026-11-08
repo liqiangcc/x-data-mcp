@@ -107,6 +107,15 @@ enum Generation {
     Third,
     /// Third plus an ordinary bar behind the stored hand bar of `sz159338`.
     Fourth,
+    /// Fourth plus a factor change whose 除权除息日 is **after** every stored
+    /// bar (`sz159919`, #607 PR-C), plus one more 不复权 bar for an ETF whose
+    /// factors do not move (`sh510050`). This is the only generation where the
+    /// derived 前复权 series must be rewritten rather than merely extended.
+    Fifth,
+    /// Fifth plus a degenerate `c3 = 0` share conversion for `sz159919`: the
+    /// factor fact itself is storable, so only the **derived** 前复权 build
+    /// fails. The item must roll back as a whole (#607 PR-C requirement 2).
+    Sixth,
 }
 
 /// One mirror generation. Second-generation deltas, per ETF:
@@ -123,11 +132,23 @@ enum Generation {
 /// generation: `sz159338` gains an ordinary bar behind the hand bar.
 /// | `sh510300` | 3 bars | first bar rewritten + today | `etf_history_rewrite` |
 /// | `sz159922` | 3 bars | + a hand-marked bar whose amount disagrees | item failure |
+/// Tomorrow as a raw `yyyymmdd` int — an 除权除息日 strictly after every bar
+/// the fixtures store (`day_u32(0)` is today).
+fn tomorrow_raw() -> u32 {
+    (crate::calendar::shanghai_today() + chrono::Days::new(1))
+        .format("%Y%m%d")
+        .to_string()
+        .parse()
+        .unwrap()
+}
+
 fn write_mirror(dir: &Path, generation: Generation) {
     std::fs::create_dir_all(dir).unwrap();
     let second = generation >= Generation::Second;
     let third = generation >= Generation::Third;
     let fourth = generation >= Generation::Fourth;
+    let fifth = generation >= Generation::Fifth;
+    let sixth = generation >= Generation::Sixth;
     write_zip(
         &dir.join("base.zip"),
         &[
@@ -154,6 +175,30 @@ fn write_mirror(dir: &Path, generation: Generation) {
             20260101,
             1,
             [0.1, 0.0, 0.0, 0.0],
+        ));
+    }
+    if sixth {
+        // c3 = 0: `etf_event_transform` refuses the division, but the factor
+        // row is a well-formed f32 fact and stores fine. The failure therefore
+        // lands in the 前复权 derivation, after the 不复权 half has written.
+        records.push(gbbq_factor_record(
+            0,
+            "159919",
+            tomorrow_raw(),
+            11,
+            [0.0, 0.0, 0.0, 0.0],
+        ));
+    }
+    if fifth {
+        // A dividend whose 除权除息日 is tomorrow: every stored 不复权 bar is
+        // strictly before it, so the derived 前复权 series must be rewritten,
+        // not extended (#607 PR-C requirement 2).
+        records.push(gbbq_factor_record(
+            0,
+            "159919",
+            tomorrow_raw(),
+            1,
+            [0.661, 0.0, 0.0, 0.0],
         ));
     }
     write_zip(
@@ -1360,3 +1405,195 @@ fn etf_forward_series_is_built_inside_the_first_collection_transaction() {
     );
 }
 
+
+#[test]
+fn etf_forward_append_only_writes_the_new_tail() {
+    // `sh510050` gains one 不复权 bar and its factors do not move: the derived
+    // 前复权 series must be extended, never rewritten — the stored prefix
+    // keeps its bytes and its version chain records an `append`.
+    let env = setup();
+    let prefix = env.bars("sh.510050", Adjustment::Forward);
+    let prefix_version = env.forward_head("sh.510050", Adjustment::Forward);
+    assert_eq!(prefix.len(), 3);
+    env.advance_generation();
+
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-append", &view, Some("sh_sz_etf_current"));
+    assert!(succeeded(&task, "sh.510050"), "{}", error_of(&task, "sh.510050"));
+
+    let after = env.bars("sh.510050", Adjustment::Forward);
+    assert_eq!(after.len(), 4, "the new 不复权 bar is mirrored");
+    assert_eq!(&after[..3], &prefix[..], "the stored prefix is untouched");
+    // The 前复权 tail is the 不复权 tail with the price fields rescaled only:
+    // no event applies, so 前复权 == 不复权 × 10^3.
+    let raw = env.bars("sh.510050", Adjustment::Raw);
+    assert_eq!(after[3].4, raw[3].4 * 1_000);
+    // An append, not a rewrite: the only event for this 口径 is an append.
+    let kinds = env.event_kinds("sh.510050", Adjustment::Forward);
+    assert!(
+        kinds.iter().any(|(kind, _)| *kind == "append"),
+        "forward events: {kinds:?}"
+    );
+    assert!(
+        kinds.iter().all(|(kind, _)| *kind != "replace"),
+        "forward events: {kinds:?}"
+    );
+    assert_ne!(
+        env.forward_head("sh.510050", Adjustment::Forward),
+        prefix_version
+    );
+}
+
+#[test]
+fn etf_forward_factor_change_rewrites_the_whole_series() {
+    // `sz159919` gains a dividend whose 除权除息日 is after every stored bar:
+    // every bar is adjusted, so the whole derived series is rewritten.
+    let env = setup();
+    let second = env.advance_generation();
+    // Third generation: identical bytes and events, so the series is stable.
+    let third = env.advance_to(Generation::Third, "req-third", &second);
+    let before = env.bars("sz.159919", Adjustment::Forward);
+
+    env.advance_to(Generation::Fifth, "req-fifth", &third);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-factor", &view, Some("sh_sz_etf_current"));
+    assert!(succeeded(&task, "sz.159919"), "{}", error_of(&task, "sz.159919"));
+
+    let after = env.bars("sz.159919", Adjustment::Forward);
+    assert_eq!(after.len(), before.len(), "no new bar, same bar count");
+    assert_ne!(after, before, "every earlier bar must move");
+    // 41.780 元 − 0.661/10 = 41.7139 元 → 41,713,900 units; the raw 厘 value
+    // is 41,780, so the adjustment is observable at 6dp.
+    assert_eq!(after[0].4, 41_713_900);
+    let kinds = env.event_kinds("sz.159919", Adjustment::Forward);
+    assert!(
+        kinds.iter().any(|(kind, _)| *kind == "replace"),
+        "forward events: {kinds:?}"
+    );
+}
+
+#[test]
+fn etf_forward_no_change_leaves_the_series_untouched() {
+    // Same `.day` bytes and same factors: the derived series must not move
+    // (`data_versions +0` on a no-change run).
+    let env = setup();
+    let before = env.forward_head("sz.159919", Adjustment::Forward);
+    let second = env.advance_generation();
+    env.advance_to(Generation::Third, "req-third", &second);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-nochange", &view, Some("sh_sz_etf_current"));
+    assert!(succeeded(&task, "sz.159919"), "{}", error_of(&task, "sz.159919"));
+    assert_eq!(env.forward_head("sz.159919", Adjustment::Forward), before);
+}
+
+#[test]
+fn etf_forward_build_failure_rolls_the_whole_item_back() {
+    // The degenerate `c3 = 0` factor is storable, so the 不复权 half of the
+    // item succeeds first; the derived 前复权 build then fails. The item must
+    // fail **and** leave no trace: same 不复权 head, same factor facts, no
+    // 前复权 event. A half-committed state (不复权 ahead of 前复权) is exactly
+    // what requirement 2 forbids.
+    let env = setup();
+    let second = env.advance_generation();
+    let third = env.advance_to(Generation::Third, "req-third", &second);
+    let fourth = env.advance_to(Generation::Fourth, "req-fourth", &third);
+    let fifth = env.advance_to(Generation::Fifth, "req-fifth", &fourth);
+    let raw_before = env.forward_head("sz.159919", Adjustment::Raw);
+    let forward_before = env.forward_head("sz.159919", Adjustment::Forward);
+    let events_before = env
+        .backend
+        .read(|c| crate::sqlite_market::derived::read_adjustment_events(c, "sz.159919"))
+        .unwrap();
+
+    env.advance_to(Generation::Sixth, "req-sixth", &fifth);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-rollback", &view, Some("sh_sz_etf_current"));
+    assert!(!succeeded(&task, "sz.159919"), "the item must fail");
+    assert!(
+        error_of(&task, "sz.159919").contains("forward chain failed"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
+
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Raw),
+        raw_before,
+        "不复权 must not commit without its 前复权 half"
+    );
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Forward),
+        forward_before,
+        "前复权 head must not move"
+    );
+    let events_after = env
+        .backend
+        .read(|c| crate::sqlite_market::derived::read_adjustment_events(c, "sz.159919"))
+        .unwrap();
+    assert_eq!(events_after, events_before, "factor facts rolled back too");
+}
+
+#[test]
+fn etf_forward_rerun_of_the_same_input_keeps_every_version() {
+    // `version_id` is the `series-fold-v2` digest of the content, so replaying
+    // one item over identical bars and identical factors must not mint a new
+    // version (#607 PR-C requirement 4).
+    let env = setup();
+    let second = env.advance_generation();
+    env.advance_to(Generation::Third, "req-third", &second);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let first = env.run("run-etf-idem-1", &view, Some("sh_sz_etf_current"));
+    assert!(succeeded(&first, "sz.159919"), "{}", error_of(&first, "sz.159919"));
+    let after_first = env.forward_head("sz.159919", Adjustment::Forward);
+    let raw_after_first = env.forward_head("sz.159919", Adjustment::Raw);
+
+    // A second plan over the same generation and target day.
+    let again = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let second_run = env.run("run-etf-idem-2", &again, Some("sh_sz_etf_current"));
+    assert!(
+        second_run.items.is_empty() || succeeded(&second_run, "sz.159919"),
+        "{:?}",
+        error_of(&second_run, "sz.159919")
+    );
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Forward),
+        after_first,
+        "the same input must keep the same 前复权 version"
+    );
+    assert_eq!(env.forward_head("sz.159919", Adjustment::Raw), raw_after_first);
+}
+
+#[test]
+fn etf_raw_series_stays_byte_identical_next_to_the_derived_one() {
+    // #607 PR-C requirement 5: adding the 前复权 series must not move one byte
+    // of the 不复权 series — same 3dp shape, same prices, same volume/amount,
+    // and the raw read face still answers exactly what it answered before.
+    let env = setup();
+    let raw = env.bars("sz.159919", Adjustment::Raw);
+    let shape = env
+        .backend
+        .read(|c| {
+            let row =
+                series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Raw)?
+                    .expect("raw series");
+            Ok((row.instrument_class, row.price_scale, row.adjustment.code()))
+        })
+        .unwrap();
+    assert_eq!(shape, (crate::market_data::INSTRUMENT_CLASS_ETF, 3, Adjustment::Raw.code()));
+    // 41.780 / 41.86 / 41.953 元 at 厘 precision — untouched by the derivation.
+    assert_eq!(
+        raw.iter().map(|b| b.4).collect::<Vec<_>>(),
+        vec![41_780, 41_860, 41_953]
+    );
+    // The 前复权 row is the derived one and differs only where an event
+    // reaches: no event applies to these bars, so it is the identity chain
+    // rescaled to 1e-6 元.
+    let adj = env.bars("sz.159919", Adjustment::Forward);
+    assert_eq!(
+        adj.iter().map(|b| b.4).collect::<Vec<_>>(),
+        vec![41_780_000, 41_860_000, 41_953_000]
+    );
+    // The read face still serves the 不复权 page unchanged.
+    let rows = env.read_raw("sz", "159919");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(close_of(&rows[0]), "41.78");
+}

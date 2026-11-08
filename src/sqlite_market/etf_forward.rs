@@ -265,33 +265,23 @@ pub(crate) fn commit_etf_forward_tx(
     let plan = plan_etf_forward(c, raw.entity, raw_changed, factors_changed)?;
     let forward_head =
         series::read_series_adjusted(c, raw.entity, Period::Day, Adjustment::Forward)?;
-    let mut bars: Vec<CompactBar> = Vec::new();
-    let mut range_start = 0_i64;
-    let mut range_end = 0_i64;
-    let change = match plan {
+    // The plan's own kind decides the shared commit kind; the bars are moved
+    // out here so the `SeriesChange` borrow has one owner.
+    let (is_append, bars) = match plan {
         ForwardPlan::Unchanged => return Ok(()),
-        ForwardPlan::Append(tail) => {
-            let start = tail[0].trade_day;
-            let end = tail[tail.len() - 1].trade_day;
-            range_start = start;
-            range_end = end;
-            bars = tail;
-            series_commit::SeriesChange::Append { upserts: &bars }
-        }
-        ForwardPlan::Replace(all) => {
-            let start = all[0].trade_day;
-            let end = all[all.len() - 1].trade_day;
-            range_start = start;
-            range_end = end;
-            bars = all;
-            // No stored series yet: insert it (`Replace` would demand an
-            // existing head and fail `NotFound`).
-            if forward_head.is_some() {
-                series_commit::SeriesChange::Replace { bars: &bars }
-            } else {
-                series_commit::SeriesChange::FirstPublish { bars: &bars }
-            }
-        }
+        ForwardPlan::Append(tail) => (true, tail),
+        ForwardPlan::Replace(all) => (false, all),
+    };
+    let range_start = bars[0].trade_day;
+    let range_end = bars[bars.len() - 1].trade_day;
+    let change = if is_append {
+        series_commit::SeriesChange::Append { upserts: &bars }
+    } else if forward_head.is_some() {
+        series_commit::SeriesChange::Replace { bars: &bars }
+    } else {
+        // No stored series yet: insert it (`Replace` would demand an existing
+        // head and fail `NotFound`).
+        series_commit::SeriesChange::FirstPublish { bars: &bars }
     };
     let window_digest = Some(series_commit::window_fold(&bars)?);
     // The derived series inherits the 不复权 head's binding and evidence: the
@@ -336,4 +326,124 @@ pub(crate) fn commit_etf_forward_tx(
         series::SeriesShape::etf(Adjustment::Forward),
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn compact(date: NaiveDate, li: i64) -> CompactBar {
+        CompactBar {
+            trade_day: compact_market::epoch_day(date),
+            open_units: li,
+            high_units: li,
+            low_units: li,
+            close_units: li,
+            volume: Some(1_000),
+            amount: Some("4.05".into()),
+            r7_raw: Some(0),
+        }
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn event(day: u32, category: u8, c1: &str, c3: &str) -> crate::etf_qfq::EtfEvent {
+        crate::etf_qfq::etf_event(
+            day,
+            category,
+            crate::etf_qfq::etf_factors(c1, "0", c3, "0").unwrap(),
+        )
+    }
+
+    /// The derived bar is `price × 10^6` at `price_scale=6`; `li` is the
+    /// stored 厘 value.
+    fn forward_units(bars: &[CompactBar]) -> Vec<(i64, i64, i64, i64, i64)> {
+        bars.iter()
+            .map(|b| {
+                (
+                    b.trade_day,
+                    b.open_units,
+                    b.high_units,
+                    b.low_units,
+                    b.close_units,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sz_159919_cash_event_lands_on_4044900_units_in_storage() {
+        // 4.111 元 − 0.661/10 = 4.0449 元, stored as 4,044,900 units.
+        let bars = [compact(day(2025, 3, 28), 4_111)];
+        let events = [event(20250331, crate::etf_qfq::ETF_CATEGORY_CASH, "0.661", "0")];
+        let derived = derive_forward_bars("sz.159919", &bars, &events).unwrap();
+        assert_eq!(derived[0].close_units, 4_044_900);
+        // volume/amount/r7 pass through byte for byte.
+        assert_eq!(derived[0].volume, bars[0].volume);
+        assert_eq!(derived[0].amount, bars[0].amount);
+        assert_eq!(derived[0].r7_raw, bars[0].r7_raw);
+    }
+
+    #[test]
+    fn sz_159922_scale_then_cash_lands_on_2334400_units_in_storage() {
+        // 6.159 / 2.5 − 1.292/10 = 2.3344 元, stored as 2,334,400 units.
+        let bars = [compact(day(2024, 11, 29), 6_159)];
+        let events = [
+            event(20241201, crate::etf_qfq::ETF_CATEGORY_SCALE, "0", "2.5"),
+            event(20241202, crate::etf_qfq::ETF_CATEGORY_CASH, "1.292", "0"),
+        ];
+        let derived = derive_forward_bars("sz.159922", &bars, &events).unwrap();
+        assert_eq!(derived[0].close_units, 2_334_400);
+    }
+
+    #[test]
+    fn an_event_only_moves_the_bars_strictly_before_its_day() {
+        let bars = [
+            compact(day(2025, 3, 27), 4_111),
+            compact(day(2025, 3, 28), 4_111),
+            compact(day(2025, 3, 31), 4_111),
+            compact(day(2025, 4, 1), 4_111),
+        ];
+        let events = [event(20250331, crate::etf_qfq::ETF_CATEGORY_CASH, "0.661", "0")];
+        let derived = derive_forward_bars("sz.159919", &bars, &events).unwrap();
+        assert_eq!(forward_units(&derived), vec![
+            (bars[0].trade_day, 4_044_900, 4_044_900, 4_044_900, 4_044_900),
+            (bars[1].trade_day, 4_044_900, 4_044_900, 4_044_900, 4_044_900),
+            // E itself and everything after it are untouched.
+            (bars[2].trade_day, 4_111_000, 4_111_000, 4_111_000, 4_111_000),
+            (bars[3].trade_day, 4_111_000, 4_111_000, 4_111_000, 4_111_000),
+        ]);
+    }
+
+    #[test]
+    fn derivation_is_deterministic_so_a_rerun_keeps_the_version() {
+        // `version_id` is the fold over the derived bars (series-fold-v2), so
+        // identical input giving identical bars is what makes a rerun
+        // idempotent. Nothing else in the path can move the id.
+        let bars = [compact(day(2025, 3, 28), 4_111)];
+        let events = [event(20250331, crate::etf_qfq::ETF_CATEGORY_CASH, "0.661", "0")];
+        let first = derive_forward_bars("sz.159919", &bars, &events).unwrap();
+        let again = derive_forward_bars("sz.159919", &bars, &events).unwrap();
+        assert_eq!(first, again);
+        let digest = |bars: &[CompactBar]| {
+            series::fold_bars(
+                "sz.159919",
+                Period::Day,
+                series::SeriesShape::etf(Adjustment::Forward),
+                bars,
+            )
+            .unwrap()
+        };
+        assert_eq!(digest(&first), digest(&again));
+    }
+
+    #[test]
+    fn an_empty_event_set_is_the_identity_chain() {
+        let bars = [compact(day(2025, 3, 28), 4_111)];
+        let derived = derive_forward_bars("sz.159919", &bars, &[]).unwrap();
+        assert_eq!(derived[0].close_units, 4_111_000);
+    }
 }
