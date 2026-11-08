@@ -42,7 +42,11 @@
 7. **契约要升版**（推荐 `generic-data-v12`），即使只是把一个错误码换成一种新的可读形态：
    客户端的行为分支变了。见 §6。
 8. **研究导出**推荐 `daily_qfq` 收录 ETF 行、**不升**快照 schema（列集合不变，见 §7）。
-9. 待 owner 决策的问题共 9 个，在 §10。
+9. **核对结论的落地方式决定了部署代价**：`(a)` 扩枚举和 `(b)` 新建表**都是 schema 迁移**
+   （27 → 28），在这个仓库「fresh init only」的模型下等于每次部署都要重建一次行情库
+   （约 2–3 小时）；推荐 `(c)` 不改 schema，把核对结论按内容寻址登记进来源库，
+   读面按 `evidence_digest` 查阻断集合。见 §3.2.1/§3.2.2 与 §10.0。
+10. 待 owner 决策的问题共 9 个，在 §10。
 
 ---
 
@@ -261,7 +265,7 @@ D-89 原文：「核对不了或不能归因的事件**不得静默进入前复�
 | B3 | 事件类别为 1/11 之外（ETF 不应出现） | `adjustment_events.category NOT IN (1,11)` | 是（DDL 已挡，防御性检查） |
 | B4 | 同一 `(entity, effective_day)` 同时有 cat1 和 cat11，且次序未锚定 | 同日组合表 | 需取证（`sz159922` 这类） |
 | B5 | 因子不可解析成精确分数（非有限、位数超预算、`c3 = 0`） | 运行时 `etf_event_transform` 返回 `Err` | 是（`src/gbbq.rs` 已有同类错误） |
-| B6 | 事件日的 bar 缺失且官方前收不可得，导致该事件无法核对 | 取证表里 `NOT_AVAILABLE` | 需取证 |
+| B6 | 事件日的 bar 缺失且官方前收不可得，导致该事件无法核对（典型是沪市：无历史日线接口） | 取证表里 `NOT_AVAILABLE` | 需取证；**沪市的波及面见 §9 P12** |
 
 **不阻断**的：事件日早于该 ETF 第一根 bar（如货币 ETF 的 `c3=0.01` 折算，
 设计 §8.1 说 60 条在首根 bar 之前）——这类事件对任何 bar 都不生效
@@ -296,20 +300,99 @@ D-89 原文：「核对不了或不能归因的事件**不得静默进入前复�
 `blocking_events` 只给条数，不给事件明细——明细走研究导出或运维查询，
 不要把可变长数组塞进错误信封（`docs/contracts/generic-data-v11.md` 的响应预算）。
 
-**`basis_status` 要不要扩枚举（Q2）**：现在是 `verified|pending`
-（`migrations/tasks/027_etf_factor_events.sql:29`）。两个做法：
+**核对结论存哪里（Q2）**：现在的 `adjustment_events.basis_status` 是
+`verified|pending`（`migrations/tasks/027_etf_factor_events.sql:29`）。三个做法，
+每个都先看它对**部署**意味着什么（见 §3.2.1）：
 
-- **(a) 扩成 `verified | pending | unverifiable | owner_accepted`**：需要一次 schema 迁移
-  （SQLite 不能放宽 CHECK，只能重建表，同 027 的做法）。语义最清楚，
-  但「哪些事件已核对」是一次性取证结果，落库后才有意义。
-- **(b) 不动表，另建一张 `etf_factor_checks(entity, ordinal, check_status, basis_ref, checked_at)`**
-  作为验收证据表；`adjustment_events.basis_status` 保持不变。
+- **(a) 扩 `basis_status` 枚举** 成 `verified | pending | unverifiable | owner_accepted`：
+  SQLite 不能放宽 CHECK，只能重建表（同 027 的做法）。语义最直接，但把核对结论写进事实表；
+- **(b) 在行情库里新建证据表** `etf_factor_checks(entity, ordinal, check_status, basis_ref, checked_at)`：
+  事实表不动，但**仍然是 schema 迁移**（27 → 28）。**这不是「无需迁移」**——
+  在本仓库「fresh init only」的部署模型下，新建一张表和在旧表上加一列对部署的代价完全相同；
+- **(c) 不改 schema**，把核对结论当成**证据**按内容寻址登记进来源库
+  （`source_store`），运行时加载成「阻断集合」（§3.2.2）。
 
-推荐 **(b)**：核对结论是**证据**，不是因子事实；写进 `adjustment_events` 会把
-「交易所官方前收核对结果」和「gbbq 解出的因子」混在同一张表里，
-以后换核对来源（比如沪市以后有了官方历史日线）就要改事实表。证据表可以
-`INSERT` 新版本，事实表不动。这也符合设计 §10.1 把 `basis_status` 加进
-`adjustment_events` 时的动机（当时是为了「区分事实的证据等级」，不是存核对结论）。
+#### 3.2.1 先看 schema 变更现在怎么部署
+
+这三条路径是当前部署模型的事实，决定了 Q2 各选项的真实代价：
+
+1. **行情库不做原地升级。** `deploy_phase_g.sh` 的文件头写明
+   「the existing market database is NEVER upgraded in place and NEVER deleted —
+   it is renamed aside and `task_sqlite init21` creates a fresh compact database」
+   （`scripts/deploy_phase_g.sh:19-22`）；`COMPACT_SCHEMA_VERSION` 的实现注释同样写
+   「Every step stays fresh-init only, never in-place: a file built by another schema
+   revision is refused, not upgraded (D-08)」（`src/sqlite_tasks.rs:49-54`）。
+2. **只换二进制不行。** 读路径有两处硬版本检查会在旧库上 fail-closed：
+   `src/research/read.rs:73`（导出侧：`version != COMPACT_SCHEMA_VERSION` 直接拒绝）和
+   `src/sqlite_market/generation_facts.rs:225`（generation facts 装载侧：同）。所以 schema 一旦 +1，
+   **`switch_binary.sh` 的纯换二进制路径不再可用**——
+   该脚本的不变量是「数据库文件、WAL/SHM 永不删除、移动或截断」
+   （`scripts/switch_binary.sh:9-12`），它不会替你做 fresh init。
+3. **唯一的原地升级是历史特例。** `upgrade_compact`（`src/sqlite_tasks.rs:245-274`）
+   只接受 **schema 18 → compact**，且要求所有业务表为空（`require_business_tables_empty`）；
+   它不是通用的 N→N+1 升级路径。
+4. **所以改 schema = 一次完整重建。** 顺序是 runbook §4
+   （`docs/new-host-runbook.md:184-215`）：部署 → `source_store replay --scope all`
+   （在 `init21` 之后、服务启动之前，`scripts/deploy_phase_g.sh:454-462`）→
+   `full` 刷新 → 目录首采 → A 股日线首采（53 批）→ 主表发布 →
+   `sh_sz_a_listed_ever` 首采 → 年线 plan-run → ETF 日线首采（`sh_sz_etf_current` 三批 500/500/500/131
+   + `sh_sz_etf_listed_ever` 128 只）→ 读回验收。
+
+**一次重建的实测代价（都注明口径与出处）**：
+
+| 项 | 读数 | 出处 |
+|---|---|---|
+| 从克隆完成到验收全部通过 | 约 2 小时 15 分 – 2 小时 40 分 | `docs/new-host-runbook.md:282-284`（上次迁移实测） |
+| 其中 `full` 刷新 | 约 73 分钟（原有 7 来源 42.5 min + ETF 4 来源 30.5 min） | `docs/new-host-runbook.md:194` |
+| A 股日线首采 | 53 批，约 3.3 分钟（199 s） | `docs/new-host-runbook.md:196` |
+| 年线 plan-run（生产单任务形态） | 89.6 s / 127.9 s（vm2 生产日更） | `docs/SLO.md:19` 第 3 行 |
+| 同代全量 `update_data` write-loop | 573.4 s（XDM-84 独占实测） | `docs/SLO.md:17` 第 1 行 |
+| 部署窗口（服务停摆） | 47 s（历史 preview.41 退役）/ 20 s（preview.42 部署窗口） | `docs/STATUS.md:149`、`docs/STATUS.md:62-63` |
+| 首采后 DB 体积上限 | ≤2.5 GiB（hard）；当前 2.31 GB | `docs/SLO.md:16` 第 4 行；`docs/STATUS.md:539` |
+
+要点：**schema 变更的代价不只在写代码那一次**，而是每次部署都要付一次约 2–3 小时的
+重建，而且这期间生产数据是空的（存量库被归档、新库要靠首采重建）。
+
+#### 3.2.2 (c) 的具体做法：证据入来源库
+
+来源库（`source_store`）已经是「fresh init 无法重新生成的事实」的唯一持久副本
+（`scripts/deploy_phase_g.sh:445-450` 的注释），并且已经服务多个写入方
+（`replay --scope all`、`--scope industry`、`--scope generation_facts`）。
+把 ETF 事件核对结论登记进去，与既有模式一致：
+
+- **写入**：核对完成后生成一份 `etf-factor-checks` 记录（每个 `(entity, ordinal)`
+  一条：`check_status`、官方前收来源与 sha、比对结果、核对日期），按内容寻址
+  （sha256 即 id），进来源库。版本演进 = 新增一条记录，旧记录不删。
+- **读取**：这是 (c) 的核心约束——**当时序关系必须与库一致**。(c) 不能在启动时
+  把来源库整表读进内存，因为**来源库的新旧与行情库的新旧不一定同步**：
+  - 重放（`deploy_phase_g.sh` 的 `replay`）会写库，但**不会**把 ETF 核对结论写进
+    `adjustment_events`（那不是重放范围）；
+  - 一次日更可能带来新的因子事件（新折算/新分红），而来源库里还没有对应核对结论。
+  所以阻断集合的解析时机必须是**读面按需查询 + 内容摘要绑定**，而不是启动时快照：
+  - 每次 `qfq` 解析该 ETF 时，取该实体**当前**因子事实的内容摘要
+    （`adjustment_events.evidence_digest`，`migrations/tasks/027_etf_factor_events.sql:32`
+    已经有这一列），用 `(entity, evidence_digest)` 去来源库索引里查核对记录；
+  - 没有匹配记录 → `etf_factor_unverified`（缺省即阻断，不需要"已核对白名单"）；
+  - 有匹配记录且全部通过 → 放行；有未通过项 → 带原因码阻断。
+  这样「库里多了一条未核对的事件」会**自动**变成阻断，不依赖任何离线同步动作。
+- **缓存**：把 `(entity, evidence_digest) → 判定` 缓存在进程内，key 含摘要，
+  所以因子一变缓存自然失效；不需要失效通知。
+- **replay 与复现**：
+  - `replay --scope all` 的语义不变（不碰 ETF 核对结论），所以 (c) 不改变 replay 的
+    任何已有 scope；要新增一个 `--scope etf_factor_checks`（只读证据、不写库），
+    或干脆不进 DB（见下一条）。
+  - **不落库的代价**：核对结论不在行情库里，所以 `query_data` 的
+    `inputs`（版本号 + 算法版本）**不足以**复现一次响应——
+    同样的 `market.daily` 版本 + 同样的算法版本，换一个来源库可能给出不同的
+    阻断判定。这是 (c) 最大的语义代价。缓解办法：在响应的 `details` 里带上
+    `etf_checks_digest`（核对记录的内容摘要），并在 `get_data_capabilities` 的
+    算法版本列表里登记 `etf-factor-checks-v1`；`daily_qfq` 导出的 manifest 也要记这个摘要。
+  - **导出/验签**：`source_store replay --verify-only` 已经能校验来源库自身，
+    核对记录跟着它一起被校验；不受影响。
+
+**写面复杂度**：需要一个小的来源库 scope + 一个只读装载器 +
+「摘要 → 判定」的缓存。规模是几百到几千条记录（P1/P2 的取证规模），
+不需要索引结构以外的存储。
 
 ### 3.3 给 owner 的两个方案
 
@@ -676,6 +759,7 @@ ETF 前复权序列行进库，`write_daily(Forward)` **已经会自动收录它
 | P9 | 沪市 ETF 中「完全无法核对」的实体数（无历史日线接口） | §3.1 B6、§3.3 | 设计 §8.3 第 1 条：「沪所无历史日线接口，只能覆盖到有官方快照的日期」 |
 | P10 | 年度事件率（每年新增 cat1/cat11 事件数），用于 §5.4 的重写成本推断 | §5.4 | `adjustment_events` 按 `effective_day` 的年份直方图 |
 | P11 | 001/其他类别的 `partition_point` 边界：事件数与首个 bar 日期的关系 | §3.1 | 判断「哪些实体的事件全部早于首 bar」→ 不阻断 |
+| P12 | **沪市**有 cat1/cat11 事件的 ETF **只数**与**事件数**（按 category 分）。这是 Q9 选 (a) 的代价边界：只数决定「整只阻断」波及多少只 ETF，事件数决定 (b) 的 `OWNER_RISK_ACCEPTED` 要逐行标多少 | §3.1 B6、§10 Q9 | 沪市 ETF 无历史日线接口（设计 §8.3 第 1 条），只能覆盖有官方快照的日期，其余为 `NOT_AVAILABLE`。SQL（主表列见 `migrations/tasks/023_security_master.sql:80-101`）：`SELECT e.category, count(DISTINCT e.entity) AS entities, count(*) AS events FROM adjustment_events e JOIN security_master m ON m.code = substr(e.entity,4) AND m.exchange = substr(e.entity,1,2) AND m.instrument_class = 2 WHERE m.exchange = 'sh' GROUP BY e.category;`（取证时把**实际执行**的 SQL 与结果一起贴进证据） |
 
 **回填规则**：本文件回填时，(1) 每个 P 项给出数字与出处（SQL + 执行时间 + 主机）；
 (2) 正文里凡是依赖它的句子从「待取证（VM2-19）」改成具体结论；
@@ -692,21 +776,37 @@ ETF 前复权序列行进库，`write_daily(Forward)` **已经会自动收录它
 | # | 问题 | 选项 | 推荐 | 理由 |
 |---|---|---|---|---|
 | **Q1** | 按实体 fail-closed 的粒度 | (a) 任一阻断事件 → 整只 ETF `qfq` 不可用；(b) 只提供最后一个阻断事件之后的 bar（序列截断） | **(a)** | D-89 第 6 条的措辞就是整只语义；(b) 的截断点会随因子修订漂移，产生**静默**的长度变化，是回测最难发现的偏差；实现复杂度也低。详见 §3.3 |
-| **Q2** | 核对结论存哪 | (a) 扩 `adjustment_events.basis_status` 枚举（需 schema 迁移）；(b) 新建证据表 `etf_factor_checks` | **(b)** | 核对结论是证据，不是因子事实；换核对来源时只加证据版本，不动事实表。§3.2 |
+| **Q2** | 核对结论存哪（三选项，**每一项都涉及部署代价**，见 §3.2.1） | (a) 扩 `adjustment_events.basis_status` 枚举；(b) 行情库新建 `etf_factor_checks` 表；(c) 不改 schema，核对结论按内容寻址进来源库，读面按 `evidence_digest` 查询阻断集合 | **(c)** | 前两项都是 schema 迁移（27→28），在本仓库「fresh init only」模型下等于**每次部署都要付一次约 2–3 小时的重建**（`docs/new-host-runbook.md:282-284`；`scripts/deploy_phase_g.sh:19-22`、`src/sqlite_tasks.rs:49-54`），而 `switch_binary.sh` 的纯换二进制路径在 schema 变化后不再可用（`src/research/read.rs:73`、`src/sqlite_market/generation_facts.rs:225` 两处硬版本检查）。(c) 的代价是复现不完全（`inputs` 不含核对摘要，需在 `details`/manifest 里补 `etf_checks_digest`），但远小于重建代价。§3.2 |
 | **Q3** | 同日 cat1+cat11 的次序 | (a) 默认「先 cat11 后 cat1」，锚定不符或不可锚定即阻断；(b) 一律按默认次序算，不阻断 | **(a)** | 两种次序的数值差 `c1/10·(1/c3−1)` 是真实差异，不是舍入噪声；D-89 要求逐条核对。真实收益取决于 P5 的组合数量（**待取证**） |
 | **Q4** | 前复权的构建时机 | (a) 挂在既有 ETF `update_data` item 的事务里（不新增 item 类型）；(b) 新增独立 `PlanSeries::EtfQfq` item | **(a)** | (b) 会把 SLO 第 1 行的 item 基数再推高，而派生不需要独立来源绑定。§5.3 |
 | **Q5** | 追加 vs 整条重写 | (a) bar 追加且因子未变 → 只追新 bar 的前复权行；因子变 → 整条重写；(b) 每次日更都整条重写 | **(a)** | 复用 `forward_adjust_exact` 的「proven-identical prefix 不复权」性质（`src/official_market.rs:1581-1586`），(b) 会让每只 ETF 每天都写一遍全历史。§5.2 |
 | **Q6** | capability revision | (a) 升 `generic-data-v12`；(b) 不升只改 release notes；(c) 升版并把 ETF 缺省口径改成 qfq | **(a)** | 客户端分支行为变了，属 D-70 Q10 的同类；缺省仍要求显式口径（§6.2）。§6.1 |
 | **Q7** | fail-closed 的响应细节 | (a) 错误码不变（`adjustment_unavailable`）+ `details.reason`；(b) 新错误码 `etf_factor_unverified` 等 | **(a)** | 新码会让现有客户端分支全失效；`details` 是既有信封的扩展位（`src/data_supply/mcp.rs:819-825` 已在 `Error::Task` 用）。§3.2/§6.3 |
 | **Q8** | 研究导出 | (a) `daily_qfq` 收录 ETF 行 + `factors.parquet` 加 `basis_status` 列（`factors` 升 schema 版）；(b) `daily_qfq` 不收录 ETF；(c) 另出 `daily_etf_qfq.parquet` | **(a)** | 导出口径必须与读面一致；(b) 会造出「MCP 读得到、导出拿不到」；(c) 多一个文件要维护 manifest 与校验，收益不抵成本。§7 |
-| **Q9** | 沪市无法核对的实体 | (a) 一律阻断（fail-closed）；(b) 按「`OWNER_RISK_ACCEPTED`」放行并标 `basis_status`；(c) 先只交付深市 ETF 的 qfq | **(a)**，除非 owner 对 (b) 另行裁定 | D-89 第 6 条：核对不了不得静默进入前复权。但 (c) 会让「沪深混合请求」出现部分可读，实现上要显式支持，代价不小。**P9 的规模决定 (b) 是否值得讨论** |
+| **Q9** | 沪市无法核对的实体 | (a) 一律阻断（fail-closed）；(b) owner 显式接受风险、以 `.day` 内部一致性作证据等级并标 `OWNER_RISK_ACCEPTED` 放行；(c) 先只交付深市 ETF 的 qfq | **(a)**，待 P12 取证数字出来后复议 | (a) 的代价完全取决于「沪市有事件的 ETF 有多少只、多少条事件」（§9 **P12，待取证 VM2-19**）：若只波及少数实体，(a) 就是最省事且最符合 D-89 第 6 条的选择；若波及面很大，(b) 才值得讨论。(b) **不是静默放行**：它要求 owner **显式**接受风险，证据等级取 `.day` 内部一致性（前收与除权日开盘的比率），并逐行标 `basis_status=OWNER_RISK_ACCEPTED`——D-89 第 6 条末句「owner 对某一类事件另有裁定的除外」正是这条路径。(c) 会让沪深混合请求出现部分可读，实现上要显式支持，代价不小 |
+
+### 10.0 Q2 的三选项代价对照
+
+| 选项 | 是否改 schema | 部署方式与代价 | 主要缺点 |
+|---|---|---|---|
+| **(a) 扩 `basis_status` 枚举** | **是**（27 → 28；`COMPACT_SCHEMA_VERSION` +1，`src/sqlite_tasks.rs:54`，尾部追加一条 `028_*.sql` 到 `COMPACT_MIGRATIONS`，`src/sqlite_tasks.rs:59-69`） | 发布后必须走 fresh init 重建：库被归档、`init21` 建新库、`source_store replay --scope all`、`full` 刷新（约 73 分钟）、目录/A 股/ETF 首采、年线 plan-run。整体约 **2 小时 15 分 – 2 小时 40 分**（`docs/new-host-runbook.md:282-284`）。服务停摆窗口本身只有 20–47 s（`docs/STATUS.md:149`、`docs/STATUS.md:62-63`），但数据重建期间读面是空库。**不能只换二进制**。注意：核对结论的**更新**本身不需要再重建——`basis_status` 是库内列，重算并重发布该实体序列即可 | 核对结论写进因子事实表，后来换核对来源（比如沪市以后有了官方历史日线）要改事实表结构；扩枚举还会牵动 `FactorBasisStatus` 的解析与写入校验（`src/market_data.rs:297-320`，`FactorBasisStatus` 的枚举、`as_str` 与 `parse`） |
+| **(b) 新建证据表** | **是**（同上，27 → 28）。新建一张表和在旧表上加一列，对部署的代价**完全相同**——这是审核意见指出的关键一点：本仓库没有 N→N+1 的原地升级路径（`src/sqlite_tasks.rs:49-54`、`245-274`） | 同上（一次约 2–3 小时的重建） | 来源库和库内两份结论要同步；核对结论每次更新都要写库并重新发布 |
+| **(c) 来源库证据 + 读面按摘要查询** | **否**（仍是 27；`switch_binary.sh` 的纯换二进制路径保持可用） | 部署代价 ≈ 0：ETF 核对结论只需随其它 scope 一起 `replay`（服务停着做，`docs/new-host-runbook.md:190-191` 的同一操作）+ 换二进制。核对结论的后续更新同样只走一次导入，不重建行情库 | **复现不完全**：`query_data` 的 `inputs`（版本号 + 算法版本）不足以复现判定，必须补 `etf_checks_digest`（§3.2.2）。另外读路径多一次来源库查询（可缓存，key 含摘要） |
+
+（重建的其它实测参照：A 股日线首采 53 批约 3.3 分钟、`docs/new-host-runbook.md:196`；
+年线 plan-run 89.6–127.9 s、`docs/SLO.md:19`；同代全量 write-loop 573.4 s、
+`docs/SLO.md:17`；首采后 DB ≤2.5 GiB 是 hard 门禁、`docs/SLO.md:16`，
+而当前库已 2.31 GB、`docs/STATUS.md:539`——(a)/(b) 每重建一次都要重新验证体积。）
 
 ### 10.1 与已批准决策的关系
 
 - Q1、Q7 直接落实 D-89 第 6 条，不需要新增决策。
 - Q6 的判例来自 D-70 Q10（已批准），本设计只是沿用。
-- Q2 若选 (a)，是一次 **schema 迁移**。按 AGENTS.md 的约束，schema 变更不在
-  本任务的授权范围内，因此本设计**推荐无需迁移的 (b)**。
+- Q2 的 (a)/(b) **都是 schema 迁移**（27 → 28），差别只在表结构长什么样，
+  部署代价一样。按 AGENTS.md 的约束，schema 变更不在本任务的授权范围内，
+  所以本文推荐不改 schema 的 (c)。若 owner 认为复现完整性优先于部署代价，
+  (a) 是可以自洽的选择——但那时要单独开一个 schema 任务，并在部署计划里
+  预留一次完整重建。
 - Q3、Q4、Q5、Q8、Q9 属于新裁定，写进 `docs/decisions.md` 需 owner 批准。
 
 ### 10.2 本文没做的事
@@ -722,7 +822,7 @@ ETF 前复权序列行进库，`write_daily(Forward)` **已经会自动收录它
 | PR | 内容 | 前置 |
 |---|---|---|
 | PR-A | 精确链的「事件→变换」参数化 + `etf_event_transform` + 单测 T1–T10（T5/T6 用取证夹具）；A 股逐位不变 | 本文批准 |
-| PR-B | 证据表 `etf_factor_checks`（Q2 选 (b)）+ 阻断判定纯函数 + 单测 | 取证结论落库 |
+| PR-B | 来源库证据 scope（Q2 推荐 (c)；若 owner 选 (a)/(b) 则改成一条 schema 任务 + 完整重建计划）+ 阻断判定纯函数 + 单测 | 取证结论落库 |
 | PR-C | 存储与日更：`SeriesShape::etf(Forward)` 写入、追加/重写规则、`resolve_read_shape` 放行、`read_public_series` 按请求口径解析 | PR-A、PR-B |
 | PR-D | 读面与契约：`generic-data-v12`、`series_capabilities` 新行、`details.reason`、契约文档、`check_current_facts.py` | PR-C |
 | PR-E | 研究导出：`daily_qfq` 收录 ETF、`factors` 加列、`export_smoke.py` 断言 | PR-D |
