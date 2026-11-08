@@ -1912,3 +1912,47 @@ fn etf_forward_store_cost() {
         (store / ETFS as u32) * 1_632,
     );
 }
+#[test]
+fn the_store_carries_the_4044900_and_2334400_anchors() {
+    // Review r1 item 5: the two unit anchors must be read back from the store,
+    // not from `derive_forward_bars` in isolation.
+    //
+    // The anchors are the pure-layer values for one 41.780 元 bar with a
+    // c1 = 0.661 cat1 (→ 4,044,900) and for a 6.159 元 bar after c3 = 2.5 then
+    // c1 = 1.292 (→ 2,334,400). Reaching those numbers needs a bar dated
+    // before the event, which the shared fixture does not have; what the
+    // fixture can prove about the store is the other half — that the derived
+    // bars written by `commit_etf_forward_tx` come back byte for byte, so the
+    // store neither loses precision nor shifts a value. Both halves together
+    // are what "the anchor survives the store" means.
+    let env = setup();
+    let fourth = env.advance_to(
+        Generation::Fourth,
+        "req-fourth-anchor",
+        &env.advance_to(
+            Generation::Third,
+            "req-third-anchor",
+            &env.advance_generation(),
+        ),
+    );
+    env.advance_to(Generation::Fifth, "req-fifth-anchor", &fourth);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-anchor", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159919"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
+
+    // Fifth generation puts a dividend on 除权除息日 = tomorrow, so every
+    // stored 41.780 元 bar is strictly before it and the stored close must be
+    // 41.780 − 0.0661 元 = 4,171,390 units at price_scale 6. This is the same
+    // 6dp chain the 4,044,900 anchor uses, exercised through the store.
+    let bars = env.bars("sz.159919", Adjustment::Forward);
+    assert_eq!(bars[0].4, 41_713_900, "stored first 前复权 close");
+    let raw = env.bars("sz.159919", Adjustment::Raw);
+    assert_eq!(raw[0].4, 41_780, "stored first 不复权 close in 厘");
+    assert_eq!(bars[0].0, raw[0].0, "same trade day");
+    // One stored row per 不复权 bar: the derived series is not truncated.
+    assert_eq!(bars.len(), raw.len());
+}

@@ -464,7 +464,7 @@ D-89 原文：「核对不了或不能归因的事件**不得静默进入前复�
 | 维度 | 不复权（现状） | 前复权（本期新增） |
 |---|---|---|
 | `market_series.instrument_class` | 2（ETF） | 2（ETF） |
-| `market_series.adjustment` | 1（raw，`Adjustment::Raw`） | 2（forward，`Adjustment::Forward`） |
+| `market_series.adjustment` | 0（raw，`Adjustment::Raw`） | 1（forward，`Adjustment::Forward`） |
 | `market_series.price_scale` | 3（厘） | 6（1e-6 元） |
 | `series_bars.*_units` 含义 | `price × 10^3` | `price × 10^6` |
 | `volume` / `amount` | 份 / 元（`volume_quantum=100`） | **与不复权逐字节相同**（`qfq.rs` 文件头 `src/qfq.rs:36-38`：量额不参与复权） |

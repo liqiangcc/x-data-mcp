@@ -328,9 +328,12 @@ pub(crate) fn commit_etf_forward_tx(
         series_commit::SeriesChange::FirstPublish { bars: &bars }
     };
     let window_digest = Some(series_commit::window_fold(&bars)?);
-    // The derived series inherits the 不复权 head's binding and evidence: the
-    // 前复权 bytes are a function of those inputs, so they name the same
-    // provenance instead of inventing a second one.
+    // The derived series names the 不复权 head's binding and evidence, always:
+    // the 前复权 bytes are a function of those inputs, so the provenance that
+    // produced them is the current 不复权 provenance, not whatever the derived
+    // row carried when it was first built. Keeping the first derivation's
+    // evidence would describe a generation the current bytes no longer come
+    // from (#607 PR-C review r1 item 7).
     let raw_head = series::read_series_adjusted(c, raw.entity, Period::Day, Adjustment::Raw)?
         .ok_or_else(|| integrity("ETF forward commit lost its 不复权 head"))?;
     let base_version_id = forward_head.as_ref().map(|row| row.version_id.clone());
@@ -352,10 +355,7 @@ pub(crate) fn commit_etf_forward_tx(
         algorithm_version: series_commit::UPDATE_ALGO,
         window_digest,
         source_binding_digest: Some(raw_head.source_binding_digest),
-        evidence_digest: forward_head
-            .as_ref()
-            .map(|row| row.evidence_digest)
-            .or(Some(raw_head.evidence_digest)),
+        evidence_digest: Some(raw_head.evidence_digest),
         coverage_status: Some(raw_head.coverage_status),
         metadata_changed: true,
         event_evidence_digest: raw.event_evidence_digest,

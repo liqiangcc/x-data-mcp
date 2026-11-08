@@ -519,9 +519,11 @@ fn write_entity_facts(
 }
 
 /// ETF update commit (M3-2 PR-B, extended by #607 PR-C): one 不复权 series at
-/// `instrument_class=2, price_scale=3`, the category-1/11 facts, and — in the
-/// same transaction — the derived 前复权 series (`instrument_class=2,
-/// adjustment=2, price_scale=6`).
+/// `instrument_class=2, adjustment=0, price_scale=3`, the category-1/11 facts,
+/// and — in the same transaction — the derived 前复权 series
+/// (`instrument_class=2, adjustment=1, price_scale=6`; the stored codes are
+/// `Adjustment::Raw.code()` and `Adjustment::Forward.code()`, and design §4.1
+/// used to print `2` for the forward row, which was a typo fixed in this PR).
 ///
 /// The derivation is not filtered by 核对 records: see
 /// [`super::etf_forward`] for why the write side must not depend on
