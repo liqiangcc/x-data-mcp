@@ -16,6 +16,12 @@ vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
 、当日 `tail`/`full`、11-07 无日更；只读为 `python3 sqlite3` 的 `file:…?mode=ro`（含 WAL）。更早的
 2026-11-07 preview.46 只读验收（XDM-198）、2026-11-05 部署与第一次生产跨代日更读数保留在「数据」段）。
 
+**preview.47 待部署（2026-11-08）**：本 PR 只做版本号与文档，未打 tag、未发 release、未部署。
+相对 preview.46（`c35b425`）含三处代码改动：#596 ETF 简称提取器 v2（`etf-short-name-v2`）、
+#601 bind 之前安装 SIGTERM/SIGINT 处理器（Fixes #599）、#606 D-87 `tail` 复用窗口类来源的
+已关闭窗口（Refs #604）。schema 仍为 27，capability revision 仍为 `generic-data-v11`，工具数不变，
+只换二进制（部署后在同一 PR 更新本文件）。
+
 **preview.46 已部署（2026-11-07T16:52Z）**：vm2-126 已切到 `v0.2.0-preview.46` /
 `c35b425f727fa74ad2cca0f6c9c683213e256b21`（switch 报告
 `/opt/x-data-mcp-preview/reports/preview46-switch-20261107T165152Z.json`：`status=PASS`、
