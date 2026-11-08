@@ -532,6 +532,352 @@ class CompositeTest(unittest.TestCase):
         self.assertTrue(mod.within_one_tick(Decimal("2.334") - proper))
 
 
+class DifferentExDaySameBarTest(unittest.TestCase):
+    """生产库遗留 1/4：`sz.159922` 的两条事件 E 不同，但作用在同一根 bar 上。
+
+    库里 ordinal 1 是 cat11 `c3=2.5`、E=2024-12-01（周日）；ordinal 2 是 cat1
+    `c1=1.292`、E=2024-12-02（周一）。官方 2024-12-02 的 `qss`=2.334 是两笔合起来
+    的结果，按 E 分组会把它们拆成两条单事件，两条都核不上。
+    """
+
+    def _rows(self):
+        rows, _warnings = load_rows(
+            csv_text(
+                (
+                    "sz.159922",
+                    "11",
+                    # v3 的 day 是 E 前一天（周日 2024-12-01 的「前一天」是周六 11-30）。
+                    "2024-11-30",
+                    "2024-12-02",
+                    "unverified",
+                    {"prev_close": "6.159", "official_qss": "2.334", "official_ks": "2.461"},
+                ),
+                (
+                    "sz.159922",
+                    "1",
+                    "2024-12-01",
+                    "2024-12-02",
+                    "unverified",
+                    {"prev_close": "6.159", "official_qss": "2.334", "official_ks": "2.461"},
+                ),
+            )
+        )
+        return rows
+
+    def _conn(self):
+        return memory_db(
+            [
+                {
+                    "entity": "sz.159922",
+                    "ordinal": 1,
+                    "effective_day": "2024-12-01",
+                    "category": 11,
+                    "c3": "2.5",
+                    "basis_status": "pending",
+                    "evidence_digest": DIGEST_A,
+                },
+                {
+                    "entity": "sz.159922",
+                    "ordinal": 2,
+                    "effective_day": "2024-12-02",
+                    "category": 1,
+                    "c1": "1.292",
+                    "basis_status": "pending",
+                    "evidence_digest": DIGEST_B,
+                },
+            ]
+        )
+
+    def test_both_events_of_one_bar_are_verified_as_a_composite(self):
+        records, report = convert_with(self._conn(), self._rows())
+        self.assertEqual([record["ordinal"] for record in records], [1, 2])
+        for record in records:
+            self.assertEqual(record["check_status"], "verified_official")
+            self.assertEqual(record["basis"], "official_qss")
+            self.assertIn("same_bar_composite", record["basis_ref"])
+            self.assertNotIn("same_E_composite", record["basis_ref"])
+            # 6.159 / 2.5 − 0.1292 = 2.3344，对官方 2.334 差 −0.0004。
+            self.assertEqual(record["price_delta"], "-0.0004")
+            self.assertTrue(record["within_one_tick"])
+            self.assertEqual(record["announced_value"], "2.334")
+        self.assertEqual(report["d92"]["verified"], 2)
+        self.assertEqual(report["unmatched"]["count"], 0)
+        self.assertEqual(report["by_check_status"], {"verified_official": 2})
+
+    def test_official_evidence_points_at_the_bar_day_not_the_earlier_ex_day(self):
+        # 官方 qss 只在 bar 上。E=2024-12-01 是周日，那天没有行情，证据必须指 bar。
+        records, _report = convert_with(self._conn(), self._rows())
+        for record in records:
+            self.assertIn("2024-12-02", record["basis_ref"])
+
+    def test_reversed_effective_order_is_refused(self):
+        # 反例：cat1 的 E 早于 cat11（2024-12-02 与 2024-12-03 作用在同一根 bar
+        # 上时次序反了），合成价 (6.159 − 0.1292) / 2.5 = 2.4119，对官方 2.334 差
+        # 0.0779，必须判为不通过。
+        conn2 = memory_db(
+            [
+                {
+                    "entity": "sz.159922",
+                    "ordinal": 1,
+                    "effective_day": "2024-12-02",
+                    "category": 1,
+                    "c1": "1.292",
+                },
+                {
+                    "entity": "sz.159922",
+                    "ordinal": 2,
+                    "effective_day": "2024-12-03",
+                    "category": 11,
+                    "c3": "2.5",
+                },
+            ]
+        )
+        rows, _warnings = load_rows(
+            csv_text(
+                (
+                    "sz.159922",
+                    "1",
+                    "2024-12-01",
+                    "2024-12-02",
+                    "unverified",
+                    {"prev_close": "6.159", "official_qss": "2.334", "official_ks": "2.461"},
+                ),
+                (
+                    "sz.159922",
+                    "11",
+                    "2024-12-02",
+                    "2024-12-03",
+                    "unverified",
+                    {"prev_close": "6.159", "official_qss": "2.334", "official_ks": "2.461"},
+                ),
+            )
+        )
+        records, _report = convert_with(conn2, rows)
+        self.assertTrue(records)
+        for record in records:
+            self.assertEqual(record["check_status"], "unverified")
+            self.assertFalse(record["within_one_tick"])
+
+
+class ShareRatioDirectionTest(unittest.TestCase):
+    """生产库遗留 2/4：`sh.510180`「10：1 的拆分……增加基金份额」要读成 c3=10。
+
+    D-92 已裁定这条一致：`.day` 价格从 6.18 变成 0.612，说明 c3=10（新价 = 旧价 /
+    10）。规则是通用的：份额增加 N/M 倍，新价 = 旧价 / (N/M)，所以 `N：M` 里的
+    `N/M` 就是 c3；写「合并、减少份额」时方向相反，读反了要拒绝。
+    """
+
+    def test_split_ratio_is_parsed_as_new_over_old(self):
+        terms = mod.parse_announcement_text("按 10：1 的拆分比例……增加基金份额")
+        self.assertEqual(terms.mode, "ratio")
+        self.assertEqual(terms.ratio, Decimal("10"))
+
+    def test_merge_ratio_gives_a_factor_below_one(self):
+        terms = mod.parse_announcement_text("按 1：10 合并、减少基金份额")
+        self.assertEqual(terms.mode, "ratio")
+        self.assertEqual(terms.ratio, Decimal("0.1"))
+
+    def test_direction_word_contradicting_the_numbers_is_refused(self):
+        # 「10：1」加「合并」：合并后份额减少，比例不该大于 1，方向与数值矛盾。
+        terms = mod.parse_announcement_text("按 10：1 合并、减少基金份额")
+        self.assertEqual(terms.mode, "")
+        self.assertIsNone(terms.ratio)
+
+    def test_fullwidth_amount_is_normalized_before_parsing(self):
+        # 生产库遗留 3/4：公告原文是全角「42．28」，v3 读成了 42.0。
+        self.assertEqual(mod.parse_decimal("４２．２８", "x"), Decimal("42.28"))
+        terms = mod.parse_announcement_text("每 10 份基金份额派发现金 ４２．２８ 元")
+        self.assertEqual(terms.mode, "per10")
+        self.assertEqual(terms.amount_per10, Decimal("42.28"))
+
+    def test_announced_factor_uses_ratio_text_when_present(self):
+        # v3 的 `ann_ratio` 是解析结果（可能读反）；有原文片段时按原文重解析。
+        row = {"category": 11, "ann_ratio": "0.1", "ann_ratio_text": "按 10：1 的拆分比例增加基金份额"}
+        self.assertEqual(mod.announced_factor(row), (11, Decimal("0"), Decimal("10")))
+        # 没有原文片段时保持 v3 的值（不能凭空改）。
+        self.assertEqual(
+            mod.announced_factor({"category": 11, "ann_ratio": "0.1"}),
+            (11, Decimal("0"), Decimal("0.1")),
+        )
+
+
+class OverridesTest(unittest.TestCase):
+    """生产库遗留 4/4：`--overrides` 逐条带原文片段的人工裁定。"""
+
+    FIXTURE = Path(__file__).with_name("testdata") / "etf_factor_overrides_d92.json"
+
+    def _rows(self):
+        rows, _warnings = load_rows(
+            csv_text(
+                (
+                    "sh.510180",
+                    "11",
+                    "2009-05-20",
+                    "2009-05-21",
+                    "unverified",
+                    {
+                        "prev_close": "6.18",
+                        "ann_ratio": "0.1",
+                        "ann_url": "https://example.invalid/a.pdf",
+                        "ann_sha256": DOC_SHA,
+                        "ann_publish": "2009-05-19",
+                    },
+                ),
+                (
+                    "sh.511880",
+                    "1",
+                    "2014-12-30",
+                    "2014-12-31",
+                    "unverified",
+                    {
+                        "prev_close": "42.30",
+                        "ann_amount": "42.0",
+                        "ann_amount_per10": "42.0",
+                        "ann_url": "https://example.invalid/b.pdf",
+                        "ann_sha256": DOC_SHA,
+                        "ann_publish": "2014-12-28",
+                    },
+                ),
+            )
+        )
+        return rows
+
+    def _conn(self):
+        return memory_db(
+            [
+                {
+                    "entity": "sh.510180",
+                    "ordinal": 3,
+                    "effective_day": "2009-05-21",
+                    "category": 11,
+                    "c3": "10",
+                    "basis_status": "pending",
+                },
+                {
+                    "entity": "sh.511880",
+                    "ordinal": 3,
+                    "effective_day": "2014-12-31",
+                    "category": 1,
+                    "c1": "42.28",
+                    "basis_status": "pending",
+                },
+            ]
+        )
+
+    def _convert(self, overrides_path=None):
+        conn = self._conn()
+        rows = self._rows()
+        etf_entities, _columns, selected = mod.read_db_events(conn)
+        entities = etf_entities | {row["entity"] for row in rows}
+        db_events = mod.fetch_events(conn, selected, entities)
+        pairs, _unmatched = mod.match_events(db_events, rows)
+        used, unused = mod.apply_overrides(
+            db_events, pairs, mod.load_overrides(overrides_path)
+        )
+        records, report = mod.build_records(db_events, rows, "2026-11-09")
+        return records, report, used, unused
+
+    def test_fixture_is_valid_json_with_both_cases(self):
+        payload = json.loads(self.FIXTURE.read_text(encoding="utf-8"))
+        entities = {item["entity"] for item in payload["overrides"]}
+        self.assertEqual(entities, {"sh.510180", "sh.511880"})
+        for item in payload["overrides"]:
+            self.assertTrue(item["basis_ref"])
+            self.assertTrue(item["snippet"])
+            self.assertIn("D-92", item["basis_ref"])
+
+    def test_overrides_turn_both_records_into_verified_announcement(self):
+        records, _report, used, unused = self._convert(str(self.FIXTURE))
+        self.assertEqual(len(used), 2)
+        self.assertEqual(unused, [])
+        by_entity = {record["entity"]: record for record in records}
+        split = by_entity["sh.510180"]
+        self.assertEqual(split["announced_value"], "10")
+        self.assertEqual(split["check_status"], "verified_announcement")
+        self.assertIn("override:", split["basis_ref"])
+        self.assertIn("D-92 one-tick", split["basis_ref"])
+        dividend = by_entity["sh.511880"]
+        self.assertEqual(dividend["announced_value"], "42.28")
+        self.assertEqual(dividend["check_status"], "verified_announcement")
+        for record in records:
+            self.assertEqual(mod.validate_record(record), [])
+
+    def test_without_overrides_both_stay_unverified(self):
+        records, _report, used, unused = self._convert(None)
+        self.assertEqual((used, unused), (set(), []))
+        for record in records:
+            self.assertEqual(record["check_status"], "unverified")
+
+    def test_override_does_not_bypass_one_tick(self):
+        # 裁定只给公告值；数值对不上 gbbq 时仍然不通过。
+        overrides = mod.load_overrides(str(self.FIXTURE))
+        key = ("sh.511880", 3, "2014-12-31", 1)
+        overrides[key] = mod.Override(
+            entity="sh.511880",
+            ordinal=3,
+            effective_day="2014-12-31",
+            category=1,
+            announced={"c1": Decimal("41.00")},
+            basis_ref="测试用裁定",
+            snippet="每 10 份基金份额派发现金 ４１．００ 元",
+        )
+        conn = self._conn()
+        rows = self._rows()
+        etf_entities, _columns, selected = mod.read_db_events(conn)
+        db_events = mod.fetch_events(
+            conn, selected, etf_entities | {row["entity"] for row in rows}
+        )
+        pairs, _unmatched = mod.match_events(db_events, rows)
+        mod.apply_overrides(db_events, pairs, overrides)
+        records, _report = mod.build_records(db_events, rows, "2026-11-09")
+        dividend = next(record for record in records if record["entity"] == "sh.511880")
+        self.assertEqual(dividend["check_status"], "unverified")
+        self.assertIn("D-92 failed", dividend["basis_ref"])
+
+    def test_unused_override_key_is_reported(self):
+        overrides = mod.load_overrides(str(self.FIXTURE))
+        overrides[("sh.510050", 9, "2025-03-31", 1)] = mod.Override(
+            entity="sh.510050",
+            ordinal=9,
+            effective_day="2025-03-31",
+            category=1,
+            announced={"c1": Decimal("0.0129")},
+            basis_ref="测试用裁定",
+            snippet="每 10 份基金份额派发现金 0.129 元",
+        )
+        conn = self._conn()
+        rows = self._rows()
+        etf_entities, _columns, selected = mod.read_db_events(conn)
+        db_events = mod.fetch_events(
+            conn, selected, etf_entities | {row["entity"] for row in rows}
+        )
+        pairs, _unmatched = mod.match_events(db_events, rows)
+        _used, unused = mod.apply_overrides(db_events, pairs, overrides)
+        self.assertEqual(unused, [("sh.510050", 9, "2025-03-31", 1)])
+
+    def test_missing_snippet_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "overrides.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "overrides": [
+                            {
+                                "entity": "sh.510180",
+                                "ordinal": 3,
+                                "effective_day": "2009-05-21",
+                                "category": 11,
+                                "announced": {"c3": "10"},
+                                "basis_ref": "D-92 裁定",
+                            }
+                        ]
+                    },
+                    handle,
+                )
+            with self.assertRaises(mod.InputError):
+                mod.load_overrides(path)
+
+
 class StatusMappingTest(unittest.TestCase):
     """`final_status` → `check_status` 的其余映射。"""
 
