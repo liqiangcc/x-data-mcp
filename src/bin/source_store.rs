@@ -8,12 +8,13 @@
 //! allowlists and the documented per-entry tool counts unchanged.
 //!
 //! ```text
-//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all]
+//! source_store replay --store <dir> [--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|etf_factor_checks|all]
 //!                     [--db <market.sqlite>] [--verify-only]
 //! source_store verify --store <dir> [--scope ...] [--db <market.sqlite>]
 //! source_store import --store <dir> --index <archive-index.jsonl|extract.csv> --blobs <dir>
 //!                     [--tiers A,B] [--kind industry|exchange]
-//!                     [--format archive|etf-delisting] [--batch <id>] [--dry-run]
+//!                     [--format archive|etf-delisting|etf-factor-checks|etf-factor-checks-jsonl]
+//!                     [--batch <id>] [--dry-run]
 //! source_store register-generation-member --store <dir> --generation <manifest sha> \
 //!                     --generation-dir <installed generation directory>
 //! source_store exempt --db <market.sqlite> --generation <manifest sha> \
@@ -62,13 +63,13 @@ use x_data_mcp::source_store::{SourceStore, generation_member, import, replay};
 const USAGE: &str = "\
 usage:
   source_store replay --store <dir> \
-[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all] \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|etf_factor_checks|all] \
 [--db <market.sqlite>] [--verify-only]
   source_store verify --store <dir> \
-[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all] \
+[--scope industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|etf_factor_checks|all] \
 [--db <market.sqlite>]
   source_store import --store <dir> --index <archive-index.jsonl|extract.csv> --blobs <dir> \
-[--tiers A,B] [--kind industry|exchange] [--format archive|etf-delisting] [--batch <id>] [--dry-run]
+[--tiers A,B] [--kind industry|exchange] [--format archive|etf-delisting|etf-factor-checks|etf-factor-checks-jsonl] [--batch <id>] [--dry-run]
   source_store register-generation-member --store <dir> --generation <manifest sha> \
 --generation-dir <installed generation directory>
   source_store exempt --db <market.sqlite> --generation <manifest sha> \
@@ -145,9 +146,14 @@ fn run(args: &[String]) -> Result<i32, String> {
                 format = match value(args, position + 1)?.as_str() {
                     "archive" => import::ImportFormat::Archive,
                     "etf-delisting" => import::ImportFormat::EtfDelisting,
+                    "etf-factor-checks" | "etf-factor-checks-csv" => {
+                        import::ImportFormat::EtfFactorChecksCsv
+                    }
+                    "etf-factor-checks-jsonl" => import::ImportFormat::EtfFactorChecksJsonl,
                     other => {
                         return Err(format!(
-                            "unknown import format {other} (archive|etf-delisting)"
+                            "unknown import format {other} \
+                             (archive|etf-delisting|etf-factor-checks|etf-factor-checks-jsonl)"
                         ));
                     }
                 };
@@ -192,7 +198,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         other => Some(replay::Scope::parse(other).ok_or_else(|| {
             format!(
                 "unknown scope {other} \
-                 (industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|all)"
+                 (industry|exchange|generation_facts|risk_warnings|security_names|suspensions|delisted_etf_names|etf_factor_checks|all)"
             )
         })?),
     };

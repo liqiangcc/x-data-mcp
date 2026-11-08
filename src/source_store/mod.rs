@@ -36,6 +36,14 @@ pub mod generation_member;
 pub mod import;
 pub mod replay;
 
+/// `#607` PR-B (D-92 Q2 (c)): ETF factor-check records as content-addressed
+/// source-store evidence, plus their replay scope.
+pub mod etf_factor_checks;
+/// The pure blocking decision over factor facts and check records.
+pub mod etf_factor_gate;
+/// Read-only loader with the `(entity, evidence_digest)` verdict cache.
+pub mod etf_factor_loader;
+
 mod lock;
 
 /// Subdirectory holding the content-addressed blobs.
@@ -735,6 +743,9 @@ pub fn validate_sha256(value: &str) -> Result<(), StoreError> {
 /// (§9.4.1): the bytes stay registered but no rebuild may claim them.
 pub fn known_parser_version(value: &str) -> bool {
     matches!(value, TDXHY_PARSER_VERSION | INCON_PARSER_VERSION)
+        // #607 PR-B: an ETF factor-check record is frozen evidence whose shape
+        // this binary can re-validate (`etf_factor_checks::EtfFactorCheck`).
+        || value == etf_factor_checks::CHECKS_VERSION
         || crate::exchange_source::PagingFormat::from_parser_version(value).is_some()
         // D-72 one-off imports (PR-4's `delisted_etf_names` scope selects
         // these records). The PDF is never parsed in production; the CSV is

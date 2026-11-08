@@ -130,6 +130,19 @@ impl MarketBackend {
         }
     }
 
+    /// Every stored factor fact of one entity with the content digest of the
+    /// evidence bundle it was written with (`#607` PR-B, D-92 Q2 (c)). The
+    /// ETF factor-check loader keys its records by that digest, so the read is
+    /// exact rather than "whatever the current factor set is". Empty for an
+    /// entity with no stored fact; the the legacy backend has no
+    /// `adjustment_events` table shape at all and therefore also reads empty.
+    pub(crate) fn stored_factor_events(
+        &self,
+        entity: &str,
+    ) -> Result<Vec<super::derived::StoredAdjustmentEvent>, Error> {
+        self.read(|c| super::derived::read_adjustment_events_with_evidence(c, entity))
+    }
+
     /// Replace the assembled M2 `security_master` dataset (issue-391 §12.1).
     /// The `derived:security_master` item drives this; the legacy backend has
     /// no M2 tables, so the item fails closed instead of writing a stub.

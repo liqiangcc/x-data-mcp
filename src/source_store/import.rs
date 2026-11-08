@@ -86,6 +86,10 @@ pub enum ImportFormat {
     Archive,
     /// D-72: one announcement PDF directory plus its extraction CSV.
     EtfDelisting,
+    /// `#607` PR-B: ETF factor-check records as CSV (header row).
+    EtfFactorChecksCsv,
+    /// `#607` PR-B: ETF factor-check records as JSONL (one object per line).
+    EtfFactorChecksJsonl,
 }
 
 /// Operator choices; the defaults are the design's A/B industry import.
@@ -278,6 +282,14 @@ pub fn import(
 ) -> Result<ImportReport, StoreError> {
     if options.format == ImportFormat::EtfDelisting {
         return import_etf_delisting(store, index_path, blobs_dir, options);
+    }
+    if matches!(
+        options.format,
+        ImportFormat::EtfFactorChecksCsv | ImportFormat::EtfFactorChecksJsonl
+    ) {
+        // One record per `(entity, ordinal)`; `blobs_dir` is unused because the
+        // record bytes are produced by this import, not read from an archive.
+        return super::etf_factor_checks::import(store, index_path, options);
     }
     let text = std::fs::read_to_string(index_path)?;
     let mut report = ImportReport {
