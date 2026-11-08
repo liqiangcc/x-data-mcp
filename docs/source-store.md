@@ -403,6 +403,14 @@ A 档 manifest 绑定 → 成员 sha256 → 完整解析（`tdxhy` / `incon` 解
   `already_present`，**不写 blob、不追加清单行**。
 - **只追加**：后来的结论是**新记录**（新 sha256），旧记录不删。读取方按
   `(entity, ordinal, evidence_digest)` 取 `checked_at` 最新的那条。
+- **首次导入的转换脚本**：`scripts/etf_factor_checks_build.py`
+  （`convert --events-v3 <csv> --db <market db> --out <jsonl> [--report <json>]`）
+  把阶段 1 的取证表转成本格式的记录。行情库只读（`file:…?mode=ro`），匹配键是库里的
+  `(entity, effective_day, category)` ↔ 取证表的 `(entity, X_day, cat)`（取证表的 `day`
+  列比 E 早一天），`ordinal` / `evidence_digest` 一律从库里读；v3 判 `unverified` 的
+  事件按 D-92 的 1 tick 再判一次，同一个 E 上的复合事件合并核对；对不上的一条不跳过，
+  全部写进报告并阻断对应实体。**它只生成文件，不写来源库**：真正的首次导入是部署后
+  另派的运维任务，需要 owner 批准。
 - **`--dry-run`**：跑完全部校验，只读（`registered_keys` 走共享锁），不写 manifest
   也不写 blob。
 - **fail-closed 逐行**：缺字段、`check_status` 不认识、sha256 形状不对、
