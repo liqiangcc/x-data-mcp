@@ -10,8 +10,8 @@
 | # | 场景 | 门禁 | 状态 | 最新实测（口径见备注） |
 |---|---|---|---|---|
 | 1 | 同代无变化，全市场 `update_data` | write-loop <600s；checkpoint 后净增长 ≤4KiB/attempted item；`data_versions +0` | **hard**。时间项 2026-10-10 签字，取代 2026-09-28 的 ≤15min；增长和版本两项沿用 2026-09-28（#259）；**2026-10-28 已解除（D-54 解除，见 XDM-84 实测）**（见备注与 D-57） | preview.27 / ecs：5,222 items，616s，+18.5MB，0 个新版本。perf 分支 / aws 私有栈：write-loop 433.8s（该构建当时因正确性问题被挂起，仅供参考）。**perf `3b11231` / aws 私有栈（t3.small），2026-10-11，浅链，53 批：write-loop 78.0s，5,224 no_change，`data_versions` +0，净增长 +18.55MB（≈3.47KiB/item），读回 PASS（XP-015，单次）**。**v6/schema-21（feat e22bafc，generation 87322997，aws 私有栈 t3.small，n=1，噪声约 ±10%）：write-loop 70.9s（k=5）/ 74.5s（k=1 对照），5,224 no_change；no_change 周期库增量 +17.8MB ≈ 3.4KiB/item**。**v2/M1 + O3（main `0f3fe25`，单进程三 socket，2026-10-28，2 vCPU，load average 4–8 最高 8.12，非完全独占，w=1，含 research 并发）：同代无待更新 write-loop 87.6s；同代全量 5,238 item（显式 `end_date` 构造，口径见备注）write-loop 573.4s（<600s），`succeeded` 5,238/5,238，data_service VmHWM 304.3 MiB，MemAvailable 最低 419.4 MiB** |
-| 2 | 跨代有变化，全市场 `update_data` | **G1** 日更 write-loop <600s（`run_market_update`，**不含来源刷新任务**）；**G2** 来源刷新：`tail` <300s（仅限未触发整表的 tail）、触发整表时**每张被触发的表各自 <600s**（run 总量不设门禁）、`full` 按来源组计量：原有 7 来源合计 <60min、ETF 4 来源合计 <40min、run 总量不设门禁（**D-73**）（**G2 在 R2 上线前不可测**；每表口径由 **D-67** 于 2026-11-01 裁定，读 `source_refresh_run_sources.elapsed_ms`） | **hard**（门槛 2026-10-10 签字，G1 沿用；**G2 2026-11-01 由 D-66 签字，R2 上线前不可测**）；**2026-10-27 临时豁免，2026-10-28 独占实测后保留**（见备注与 D-52）；**2026-10-28 解除条件改为看生产：连续 3 次生产跨代日更（有新 generation 激活）G1 write-loop 均 <600s，单次 ≥600s 计数清零**（见 D-63）；**2026-11-01 拆 G1/G2（D-66），D-52 豁免与 D-63 计数规则不变，从 preview.41 上线起重新计数**；**2026-11-05 生产机换成 vm2-126（D-74），D-63 的连续 3 次计数从 0 重新开始，从 vm2 第一次生产跨代日更算起**；**计数 1/3（2026-11-05 vm2 第一次生产跨代日更，G1 write-loop 175.3s <600s）** | preview.30 / aws 私有栈：E2E 1,484.6s。ecs 生产 2026-10-08：1,613s。**perf `3b11231` / aws 私有栈，2026-10-11，浅链，53 批，合成截断夹具：write-loop 104.2s，5,224 published，读回 PASS（XP-015，单次）**；日线 rollover 单条约 0.26–0.30s（错开后约 21–25s/日）。**v6/schema-21（同上口径）：write-loop 97.4s（k=5）/ 93.5s（k=1），5,224 published；追加周期库增量约 +27MB**。**v2/M1（代码 `84b6657`，私有栈，2026-10-27，2 vCPU，load average 约 6，非独占）：`plan_market_update`/`run_market_update` 跨代日更 write-loop 735s（超 600s，按 2026-10-27 裁决临时豁免）**。**v2/M1 + O3（同第 1 行环境与口径：main `0f3fe25`，单进程三 socket，w=1，2026-10-28，load average 最高 7.86，非完全独占）：跨代全量 5,238 item write-loop 734.0s（仍超 600s，24 项 `RevisionUnverified`），data_service VmHWM 293.2 MiB；acquire 切代（删决策工件后真跑 verify，12.88s）VmHWM 33.3 MiB，复用决策工件时 5.9 MiB（XDM-64 同口径 479.8 MiB，#435 后 −93%）**。**vm2-126 / preview.45 生产跨代日更（2026-11-05，`4c17de16…`→`c642468f…`，2 vCPU，非独占、窗口内没有其他数据任务）：G1 `run_market_update`（不带 `scope`，1 个 task `task-dea5f97c…`）5,241 项，5,235 成功、6 个 `REVISION_UNVERIFIED`，write-loop 175.3s（<600s）；6 项补漏 5.1s，6/6 成功**（Claude 2026-11-05 只读核实） |
-| 3 | 全市场年线 `update_data` | write-loop <600s | **hard**（2026-10-10 签字）；**2026-11-02 临时豁免（D-69）**：有效到方案 A 上线后连续 3 次生产日更的年线 write-loop 均 <600s 为止，任何一次 ≥600s 计数清零并附原因分析；门槛本身不改（见备注与 D-69）；计数规则不变、只算生产日更（2026-11-05 起生产日更在 vm2-126，D-74）；**计数 1/3（2026-11-05 vm2 第一次生产日更，年线 write-loop 127.9s <600s）** | aws 私有栈：E2E 4,021s，其中服务端窗口合计 702s。aws 生产重建：服务端合计 603s，E2E 约 45min。**perf `3b11231` / aws 私有栈，2026-10-11，浅链，53 批驱动（5,224 项分 53 个任务、每任务约 100 项）：年线首次 310.6s、日线变化后重聚合 328.3s，读回 PASS（XP-015，单次）。最坏链深（≤127）为分布外推：批中位 10.3s，×53 ≈ 548–588s，未做全量实测**。**v6/schema-21（同 53 批驱动口径）：年线首次 222.4s（k=5）/ 217.2s（k=1），重聚合 233.3s / 234.8s，5,224；重聚合周期库增量约 +27MB——每个日更周期库增量约 54MB（追加 27MB + 年线重聚合 27MB）**。**生产单任务形态（一个 task 装 5,223 项，带 `comparison` + `expected_yearly_head`）：preview.41 2026-11-01 write-loop **729.2s**；preview.42/schema 26 2026-11-02 **791.89s**（均超 600s；两次数据工作量与 2026-11-02 部署重建相同：5,223 项 / 74,504 年 / 逐项年份直方图相同；根因是 `tasks.frozen_work_json` 每项整行重写 2 次，见 XDM-169 报告 §3(e)/§4）**。**vm2-126 / preview.45 生产日更（2026-11-05，跨代，单任务形态：1 个 task `task-85edf8f8…`，5,205 项，非独占、窗口内没有其他数据任务）：5,205/5,205 成功，write-loop 127.9s（<600s）；25 项补推 1.0s，25/25 成功**（Claude 2026-11-05 只读核实） |
+| 2 | 跨代有变化，全市场 `update_data` | **G1** 日更 write-loop <600s（`run_market_update`，**不含来源刷新任务**）；**G2** 来源刷新：`tail` <300s（仅限未触发整表的 tail）、触发整表时**每张被触发的表各自 <600s**（run 总量不设门禁）、`full` 按来源组计量：原有 7 来源合计 <60min、ETF 4 来源合计 <40min、run 总量不设门禁（**D-73**）（**G2 在 R2 上线前不可测**；每表口径由 **D-67** 于 2026-11-01 裁定，读 `source_refresh_run_sources.elapsed_ms`） | **hard**（门槛 2026-10-10 签字，G1 沿用；**G2 2026-11-01 由 D-66 签字，R2 上线前不可测**）；**2026-10-27 临时豁免，2026-10-28 独占实测后保留**（见备注与 D-52）；**2026-10-28 解除条件改为看生产：连续 3 次生产跨代日更（有新 generation 激活）G1 write-loop 均 <600s，单次 ≥600s 计数清零**（见 D-63）；**2026-11-01 拆 G1/G2（D-66），D-52 豁免与 D-63 计数规则不变，从 preview.41 上线起重新计数**；**2026-11-05 生产机换成 vm2-126（D-74），D-63 的连续 3 次计数从 0 重新开始，从 vm2 第一次生产跨代日更算起**；**计数 2/3（2026-11-05 vm2 第一次 175.3s、2026-11-06 vm2 第二次 154.3s，G1 write-loop 均 <600s）** | preview.30 / aws 私有栈：E2E 1,484.6s。ecs 生产 2026-10-08：1,613s。**perf `3b11231` / aws 私有栈，2026-10-11，浅链，53 批，合成截断夹具：write-loop 104.2s，5,224 published，读回 PASS（XP-015，单次）**；日线 rollover 单条约 0.26–0.30s（错开后约 21–25s/日）。**v6/schema-21（同上口径）：write-loop 97.4s（k=5）/ 93.5s（k=1），5,224 published；追加周期库增量约 +27MB**。**v2/M1（代码 `84b6657`，私有栈，2026-10-27，2 vCPU，load average 约 6，非独占）：`plan_market_update`/`run_market_update` 跨代日更 write-loop 735s（超 600s，按 2026-10-27 裁决临时豁免）**。**v2/M1 + O3（同第 1 行环境与口径：main `0f3fe25`，单进程三 socket，w=1，2026-10-28，load average 最高 7.86，非完全独占）：跨代全量 5,238 item write-loop 734.0s（仍超 600s，24 项 `RevisionUnverified`），data_service VmHWM 293.2 MiB；acquire 切代（删决策工件后真跑 verify，12.88s）VmHWM 33.3 MiB，复用决策工件时 5.9 MiB（XDM-64 同口径 479.8 MiB，#435 后 −93%）**。**vm2-126 / preview.45 生产跨代日更（2026-11-05，`4c17de16…`→`c642468f…`，2 vCPU，非独占、窗口内没有其他数据任务）：G1 `run_market_update`（不带 `scope`，1 个 task `task-dea5f97c…`）5,241 项，5,235 成功、6 个 `REVISION_UNVERIFIED`，write-loop 175.3s（<600s）；6 项补漏 5.1s，6/6 成功**（Claude 2026-11-05 只读核实）。**vm2-126 / preview.45 生产跨代日更（2026-11-06，`c642468f…`→`2731a664…`，2 vCPU，非独占、窗口内没有其他数据任务）：G1 `run_market_update`（不带 `scope`，1 个 task `task-e7c1a907…`）5,241 项，5,231 成功、10 个 `REVISION_UNVERIFIED`，write-loop 154.3s（<600s）**（VM2 只读查询 2026-11-08） |
+| 3 | 全市场年线 `update_data` | write-loop <600s | **hard**（2026-10-10 签字）；**2026-11-02 临时豁免（D-69）**：有效到方案 A 上线后连续 3 次生产日更的年线 write-loop 均 <600s 为止，任何一次 ≥600s 计数清零并附原因分析；门槛本身不改（见备注与 D-69）；计数规则不变、只算生产日更（2026-11-05 起生产日更在 vm2-126，D-74）；**计数 2/3（2026-11-05 vm2 第一次 127.9s、2026-11-06 vm2 第二次 89.6s，年线 write-loop 均 <600s）** | aws 私有栈：E2E 4,021s，其中服务端窗口合计 702s。aws 生产重建：服务端合计 603s，E2E 约 45min。**perf `3b11231` / aws 私有栈，2026-10-11，浅链，53 批驱动（5,224 项分 53 个任务、每任务约 100 项）：年线首次 310.6s、日线变化后重聚合 328.3s，读回 PASS（XP-015，单次）。最坏链深（≤127）为分布外推：批中位 10.3s，×53 ≈ 548–588s，未做全量实测**。**v6/schema-21（同 53 批驱动口径）：年线首次 222.4s（k=5）/ 217.2s（k=1），重聚合 233.3s / 234.8s，5,224；重聚合周期库增量约 +27MB——每个日更周期库增量约 54MB（追加 27MB + 年线重聚合 27MB）**。**生产单任务形态（一个 task 装 5,223 项，带 `comparison` + `expected_yearly_head`）：preview.41 2026-11-01 write-loop **729.2s**；preview.42/schema 26 2026-11-02 **791.89s**（均超 600s；两次数据工作量与 2026-11-02 部署重建相同：5,223 项 / 74,504 年 / 逐项年份直方图相同；根因是 `tasks.frozen_work_json` 每项整行重写 2 次，见 XDM-169 报告 §3(e)/§4）**。**vm2-126 / preview.45 生产日更（2026-11-05，跨代，单任务形态：1 个 task `task-85edf8f8…`，5,205 项，非独占、窗口内没有其他数据任务）：5,205/5,205 成功，write-loop 127.9s（<600s）；25 项补推 1.0s，25/25 成功**（Claude 2026-11-05 只读核实）。**vm2-126 / preview.45 生产日更（2026-11-06，跨代，单任务形态：1 个 task `task-6970fa8e…`，5,196 项，非独占、窗口内没有其他数据任务）：5,196/5,196 成功，write-loop 89.6s（<600s）**（VM2 只读查询 2026-11-08） |
 | 3a | 年线服务端窗口子目标 | — | **待定**，等年线服务端分阶段计时完成后再定 | — |
 | 4 | 首次全市场采集 | ≤20min；首采后 DB ≤2.5GiB | hard（沿用） | aws 私有栈：346.4s。aws 生产重建：服务端合计 452s。**v6/schema-21（同上口径）：collect write-loop 200.3s（k=5）/ 208.8s（k=1），5,228 considered / 5,224 succeeded / 4 failed（官方缺成员，预期）** |
 | 5 | 部署体积 | ≤**8GiB**（目录口径） | **hard**（2026-10-26 签字；口径 = `/opt/x-data-mcp-preview` 完整部署目录）。原「≤4GiB」为历史值，保留在 §4 与备注 | 2026-10-24T17:55Z baseline（preview.35 切换 + 清理后）：`/opt/x-data-mcp-preview` 全树 4.2GiB（清理前 6.2GiB）= generations 2.7GiB（5 个带字节代）+ state 1.2GiB（当前库 1,185,640,448 B + WAL 0 B）+ releases 348MiB（6 个版本目录）+ reports 2.8MiB；两份 v20 归档库已移出到 `/root/x-data-archive/` 并 gzip（709MiB），`/tmp` tmpfs 另用 19MB，均不计入。分项见 [STATUS](STATUS.md)「足迹」。历史：按 2026-10-26 之前的 ≤4GiB 门禁，这 4.2GiB 属于超标（当时口径待定） |
@@ -95,6 +95,53 @@
   计算；这里只记录计数，D-52 与 D-69 的豁免继续有效，直到各自连续 3 次达成。
   运行观察：执行这次日更的模型（SWE 2 Flash）提前结束并漏了步骤，经提示后走完；这是一次运行观察，
   不是对该模型的结论。
+- **2026-11-06 vm2 第二次生产跨代日更（D-63 计数 2/3，D-69 计数 2/3；VM2 只读查询 2026-11-08）**：
+  vm2-126、preview.45，generation `c642468f…` → `2731a664…`
+  （`2731a664546921b8c43b81744ba53dd0a86682c89668f2be640a63e8c65bfc54`，2026-11-06T08:49:30Z 激活，
+  激活请求 `daily-sync-20261106-activate-g2pqjr`，`expected_previous=c642468f…`，`VERIFIED_COMPATIBLE`），
+  2 vCPU，**非独占，窗口内没有其他数据任务**（当天只有下面 8 个 task，G1 窗口 08:49:46–08:52:20Z 内只有它自己）。
+  跨代生产读数（有新 generation 激活）。按 §3 任务形态：G1 与年线都是各 1 个 task，
+  write-loop 取 `created_at` → `last_progress_at`。
+
+  | 项 | task | 项数 | 结果 | 门禁 |
+  |---|---|---|---|---|
+  | G1：A 股 `run_market_update`（不带 `scope`） | `task-e7c1a907…` | 5,241 | 5,231 成功，10 个 `REVISION_UNVERIFIED`；write-loop **154.3 s** | 第 2 行 G1 <600s，D-63 计数 **2/3** |
+  | 年线 | `task-6970fa8e…` | 5,196 | 5,196/5,196 成功，write-loop **89.6 s** | 第 3 行 <600s，D-69 计数 **2/3** |
+  | 10 只 `REVISION_UNVERIFIED` 重推 | `task-0471bbcf…` | 33 | 23 成功，其余 10 项仍 `REVISION_UNVERIFIED`，38.0 s | 不单独计门禁 |
+  | 同 10 只显式区间补写 | `task-45e859d8…` | 10 | 10/10 成功，4.1 s | 不单独计门禁 |
+  | ETF 批次 | `task-c8fee63e…` | 1,632 | 1,632/1,632 成功，26.5 s | 不单独计门禁 |
+  | 年线补推 | `task-bf22a99a…` | 6 | 6/6 成功，0.5 s | 不单独计门禁 |
+  | 年线显式补推 | `task-19c08ffd…` | 28 | 28/28 成功，1.1 s | 不单独计门禁 |
+  | `sz.158076` 首采 | `task-670debf9…` | 1 | 成功，0.5 s | — |
+
+  G1 的 10 个失败项都是 `INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: RevisionUnverified([…])`，
+  symbols：`sh.600894`、`sh.603279`、`sh.605338`、`sz.000650`、`sz.002275`、`sz.002864`、
+  `sz.300741`、`sz.301099`、`sz.301215`、`sz.301300`（与 11-05 的 6 项同类，是改写历史窗口的 fail-closed，
+  不是写入失败）。
+  当天跑了 3 段 `tail`（09:17:02–09:36:05Z，均 `succeeded`），**没有跑 `full`**，所以本次没有 G2 的
+  `full` 读数。3 个 run 的 `finished_at − started_at`（VM2 只读查询 2026-11-08）：
+
+  | run | 起止（Z） | 时长 | requests | changed | 判定 |
+  |---|---|---|---|---|---|
+  | `refresh-tail-1793956622169890299` | 09:17:02→09:27:44 | 642 s | 602 | 380 | 触发整表（`szse_short_name` 380.0 s <600 s，通过）；run 总量 642 s 不设门禁 |
+  | `refresh-tail-1793957264088571449` | 09:27:44→09:31:51 | 247 s | 225 | 1 | 未触发整表，`tail` <300 s 通过 |
+  | `refresh-tail-1793957511942187918` | 09:31:51→09:36:05 | 254 s | 225 | 1 | 未触发整表，`tail` <300 s 通过 |
+
+  三段按第 2 行原文判定均达标：第一段触发了整表，适用 D-67 的「每张被触发的表各自 <600 s」——
+  `source_refresh_run_sources` 中 `szse_short_name` 该 run 有 376 条成员（页）、`elapsed_ms=379969`
+  （即 380.0 s，<600 s）；`szse_listing` 无成员、`elapsed_ms=4214`（仅探针）；run 总量 642 s
+  按规则不设门禁。另两段的 `szse_short_name`、`szse_listing` 均无成员（仅探针），即未触发整表，
+  适用 `tail` <300 s：247 s、254 s 均达标。
+  出现 3 次是因为客户端 60 s 超时后重试，而 worker 一直被占着（#582 的描述；
+  会话日志证实：09:16Z 的 daily-sync 会话里 3 次 `refresh_exchange_sources({"mode":"tail"})`
+  均为 `error` / `MCP request timed out after 60000ms`，`durationMs` 60,003/60,002/60,002 ms）。
+  **G2 不进 D-63 计数**——D-63 只看 G1 write-loop，所以 D-63 2/3 与 D-69 2/3 的结论不变。
+  **推断（未验证）**：三段 `tail` 里 `szse_etf_notice_ann` 每次约 181 s（`elapsed_ms`
+  181052 / 181018 / 180966，各 181 个请求，按 1 s 出站间隔即固定开销）；未触发整表的 `tail`
+  实测 247–254 s，离 300 s 门槛只剩约 50 s 余量，该来源变慢即可能超门禁。
+  判定仍由 owner 根据原始数据计算；这里只记录计数，D-52 与 D-69 的豁免继续有效，直到各自连续 3 次达成。
+  运行观察：当天第一次启动时 pi 1.3.0 没展开 `/skill:`，提示词缺 Skill 正文，09:16Z 续跑补完 §3.3、
+  ETF 批次和 §3.6（#586）；这是编排问题，不影响 G1 的任务记录。
 - **G2 的测量入口（runbook）**：G2 只读 schema 26 的 `source_refresh_runs` 与
   `source_refresh_run_sources`，不另设计时器。未触发整表的 `tail` 读
   `source_refresh_runs.finished_at − started_at`；`full` 按来源组读 `source_refresh_run_sources.elapsed_ms` 之和（D-73）；触发整表时读
