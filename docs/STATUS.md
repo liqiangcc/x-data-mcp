@@ -328,8 +328,7 @@ XDM-198 2026-11-07 只读验收（查询与报告在仓库外）；标「历史�
 
 | 项 | 事实 | 来源 |
 |---|---|---|
-| active generation | `2731a664546921b8c43b81744ba53dd0a86682c89668f2be640a63e8c65bfc54`（2026-11-06T08:49:30Z 激活，上一代 `c642468f…`，激活请求 `daily-sync-20261106-activate-g2pqjr`）；最新集中行情日本轮未列出 | VM2 只读查询 2026-11-08；XDM-198 |
-| active generation（完整） | 完整 sha `2731a664546921b8c43b81744ba53dd0a86682c89668f2be640a63e8c65bfc54`，2026-11-06T08:49:30.017197549Z 激活（`generations.updated_at` 08:49:30.024Z），上一代 `c642468f85e29dce79fe4460bda6a8d1175ef60be3c0afd2520cb1c75e7544d6`（现 `superseded`），激活请求 `daily-sync-20261106-activate-g2pqjr`（`expected_previous=c642468f…`，`VERIFIED_COMPATIBLE`、`reused=false`）；采集请求 `daily-sync-20261106-acq-bij3gv`（acquire 117.2 s，574,682,696 B）；manifest：base 16,612,084 B / gbbq 6,152,170 B / hsjday 551,918,442 B（`Last-Modified` Fri, 06 Nov 2026 07:58:47 GMT） | VM2 只读查询（`generations/active-generation.json`、`acquire.sqlite` 的 `generations`/`requests`/`request_outcomes`/`acquisition_tasks`，2026-11-08） |
+| active generation | 完整 sha `2731a664546921b8c43b81744ba53dd0a86682c89668f2be640a63e8c65bfc54`，2026-11-06T08:49:30.017197549Z 激活（`generations.updated_at` 08:49:30.024Z），上一代 `c642468f85e29dce79fe4460bda6a8d1175ef60be3c0afd2520cb1c75e7544d6`（现 `superseded`），激活请求 `daily-sync-20261106-activate-g2pqjr`（`expected_previous=c642468f…`，`VERIFIED_COMPATIBLE`、`reused=false`）；采集请求 `daily-sync-20261106-acq-bij3gv`（acquire 117.2 s，574,682,696 B）；manifest：base 16,612,084 B / gbbq 6,152,170 B / hsjday 551,918,442 B（`Last-Modified` Fri, 06 Nov 2026 07:58:47 GMT） | VM2 只读查询（`generations/active-generation.json`、`acquire.sqlite` 的 `generations`/`requests`/`request_outcomes`/`acquisition_tasks`，2026-11-08）；XDM-198 |
 | 最新行情日 | **2026-11-06**（`trading_days.trade_day` 最大 20763；12,078 条日线序列 `last_day=20763`） | VM2 只读查询 2026-11-08 |
 | 热 generation | **4/6**（**历史**：2026-11-05 时点，1 active `c642468f…` + 3 superseded；2026-11-07 验收未重测）；`evidence_only` 17。`5ac3ef2b…` 没被自动退役：`derived_facts_missing`，原因是 vm2 的库是 fresh init，缺这个旧代的派生事实。按保留规则（`RETAINED_SUPERSEDED=2`）最多稳定在 5/6 | 历史 + `generations/acquire.sqlite`、`src/acquire/service.rs:40,44` |
 | `market_series` | **18,118** 条（2026-11-07 只读快照） | XDM-198 |
@@ -380,8 +379,20 @@ write-loop 取 D-63 口径的 `created_at` → `last_progress_at`。
 G1 的 10 个失败项均为 `INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: RevisionUnverified([…])`：
 `sh.600894`、`sh.603279`、`sh.605338`、`sz.000650`、`sz.002275`、`sz.002864`、`sz.300741`、
 `sz.301099`、`sz.301215`、`sz.301300`；同 10 只的显式区间任务与年线任务均成功。
-当天跑了 `tail`（09:17:02–09:36:05Z 连续 3 段，均 `succeeded`，未触发整表），**没有跑 `full`**，
-所以没有 G2 的 `full` 读数。
+当天跑了 3 段 `tail`（09:17:02–09:36:05Z，均 `succeeded`），**没有跑 `full`**，所以没有 G2 的
+`full` 读数。3 个 run 的时长（`source_refresh_runs.finished_at − started_at`，VM2 只读查询 2026-11-08）：
+
+| run | 起止（Z） | 时长 | requests | changed | 判定 |
+|---|---|---|---|---|---|
+| `refresh-tail-1793956622169890299` | 09:17:02→09:27:44 | **642 s** | 602 | 380 | **G2 `tail` <300 s 超标**；触发整表 `szse_short_name`（376 页，`elapsed_ms=379969`，<600 s 通过） |
+| `refresh-tail-1793957264088571449` | 09:27:44→09:31:51 | 247 s | 225 | 1 | 未触发整表，`tail` <300 s 通过 |
+| `refresh-tail-1793957511942187918` | 09:31:51→09:36:05 | 254 s | 225 | 1 | 未触发整表，`tail` <300 s 通过 |
+
+第一次 642 s 是一次 G2 超标读数；出现 3 次是因为客户端 60 s 超时后重试，而 worker 一直被占着
+（#582，修复 #585 随 preview.46 上线）。是否触发整表由 `source_refresh_run_sources` 的成员行判定：
+第一段 `szse_short_name` 有 376 条 `source_refresh_run_members`（`snapshots=376`、`changed=376`），
+另两段 `szse_short_name`/`szse_listing` 均无成员行（仅页 1 探针）；`source_refresh_runs.detail` 为空，
+不以它判定。G2 不进 D-63 计数，所以下面的 2/3 结论不变。
 计数结论：生产主机、有新 generation 激活、G1 不带 `scope`、write-loop 154.3 s <600 s 四条均满足，
 D-63 计数 → **2/3**；年线 89.6 s 同样满足 D-69 的条件，计数 → **2/3**（细节见 [SLO](SLO.md)）。
 
