@@ -384,15 +384,19 @@ G1 的 10 个失败项均为 `INVALID_MARKET_COMMAND: NEEDS_VERIFICATION: Revisi
 
 | run | 起止（Z） | 时长 | requests | changed | 判定 |
 |---|---|---|---|---|---|
-| `refresh-tail-1793956622169890299` | 09:17:02→09:27:44 | **642 s** | 602 | 380 | **G2 `tail` <300 s 超标**；触发整表 `szse_short_name`（376 页，`elapsed_ms=379969`，<600 s 通过） |
+| `refresh-tail-1793956622169890299` | 09:17:02→09:27:44 | 642 s | 602 | 380 | 触发整表（`szse_short_name` 380.0 s <600 s，通过）；run 总量 642 s 不设门禁 |
 | `refresh-tail-1793957264088571449` | 09:27:44→09:31:51 | 247 s | 225 | 1 | 未触发整表，`tail` <300 s 通过 |
 | `refresh-tail-1793957511942187918` | 09:31:51→09:36:05 | 254 s | 225 | 1 | 未触发整表，`tail` <300 s 通过 |
 
-第一次 642 s 是一次 G2 超标读数；出现 3 次是因为客户端 60 s 超时后重试，而 worker 一直被占着
-（#582，修复 #585 随 preview.46 上线）。是否触发整表由 `source_refresh_run_sources` 的成员行判定：
-第一段 `szse_short_name` 有 376 条 `source_refresh_run_members`（`snapshots=376`、`changed=376`），
-另两段 `szse_short_name`/`szse_listing` 均无成员行（仅页 1 探针）；`source_refresh_runs.detail` 为空，
+三段按 SLO 第 2 行原文均达标，G2 本次无超标读数。出现 3 次是因为客户端 60 s 超时后重试、
+worker 一直被占着（#582；会话日志证实 09:16Z 的 daily-sync 会话里 3 次
+`refresh_exchange_sources({"mode":"tail"})` 均为 `MCP request timed out after 60000ms`）。
+是否触发整表由 `source_refresh_run_sources` 的成员行判定：第一段 `szse_short_name` 有 376 条
+`source_refresh_run_members`（`snapshots=376`、`changed=376`、`elapsed_ms=379969`），另两段的
+`szse_short_name`/`szse_listing` 均无成员行（仅页 1 探针）；`source_refresh_runs.detail` 为空，
 不以它判定。G2 不进 D-63 计数，所以下面的 2/3 结论不变。
+**推断（未验证）**：三段 `tail` 里 `szse_etf_notice_ann` 每次约 181 s（`elapsed_ms` 181052/181018/180966，
+各 181 个请求），是固定开销；未触发整表的 `tail` 实测 247–254 s，离 300 s 门槛只剩约 50 s 余量。
 计数结论：生产主机、有新 generation 激活、G1 不带 `scope`、write-loop 154.3 s <600 s 四条均满足，
 D-63 计数 → **2/3**；年线 89.6 s 同样满足 D-69 的条件，计数 → **2/3**（细节见 [SLO](SLO.md)）。
 
