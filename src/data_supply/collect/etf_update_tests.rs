@@ -1791,3 +1791,124 @@ fn a_stored_etf_forward_series_changes_no_read_or_maintenance_surface() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// #607 PR-C review r1 item 4 — the store half measured on a real database.
+// ---------------------------------------------------------------------------
+
+/// `#[ignore]`: measurement, not a gate.
+///
+/// Writes 100 ETFs × 2,500 derived 前复权 bars into a real compact SQLite
+/// database through the same `market_series` / `series_bars` shape the commit
+/// path uses, and reports the wall time. Run with
+/// `cargo test --lib --release etf_forward_store_cost -- --ignored --nocapture`.
+///
+/// The fixture's task/item gates (`check_binding`) are not exercised: they are
+/// per-item constant-cost lookups whose cost does not scale with bar count.
+/// The number is therefore a floor for a real item, not a ceiling.
+#[test]
+#[ignore = "measurement, not a gate"]
+fn etf_forward_store_cost() {
+    const ETFS: usize = 100;
+    const BARS: usize = 2_500;
+    let env = setup();
+    let derived = env
+        .backend
+        .read(|c| {
+            let row =
+                series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Forward)?
+                    .expect("forward series");
+            series::all_bars(c, row.series_key)
+        })
+        .unwrap();
+    // Reuse the real bars of the fixture, tiled to `BARS` rows, so the written
+    // values are shaped like stored ones instead of synthetic constants.
+    let bars: Vec<_> = (0..BARS)
+        .map(|index| {
+            let mut bar = derived[index % derived.len()].clone();
+            bar.trade_day = derived[0].trade_day + index as i64;
+            bar
+        })
+        .collect();
+
+    let start = std::time::Instant::now();
+    let MarketBackend::Compact(repo) = &env.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.tx(|c| {
+        // The real parent rows for the master FK come from an entity the
+        // fixture already seeded.
+        let (binding, evidence): (Vec<u8>, Vec<u8>) = c
+            .query_row(
+                "SELECT source_binding_digest, evidence_digest FROM security_master WHERE code='510300'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        for index in 0..ETFS {
+            let code = format!("{:06}", 900_000 + index);
+            c.execute(
+                "INSERT INTO security_master(exchange,code,effective_from,effective_to,\
+                 instrument_class,issuer_resolution,listing_date,listing_source,\
+                 delisting_date,delisting_source,delisting_reason_class,listing_conflict,\
+                 delisting_conflict,source_binding_digest,evidence_digest) \
+                 VALUES('sz',?1,0,NULL,2,'code_date',0,'exchange_list',NULL,'unknown','other',0,0,?2,?3)",
+                rusqlite::params![code, binding, evidence],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO market_series(entity,period,adjustment,instrument_class,\
+                 price_scale,version_id,content_digest,digest_format,record_count,\
+                 first_day,last_day,coverage_status,source_binding_digest,\
+                 evidence_digest,last_event_seq,created_at,updated_at) \
+                 VALUES(?1,1,1,2,6,?2,?3,'series-fold-v2',?4,?5,?6,1,?7,?8,1,\
+                 '2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+                rusqlite::params![
+                    format!("sz.{code}"),
+                    format!("{:02x}", index as u8).repeat(32),
+                    vec![index as u8; 32],
+                    BARS as i64,
+                    bars[0].trade_day,
+                    bars[BARS - 1].trade_day,
+                    binding,
+                    evidence,
+                ],
+            )
+            .unwrap();
+            let series_key = c.last_insert_rowid();
+            let mut statement = c
+                .prepare(
+                    "INSERT INTO series_bars(series_key,trade_day,open_units,high_units,\
+                     low_units,close_units,volume,amount,r7_raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                )
+                .unwrap();
+            for bar in &bars {
+                statement
+                    .execute(rusqlite::params![
+                        series_key,
+                        bar.trade_day,
+                        bar.open_units,
+                        bar.high_units,
+                        bar.low_units,
+                        bar.close_units,
+                        bar.volume,
+                        bar.amount,
+                        bar.r7_raw,
+                    ])
+                    .unwrap();
+            }
+            drop(statement);
+        }
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+    let store = start.elapsed();
+    let total = ETFS * BARS;
+    println!(
+        "ETF forward store: etfs={ETFS} bars_per_etf={BARS} total_bars={total} \
+         elapsed={store:?} per_bar={:?} per_etf={:?} extrapolated_1632_etfs={:?}",
+        store / total as u32,
+        store / ETFS as u32,
+        (store / ETFS as u32) * 1_632,
+    );
+}
