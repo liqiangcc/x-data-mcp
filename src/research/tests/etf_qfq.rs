@@ -21,16 +21,10 @@
 use super::*;
 use crate::research::export::{Compression, ExportOptions, export, export_with_gate};
 use crate::research::{FACTORS_SCHEMA_VERSION, SnapshotPlan};
-use crate::source_store::SourceStore;
-use crate::source_store::etf_factor_checks::{
-    self, CheckBasis, CheckStatus, EtfFactorCheck,
-};
+use crate::source_store::etf_factor_checks::{CheckStatus, EtfFactorCheck};
 use crate::source_store::etf_factor_read_gate::ForwardGate;
-use crate::source_store::import::{ImportFormat, ImportOptions};
 use parquet::file::reader::{FileReader as _, SerializedFileReader};
 use parquet::record::Field;
-
-const DOC_SHA: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
 fn options(root: &Path) -> ExportOptions {
     ExportOptions {
@@ -40,63 +34,18 @@ fn options(root: &Path) -> ExportOptions {
     }
 }
 
-/// The check record for `sh.510050`'s single stored event, at the digest the
-/// fixture actually wrote (read from the database, never guessed).
+/// The shared fixture helpers: [`etf_check_record`] reads the digest the
+/// fixture actually wrote, [`etf_gate_with`] imports records through the real
+/// importer.
 fn check_record(fixture: &Fixture, entity: &str, status: CheckStatus) -> EtfFactorCheck {
-    let c = fixture.read();
-    let events = crate::sqlite_market::derived::read_adjustment_events_with_evidence(&c, entity)
-        .unwrap();
-    let event = events.first().expect("fixture ETF event");
-    EtfFactorCheck {
-        record_version: etf_factor_checks::CHECKS_VERSION.into(),
-        entity: entity.into(),
-        ordinal: event.event.ordinal,
-        effective_day: event.event.effective_day.to_string(),
-        category: event.event.category,
-        check_status: status,
-        basis: match status {
-            CheckStatus::VerifiedOfficial => CheckBasis::OfficialQss,
-            CheckStatus::VerifiedAnnouncement => CheckBasis::Announcement,
-            _ => CheckBasis::None,
-        },
-        basis_ref: "sse_ann:2026-10-21".into(),
-        evidence_url: "https://example.invalid/announcement".into(),
-        evidence_sha256: DOC_SHA.into(),
-        announced_value: "2.5".into(),
-        gbbq_value: "2.5".into(),
-        price_delta: "0.0000".into(),
-        within_one_tick: Some(true),
-        checked_at: "2026-11-09".into(),
-        evidence_digest: hex(&event.evidence_digest),
-    }
+    etf_check_record(fixture, entity, status)
 }
 
-fn hex(digest: &Digest) -> String {
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// A gate over a store holding `records`, imported through the real importer so
-/// the gate sees what a deployment would see.
-fn gate_with(dir: &tempfile::TempDir, records: &[EtfFactorCheck]) -> std::sync::Arc<ForwardGate> {
-    let store = SourceStore::new(dir.path().join("store"));
-    if !records.is_empty() {
-        let file = dir.path().join("checks.jsonl");
-        let body: String = records
-            .iter()
-            .map(|record| record.canonical_json().unwrap() + "\n")
-            .collect();
-        std::fs::write(&file, body).unwrap();
-        etf_factor_checks::import(
-            &store,
-            &file,
-            &ImportOptions {
-                format: ImportFormat::EtfFactorChecksJsonl,
-                ..ImportOptions::default()
-            },
-        )
-        .unwrap();
-    }
-    std::sync::Arc::new(ForwardGate::store(store))
+fn gate_with(
+    dir: &tempfile::TempDir,
+    records: &[EtfFactorCheck],
+) -> std::sync::Arc<ForwardGate> {
+    etf_gate_with(dir.path(), records)
 }
 
 type Row = Vec<(String, Field)>;

@@ -58,6 +58,127 @@ fn tempdir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+/// A check record for `entity`'s first stored ETF event, at the
+/// `evidence_digest` the fixture actually wrote (read from the database, never
+/// guessed). `#607` PR-E's `basis_status` and the admission gate both key on
+/// that digest, so a made-up one would silently exercise the "no record" path.
+#[cfg(feature = "export")]
+fn etf_check_record(
+    fixture: &Fixture,
+    entity: &str,
+    status: crate::source_store::etf_factor_checks::CheckStatus,
+) -> crate::source_store::etf_factor_checks::EtfFactorCheck {
+    use crate::source_store::etf_factor_checks::{CheckBasis, CHECKS_VERSION};
+    let c = fixture.read();
+    let events =
+        crate::sqlite_market::derived::read_adjustment_events_with_evidence(&c, entity).unwrap();
+    let event = events.first().expect("fixture ETF event");
+    // The importer enforces the (status, basis) pairing and the evidence
+    // fields, so a test cannot build a record the production writer would
+    // reject. `basis: none` must leave the evidence pair empty.
+    let basis = match status {
+        crate::source_store::etf_factor_checks::CheckStatus::VerifiedOfficial => {
+            CheckBasis::OfficialQss
+        }
+        crate::source_store::etf_factor_checks::CheckStatus::VerifiedAnnouncement => {
+            CheckBasis::Announcement
+        }
+        _ => CheckBasis::None,
+    };
+    let evidence = basis != CheckBasis::None;
+    crate::source_store::etf_factor_checks::EtfFactorCheck {
+        record_version: CHECKS_VERSION.into(),
+        entity: entity.into(),
+        ordinal: event.event.ordinal,
+        effective_day: event.event.effective_day.to_string(),
+        category: event.event.category,
+        check_status: status,
+        basis,
+        basis_ref: if evidence {
+            "sse_ann:2026-10-21".into()
+        } else {
+            String::new()
+        },
+        evidence_url: if evidence {
+            "https://example.invalid/announcement".into()
+        } else {
+            String::new()
+        },
+        evidence_sha256: if evidence {
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into()
+        } else {
+            String::new()
+        },
+        announced_value: "2.5".into(),
+        gbbq_value: "2.5".into(),
+        price_delta: "0.0000".into(),
+        within_one_tick: Some(true),
+        checked_at: "2026-11-09".into(),
+        evidence_digest: event
+            .evidence_digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    }
+}
+
+/// A `#607` PR-E gate over a store holding `records`, imported through the real
+/// importer so the gate sees exactly what a deployment would see (the manifest
+/// append the change probe watches, not a hand-made cache).
+#[cfg(feature = "export")]
+fn etf_gate_with(
+    dir: &Path,
+    records: &[crate::source_store::etf_factor_checks::EtfFactorCheck],
+) -> std::sync::Arc<crate::source_store::etf_factor_read_gate::ForwardGate> {
+    use crate::source_store::etf_factor_checks;
+    use crate::source_store::import::{ImportFormat, ImportOptions};
+    let store = crate::source_store::SourceStore::new(dir.join("store"));
+    if !records.is_empty() {
+        let file = dir.join("checks.jsonl");
+        let body: String = records
+            .iter()
+            .map(|record| record.canonical_json().unwrap() + "\n")
+            .collect();
+        std::fs::write(&file, body).unwrap();
+        etf_factor_checks::import(
+            &store,
+            &file,
+            &ImportOptions {
+                format: ImportFormat::EtfFactorChecksJsonl,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        // A silently skipped record would make every "admitted" assertion below
+        // pass for the wrong reason (the importer reports skips in its outcome,
+        // not as an error).
+        assert_eq!(
+            etf_factor_checks::read(&store).unwrap().records.len(),
+            records.len(),
+            "the fixture check records did not all import"
+        );
+    }
+    std::sync::Arc::new(crate::source_store::etf_factor_read_gate::ForwardGate::store(store))
+}
+
+/// The gate [`smoke_export_for_external_readers`] exports with: one verified
+/// record for `sh.510050`'s event, so the smoke directory carries an **admitted**
+/// ETF 前复权 block.
+#[cfg(feature = "export")]
+fn smoke_gate(
+    fixture: &Fixture,
+    dir: &Path,
+) -> std::sync::Arc<crate::source_store::etf_factor_read_gate::ForwardGate> {
+    etf_gate_with(
+        dir,
+        &[etf_check_record(
+            fixture,
+            "sh.510050",
+            crate::source_store::etf_factor_checks::CheckStatus::VerifiedOfficial,
+        )],
+    )
+}
+
 /// The two fixture ETFs that carry a 前复权 series
 /// ([`Fixture::populate_etf_forward_series`]).
 const ETF_FORWARD_ENTITIES: [&str; 2] = ["sh.510050", "sz.159919"];
@@ -1754,7 +1875,9 @@ fn the_public_read_surface_cannot_see_the_export_only_datasets() {
 #[cfg(feature = "export")]
 mod with_export {
     use super::*;
-    use crate::research::export::{Compression, ExportOptions, SnapshotWriter, dry_run, export};
+    use crate::research::export::{
+        Compression, ExportOptions, SnapshotWriter, dry_run, export, export_with_gate,
+    };
 
     fn options(root: &Path) -> ExportOptions {
         ExportOptions {
@@ -2426,10 +2549,23 @@ mod with_export {
         };
         let target = PathBuf::from(target);
         std::fs::create_dir_all(&target).unwrap();
-        // The ETF fixture, so the pyarrow/duckdb read-back also sees the v4
-        // ETF rows (`instrument_class`, `no_trade`, the D-72 dates).
+        // The ETF fixture, so the pyarrow/duckdb read-back also sees the ETF
+        // rows (`instrument_class`, `no_trade`, the D-72 dates) and — since
+        // `#607` PR-E — a `daily_qfq` ETF block at `price_scale=6` with a
+        // matching `manifest.etf_forward`. The gate is built over a fixture
+        // source store holding one verified check record, so the smoke
+        // directory exercises the **admitted** path rather than only the
+        // fail-closed one; `sz.159919` has no event and is admitted without
+        // facts, `sh.510050` is admitted on its record.
         let fixture = Fixture::with_etf();
-        let outcome = export(fixture.path(), &ExportRequest::default(), &options(&target)).unwrap();
+        let store_dir = tempdir();
+        let outcome = export_with_gate(
+            fixture.path(),
+            &ExportRequest::default(),
+            &options(&target),
+            smoke_gate(&fixture, store_dir.path()),
+        )
+        .unwrap();
         std::fs::write(target.join("snapshot-id.txt"), &outcome.snapshot_id).unwrap();
     }
 }
