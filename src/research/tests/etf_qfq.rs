@@ -176,6 +176,67 @@ fn an_admitted_etf_export_carries_the_read_face_qfq_bytes() {
 }
 
 #[test]
+fn an_admitted_etf_export_matches_the_stored_forward_series_row_for_row() {
+    // §7.1 requirement 1: the exported 前复权 rows are the stored derived rows
+    // — the same bytes `market.daily` serves, since the MCP layer adds framing
+    // and no arithmetic. Every price field is compared at the stored 1e-6
+    // unit, so a rescale, a re-rounding or a dropped bar fails here.
+    let fixture = Fixture::with_etf();
+    let store = tempdir();
+    let gate = gate_with(
+        &store,
+        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+    );
+    let out = tempdir();
+    let outcome =
+        export_with_gate(fixture.path(), &ExportRequest::default(), &options(out.path()), gate)
+            .unwrap();
+    let exported = rows_of(&outcome.directory, crate::research::DAILY_QFQ_FILE);
+
+    let c = fixture.read();
+    for entity in ETF_FORWARD_ENTITIES {
+        let row = crate::sqlite_market::series::read_series_adjusted(
+            &c,
+            entity,
+            Period::Day,
+            Adjustment::Forward,
+        )
+        .unwrap()
+        .expect("fixture forward series");
+        assert_eq!(row.price_scale, 6);
+        let stored = crate::sqlite_market::series::all_bars(&c, row.series_key).unwrap();
+        let mut seen = 0;
+        for bar in &stored {
+            let day = crate::compact_market::epoch_date(bar.trade_day).unwrap().to_string();
+            let found = exported
+                .iter()
+                .find(|row| text(row, "entity") == entity && text(row, "trade_day") == day)
+                .unwrap_or_else(|| panic!("{entity} {day} is missing from daily_qfq"));
+            // Stored units are 1e-6 元; the file's DECIMAL(18,6) is the same
+            // value with a decimal point.
+            for (column, units) in [
+                ("open", bar.open_units),
+                ("high", bar.high_units),
+                ("low", bar.low_units),
+                ("close", bar.close_units),
+            ] {
+                assert_eq!(
+                    text(found, column),
+                    format!("{}.{:06}", units / 1_000_000, units % 1_000_000),
+                    "{entity} {day} {column}"
+                );
+            }
+            assert_eq!(text(found, "volume"), bar.volume.unwrap().to_string());
+            assert_eq!(text(found, "amount"), bar.amount.clone().unwrap());
+            assert_eq!(text(found, "price_scale"), "6");
+            assert_eq!(text(found, "instrument_class"), "2");
+            seen += 1;
+        }
+        assert_eq!(seen, stored.len());
+    }
+}
+
+#[test]
 fn a_blocked_etf_is_absent_from_daily_qfq_and_named_in_the_manifest() {
     // The store holds a record for `sh.510050`'s event but its verdict is
     // `unverified`: the read face blocks the entity, so the export must too.
