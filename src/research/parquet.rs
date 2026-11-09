@@ -77,6 +77,7 @@ message factors {
   REQUIRED INT64 c4 (DECIMAL(18,2));
   REQUIRED FIXED_LEN_BYTE_ARRAY(16) factor_a (DECIMAL(28,18));
   REQUIRED FIXED_LEN_BYTE_ARRAY(16) factor_b (DECIMAL(28,18));
+  REQUIRED BINARY basis_status (STRING);
 }";
 
 const CALENDAR_SCHEMA: &str = "
@@ -509,6 +510,7 @@ struct FactorBatch {
     c4: Vec<i64>,
     factor_a: Vec<FixedLenByteArray>,
     factor_b: Vec<FixedLenByteArray>,
+    basis_status: Vec<ByteArray>,
     rows: usize,
 }
 
@@ -535,6 +537,9 @@ impl FactorBatch {
             .push(fixed16(read::scaled_units(row.factor_a, 18)?));
         self.factor_b
             .push(fixed16(read::scaled_units(row.factor_b, 18)?));
+        self.basis_status.push(ByteArray::from(
+            row.basis_status.as_str().as_bytes().to_vec(),
+        ));
         self.rows += 1;
         Ok(())
     }
@@ -552,6 +557,7 @@ impl FactorBatch {
         self.c4.clear();
         self.factor_a.clear();
         self.factor_b.clear();
+        self.basis_status.clear();
         self.rows = 0;
     }
 }
@@ -627,6 +633,17 @@ fn flush_factors(
             .map_err(parquet_error)?;
         column.close().map_err(parquet_error)?;
     }
+    {
+        let mut column = group
+            .next_column()
+            .map_err(parquet_error)?
+            .ok_or_else(|| Error::Parquet("missing basis_status column".into()))?;
+        column
+            .typed::<ByteArrayType>()
+            .write_batch(&batch.basis_status, None, None)
+            .map_err(parquet_error)?;
+        column.close().map_err(parquet_error)?;
+    }
     group.close().map_err(parquet_error)?;
     batch.clear();
     Ok(())
@@ -642,19 +659,33 @@ fn write_factors(
     let mut writer = start(path, FACTOR_SCHEMA, compression, row_group_rows)?;
     let mut batch = FactorBatch::default();
     let mut rows = 0i64;
+    // Which entities are ETFs comes from the main table (`security_master`),
+    // never from a code prefix (design §1.3), so `basis_status` cannot be
+    // assigned by string matching on `sh51*`/`sz159*`.
+    let instrument_classes = read::instrument_classes(c)?;
     for entry in plan
         .derived
         .iter()
         .filter(|entry| entry.dataset == super::DerivedDataset::AdjustmentEvents)
     {
-        let count =
-            read::for_each_factor(c, &entry.key, plan.request.start, plan.request.end, |row| {
+        let etf = instrument_classes
+            .get(&entry.key)
+            .is_some_and(|class| *class == INSTRUMENT_CLASS_ETF);
+        let basis = read::basis_lookup(etf, &plan.factor_basis);
+        let count = read::for_each_factor(
+            c,
+            &entry.key,
+            plan.request.start,
+            plan.request.end,
+            basis,
+            |row| {
                 batch.push(row)?;
                 if batch.rows >= row_group_rows {
                     flush_factors(&mut writer, &mut batch)?;
                 }
                 Ok(())
-            })?;
+            },
+        )?;
         if count > entry.record_count
             || (plan.request.start.is_none()
                 && plan.request.end.is_none()

@@ -566,6 +566,18 @@ pub struct EtfForwardFacts {
 /// without one fails closed.
 pub trait EtfForwardGate: Send + Sync {
     fn admit(&self, facts: &EtfForwardFacts) -> EtfForwardAdmission;
+
+    /// The check set this gate judges with, once it has read one.
+    ///
+    /// The research export reports each event's verdict as the `basis_status`
+    /// column of `factors.parquet` (`#607` PR-E, design §7.3). It asks the gate
+    /// for the set it already holds instead of opening the source store a
+    /// second time, so the column and the admission cannot be judged against
+    /// two different check sets. `None` before the first decision, or when the
+    /// gate has no store: then no event can be shown to be verified.
+    fn check_set(&self) -> Option<crate::source_store::etf_factor_checks::CheckSet> {
+        None
+    }
 }
 
 /// The gate's answer for one entity.

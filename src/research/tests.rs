@@ -1459,6 +1459,7 @@ fn rows_stream_with_the_requested_range() {
         "sh.600000",
         Some(day(2026, 10, 21)),
         Some(day(2026, 10, 21)),
+        |_, _| crate::research::read::FactorBasisStatus::Stock,
         |row| {
             factors.push(row);
             Ok(())

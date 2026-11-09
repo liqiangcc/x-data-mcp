@@ -214,6 +214,22 @@ impl EtfForwardGate for ForwardGate {
     fn admit(&self, facts: &EtfForwardFacts) -> EtfForwardAdmission {
         self.decide(facts)
     }
+
+    fn check_set(&self) -> Option<etf_factor_checks::CheckSet> {
+        // Open the store if this gate has not been asked a decision yet (a
+        // `--adjustment raw` export with `--dataset factors` judges nothing but
+        // still reports each event's verdict). A failure here is not an error:
+        // the column then says `unverified`, which matches the gate's own
+        // fail-closed answer for every ETF.
+        let store = self.resolve_store().ok()?;
+        let mut open = self.open.lock().expect("gate lock");
+        if open.is_none() {
+            *open = self.opened(&store).ok();
+        }
+        let state = open.as_mut()?;
+        self.refresh_if_changed(state, &store).ok()?;
+        Some(state.loader.checks())
+    }
 }
 
 /// The market-side facts in the shape PR-B's decision consumes.

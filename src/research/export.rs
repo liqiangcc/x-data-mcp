@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::{
     DEFAULT_OUTPUT_ROOT, Error, ExportRequest, FileStat, SnapshotPlan, manifest, open_read_only,
-    parquet, verify_unchanged,
+    parquet, verify_unchanged_with_gate,
 };
 
 /// `--compression` (§7.1). Snappy is pure Rust, so the export feature adds no C
@@ -135,7 +135,20 @@ pub struct SnapshotWriter {
     connection: Option<Connection>,
     started_at: DateTime<Utc>,
     wal_before: u64,
+    /// The admission gate the plan was made with. `finalize` re-plans through
+    /// the same one, so the drift guard cannot see a different check set than
+    /// the files were written under (`#607` PR-E).
+    gate: SharedGate,
 }
+
+/// The gate a writer keeps for its `finalize` re-plan.
+///
+/// The CLI builds one from the environment and tests hand one over, so the
+/// writer cannot own the boxed trait object by type alone. The read face
+/// already stores the same object in an `Arc`, which is why the shared handle
+/// is the natural form here (`EtfForwardGate` is `Send + Sync`).
+type SharedGate = std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate>;
+
 
 impl SnapshotWriter {
     /// Plan the snapshot and reserve the temporary directory.
@@ -150,6 +163,21 @@ impl SnapshotWriter {
         request: &ExportRequest,
         options: &ExportOptions,
     ) -> Result<Self, Error> {
+        Self::create_with_gate(db, request, options, super::etf_source_gate())
+    }
+
+    /// [`Self::create`] against an explicitly supplied ETF 前复权 gate.
+    ///
+    /// The command line uses [`super::etf_source_gate`]
+    /// (`X_DATA_MCP_SOURCE_STORE`); tests pass a gate over a fixture store.
+    /// It is the **same** trait object the MCP read face injects, so the export
+    /// never re-implements the admission rule (design §7.1).
+    pub fn create_with_gate(
+        db: &Path,
+        request: &ExportRequest,
+        options: &ExportOptions,
+        gate: std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate>,
+    ) -> Result<Self, Error> {
         if options.row_group_rows == 0 {
             return Err(Error::Invalid("--row-group-rows must be positive".into()));
         }
@@ -159,7 +187,7 @@ impl SnapshotWriter {
         connection
             .execute_batch("BEGIN")
             .map_err(|e| Error::Db(e.to_string()))?;
-        let plan = super::plan(&connection, request)?;
+        let plan = super::plan_with_gate(&connection, request, gate.as_ref())?;
         let directory = options.out_root.join(&plan.snapshot_id);
         if directory.exists() {
             return Err(Error::OutputExists(format!(
@@ -178,6 +206,7 @@ impl SnapshotWriter {
             connection: Some(connection),
             started_at,
             wal_before,
+            gate,
         })
     }
 
@@ -218,7 +247,7 @@ impl SnapshotWriter {
         // AC-M1-8: the bound inputs must still be the ones the files were
         // written from. This runs before the manifest exists, so a drift
         // leaves no valid snapshot behind.
-        verify_unchanged(&self.db, &self.plan)?;
+        verify_unchanged_with_gate(&self.db, &self.plan, self.gate.as_ref())?;
         let finished_at = Utc::now();
         let created_at = finished_at.to_rfc3339_opts(SecondsFormat::Secs, true);
         let started_at = self.started_at.to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -268,7 +297,17 @@ pub fn export(
     request: &ExportRequest,
     options: &ExportOptions,
 ) -> Result<ExportOutcome, Error> {
-    let mut writer = SnapshotWriter::create(db, request, options)?;
+    export_with_gate(db, request, options, super::etf_source_gate())
+}
+
+/// [`export`] against an explicitly supplied ETF 前复权 gate.
+pub fn export_with_gate(
+    db: &Path,
+    request: &ExportRequest,
+    options: &ExportOptions,
+    gate: std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate>,
+) -> Result<ExportOutcome, Error> {
+    let mut writer = SnapshotWriter::create_with_gate(db, request, options, gate)?;
     writer.write_files()?;
     writer.finalize()
 }
@@ -277,18 +316,30 @@ pub fn export(
 ///
 /// `files[].rows`/`bytes`/`sha256` are `null` here: they are only known after
 /// the file is written, and they are excluded from the snapshot identity, so
-/// the id printed by a dry run is the id a real run would produce.
+/// the id printed by a dry run is the id a real run would produce. The ETF
+/// 前复权 admission is the CLI's own gate, so a dry run and a real run of the
+/// same database agree on which ETFs `daily_qfq` would carry.
 pub fn dry_run(
     db: &Path,
     request: &ExportRequest,
     options: &ExportOptions,
+) -> Result<(SnapshotPlan, Value), Error> {
+    dry_run_with_gate(db, request, options, super::etf_source_gate().as_ref())
+}
+
+/// [`dry_run`] against an explicitly supplied ETF 前复权 gate.
+pub fn dry_run_with_gate(
+    db: &Path,
+    request: &ExportRequest,
+    options: &ExportOptions,
+    gate: &dyn crate::sqlite_market::series::EtfForwardGate,
 ) -> Result<(SnapshotPlan, Value), Error> {
     let connection = open_read_only(db)?;
     // §7.3: `--dry-run` plans inside one read transaction, like a real export.
     connection
         .execute_batch("BEGIN")
         .map_err(|e| Error::Db(e.to_string()))?;
-    let plan = super::plan(&connection, request)?;
+    let plan = super::plan_with_gate(&connection, request, gate)?;
     let files = manifest::files_value(&plan.files, None, options.compression.as_str());
     let export = json!({
         "dry_run": true,

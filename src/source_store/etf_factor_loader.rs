@@ -109,6 +109,12 @@ impl Loader {
         self.checks.records.len()
     }
 
+    /// The whole set this loader judges with (`#607` PR-E: the research export
+    /// reports each event's verdict as `basis_status`).
+    pub fn checks(&self) -> CheckSet {
+        self.checks.clone()
+    }
+
     /// Re-read the store's check records (a long-lived process picks up an
     /// import without a restart). The cache is emptied because the digest that
     /// names the set changed.

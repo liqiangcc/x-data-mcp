@@ -24,10 +24,12 @@ use rust_decimal::Decimal;
 use rust_decimal::RoundingStrategy;
 
 use super::{
-    AdjustmentSelection, CatalogBinding, DerivedDataset, DerivedEntry, EntitySelection, EtfBinding,
+    CatalogBinding, DerivedDataset, DerivedEntry, EntitySelection, EtfBinding,
     ExportRequest, GenerationBinding, IndexBinding, SeriesEntry,
 };
 use crate::compact_market;
+use crate::source_store::etf_factor_checks::CheckStatus;
+use crate::sqlite_market::series::EtfForwardGate;
 use crate::market_data::{
     Adjustment, CoverageStatus, INSTRUMENT_CLASS_ETF, INSTRUMENT_CLASS_INDEX,
     INSTRUMENT_CLASS_STOCK, Period,
@@ -259,10 +261,11 @@ pub(crate) fn daily_series(
     c: &Connection,
     request: &ExportRequest,
     members: Option<&BTreeSet<String>>,
-) -> Result<Vec<SeriesEntry>, Error> {
+    gate: &dyn EtfForwardGate,
+) -> Result<(Vec<SeriesEntry>, EtfForwardReport), Error> {
     let explicit = request.entities.explicit();
     let (mut entries, mut published) = stock_series(c, request, members)?;
-    let (etfs, etf_published) = etf_series(c, request, explicit)?;
+    let (etfs, etf_published, report) = etf_series(c, request, explicit, gate)?;
     entries.extend(etfs);
     published.extend(etf_published);
     if let Some(list) = explicit {
@@ -277,8 +280,12 @@ pub(crate) fn daily_series(
                 missing.join(",")
             )));
         }
+        // An ETF the gate blocked is not a request error: it keeps its
+        // `daily_raw` rows and the manifest names it with the read face's
+        // reason code (§7.1). A 前复权-only request for such an ETF yields an
+        // empty `daily_qfq`, which the `EXPORT_EMPTY` check reports.
     }
-    Ok(entries)
+    Ok((entries, report))
 }
 
 fn stock_series(
@@ -316,97 +323,210 @@ fn stock_series(
     Ok((entries, published))
 }
 
-/// ETF 不复权 daily series (M3-2 PR-D). Returns the selected entries and the
-/// set of ETF entities that are published and selected, so an explicit list
-/// can tell "an ETF with no series" from "not an ETF at all".
+/// The ETF daily series of the selection (`#607` PR-D/PR-E). Returns the
+/// selected entries, the set of ETF entities that are published **and**
+/// selected (so an explicit list can tell "an ETF with no series" from "not an
+/// ETF at all"), and the admission report the manifest carries.
 ///
 /// Every stored ETF series goes through the read surface's single shape
-/// resolver ([`crate::sqlite_market::series::resolve_read_shape`]): the main
-/// table must agree on the class, the scale must be the ETF one, and an ETF
-/// without a `security_master` row fails closed instead of being exported as a
-/// stock-shaped series. A stored ETF 前复权 or year series contradicts the
-/// delivery boundary (D-70 Q3/Q6) and also fails closed.
+/// resolver ([`crate::sqlite_market::series::resolve_read_shape_with_digest`])
+/// with the **same** injected gate the MCP read face uses, so the export can
+/// never contradict `market.daily`:
+///
+/// * an ETF whose 前复权 series the gate admits gets both entries — `raw` and
+///   `qfq` — and the exported qfq rows are the stored derived rows, i.e. the
+///   bytes `market.daily` serves (`price_scale=6`, volume/amount 不复权);
+/// * an ETF the gate blocks contributes its `raw` entry and **no** `qfq` row,
+///   and is reported in [`EtfBlocked`] with the read face's wire reason code, so
+///   the manifest says why instead of `daily_qfq` ending without a word
+///   (design §7.1);
+/// * an ETF whose 前复权 series was never built is `etf_qfq_not_built`;
+/// * a stored ETF row the resolver rejects (no `security_master` row, class or
+///   scale mismatch) fails the whole export as an integrity error, as before.
+///
+/// A `--adjustment raw` export never asks the gate, so neither its bytes nor
+/// its failure modes change.
 fn etf_series(
     c: &Connection,
     request: &ExportRequest,
     explicit: Option<&[String]>,
-) -> Result<(Vec<SeriesEntry>, BTreeSet<String>), Error> {
-    use crate::sqlite_market::series::{ReadSeriesKind, resolve_read_shape};
-    // #607 PR-C: every ETF now also carries a derived 前复权 series
-    // (`adjustment=1`). Research export is not the read surface that admits
-    // it — that is PR-D — so the export takes the 不复权 rows only. Without
-    // this filter the loop below would reject every ETF-bearing export with
-    // "has an unexpected qfq row" as soon as the derived series exists.
+    gate: &dyn EtfForwardGate,
+) -> Result<(Vec<SeriesEntry>, BTreeSet<String>, EtfForwardReport), Error> {
+    use crate::sqlite_market::series::{ReadSeriesKind, resolve_read_shape_with_digest};
     let mut statement = c
         .prepare(&format!(
             "SELECT {SERIES_COLUMNS} FROM market_series s \
-             WHERE s.period=?1 AND s.instrument_class=?2 AND s.adjustment=?3 \
+             WHERE s.period=?1 AND s.instrument_class=?2 \
              ORDER BY s.entity, s.adjustment"
         ))
         .map_err(db)?;
     let rows = statement
-        .query_map(
-            params![period_day(), INSTRUMENT_CLASS_ETF, Adjustment::Raw.code()],
-            series_row,
-        )
+        .query_map(params![period_day(), INSTRUMENT_CLASS_ETF], series_row)
         .map_err(db)?;
+    // Grouped per entity: both 口径 are resolved together, because the
+    // admission is a verdict on the entity, not on one series row.
+    let mut by_entity: BTreeMap<String, Vec<SeriesEntry>> = BTreeMap::new();
+    for row in rows {
+        let entry = series_entry(row.map_err(db)?)?;
+        by_entity
+            .entry(entry.entity.clone())
+            .or_default()
+            .push(entry);
+    }
     let mut entries = Vec::new();
     let mut published: BTreeSet<String> = BTreeSet::new();
-    for row in rows {
-        let mut entry = series_entry(row.map_err(db)?)?;
-        let selected = explicit.is_none_or(|list| list.binary_search(&entry.entity).is_ok());
+    let mut report = EtfForwardReport::default();
+    for (entity, rows) in by_entity {
+        let selected = explicit.is_none_or(|list| list.binary_search(&entity).is_ok());
         if !selected {
             continue;
         }
-        if entry.adjustment != Adjustment::Raw {
-            return Err(integrity(format!(
-                "ETF series {} has an unexpected {} row; ETF 前复权 is not delivered",
-                entry.entity,
-                entry.adjustment.as_str()
-            )));
-        }
-        let shape = resolve_read_shape(
+        let raw = rows
+            .iter()
+            .find(|entry| entry.adjustment == Adjustment::Raw)
+            .ok_or_else(|| integrity(format!("ETF series {entity} has no 不复权 row")))?;
+        // The stored shape must agree with the resolved 不复权 shape: the check
+        // PR-D's resolver owns, and it runs before any admission.
+        let resolved_raw = resolve_read_shape_with_digest(
             c,
-            &entry.entity,
+            &entity,
             ReadSeriesKind::Daily,
             Some(Adjustment::Raw),
-            None,
+            Some(gate),
         )
         .map_err(Error::from)?
         .ok_or_else(|| {
             integrity(format!(
-                "ETF series {} is not served by the daily dataset",
-                entry.entity
+                "ETF series {entity} is not served by the daily dataset"
             ))
         })?;
-        if shape.instrument_class != entry.instrument_class
-            || shape.price_scale != entry.price_scale
-            || shape.adjustment != entry.adjustment
+        if resolved_raw.shape.instrument_class != raw.instrument_class
+            || resolved_raw.shape.price_scale != raw.price_scale
+            || resolved_raw.shape.adjustment != raw.adjustment
         {
             return Err(integrity(format!(
-                "ETF series {} stored shape disagrees with the resolved shape",
-                entry.entity
+                "ETF series {entity} stored shape disagrees with the resolved shape"
             )));
         }
-        published.insert(entry.entity.clone());
-        if request.adjustment.includes(entry.adjustment) {
+        published.insert(entity.clone());
+        let forward = rows
+            .iter()
+            .find(|entry| entry.adjustment == Adjustment::Forward);
+        // The admission is asked only when a 前复权 row is exported at all: a
+        // `--adjustment raw` export must not depend on the source store.
+        let mut checks_digest: Option<String> = None;
+        let mut blocked: Option<EtfBlocked> = None;
+        if request.adjustment.includes(Adjustment::Forward) {
+            match resolve_read_shape_with_digest(
+                c,
+                &entity,
+                ReadSeriesKind::Daily,
+                Some(Adjustment::Forward),
+                Some(gate),
+            ) {
+                Ok(Some(resolved)) => {
+                    let shape = resolved.shape;
+                    if let Some(stored) = forward
+                        && (shape.instrument_class != stored.instrument_class
+                            || shape.price_scale != stored.price_scale
+                            || shape.adjustment != stored.adjustment)
+                    {
+                        return Err(integrity(format!(
+                            "ETF series {entity} stored 前复权 shape disagrees with the resolved shape"
+                        )));
+                    }
+                    checks_digest = resolved.etf_checks_digest;
+                }
+                Ok(None) => {
+                    return Err(integrity(format!(
+                        "ETF series {entity} is not served by the daily dataset"
+                    )));
+                }
+                Err(error) => {
+                    let crate::market_storage::Error::AdjustmentUnavailable {
+                        reason,
+                        blocking_events,
+                        categories,
+                        ..
+                    } = error
+                    else {
+                        return Err(Error::from(error));
+                    };
+                    blocked = Some(EtfBlocked {
+                        entity: entity.clone(),
+                        reason: reason.into(),
+                        blocking_events: Some(blocking_events),
+                        categories: Some(categories),
+                    });
+                }
+            }
+        }
+        if request.adjustment.includes(Adjustment::Raw) {
+            let mut entry = raw.clone();
             entry.etf = Some(etf_binding(c, &entry)?);
             entries.push(entry);
         }
-    }
-    if request.adjustment == AdjustmentSelection::Qfq
-        && let Some(list) = explicit
-    {
-        // An ETF named for a 前复权-only export has nothing to give. Saying so
-        // beats an empty or partial file that reads as "no data".
-        if let Some(entity) = list.iter().find(|entity| published.contains(*entity)) {
-            return Err(Error::Invalid(format!(
-                "adjustment_unavailable: ETF {entity} has no 前复权 series; use --adjustment raw"
-            )));
+        match (checks_digest, blocked) {
+            (Some(digest), None) => {
+                let mut entry = forward
+                    .ok_or_else(|| {
+                        integrity(format!(
+                            "ETF series {entity} was admitted without a stored 前复权 row"
+                        ))
+                    })?
+                    .clone();
+                entry.etf = Some(etf_binding(c, &entry)?);
+                entries.push(entry);
+                report.admitted.insert(entity, digest.clone());
+                report.checks_digest.get_or_insert(digest);
+            }
+            (None, Some(blocked)) => report.blocked.push(blocked),
+            _ => {
+                return Err(integrity(format!(
+                    "ETF series {entity} resolved to neither an admission nor a block"
+                )));
+            }
         }
     }
-    Ok((entries, published))
+    Ok((entries, published, report))
 }
+
+/// One ETF whose 前复权 series the gate refused (design §7.1). The manifest
+/// lists these instead of letting `daily_qfq` end without a word.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EtfBlocked {
+    pub entity: String,
+    /// The wire reason code — the same string the read face puts in
+    /// `details.reason` (`BlockReason::as_str`).
+    pub reason: String,
+    /// `details.blocking_events`.
+    pub blocking_events: Option<usize>,
+    /// `details.categories`.
+    pub categories: Option<Vec<u8>>,
+}
+
+/// What the ETF 前复权 admission did during one plan (§7.1/§7.3, D-92 Q8 (a)).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EtfForwardReport {
+    /// `etf_checks_digest` of the check set every admission in this plan was
+    /// judged with (design §3.2.2: the reproduction handle). `None` when no
+    /// 前复权 row was requested, or no ETF was judged at all.
+    pub checks_digest: Option<String>,
+    /// Admitted entities with the digest of their own verdict. Within one plan
+    /// every value equals [`Self::checks_digest`]; keeping it per entity lets a
+    /// reader tie an entity to the set it was judged against.
+    pub admitted: BTreeMap<String, String>,
+    /// Blocked entities with the read face's reason code.
+    pub blocked: Vec<EtfBlocked>,
+}
+
+impl EtfForwardReport {
+    /// Whether this plan asked the gate at all.
+    pub fn is_judged(&self) -> bool {
+        !self.admitted.is_empty() || !self.blocked.is_empty()
+    }
+}
+
 
 fn etf_binding(c: &Connection, entry: &SeriesEntry) -> Result<EtfBinding, Error> {
     Ok(EtfBinding {
@@ -557,6 +677,75 @@ pub(crate) fn factor_sets(
         }
     }
     Ok(entries)
+}
+
+/// `entity` → `security_master.instrument_class` for the entities the factor
+/// file can name. UTF-8 codes are read straight from the table (the file's
+/// `entity` column is `exchange.code`); a code with conflicting classes has no
+/// entry, and its events then take the stock value — a row the export never
+/// assigns a class to cannot claim a check verdict, and the read surface
+/// already fails closed on the conflict (`master_instrument_class`).
+pub fn instrument_classes(c: &Connection) -> Result<BTreeMap<String, i64>, Error> {
+    let mut statement = c
+        .prepare("SELECT DISTINCT exchange, code, instrument_class FROM security_master")
+        .map_err(db)?;
+    let rows = statement
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(db)?;
+    let mut out: BTreeMap<String, i64> = BTreeMap::new();
+    for row in rows {
+        let (exchange, code, class) = row.map_err(db)?;
+        out.insert(format!("{exchange}.{code}"), class);
+    }
+    Ok(out)
+}
+
+/// Per-`(entity, ordinal, evidence_digest)` check verdicts, for the
+/// `basis_status` column of `factors.parquet` (§7.3, D-92 Q2 (c)).
+///
+/// The newest record per key wins — the same rule the blocking decision applies
+/// (`CheckSet::latest_by_key`) — so the exported column and the gate that
+/// admitted or refused the entity can never disagree about an event's verdict.
+/// An entity with no record at all yields an empty map, and every one of its
+/// events exports `unverified`.
+pub fn check_status_index(
+    checks: &crate::source_store::etf_factor_checks::CheckSet,
+) -> BTreeMap<(String, i64, String), CheckStatus> {
+    checks
+        .latest_by_key()
+        .into_iter()
+        .map(|(key, record)| (key, record.check_status))
+        .collect()
+}
+
+/// The `basis_status` lookup a [`for_each_factor`] call takes.
+///
+/// `etf` decides which question is being asked: an ETF's events read the check
+/// record for their `(entity, ordinal, evidence_digest)` and fall back to
+/// `unverified`; every other entity gets the fixed M1 value. The caller passes
+/// the entity's class, not a code prefix (design §1.3: membership comes from
+/// the main table, never from the shape of a code).
+pub fn basis_lookup<'a>(
+    etf: bool,
+    checks: &'a BTreeMap<(String, i64, String), CheckStatus>,
+) -> impl FnMut(i64, &str) -> FactorBasisStatus + 'a {
+    move |ordinal, evidence_digest| {
+        if !etf {
+            return FactorBasisStatus::Stock;
+        }
+        checks
+            .iter()
+            .find(|((_, row, digest), _)| *row == ordinal && digest == evidence_digest)
+            .map_or(FactorBasisStatus::Unverified, |(_, status)| {
+                FactorBasisStatus::Check(*status)
+            })
+    }
 }
 
 /// The registered trading calendar (§3.8/§3.7).
@@ -813,14 +1002,66 @@ pub struct FactorRow {
     pub c: [Decimal; 4],
     pub factor_a: Decimal,
     pub factor_b: Decimal,
+    /// `#607` PR-E (D-92 Q8 (a), design §7.3): which evidence admitted this
+    /// event into the 前复权 chain — see [`FactorBasisStatus`].
+    pub basis_status: FactorBasisStatus,
+}
+
+/// The `basis_status` column of `factors.parquet` (design §7.3).
+///
+/// Two different questions end up here, which is why the value space is a
+/// string and not a boolean:
+///
+/// * **ETF events** carry the verdict of the check record that admitted them
+///   ([`CheckStatus`]: `verified_official`,
+///   `verified_announcement`, `no_effect`), or `unverified` when the source
+///   store holds no record for that `(entity, ordinal, evidence_digest)`. It is
+///   read from the **source store's check records**, never from
+///   `adjustment_events.basis_status`: that column is the schema-27 leftover
+///   whose `pending`/`verified` value the ETF path does not use (D-92 Q2 (c)).
+/// * **A-share events** carry one fixed value, [`FactorBasisStatus::STOCK`]
+///   (`gbbq-verified` — M1's 口径: the row passed the source-side category
+///   check that `derived::replace_adjustment_events` enforces before it is
+///   stored). There is no per-event evidence record for them, and inventing a
+///   per-event value would claim a verification that does not exist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FactorBasisStatus {
+    /// The check record's `check_status`, verbatim.
+    Check(CheckStatus),
+    /// No check record: the event may not enter any 前复权 chain we publish.
+    Unverified,
+    /// The fixed A-share value.
+    Stock,
+}
+
+impl FactorBasisStatus {
+    /// The A-share value: M1's 口径, stated once here.
+    pub const STOCK: &'static str = "gbbq-verified";
+    /// The value for an event with no check record.
+    pub const UNVERIFIED: &'static str = "unverified";
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Check(status) => status.as_str(),
+            Self::Unverified => Self::UNVERIFIED,
+            Self::Stock => Self::STOCK,
+        }
+    }
 }
 
 /// Stream one entity's factor events inside `[start, end]` by `ordinal`.
+///
+/// `basis` supplies each event's [`FactorBasisStatus`] (§7.3): an ETF's comes
+/// from the source store's check records, a stock's is the fixed M1 value. It
+/// is a parameter and not a database read, because the check records live
+/// outside the market database (D-92 Q2 (c)) and a missing store must not turn
+/// into a silently different column value.
 pub fn for_each_factor<F>(
     c: &Connection,
     entity: &str,
     start: Option<NaiveDate>,
     end: Option<NaiveDate>,
+    mut basis: impl FnMut(i64, &str) -> FactorBasisStatus,
     mut f: F,
 ) -> Result<i64, Error>
 where
@@ -828,7 +1069,8 @@ where
 {
     let mut statement = c
         .prepare(
-            "SELECT ordinal,effective_day,known_at,category,c1,c2,c3,c4 FROM adjustment_events \
+            "SELECT ordinal,effective_day,known_at,category,c1,c2,c3,c4,evidence_digest \
+             FROM adjustment_events \
              WHERE entity=?1 AND effective_day>=COALESCE(?2,-9223372036854775808) \
              AND effective_day<=COALESCE(?3,9223372036854775807) ORDER BY ordinal",
         )
@@ -850,6 +1092,7 @@ where
                     r.get::<_, String>(5)?,
                     r.get::<_, String>(6)?,
                     r.get::<_, String>(7)?,
+                    r.get::<_, Vec<u8>>(8)?,
                 ))
             },
         )
@@ -871,6 +1114,7 @@ where
                 .map_err(|_| integrity("stored factor is not a decimal"))?;
         }
         let affine = crate::gbbq::event_transform(&c_values);
+        let evidence_digest = hex(&raw.8);
         f(FactorRow {
             entity: entity.to_string(),
             ordinal: raw.0,
@@ -880,6 +1124,7 @@ where
             c: c_values,
             factor_a: affine.a,
             factor_b: affine.b,
+            basis_status: basis(raw.0, &evidence_digest),
         })?;
         count += 1;
     }

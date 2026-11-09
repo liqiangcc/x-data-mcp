@@ -223,6 +223,7 @@ pub fn identity(
     series: &[SeriesEntry],
     derived: &[DerivedEntry],
     whole_market: &WholeMarket<'_>,
+    etf_forward: &super::read::EtfForwardReport,
 ) -> Result<Value, Error> {
     let WholeMarket { industry, coverage } = whole_market;
     let industry = *industry;
@@ -265,7 +266,56 @@ pub fn identity(
         "industry": industry,
         "series": series,
         "derived": derived,
+        // `#607` PR-E (design §7.1/§7.3): the ETF 前复权 admission. In the
+        // identity because a different check set is a different input: two
+        // exports of one database that differ only in which ETFs the gate
+        // admitted must not share a `snapshot_id`. Omitted entirely when no
+        // 前复权 row was requested, so a `--adjustment raw` snapshot keeps its
+        // previous identity.
+        "etf_forward": etf_forward_value(etf_forward),
     }))
+}
+
+/// The `etf_forward` identity block: the check set every admission was judged
+/// with, and the entities it refused with the read face's reason code.
+fn etf_forward_value(report: &super::read::EtfForwardReport) -> Value {
+    if !report.is_judged() {
+        return Value::Null;
+    }
+    Value::Object(
+        [
+            (
+                "checks_digest".to_string(),
+                report
+                    .checks_digest
+                    .clone()
+                    .map_or(Value::Null, Value::String),
+            ),
+            (
+                "admitted".to_string(),
+                json!(report.admitted.keys().cloned().collect::<Vec<_>>()),
+            ),
+            (
+                "blocked".to_string(),
+                Value::Array(
+                    report
+                        .blocked
+                        .iter()
+                        .map(|blocked| {
+                            json!({
+                                "entity": blocked.entity,
+                                "reason": blocked.reason,
+                                "blocking_events": blocked.blocking_events,
+                                "categories": blocked.categories,
+                            })
+                        })
+                        .collect(),
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )
 }
 
 /// `snapshot-<32 hex>` of the canonical identity (§7.3, AC-M1-7).
