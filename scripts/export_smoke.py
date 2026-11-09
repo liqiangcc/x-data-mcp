@@ -1050,6 +1050,7 @@ def self_check_etf_admission() -> None:
         ),
         "an ETF both admitted and blocked was accepted",
     )
+    print("ok   etf admission: 1 consistent shape accepted, 4 broken shapes rejected")
 
 
 def etf_admission_problems(
