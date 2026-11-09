@@ -332,14 +332,23 @@ fn etf_series(
     explicit: Option<&[String]>,
 ) -> Result<(Vec<SeriesEntry>, BTreeSet<String>), Error> {
     use crate::sqlite_market::series::{ReadSeriesKind, resolve_read_shape};
+    // #607 PR-C: every ETF now also carries a derived 前复权 series
+    // (`adjustment=1`). Research export is not the read surface that admits
+    // it — that is PR-D — so the export takes the 不复权 rows only. Without
+    // this filter the loop below would reject every ETF-bearing export with
+    // "has an unexpected qfq row" as soon as the derived series exists.
     let mut statement = c
         .prepare(&format!(
             "SELECT {SERIES_COLUMNS} FROM market_series s \
-             WHERE s.period=?1 AND s.instrument_class=?2 ORDER BY s.entity, s.adjustment"
+             WHERE s.period=?1 AND s.instrument_class=?2 AND s.adjustment=?3 \
+             ORDER BY s.entity, s.adjustment"
         ))
         .map_err(db)?;
     let rows = statement
-        .query_map(params![period_day(), INSTRUMENT_CLASS_ETF], series_row)
+        .query_map(
+            params![period_day(), INSTRUMENT_CLASS_ETF, Adjustment::Raw.code()],
+            series_row,
+        )
         .map_err(db)?;
     let mut entries = Vec::new();
     let mut published: BTreeSet<String> = BTreeSet::new();

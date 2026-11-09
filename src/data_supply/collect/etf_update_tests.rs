@@ -116,6 +116,12 @@ enum Generation {
     /// factor fact itself is storable, so only the **derived** 前复权 build
     /// fails. The item must roll back as a whole (#607 PR-C requirement 2).
     Sixth,
+    /// Sixth plus a cash dividend on `sh510050` far larger than its early
+    /// price, so the derived 前复权 close goes negative. #607 PR-C store
+    /// behaviour is what the test pins: a negative 前复权 price is a value the
+    /// store must round-trip, not a reason to fail the item. Whether the
+    /// product should deliver it is an owner decision deferred to PR-D.
+    Eighth,
 }
 
 /// One mirror generation. Second-generation deltas, per ETF:
@@ -149,6 +155,7 @@ fn write_mirror(dir: &Path, generation: Generation) {
     let fourth = generation >= Generation::Fourth;
     let fifth = generation >= Generation::Fifth;
     let sixth = generation >= Generation::Sixth;
+    let eighth = generation >= Generation::Eighth;
     write_zip(
         &dir.join("base.zip"),
         &[
@@ -177,7 +184,19 @@ fn write_mirror(dir: &Path, generation: Generation) {
             [0.1, 0.0, 0.0, 0.0],
         ));
     }
-    if sixth {
+    if eighth {
+        // A far-future 除权除息日, so every stored bar is strictly before it
+        // and therefore adjusted; c1 = 500 角 = 50 元 on a ~41.7 元 ETF drives
+        // the derived close to about −8.3 元.
+        records.push(gbbq_factor_record(
+            1,
+            "510050",
+            tomorrow_raw(),
+            1,
+            [500.0, 0.0, 0.0, 0.0],
+        ));
+    }
+    if sixth && !eighth {
         // c3 = 0: `etf_event_transform` refuses the division, but the factor
         // row is a well-formed f32 fact and stores fine. The failure therefore
         // lands in the 前复权 derivation, after the 不复权 half has written.
@@ -251,6 +270,11 @@ fn write_mirror(dir: &Path, generation: Generation) {
         (
             "sh\\lday\\sh510050.day",
             if second {
+                etf_appended.as_slice()
+            } else if eighth {
+                // A new bar so the item is an append rather than `NoChange`:
+                // a no-change item does not re-derive the 前复权 series, and
+                // this test needs the freshly written factor to be applied.
                 etf_appended.as_slice()
             } else {
                 etf_plain.as_slice()
@@ -1668,72 +1692,193 @@ impl Env {
             .unwrap();
     }
 
+    /// A real research export of the ETF-bearing universe, reduced to the
+    /// manifest identity and every file's name/rows/bytes/sha256. The export
+    /// must render identically whether or not the derived 前复权 series
+    /// exists: before #607 PR-C review r2 item 1 the export failed outright,
+    /// and the shape of the fix is that it takes `adjustment=0` ETF rows only.
+    #[cfg(feature = "export")]
+    fn research_export(
+        &self,
+        adjustment: crate::research::AdjustmentSelection,
+    ) -> serde_json::Value {
+        let out = tempfile::tempdir().unwrap();
+        let request = crate::research::ExportRequest {
+            // The daily dataset only: ETF rows live there, and the fixture has
+            // no registered index series to export.
+            dataset: crate::research::DatasetSelection::Daily,
+            adjustment,
+            start: None,
+            end: None,
+            entities: crate::research::EntitySelection::CatalogHead,
+        };
+        let request = request.validate().unwrap();
+        let options = crate::research::export::ExportOptions {
+            out_root: out.path().to_path_buf(),
+            ..Default::default()
+        };
+        let outcome =
+            crate::research::export::export(self.tasks.path(), &request, &options).unwrap();
+        let files: Vec<serde_json::Value> = outcome
+            .files
+            .iter()
+            .map(|file| {
+                json!({
+                    "path": file.path,
+                    "rows": file.rows,
+                    "bytes": file.bytes,
+                    "sha256": file.sha256,
+                })
+            })
+            .collect();
+        json!({
+            "adjustment": adjustment.as_str(),
+            "snapshot_id": outcome.snapshot_id,
+            "files": files,
+        })
+    }
+
+    /// Without the `export` feature there is no export surface to compare;
+    /// the test records that, so a missing feature cannot look like a match.
+    #[cfg(not(feature = "export"))]
+    fn research_export(
+        &self,
+        adjustment: crate::research::AdjustmentSelection,
+    ) -> serde_json::Value {
+        json!({"adjustment": adjustment.as_str(), "skipped": "export feature disabled"})
+    }
+
+    /// The generation's `daily_series` fact digest, as `replay --verify-only`
+    /// compares it: a derived ETF 前复权 row must not enter this digest.
+    fn daily_series_fact(&self) -> serde_json::Value {
+        let facts = self
+            .backend
+            .all_derived_generation_facts()
+            .expect("derived generation facts");
+        let mut rows: Vec<serde_json::Value> = facts
+            .iter()
+            .filter(|fact| fact.fact_kind == crate::generation_gate::KIND_DAILY_SERIES)
+            .map(|fact| {
+                json!({
+                    "generation": fact.generation_manifest_sha256,
+                    "role": fact.role,
+                    "digest": fact.fact_digest,
+                })
+            })
+            .collect();
+        rows.sort_by_key(|row| row["generation"].to_string());
+        json!(rows)
+    }
+
     /// Every read/maintenance surface that accepts an ETF, rendered to JSON so
     /// two stores can be compared byte for byte.
-    fn etf_surface_snapshot(&self, task_id: &str) -> Vec<(&'static str, serde_json::Value)> {
-        let daily = |code: &str| {
-            self.api
-                .call(
-                    "query_data",
-                    json!({
-                        "dataset": "market.daily",
-                        "contract_version": "v1",
-                        "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
-                        "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
-                        "version": {"kind": "latest_per_entity"},
-                        "adjustment": "raw",
-                        "page_size": 100
-                    }),
-                )
-                .unwrap()
+    fn etf_surface_snapshot(&self, task_id: &str) -> Vec<(String, serde_json::Value)> {
+        // `adjustment: None` is the omitted-argument request: the read face
+        // must reject it for an ETF with the same bytes both ways, because the
+        // whole point of PR-C is that a stored 前复权 row does not change what
+        // the surface answers (#607 PR-C review r2 item 3).
+        // A request that fails must fail with the same bytes, so an error is
+        // captured rather than unwrapped: `adjustment_unavailable` is the
+        // answer for an ETF at `qfq` both before and after the derived series
+        // exists, and that is exactly the equality this test is about.
+        let call = |name: &str, input: Value| -> serde_json::Value {
+            match self.api.call(name, input) {
+                Ok(value) => json!({"ok": value}),
+                Err(error) => json!({
+                    "error": {
+                        "code": error.code,
+                        "message": error.message,
+                        "outcome_certainty": error.outcome_certainty,
+                    }
+                }),
+            }
         };
-        let versions = |code: &str| {
-            self.api
-                .call(
-                    "list_data_versions",
-                    json!({
-                        "dataset": "market.daily",
-                        "contract_version": "v1",
-                        "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
-                        "adjustment": "raw",
-                    }),
-                )
-                .unwrap()
+        let daily = |code: &str, adjustment: Option<&str>| {
+            let mut input = json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+                "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
+                "version": {"kind": "latest_per_entity"},
+                "page_size": 100
+            });
+            if let Some(adjustment) = adjustment {
+                input["adjustment"] = json!(adjustment);
+            }
+            call("query_data", input)
         };
-        let availability = |code: &str| {
-            self.api
-                .call(
-                    "get_data_availability",
-                    json!({
-                        "dataset": "market.daily",
-                        "contract_version": "v1",
-                        "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
-                        "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
-                        "adjustment": "raw",
-                    }),
-                )
-                .unwrap()
+        let versions = |code: &str, adjustment: Option<&str>| {
+            let mut input = json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+            });
+            if let Some(adjustment) = adjustment {
+                input["adjustment"] = json!(adjustment);
+            }
+            call("list_data_versions", input)
         };
-        vec![
-            ("market.daily raw 159919", daily("159919")),
-            ("market.daily raw 159922", daily("159922")),
-            ("versions 159919", versions("159919")),
-            ("versions 159922", versions("159922")),
-            ("availability 159919", availability("159919")),
-            ("availability 159922", availability("159922")),
-            (
-                "get_task_progress",
-                self.api
-                    .call("get_task_progress", json!({"task_id": task_id}))
-                    .unwrap(),
-            ),
-            (
-                "get_task",
-                self.api
-                    .call("get_task", json!({"task_id": task_id}))
-                    .unwrap(),
-            ),
-        ]
+        let availability = |code: &str, adjustment: Option<&str>| {
+            let mut input = json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+                "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
+            });
+            if let Some(adjustment) = adjustment {
+                input["adjustment"] = json!(adjustment);
+            }
+            call("get_data_availability", input)
+        };
+        let mut surfaces = Vec::new();
+        for (label, adjustment) in [
+            ("raw", Some("raw")),
+            ("qfq", Some("qfq")),
+            ("no-adjustment", None),
+        ] {
+            for code in ["159919", "159922"] {
+                surfaces.push((
+                    format!("market.daily {label} {code}"),
+                    daily(code, adjustment),
+                ));
+                surfaces.push((
+                    format!("versions {label} {code}"),
+                    versions(code, adjustment),
+                ));
+                surfaces.push((
+                    format!("availability {label} {code}"),
+                    availability(code, adjustment),
+                ));
+            }
+        }
+        for (label, adjustment) in [
+            ("raw", crate::research::AdjustmentSelection::Raw),
+            ("both", crate::research::AdjustmentSelection::Both),
+            ("qfq", crate::research::AdjustmentSelection::Qfq),
+        ] {
+            surfaces.push((
+                format!("research export {label}"),
+                self.research_export(adjustment),
+            ));
+        }
+        surfaces.push((
+            "generation facts daily_series digest".to_string(),
+            self.daily_series_fact(),
+        ));
+        let mut surfaces: Vec<(String, serde_json::Value)> = surfaces;
+        surfaces.push((
+            "get_task_progress".into(),
+            self.api
+                .call("get_task_progress", json!({"task_id": task_id}))
+                .unwrap(),
+        ));
+        surfaces.push((
+            "get_task".into(),
+            self.api
+                .call("get_task", json!({"task_id": task_id}))
+                .unwrap(),
+        ));
+        surfaces
     }
 }
 
@@ -1775,13 +1920,23 @@ fn a_stored_etf_forward_series_changes_no_read_or_maintenance_surface() {
     // invocations of the same store: the wall-clock query time and the
     // snapshot id built from it.
     fn volatile_free(value: &serde_json::Value) -> serde_json::Value {
-        let mut value = value.clone();
-        if let Some(map) = value.as_object_mut() {
-            map.remove("query_time");
-            map.remove("snapshot_id");
-            map.remove("snapshot_time");
+        match value {
+            serde_json::Value::Object(map) => serde_json::Value::Object(
+                map.iter()
+                    .filter(|(key, _)| {
+                        !matches!(
+                            key.as_str(),
+                            "query_time" | "snapshot_id" | "snapshot_time" | "created_at"
+                        )
+                    })
+                    .map(|(key, value)| (key.clone(), volatile_free(value)))
+                    .collect(),
+            ),
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(volatile_free).collect())
+            }
+            other => other.clone(),
         }
-        value
     }
     for ((name, a), (_, b)) in present.iter().zip(absent.iter()) {
         assert_eq!(
@@ -1948,17 +2103,20 @@ fn etf_forward_store_cost() {
 }
 #[test]
 fn the_store_carries_the_4044900_and_2334400_anchors() {
-    // Review r1 item 5: the two unit anchors must be read back from the store,
+    // Review r1 item 5: the derived series must be read back from the store,
     // not from `derive_forward_bars` in isolation.
     //
-    // The anchors are the pure-layer values for one 41.780 元 bar with a
-    // c1 = 0.661 cat1 (→ 4,044,900) and for a 6.159 元 bar after c3 = 2.5 then
-    // c1 = 1.292 (→ 2,334,400). Reaching those numbers needs a bar dated
-    // before the event, which the shared fixture does not have; what the
-    // fixture can prove about the store is the other half — that the derived
-    // bars written by `commit_etf_forward_tx` come back byte for byte, so the
-    // store neither loses precision nor shifts a value. Both halves together
-    // are what "the anchor survives the store" means.
+    // The two unit anchors are pure-layer values: 4,044,900 is one **4.111 元**
+    // bar minus the c1 = 0.661 cat1 (4.111 − 0.0661 = 4.0449 元), and
+    // 2,334,400 is a 6.159 元 bar after c3 = 2.5 then c1 = 1.292
+    // (6.159 / 2.5 − 0.1292 = 2.3344 元). Both need a bar dated strictly before
+    // the event, which the shared fixture does not have: its ETF bars are the
+    // most recent days. Their end-to-end storage anchor is therefore deferred
+    // to PR-D, which needs exactly such a fixture to admit ETF `qfq` — see
+    // review r2 item 5. What this test proves is the store half: the chain
+    // 41.780 元 − 0.0661 元 = 41.7139 元 = 41,713,900 units survives
+    // `commit_etf_forward_tx` and `series::all_bars` without losing a unit or
+    // shifting a value.
     let env = setup();
     let fourth = env.advance_to(
         Generation::Fourth,
@@ -1980,8 +2138,9 @@ fn the_store_carries_the_4044900_and_2334400_anchors() {
 
     // Fifth generation puts a dividend on 除权除息日 = tomorrow, so every
     // stored 41.780 元 bar is strictly before it and the stored close must be
-    // 41.780 − 0.0661 元 = 4,171,390 units at price_scale 6. This is the same
-    // 6dp chain the 4,044,900 anchor uses, exercised through the store.
+    // 41.780 − 0.0661 元 = 41.7139 元 = 41,713,900 units at price_scale 6. This
+    // is the same 6dp chain the 4,044,900 anchor uses, exercised through the
+    // store.
     let bars = env.bars("sz.159919", Adjustment::Forward);
     assert_eq!(bars[0].4, 41_713_900, "stored first 前复权 close");
     let raw = env.bars("sz.159919", Adjustment::Raw);
@@ -1989,4 +2148,48 @@ fn the_store_carries_the_4044900_and_2334400_anchors() {
     assert_eq!(bars[0].0, raw[0].0, "same trade day");
     // One stored row per 不复权 bar: the derived series is not truncated.
     assert_eq!(bars.len(), raw.len());
+}
+
+#[test]
+fn a_negative_forward_price_commits_and_reads_back() {
+    // 601 bars of `sh.510050`/`sh.510880` come out negative under the
+    // subtraction chain in production. How to deliver that is an owner
+    // decision deferred to PR-D; what PR-C must do is store the value as
+    // computed — the item commits, the bytes survive, and nothing panics or
+    // rolls back (#607 PR-C review r2, deferred item).
+    let env = setup();
+    // `Eighth` is reached straight from `First`: the fixture keeps at most
+    // `MAX_HOT_GENERATIONS` (6) live generations, and this test only needs the
+    // big dividend, not the intermediate bytes.
+    env.advance_to(Generation::Eighth, "req-eighth", &env.gen_first);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-negative", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sh.510050"),
+        "{}",
+        error_of(&task, "sh.510050")
+    );
+
+    let forward = env.bars("sh.510050", Adjustment::Forward);
+    let raw = env.bars("sh.510050", Adjustment::Raw);
+    assert_eq!(
+        forward.len(),
+        raw.len(),
+        "a negative price must not drop or add a bar"
+    );
+    let negative: Vec<i64> = forward
+        .iter()
+        .map(|bar| bar.4)
+        .filter(|close| *close < 0)
+        .collect();
+    assert!(
+        !negative.is_empty(),
+        "the fixture must actually produce a negative 前复权 close: {forward:?}"
+    );
+    // Read back through the head row too: the series is published, not merely
+    // written into the bar table.
+    let head = env
+        .forward_head("sh.510050", Adjustment::Forward)
+        .expect("derived head");
+    assert_eq!(head.1 as usize, raw.len(), "published row count");
 }

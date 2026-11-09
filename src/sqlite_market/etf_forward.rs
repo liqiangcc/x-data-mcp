@@ -120,9 +120,17 @@ pub(crate) fn plan_etf_forward(
     // over the factor barriers, so only the bars at or before the stored head
     // ever need reading again — they cannot have changed. A rewrite or a first
     // derivation has to see the whole series (#607 PR-C review r1 item 3).
-    let raw_bars = match (appends, &forward_head) {
-        (true, Some(head)) => {
-            series::bars_in_range(c, raw_head.series_key, head.last_day + 1, i64::MAX)?
+    // Read the tail only for the shape that is *actually* an append: an
+    // appended 不复权 item whose factor digest also moved is a rewrite
+    // (`plan_kind` below), so it needs the whole series. Deciding the read
+    // range from `appends` alone derives a rewrite from the tail and silently
+    // drops the prefix — caught by the negative-price test.
+    let append_only =
+        plan_kind(appends, factors_changed, forward_head.is_some()) == ForwardPlanKind::Append;
+    let forward_last_day = forward_head.as_ref().map(|head| head.last_day);
+    let raw_bars = match forward_last_day {
+        Some(last_day) if append_only => {
+            series::bars_in_range(c, raw_head.series_key, last_day + 1, i64::MAX)?
         }
         _ => series::all_bars(c, raw_head.series_key)?,
     };
@@ -531,6 +539,42 @@ mod tests {
         let bars = [compact(day(2025, 3, 28), 4_111)];
         let derived = derive_forward_bars("sz.159919", &bars, &[]).unwrap();
         assert_eq!(derived[0].close_units, 4_111_000);
+    }
+
+    /// A cumulative cash dividend larger than an early low price makes the
+    /// subtracted 前复权 price negative. `sh.510050`/`sh.510880` have 601 such
+    /// bars in production (lowest −0.286 元). Whether that is delivered,
+    /// blocked or clamped is a semantics decision for the owner (PR-C review
+    /// r2, deferred to PR-D); what this test pins is that PR-C stores the value
+    /// as computed — no panic, no clamp, no rollback — so the decision lands on
+    /// a known behaviour instead of an accidental one.
+    #[test]
+    fn a_negative_forward_price_is_derived_and_stored_as_computed() {
+        // The cat1 `c1` value is in 角 (the chain subtracts `c1/10` 元), so
+        // c1 = 5.0 is a 0.500 元 dividend on a 0.300 元 bar → −0.200 元.
+        let bars = [compact(day(2025, 3, 28), 300)];
+        let events = [event(
+            20250331,
+            crate::etf_qfq::ETF_CATEGORY_CASH,
+            "5.0",
+            "0",
+        )];
+        let derived = derive_forward_bars("sh.510050", &bars, &events).unwrap();
+        assert_eq!(derived[0].close_units, -200_000);
+        assert!(derived[0].open_units < 0);
+        // The bar count is unchanged: a negative price is a value, not a
+        // reason to drop the bar.
+        assert_eq!(derived.len(), bars.len());
+        // And the digest of the series is still well defined, so the version
+        // can be computed and the item committed.
+        let digest = series::fold_bars(
+            "sh.510050",
+            Period::Day,
+            series::SeriesShape::etf(Adjustment::Forward),
+            &derived,
+        )
+        .unwrap();
+        assert_eq!(digest.len(), 32);
     }
 
     /// `raw_changed` as a boolean cannot distinguish an append from a
