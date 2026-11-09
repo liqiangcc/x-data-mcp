@@ -379,7 +379,10 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
 - **每周一次 `{"mode":"full"}`（operator 步骤）**：窗口类来源补齐全部季度、整表类来源重读整表，并推进
   `verified_through`。**由 operator 在周末单独跑**（D-87），不是日更 Skill 的步骤：
   （#625 过渡口径，长轮询上线后改）日更 Skill **不得**仅凭「到周末了 / 本代 run 已终态」自行起 `full`；
-  它只在 `tail` 报 `source_refresh_overdue` 或四个同源 item 失败时兜底跑一次。
+  它只在两种兜底情况才跑一次：`tail` 报 `source_refresh_overdue`，或四个同源 item 返回
+  `source_refresh_overdue` / `source_snapshot_not_found` / `snapshot_incomplete`。
+  **兜底只限这三个错误码**；`source_store_unconfigured` 这类配置错误重跑 `full` 也解决不了，
+  不在兜底范围内，按配置问题报告。
   `full` 只写来源库/索引与 run 记录，不发布数据集，
   下一次日更才读新快照。`full` **异步**：调用立刻返回 `{"status":"running","run_id":…}`，抓取
   在本进程后台线程（客户端断开不影响）；用 `refresh_exchange_sources({"status_of":run_id})`
@@ -399,7 +402,10 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
   （返回 `refresh_already_running` 就轮询那个 run 到 `succeeded`），再重跑当天的 `tail`。
 - 返回 `refresh_already_running`：已有运行中的刷新（`tail` 与 `full` 互斥），读
   `details.run_id` 并轮询**那个** run 到终态，不要再起新 run。
-- 预算：`tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设
+- **轮询预算 vs SLO 门槛**（#625 过渡口径，长轮询上线后改）：轮询能等多久是**墙钟时间**——
+  `tail` 从 `started_at` 起可等 **20 分钟**（探针触发整表时最多 549 个请求，1 req/s 下约 13 分钟），
+  超过 20 分钟仍未到终态才按「轮询预算耗尽」停止。下面是**性能读数（G2）**，**不是轮询的停止条件**：
+  `tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设
   门禁，按表读 `source_refresh_run_sources.elapsed_ms`）、`full` 按来源组计量（D-73：
   原有 7 来源合计 <60min、ETF 4 来源合计 <40min、run 总量不设门禁，按来源读
   `source_refresh_run_sources.elapsed_ms` 之和）；1 req/s 不变。

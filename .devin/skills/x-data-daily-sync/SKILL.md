@@ -230,8 +230,9 @@ v9 起同源的四个派生 item（`derived:security_master`、`derived:security
 `X_DATA_MCP_SOURCE_STORE` 里由 `refresh_exchange_sources` 冻结的快照，并要求最近一次完整
 刷新距今不超过 `H=14` 天。顺序属于 Skill：**先刷新来源，再 plan/run 日更**；一次完整日更的
 顺序是 **`tail` → `plan`/`run_market_update`**；每周 `full` 不在日更内，由 operator 在周末单独执行
-（#625 过渡口径，长轮询上线后改），Skill 只在 `tail` 报 `source_refresh_overdue` 或四个同源
-item 失败时才兜底跑 `full`。
+（#625 过渡口径，长轮询上线后改），Skill 只在两种兜底情况才发起 `full`：`tail` 报
+`source_refresh_overdue`，或四个同源 item 返回 `source_refresh_overdue` /
+`source_snapshot_not_found` / `snapshot_incomplete`。
 
 - 每次日更前（**必做，不可跳过**，plan 之前先完成）：`refresh_exchange_sources({"mode":"tail"})`（开窗 + 上一自然季度；整表类重读
   整表，深市上市/简称先探页 1）。`tail` **异步**（#582）：调用只校验并写 run 记录，立刻返回
@@ -241,7 +242,10 @@ item 失败时才兜底跑 `full`。
   codemode 没有 `setTimeout`，写循环只会变成忙轮询——11-09 实测因此每分钟发出约
   5,000 次 `status_of`，被死循环检测拦停。每段脚本只查一轮、下轮另起；每轮输出带
   `new Date().toISOString()` 与「自 `started_at` 起已过 N 秒」，避免相邻两轮结果相同。
-  预算是**墙钟时间**：`tail` 照现有预算（未触发整表 <300s）从 `started_at` 算起。
+  预算是**墙钟时间，不是 SLO 门槛**（#625 过渡口径，长轮询上线后改）：`tail` 轮询从
+  `started_at` 起可以等 **20 分钟**（探针触发整表时最多 549 个请求，1 req/s 下约 13 分钟；
+  11-06 实测 642 s）。SLO 的 `<300s` 是**性能读数（G2）**，**不是轮询的停止条件**：
+  超过 300 s 只在报告里记成 G2 读数，继续等；超过 20 分钟仍未到终态，才按「轮询预算耗尽」停止。
   同步跑会在客户端 60 s 预算后超时（探针触发整表时最多 549 个请求、1 req/s 下约 13 分钟），
   所以**不要**把它当成一次能拿回报告的调用，也不要重复发 `tail` 等它。终态后按 run 记录的
   `status`、`requests`、`reused`、`failed_windows`、`unobserved_windows`、`verified_through` 复核；
@@ -260,8 +264,12 @@ item 失败时才兜底跑 `full`。
   **不是日更 Skill 的步骤**。Skill 仅凭「到周末了 / 本代 run 已终态」**不得**自作主张起 `full`：
   11-09 日更就因此多跑了一轮完整交易所请求（约 3,900 个，约 71 分钟），而本周 `full` 实际
   已于 11-08 由 operator 跑完。本次日更没有跑 `full` 时，报告里写一句「每周 full 由 operator 执行」即可。
-  下面「`tail` 报 `source_refresh_overdue` 时先 `full`」与「四个同源 item 失败时跑 `full`」
+  下面「`tail` 报 `source_refresh_overdue` 时先 `full`」与「四个同源 item 返回
+  `source_refresh_overdue` / `source_snapshot_not_found` / `snapshot_incomplete` 时跑 `full`」
   是**兜底条件，不是每周例跑**：Skill 仅在这两种情况下才发起 `full`。
+  **兜底只限这三个错误码**：这四个同源 item 实在的失败原因就是冻结集缺失、不完整或过期。
+  `source_store_unconfigured` 这类**配置错误不在兜底范围**——重跑 `full` 也解决不了，
+  按配置问题报告，不要起 `full`。
 - **兜底跑 `full` 时的停止条件（#625 过渡口径，长轮询上线后改）**：按上面的「一轮一查」轮询，
   从 run 的 `started_at` 起 **30 分钟**还没到终态就停下，不再等。报告里写出 `run_id`，
   结论写 `stopped`（等待 `full`），说明后面的 `tail` 重跑与 plan/run 尚未完成；
@@ -290,9 +298,9 @@ item 失败时才兜底跑 `full`。
   再重新 plan/run；`full` 重跑后仍失败才按缺陷报 owner。不要对这四个 item 单独
   `retry_task`，也不要把它们当成实体补漏项。
 - v8 运行时的 `ops` 入口没有该工具（item 内联获取）：本步跳过，其余步骤不变。v9 运行时
-  该工具缺失即 `SKILL_CONTRACT_MISMATCH`。刷新任务不发布数据集，1 req/s 不变；预算为
-  `tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设门禁）、
-  `full` <60min。
+  该工具缺失即 `SKILL_CONTRACT_MISMATCH`。刷新任务不发布数据集，1 req/s 不变；SLO 的性能
+  门槛为 `tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设门禁）、
+  `full` <60min——这些是**性能读数（G2），不是轮询的停止条件**（#625 过渡口径，长轮询上线后改）。
 
 ### 3.1 日线 plan
 
@@ -695,8 +703,9 @@ start_collection{dataset:"market.daily", contract_version:"v2",
 `unknown` 观测、`day` 未明确 pending（不得 acquire；只有 §1.1 判定需要补发布时才继续，且不经 §2）、缺少同次 day-pending 证据的 inflight acquisition、
 `not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝
 （`update_data` 显式批次先按 §3.8 归因，per-item 类别走分裂重试，其余才停）、
-大面积同类 per-item 失败、轮询预算耗尽（含兜底 `full` 从 `started_at` 起 30 分钟未到终态，
-#625 过渡口径）、工具不可用。任务终态 `partially_failed` 与 per-item
+大面积同类 per-item 失败、轮询预算耗尽（获取从 `created_at` 起 45 分钟、`tail` 从 `started_at`
+起 20 分钟、兜底 `full` 从 `started_at` 起 30 分钟未到终态，#625 过渡口径）、工具不可用。
+注意：SLO 的 `tail` <300s 是性能读数（G2），**不是**停止条件。任务终态 `partially_failed` 与 per-item
 `needs_verification` 不属全局停止（见 §3.2/§3.3/§3.7：`REVISION_UNVERIFIED` 走显式补漏，
 其余聚合上报为 fail-closed 集合）。**ETF 批次（§3.3a）是例外**：ETF 任务级失败只停止 ETF
 这部分（报告后继续 §3.4 年线），不回滚 A 股、不重试、不用 `update_data` 补 ETF。停止时旧
