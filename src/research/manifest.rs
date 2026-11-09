@@ -174,6 +174,12 @@ fn series_value(entry: &SeriesEntry, lineage: &LineageIndex) -> Result<Value, Er
         value["last_trade_date"] = json!(etf.last_trade_date.map(|day| day.to_string()));
         value["delisting_date"] = json!(etf.delisting_date.map(|day| day.to_string()));
     }
+    // `#607` PR-E (design §7.1): an ETF 前复权 block names the check set it was
+    // admitted under. Present on that entry only, so every other series entry
+    // keeps exactly the keys it had.
+    if let Some(digest) = &entry.etf_checks_digest {
+        value["etf_checks_digest"] = json!(digest);
+    }
     Ok(value)
 }
 
@@ -215,6 +221,12 @@ pub struct WholeMarket<'a> {
 /// database that differs only in industry rows cannot reuse a `snapshot_id`)
 /// and the `coverage` block (`delisted_series`, `industry_coverage_start`). Both
 /// are functions of the bound inputs, so the manifest stays byte-reproducible.
+///
+/// PR-E added the eighth argument, the ETF 前复权 admission. It stays a flat
+/// list on purpose: every argument is one top-level block of the identity
+/// document, and bundling two of them into a wrapper would move the arity, not
+/// remove it. The function is a pure document builder with one caller.
+#[allow(clippy::too_many_arguments)]
 pub fn identity(
     request: &ExportRequest,
     catalog: &CatalogBinding,
@@ -223,6 +235,7 @@ pub fn identity(
     series: &[SeriesEntry],
     derived: &[DerivedEntry],
     whole_market: &WholeMarket<'_>,
+    etf_forward: &super::read::EtfForwardReport,
 ) -> Result<Value, Error> {
     let WholeMarket { industry, coverage } = whole_market;
     let industry = *industry;
@@ -242,7 +255,7 @@ pub fn identity(
             "assignment_rows": binding.assignment_rows,
         })
     });
-    Ok(json!({
+    let mut identity = json!({
         "schema": SCHEMA,
         "request": request_value(request),
         "catalog": {
@@ -265,7 +278,68 @@ pub fn identity(
         "industry": industry,
         "series": series,
         "derived": derived,
-    }))
+    });
+    // `#607` PR-E (design §7.1/§7.3): the ETF 前复权 admission. In the identity
+    // because a different check set is a different input: two exports of one
+    // database that differ only in which ETFs the gate admitted must not share
+    // a `snapshot_id`.
+    //
+    // **Absent**, not `null`, when no 前复权 row was requested and no check set
+    // was read: a key whose value is `null` is still a key in the canonical
+    // JSON, so writing one would move the `snapshot_id` of a
+    // `--adjustment raw --dataset daily` export away from the id the same
+    // database and request produced before PR-E. Absence keeps that identity
+    // stable, and D-83's same-id deduplication keeps working.
+    if let Some(block) = etf_forward_value(etf_forward) {
+        identity["etf_forward"] = block;
+    }
+    Ok(identity)
+}
+
+/// The `etf_forward` identity block: the check set every admission was judged
+/// with, and the entities it refused with the read face's reason code.
+///
+/// `None` when neither an admission was asked nor a check set was read: then
+/// nothing in the snapshot depends on the source store, and the identity must
+/// not grow a key (see the caller).
+fn etf_forward_value(report: &super::read::EtfForwardReport) -> Option<Value> {
+    if !report.is_judged() && report.checks_digest.is_none() {
+        return None;
+    }
+    Some(Value::Object(
+        [
+            (
+                "checks_digest".to_string(),
+                report
+                    .checks_digest
+                    .clone()
+                    .map_or(Value::Null, Value::String),
+            ),
+            (
+                "admitted".to_string(),
+                json!(report.admitted.keys().cloned().collect::<Vec<_>>()),
+            ),
+            (
+                "blocked".to_string(),
+                Value::Array(
+                    report
+                        .blocked
+                        .iter()
+                        .map(|blocked| {
+                            json!({
+                                "entity": blocked.entity,
+                                "reason": blocked.reason,
+                                "blocking_events": blocked.blocking_events,
+                                "categories": blocked.categories,
+                            })
+                        })
+                        .collect(),
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    ))
 }
 
 /// `snapshot-<32 hex>` of the canonical identity (§7.3, AC-M1-7).
@@ -294,6 +368,10 @@ pub fn files_value(plans: &[FilePlan], stats: Option<&[FileStat]>, compression: 
                     "sha256": stat.map(|s| s.sha256.clone()),
                     "compression": compression,
                     "columns": plan.columns,
+                    // `#607` PR-E (§7.2/§7.3): a file versioned on its own says
+                    // so here. `null` = the snapshot schema and the columns
+                    // describe it fully.
+                    "schema_version": super::file_schema_version(plan.path),
                 })
             })
             .collect(),

@@ -17,6 +17,7 @@ use chrono::{Duration, NaiveDate};
 use rusqlite::{Connection, params};
 use rust_decimal::Decimal;
 use serde_json::json;
+use std::str::FromStr as _;
 
 use super::read::{
     for_each_bar, for_each_calendar_day, for_each_factor, price_units, scaled_units,
@@ -25,7 +26,7 @@ use super::{
     AdjustmentSelection, DatasetSelection, EntitySelection, ExportRequest, plan, verify_unchanged,
 };
 use crate::compact_market::{
-    CompactBar, Digest, EvidenceKind, ExcludedBar, SourceBinding, VersionEvidence,
+    CompactBar, Digest, EvidenceKind, ExcludedBar, PRICE_SCALE_QFQ, SourceBinding, VersionEvidence,
 };
 use crate::market_data::{
     Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, CalendarBatch,
@@ -54,6 +55,195 @@ const CREATED_AT: &str = "2026-10-26T00:00:00Z";
 
 fn tempdir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
+}
+
+/// A check record for `entity`'s first stored ETF event, at the
+/// `evidence_digest` the fixture actually wrote (read from the database, never
+/// guessed). `#607` PR-E's `basis_status` and the admission gate both key on
+/// that digest, so a made-up one would silently exercise the "no record" path.
+#[cfg(feature = "export")]
+fn etf_check_record(
+    fixture: &Fixture,
+    entity: &str,
+    status: crate::source_store::etf_factor_checks::CheckStatus,
+) -> crate::source_store::etf_factor_checks::EtfFactorCheck {
+    use crate::source_store::etf_factor_checks::{CHECKS_VERSION, CheckBasis};
+    let c = fixture.read();
+    let events =
+        crate::sqlite_market::derived::read_adjustment_events_with_evidence(&c, entity).unwrap();
+    let event = events.first().expect("fixture ETF event");
+    // The importer enforces the (status, basis) pairing and the evidence
+    // fields, so a test cannot build a record the production writer would
+    // reject. `basis: none` must leave the evidence pair empty.
+    let basis = match status {
+        crate::source_store::etf_factor_checks::CheckStatus::VerifiedOfficial => {
+            CheckBasis::OfficialQss
+        }
+        crate::source_store::etf_factor_checks::CheckStatus::VerifiedAnnouncement => {
+            CheckBasis::Announcement
+        }
+        _ => CheckBasis::None,
+    };
+    let evidence = basis != CheckBasis::None;
+    crate::source_store::etf_factor_checks::EtfFactorCheck {
+        record_version: CHECKS_VERSION.into(),
+        entity: entity.into(),
+        ordinal: event.event.ordinal,
+        effective_day: event.event.effective_day.to_string(),
+        category: event.event.category,
+        check_status: status,
+        basis,
+        basis_ref: if evidence {
+            "sse_ann:2026-10-21".into()
+        } else {
+            String::new()
+        },
+        evidence_url: if evidence {
+            "https://example.invalid/announcement".into()
+        } else {
+            String::new()
+        },
+        evidence_sha256: if evidence {
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".into()
+        } else {
+            String::new()
+        },
+        announced_value: "2.5".into(),
+        gbbq_value: "2.5".into(),
+        price_delta: "0.0000".into(),
+        within_one_tick: Some(true),
+        checked_at: "2026-11-09".into(),
+        evidence_digest: event
+            .evidence_digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    }
+}
+
+/// A `#607` PR-E gate over a store holding `records`, imported through the real
+/// importer so the gate sees exactly what a deployment would see (the manifest
+/// append the change probe watches, not a hand-made cache).
+#[cfg(feature = "export")]
+fn etf_gate_with(
+    dir: &Path,
+    records: &[crate::source_store::etf_factor_checks::EtfFactorCheck],
+) -> std::sync::Arc<crate::source_store::etf_factor_read_gate::ForwardGate> {
+    use crate::source_store::etf_factor_checks;
+    use crate::source_store::import::{ImportFormat, ImportOptions};
+    let store = crate::source_store::SourceStore::new(dir.join("store"));
+    if !records.is_empty() {
+        let file = dir.join("checks.jsonl");
+        let body: String = records
+            .iter()
+            .map(|record| record.canonical_json().unwrap() + "\n")
+            .collect();
+        std::fs::write(&file, body).unwrap();
+        etf_factor_checks::import(
+            &store,
+            &file,
+            &ImportOptions {
+                format: ImportFormat::EtfFactorChecksJsonl,
+                ..ImportOptions::default()
+            },
+        )
+        .unwrap();
+        // A silently skipped record would make every "admitted" assertion below
+        // pass for the wrong reason (the importer reports skips in its outcome,
+        // not as an error).
+        assert_eq!(
+            etf_factor_checks::read(&store).unwrap().records.len(),
+            records.len(),
+            "the fixture check records did not all import"
+        );
+    }
+    std::sync::Arc::new(crate::source_store::etf_factor_read_gate::ForwardGate::store(store))
+}
+
+/// The gate [`smoke_export_for_external_readers`] exports with: one verified
+/// record for `sh.510050`'s event, so the smoke directory carries an **admitted**
+/// ETF 前复权 block.
+#[cfg(feature = "export")]
+fn smoke_gate(
+    fixture: &Fixture,
+    dir: &Path,
+) -> std::sync::Arc<crate::source_store::etf_factor_read_gate::ForwardGate> {
+    etf_gate_with(
+        dir,
+        &[etf_check_record(
+            fixture,
+            "sh.510050",
+            crate::source_store::etf_factor_checks::CheckStatus::VerifiedOfficial,
+        )],
+    )
+}
+
+/// The two fixture ETFs that carry a 前复权 series
+/// ([`Fixture::populate_etf_forward_series`]).
+const ETF_FORWARD_ENTITIES: [&str; 2] = ["sh.510050", "sz.159919"];
+
+/// `date` as the raw `yyyymmdd` integer the gbbq chain keys events on.
+fn yyyymmdd(date: NaiveDate) -> u32 {
+    use chrono::Datelike as _;
+    date.year() as u32 * 10_000 + date.month() * 100 + date.day()
+}
+
+/// The 前复权 bars of `entity` over `events`, at `price_scale=6`, with the
+/// 不复权 volume/amount/`r7` copied verbatim — the arithmetic
+/// [`crate::sqlite_market::etf_forward`] writes, so the fixture cannot describe
+/// a shape the writer does not produce.
+fn etf_forward_bars(
+    c: &Connection,
+    entity: &str,
+    events: &[crate::etf_qfq::EtfEvent],
+) -> Vec<CompactBar> {
+    let raw = series::read_series_adjusted(c, entity, Period::Day, Adjustment::Raw)
+        .unwrap()
+        .expect("fixture ETF 不复权 series");
+    let stored = series::all_bars(c, raw.series_key).unwrap();
+    let records: Vec<crate::day_file::RawDayRecord> = stored
+        .iter()
+        .map(|bar| {
+            let cents = |units: i64| u32::try_from(units).unwrap();
+            crate::day_file::RawDayRecord {
+                date: crate::compact_market::epoch_date(bar.trade_day).unwrap(),
+                ohlc_raw: [
+                    cents(bar.open_units),
+                    cents(bar.high_units),
+                    cents(bar.low_units),
+                    cents(bar.close_units),
+                ],
+                amount_float32_bits: bar
+                    .amount
+                    .as_deref()
+                    .and_then(|text| text.parse::<f32>().ok())
+                    .map(f32::to_bits)
+                    .unwrap_or(0),
+                volume_raw: bar.volume.map(|v| u32::try_from(v).unwrap()).unwrap_or(0),
+                r7_raw: bar.r7_raw.unwrap_or(0),
+            }
+        })
+        .collect();
+    let adjusted =
+        crate::etf_qfq::etf_forward_adjust_exact(&records, events, PRICE_SCALE_QFQ).unwrap();
+    use num_traits::ToPrimitive as _;
+    let units = |value: Decimal| -> i64 {
+        (value * Decimal::from(10u32.pow(PRICE_SCALE_QFQ)))
+            .to_i64()
+            .unwrap()
+    };
+    stored
+        .iter()
+        .zip(adjusted.iter())
+        .map(|(bar, adj)| CompactBar {
+            open_units: units(adj.open),
+            high_units: units(adj.high),
+            low_units: units(adj.low),
+            close_units: units(adj.close),
+            // The 前复权 series' volume/amount are the 不复权 bytes (design §4.1).
+            ..bar.clone()
+        })
+        .collect()
 }
 
 fn day(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -322,6 +512,37 @@ impl Fixture {
             derived::replace_adjustment_events(c, &set, binding, "task-factor", "item-factor")
                 .unwrap();
         }
+        if etf {
+            // One ETF owner event: `basis_status` in the factor file is only
+            // observable on an ETF row, and PR-E must not fall back to the
+            // A-share constant for it.
+            let set = AdjustmentEventSet {
+                entity: "sh.510050".into(),
+                events: vec![AdjustmentEvent {
+                    ordinal: 0,
+                    effective_day: day(2026, 10, 21),
+                    category: 11,
+                    c_bits: [
+                        f32::to_bits(0.0),
+                        f32::to_bits(0.0),
+                        f32::to_bits(2.5),
+                        f32::to_bits(0.0),
+                    ],
+                    factors: [
+                        Decimal::ZERO,
+                        Decimal::ZERO,
+                        Decimal::new(25, 1),
+                        Decimal::ZERO,
+                    ],
+                    known_at: None,
+                    basis_status: crate::market_data::FactorBasisStatus::Verified,
+                }],
+                excluded: 0,
+                precision: crate::market_data::FactorPrecision::EtfF32Shortest,
+            };
+            derived::replace_adjustment_events(c, &set, binding, "task-etf-factor", "item-1")
+                .unwrap();
+        }
 
         // The derived calendar, committed through its own gate.
         let batch = CalendarBatch {
@@ -382,6 +603,7 @@ impl Fixture {
 
         if etf {
             Self::populate_etf_series(c, binding, version_evidence);
+            Self::populate_etf_forward_series(c, binding, version_evidence);
         }
         Self::populate_security_master(c, binding, etf, delisted);
         Self::populate_industry(c, delisted);
@@ -437,6 +659,57 @@ impl Fixture {
                     instrument_class: crate::market_data::INSTRUMENT_CLASS_ETF,
                     price_scale: crate::compact_market::PRICE_SCALE_LI,
                     content_digest: digest(seed),
+                    record_count: bars.len() as i64,
+                    first_day: bars[0].trade_day,
+                    last_day: bars[bars.len() - 1].trade_day,
+                    coverage_status: CoverageStatus::Complete,
+                    source_binding_digest: binding,
+                    evidence_digest: version_evidence,
+                    last_event_seq: 1,
+                    created_at: CREATED_AT.into(),
+                    updated_at: CREATED_AT.into(),
+                },
+            )
+            .unwrap();
+            series::insert_bars(c, key, &bars).unwrap();
+        }
+    }
+
+    /// The 前复权 series of the two ETF bars above, derived through the
+    /// production arithmetic ([`crate::etf_qfq::etf_forward_adjust_exact`] over
+    /// the fixture's stored owner events), at `price_scale=6` and with the
+    /// 不复权 volume/amount copied verbatim — the shape PR-C's writer produces.
+    ///
+    /// `sh.510050` gets one owner event and `sz.159919` none, so the export
+    /// carries one ETF factor set and the "no record → unverified" case has a
+    /// subject that actually has an event to report.
+    fn populate_etf_forward_series(c: &Connection, binding: Digest, version_evidence: Digest) {
+        let event_day = days()[1];
+        for (index, entity) in ETF_FORWARD_ENTITIES.iter().enumerate() {
+            let events = if *entity == "sh.510050" {
+                vec![crate::etf_qfq::etf_event(
+                    yyyymmdd(event_day),
+                    crate::etf_qfq::ETF_CATEGORY_SCALE,
+                    [
+                        Decimal::ZERO,
+                        Decimal::ZERO,
+                        Decimal::from_str("2.5").unwrap(),
+                        Decimal::ZERO,
+                    ],
+                )]
+            } else {
+                Vec::new()
+            };
+            let bars = etf_forward_bars(c, entity, &events);
+            let key = series::insert_series(
+                c,
+                &NewSeries {
+                    entity: (*entity).into(),
+                    period: Period::Day,
+                    adjustment: Adjustment::Forward,
+                    instrument_class: crate::market_data::INSTRUMENT_CLASS_ETF,
+                    price_scale: crate::compact_market::PRICE_SCALE_QFQ,
+                    content_digest: digest(0x70 + index as u8),
                     record_count: bars.len() as i64,
                     first_day: bars[0].trade_day,
                     last_day: bars[bars.len() - 1].trade_day,
@@ -1459,6 +1732,7 @@ fn rows_stream_with_the_requested_range() {
         "sh.600000",
         Some(day(2026, 10, 21)),
         Some(day(2026, 10, 21)),
+        |_, _| crate::research::read::FactorBasisStatus::Stock,
         |row| {
             factors.push(row);
             Ok(())
@@ -1605,7 +1879,9 @@ fn the_public_read_surface_cannot_see_the_export_only_datasets() {
 #[cfg(feature = "export")]
 mod with_export {
     use super::*;
-    use crate::research::export::{Compression, ExportOptions, SnapshotWriter, dry_run, export};
+    use crate::research::export::{
+        Compression, ExportOptions, SnapshotWriter, dry_run, export, export_with_gate,
+    };
 
     fn options(root: &Path) -> ExportOptions {
         ExportOptions {
@@ -2277,10 +2553,23 @@ mod with_export {
         };
         let target = PathBuf::from(target);
         std::fs::create_dir_all(&target).unwrap();
-        // The ETF fixture, so the pyarrow/duckdb read-back also sees the v4
-        // ETF rows (`instrument_class`, `no_trade`, the D-72 dates).
+        // The ETF fixture, so the pyarrow/duckdb read-back also sees the ETF
+        // rows (`instrument_class`, `no_trade`, the D-72 dates) and — since
+        // `#607` PR-E — a `daily_qfq` ETF block at `price_scale=6` with a
+        // matching `manifest.etf_forward`. The gate is built over a fixture
+        // source store holding one verified check record, so the smoke
+        // directory exercises the **admitted** path rather than only the
+        // fail-closed one; `sz.159919` has no event and is admitted without
+        // facts, `sh.510050` is admitted on its record.
         let fixture = Fixture::with_etf();
-        let outcome = export(fixture.path(), &ExportRequest::default(), &options(&target)).unwrap();
+        let store_dir = tempdir();
+        let outcome = export_with_gate(
+            fixture.path(),
+            &ExportRequest::default(),
+            &options(&target),
+            smoke_gate(&fixture, store_dir.path()),
+        )
+        .unwrap();
         std::fs::write(target.join("snapshot-id.txt"), &outcome.snapshot_id).unwrap();
     }
 }
@@ -2289,5 +2578,7 @@ mod with_export {
 mod delisted;
 #[cfg(feature = "export")]
 mod etf;
+#[cfg(feature = "export")]
+mod etf_qfq;
 #[cfg(feature = "export")]
 mod producer;

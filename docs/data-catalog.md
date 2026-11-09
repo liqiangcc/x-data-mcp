@@ -808,7 +808,7 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
 - 脚本只读、无写，不是服务/MCP/契约的一部分，也没有稳定性承诺。
 - 需要可复现结论时，必须自己记录 `market_series.version_id` 与目录版本（§5.3 的清单形状）。
 
-### 5.3 研究快照导出（preview.36 起部署；preview.46 起已部署 `research-snapshot.v5`，含 M3/ETF 行与 `producer`；preview.45 及以前为 `v4`）
+### 5.3 研究快照导出（preview.36 起部署；preview.46 起已部署 `research-snapshot.v5`，含 M3/ETF 行与 `producer`；preview.45 及以前为 `v4`；`#607` PR-E 的 ETF 前复权行已实现、未部署）
 
 - **随发布包部署**：`export_research` bin（feature `export`，`Cargo.toml:6-17`；默认构建不编译
   它；`scripts/build_release.sh` 自 #413 固定 `--features export` 并在打包后断言该命令存在），
@@ -901,6 +901,56 @@ PR-10/11/12（历史 ST、停复牌、简称写入器）同样已部署：简称
     `created_by` 变化都可能改字节），以 `files[].sha256` 为准。
   - 不做：没有给旧 `v4` 目录补 `producer`；没有改 `snapshot_id` 定义；没有把 `git_sha` 放进
     `algorithms`（`algorithms` 在身份里）。
+- **ETF 前复权进入导出（`#607` PR-E，Refs #607；D-89 第 6 条、D-92 Q8 (a)；代码已实现，未部署）**：
+  - **`daily_qfq` 收录 ETF 行**：只收**门控放行**的 ETF，行就是库里那条 `Forward` 序列的行
+    （`price_scale=6`、`instrument_class=2`），量额与 `daily_raw` 逐字节相同（复权只改四个价格字段）。
+    所以 `daily_qfq` 的 ETF 行与 MCP `market.daily` 的 `qfq` 读回同一份字节；A 股行不变，ETF 块是
+    文件尾部的一段后缀。**不升日线文件的列版本**（列集合没变，只是多了 `instrument_class=2` +
+    `price_scale=6` 这个既有组合，设计 §7.2 (a)）。
+  - **被阻断的 ETF 不是「悄悄少一行」**：它保留 `daily_raw` 行、`daily_qfq` 里没有它，清单
+    `etf_forward.blocked[]` 逐只给出 `entity` 与 `reason`——`reason` 就是读面
+    `details.reason` 的同一个码（`etf_factor_unverified`、`etf_qfq_not_built` 等），另带
+    `blocking_events`/`categories`。`etf_forward.admitted[]` 是放行名单，
+    `etf_forward.checks_digest` 是判定用的 `etf_checks_digest`（来源库核对记录集合的内容摘要）。
+    这三个键进 `snapshot_id` 身份：同一库、换一份核对记录集，是另一份快照。
+  - **门控与读面同一个对象**：导出用
+    `crate::source_store::etf_factor_read_gate::ForwardGate::from_env()`，与 `data_service` 读
+    `market.daily` 时注入的是同一个 `EtfForwardGate`，导出**不自己实现**准入规则（设计 §7.1）。
+  - **环境变量 `X_DATA_MCP_SOURCE_STORE`**：命令行导出是独立进程，必须自己解析来源库——用的就是
+    读面那个变量（`src/source_store/mod.rs` 的 `CONFIG_ENV`）。**vm2 生产导出必须设置它**，
+    例如 `X_DATA_MCP_SOURCE_STORE=/srv/x-data-mcp/source-store export_research --db state/preview.sqlite`；
+    `--help` 里也写了这一句。**不设或读不到不是导出失败**：门控按实体 fail-closed，每只 ETF 都不进
+    `daily_qfq`、都出现在 `etf_forward.blocked[]` 里并给出原因，其余文件照常写出。这正是「宁可少
+    一行也不要悄悄给一条没核对的复权序列」的落地方式。
+  - **`factors.parquet` 加 `basis_status`**：ETF 事件的取值来自**来源库核对记录的 `check_status`**
+    （`verified_official`/`verified_announcement`/`no_effect`），没有覆盖该
+    `(entity, ordinal, evidence_digest)` 的记录就是 `unverified`；A 股事件是固定值
+    `gbbq-verified`（M1 口径，逐事件没有核对记录，编一个就是谎报验证）。
+    **不用** `adjustment_events.basis_status`（那是 schema 27 遗留列，D-92 Q2 (c)）。
+    这一列让 `factors.parquet` 自己升版：清单 `files[].schema_version` 记 `factors=2`，日线文件是
+    `null`（不升版，设计 §7.2/§7.3「两者独立版本化」）。快照 schema 字符串仍是 `v5`——日线列没变，
+    不该让所有消费方跟着升。
+  - **`--adjustment raw` 不变**：不出 ETF 前复权行、不写 `daily_qfq` 文件，日线字节与来源库无关。
+    `factors.parquet` 例外：`basis_status` 是事件自身的属性，与写了哪些日线文件无关，所以 raw 导出
+    的 `factors` 仍依赖核对记录集（清单 `etf_forward.checks_digest` 会反映这一点，`snapshot_id` 随之不同）。
+  - **`scripts/export_smoke.py` 的新断言**（`--snapshot-dir`）：`daily_qfq` 的 ETF 行必须
+    `price_scale=6`；每个出现在 `daily_qfq` 的 ETF 在 `manifest.series[]` 里有 `qfq` 条目（即
+    `market_series` 里有 `Forward` 行）且在 `etf_forward.admitted[]` 里；`daily_raw` 里的每只 ETF
+    要么放行要么阻断（既不在放行也不在阻断就是「悄悄漏掉」，报错）；`factors.basis_status` 的取值
+    必须在允许集合内，ETF 行不得冒用 A 股固定值。这些规则是纯函数
+    （`etf_admission_problems`），`--self-check` 用构造的清单逐条证明它会拒绝坏形状，CI 先跑
+    `--self-check` 再跑真快照。
+- **D-94：减法式前复权不能直接算收益率（Refs #621）**：本快照的 `daily_qfq` 是**减法式**复权
+  （D-89 §1）：事件把价格减去一个偏移量（现金分红、份额折算折算成价格差），**保持价格差、不保持
+  价格比**。所以：
+  - 早期价格可能 **≤ 0**（0 或负数）：分红累积超过当时的股价时就会这样。已知受影响的是
+    5,562 只 A 股中的 747 只，以及 ETF `sh.510050`、`sh.510880`（#621 记录的范围）。
+  - 因此 `qfq[t]/qfq[t-1]` 在任一端 ≤ 0 时**没有意义**（符号翻转、除零、量级乱跳）。
+  - **算收益率请用 `daily_raw` + `factors`**：原始价配合事件因子做比值运算，A 股与 ETF 一样。
+  - `daily_qfq` 是「差值可加」的价位序列，适合做价差、价差回归、需要同一价位基准的图；不适合
+    当收益率序列。
+  - 自本期起 `daily_qfq` 含 class 2（ETF）行；这条限制对 A 股与 ETF **同样适用**，不是 ETF 专属。
+    清单 `limitations[]` 里也有这条（消费方读清单即可看到，不必读文档）。
 - **旧快照可读**：schema 升版不改读取方约定——`scripts/export_smoke.py` 同时接受 v2/v3/v4/v5，v2 目录
   不要求 M3 文件、`universe_intervals` 按 5 列校验；`snapshot_id` 定义不变，但 schema 字符串在
   身份里，所以同一输入的 v2/v3/v4/v5 `snapshot_id` 不同、不会互相覆盖。

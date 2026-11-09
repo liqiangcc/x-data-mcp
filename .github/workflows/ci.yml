@@ -159,6 +159,11 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/research-venv"
           "$RUNNER_TEMP/research-venv/bin/pip" install --disable-pip-version-check \
             'pyarrow==26.0.0' 'duckdb==2.0.0'
+          # Offline first: the rules the snapshot check applies, including the
+          # `#607` PR-E ETF admission, against hand-built manifests. A rule that
+          # stopped rejecting a broken snapshot fails here even when today's
+          # snapshot happens to be consistent.
+          "$RUNNER_TEMP/research-venv/bin/python" scripts/export_smoke.py --self-check
           "$RUNNER_TEMP/research-venv/bin/python" scripts/export_smoke.py \
             --snapshot-dir "export-smoke/$(cat export-smoke/snapshot-id.txt)"
       - name: Release build cost (§7.6)

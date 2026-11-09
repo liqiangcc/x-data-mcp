@@ -120,8 +120,10 @@ fn etf_rows_do_not_change_the_a_share_plan() {
     };
     assert_eq!(non_etf_values(&plain), non_etf_values(&with));
 
-    // The factor sets (stock only) and the calendar are untouched; the
-    // coverage count of delisted stock series does not count ETFs.
+    // The A-share factor sets and the calendar are untouched; the coverage
+    // count of delisted stock series does not count ETFs. Since `#607` PR-E an
+    // ETF factor set is part of the snapshot too, so the comparison keeps the
+    // A-share entries and asserts the ETF entry is the only addition.
     let stable = |snapshot: &SnapshotPlan| -> Vec<crate::research::DerivedEntry> {
         snapshot
             .derived
@@ -131,18 +133,31 @@ fn etf_rows_do_not_change_the_a_share_plan() {
                     entry.dataset,
                     crate::research::DerivedDataset::AdjustmentEvents
                         | crate::research::DerivedDataset::TradingCalendar
-                )
+                ) && !entry.key.starts_with("sh.51")
+                    && !entry.key.starts_with("sz.159")
             })
             .cloned()
             .collect()
     };
     assert_eq!(stable(&plain), stable(&with));
+    let added: Vec<&str> = with
+        .derived
+        .iter()
+        .filter(|entry| entry.dataset == crate::research::DerivedDataset::AdjustmentEvents)
+        .map(|entry| entry.key.as_str())
+        .filter(|key| key.starts_with("sh.51") || key.starts_with("sz.159"))
+        .collect();
+    assert_eq!(added, ["sh.510050"], "the ETF factor set is exported");
     assert_eq!(plain.coverage, with.coverage);
     assert_eq!(plain.catalog, with.catalog);
 }
 
 #[test]
-fn qfq_only_exports_exclude_etfs_and_an_explicit_etf_is_refused() {
+fn a_gate_without_check_records_leaves_every_etf_out_of_the_qfq_plan() {
+    // `#607` PR-E: the default gate has no source store, so the read face
+    // refuses every ETF with `etf_factor_unverified`. The export must agree:
+    // no ETF enters the 前复权 block, and the manifest says why per entity
+    // instead of the file ending without a word (design §7.1).
     let fixture = Fixture::with_etf();
     let qfq = plan(
         &fixture.read(),
@@ -153,9 +168,23 @@ fn qfq_only_exports_exclude_etfs_and_an_explicit_etf_is_refused() {
     )
     .unwrap();
     assert!(etf_entries(&qfq.series).is_empty());
+    let blocked: Vec<&str> = qfq
+        .etf_forward
+        .blocked
+        .iter()
+        .map(|entry| entry.entity.as_str())
+        .collect();
+    assert_eq!(blocked, ["sh.510050", "sz.159919"]);
+    for entry in &qfq.etf_forward.blocked {
+        // `sz.159919` has one ETF factor event the store has no record for, and
+        // `sh.510050` is judged the same way once its set is unverifiable.
+        assert_eq!(entry.reason, "etf_factor_unverified", "{}", entry.entity);
+    }
+    assert!(qfq.etf_forward.checks_digest.is_none());
 
-    // Naming an ETF for a qfq-only export must say so, not return an empty or
-    // partial file that reads as "this ETF has no data".
+    // Naming an ETF for a 前复权-only export is not a request error any more:
+    // the request is valid, the answer is "blocked, and here is why". An empty
+    // selection is reported as EXPORT_EMPTY, which is also honest.
     let error = plan(
         &fixture.read(),
         &ExportRequest {
@@ -166,10 +195,7 @@ fn qfq_only_exports_exclude_etfs_and_an_explicit_etf_is_refused() {
         },
     )
     .unwrap_err();
-    assert!(
-        error.to_string().contains("adjustment_unavailable"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("EXPORT_EMPTY"), "{error}");
 }
 
 #[test]
@@ -477,9 +503,10 @@ mod export_files {
         let with = exported(&Fixture::with_etf(), etf_out.path());
 
         // Files an ETF does not belong in are byte-identical (sha256 equal).
+        // `factors.parquet` is deliberately not in this list since `#607`
+        // PR-E: it carries the ETF factor event (and its `basis_status`). The
+        // A-share rows of that file are compared below instead.
         for name in [
-            crate::research::DAILY_QFQ_FILE,
-            crate::research::FACTORS_FILE,
             crate::research::CALENDAR_FILE,
             crate::research::INDEX_FILE,
             crate::research::SECURITY_NAMES_FILE,
@@ -514,6 +541,26 @@ mod export_files {
             }
             assert_eq!(before, after, "the new columns are equal on stock rows too");
         }
+        // `factors.parquet`: every A-share row is unchanged, in all eleven v1
+        // columns; `basis_status` (the new column) says `gbbq-verified` for
+        // them, which is the same value an export without ETFs writes.
+        let plain_factors = rows_of(&plain.directory, crate::research::FACTORS_FILE);
+        let with_factors = rows_of(&with.directory, crate::research::FACTORS_FILE);
+        let stock_factors: Vec<&Row> = with_factors
+            .iter()
+            .filter(|row| !text(row, "entity").starts_with("sh.51"))
+            .filter(|row| !text(row, "entity").starts_with("sz.159"))
+            .collect();
+        assert_eq!(plain_factors.len(), 2);
+        assert_eq!(stock_factors.len(), 2);
+        for (before, after) in plain_factors.iter().zip(&stock_factors) {
+            assert_eq!(*before, **after, "the A-share factor rows changed");
+            assert_eq!(
+                text(after, "basis_status"),
+                crate::research::read::FactorBasisStatus::STOCK
+            );
+        }
+
         let plain_universe = rows_of(&plain.directory, crate::research::UNIVERSE_INTERVALS_FILE);
         let with_universe = rows_of(&with.directory, crate::research::UNIVERSE_INTERVALS_FILE);
         assert_eq!(plain_universe.len(), 2);
@@ -594,7 +641,14 @@ mod export_files {
             .iter()
             .map(|v| v.as_str().unwrap())
             .collect();
-        for needle in ["no_trade is derived", "no ETF 前复权", "survivor bias"] {
+        for needle in [
+            "no_trade is derived",
+            "daily_qfq also carries ETF rows",
+            "survivor bias",
+            // D-94: the subtractive 前复权 limit, for A shares and ETFs alike.
+            "preserves price DIFFERENCES",
+            "daily_raw plus factors",
+        ] {
             assert!(
                 limitations.iter().any(|text| text.contains(needle)),
                 "missing ETF limitation {needle:?}"

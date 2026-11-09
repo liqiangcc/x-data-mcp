@@ -60,6 +60,7 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use crate::market_data::{Adjustment, CoverageStatus};
+use crate::research::read::EtfForwardReport;
 
 /// Structured export failures. The `Display` prefix is the machine-readable
 /// code the CLI prints as its one-line reason (§7.1).
@@ -389,6 +390,11 @@ pub struct SeriesEntry {
     pub index: Option<IndexBinding>,
     /// D-72 facts of an ETF series (`None` for every other class).
     pub etf: Option<EtfBinding>,
+    /// `etf_checks_digest` the 前复权 block was admitted under (`#607` PR-E,
+    /// design §7.1). Set on the ETF 前复权 entry only: it records *which check
+    /// set* the gate judged, so a consumer can tell two exports apart that
+    /// differ only in the source store's records.
+    pub etf_checks_digest: Option<String>,
 }
 
 /// The two series-level D-72 dates an ETF series carries (M3-2 PR-D).
@@ -499,6 +505,18 @@ pub struct FilePlan {
     pub temporal: TemporalDecl,
 }
 
+/// The schema version of one exported file, when that file is versioned on its
+/// own (§7.2/§7.3).
+///
+/// The snapshot's `manifest.schema` string names the **snapshot** layout; the
+/// daily files and the factors file are versioned independently, because a
+/// column added to one must not force a consumer of the other to move. `None`
+/// means "no independent version": the file's `columns` and the snapshot schema
+/// describe it fully.
+pub fn file_schema_version(path: &str) -> Option<u32> {
+    (path == FACTORS_FILE).then_some(FACTORS_SCHEMA_VERSION)
+}
+
 /// One dataset's temporal declaration (§12.2). It answers "would a temporal
 /// parameter change this dataset?" before a consumer reads a row, which is the
 /// same question v8's per-dataset `temporal` block answers.
@@ -587,7 +605,21 @@ pub const FACTOR_COLUMNS: &[&str] = &[
     "c4",
     "factor_a",
     "factor_b",
+    // PR-E (D-92 Q8 (a), design §7.3): appended, so a positional reader of the
+    // eleven v3 columns still finds them where it expects them. This is the
+    // `factors` file's own schema change; the daily files stay unchanged
+    // (§7.2 (a)).
+    "basis_status",
 ];
+
+/// Schema version of `factors.parquet` (§7.2/§7.3). The daily files carry no
+/// version of their own — their column set did not change in PR-E — so this is
+/// the only file-level schema the ETF 前复权 delivery bumps.
+///
+/// v1: `ordinal…factor_b` (M1).
+/// v2 (`#607` PR-E): appends `basis_status` (ETF events carry their check
+/// verdict, A-share events carry `gbbq-verified`).
+pub const FACTORS_SCHEMA_VERSION: u32 = 2;
 pub const CALENDAR_COLUMNS: &[&str] = &["trade_day", "sources"];
 pub const INDEX_COLUMNS: &[&str] = &[
     "entity",
@@ -915,6 +947,17 @@ pub struct SnapshotPlan {
     /// Manifest `coverage` block (#446 §10.4).
     pub coverage: Coverage,
     pub files: Vec<FilePlan>,
+    /// The ETF 前复权 admission (§7.1): which ETFs got a `daily_qfq` block, the
+    /// `etf_checks_digest` they were judged with, and every blocked entity with
+    /// the read face's reason code. Part of the identity, because a different
+    /// check set is a different input.
+    pub etf_forward: EtfForwardReport,
+    /// Check verdicts per `(entity, ordinal, evidence_digest)` for the
+    /// `basis_status` column of `factors.parquet` (§7.3). Not part of the
+    /// identity on its own — it is a function of the same check set the
+    /// `etf_checks_digest` in the identity names.
+    pub factor_basis:
+        BTreeMap<(String, i64, String), crate::source_store::etf_factor_checks::CheckStatus>,
     /// The canonical identity document the `snapshot_id` hashes. Printed by
     /// `--dry-run`; also the base of `manifest.json`.
     pub identity: Value,
@@ -946,20 +989,38 @@ pub fn open_read_only(path: &Path) -> Result<Connection, Error> {
 /// bound inputs only (§7.3), so two runs over the same state produce the same
 /// id (AC-M1-7).
 pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Error> {
+    plan_with_gate(c, request, etf_source_gate().as_ref())
+}
+
+/// [`plan`] against an explicitly supplied ETF 前复权 gate.
+///
+/// The gate is the **same** object the MCP read face injects
+/// ([`crate::source_store::etf_factor_read_gate::ForwardGate`]): design §7.1
+/// forbids the export from deciding admission on its own. Tests pass a gate
+/// over a fixture store; the CLI path is [`etf_source_gate`], which resolves
+/// `X_DATA_MCP_SOURCE_STORE` exactly like `data_service` does.
+pub fn plan_with_gate(
+    c: &Connection,
+    request: &ExportRequest,
+    gate: &dyn crate::sqlite_market::series::EtfForwardGate,
+) -> Result<SnapshotPlan, Error> {
     let request = request.clone().validate()?;
     let catalog = read::catalog(c, &request.entities)?;
 
     let mut series = Vec::new();
+    let mut etf_forward = read::EtfForwardReport::default();
     if request.dataset.includes_daily() {
         // Stocks first (the A-share block is a stable prefix of every daily
-        // file), then the ETF 不复权 series (M3-2 PR-D).
-        let daily = read::daily_series(c, &request, catalog.members.as_ref())?;
+        // file), then the ETF block: `raw` always, `qfq` only when the gate
+        // admits the entity (`#607` PR-E).
+        let (daily, report) = read::daily_series(c, &request, catalog.members.as_ref(), gate)?;
         if daily.is_empty() {
             return Err(Error::Empty(
                 "the entity selection has no published daily series".into(),
             ));
         }
         series.extend(daily);
+        etf_forward = report;
     }
     if request.dataset.includes_index() {
         let indexes = read::index_series(c)?;
@@ -1023,6 +1084,21 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
         }
     }
 
+    // The `basis_status` column of `factors.parquet` (§7.3): the same check
+    // records the admission above used, so the column and the gate agree.
+    //
+    // This is asked whenever `factors` is exported, whatever `--adjustment`
+    // says: an ETF event's verdict is a property of the event, not of which
+    // daily files are written. It therefore also makes a `--adjustment raw`
+    // snapshot depend on the check set — through `factors.parquet`, and
+    // through the identity, which records the digest below.
+    let mut factor_basis = BTreeMap::new();
+    if request.dataset.includes_factors()
+        && let Some(set) = gate.check_set()
+    {
+        factor_basis = read::check_status_index(&set);
+        etf_forward.checks_digest = Some(set.digest());
+    }
     let lineage = read::resolve_lineage(c, &series, &derived)?;
     let industry = read::industry_binding(c)?;
     let coverage = Coverage {
@@ -1040,6 +1116,7 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
             industry: industry.as_ref(),
             coverage: &coverage,
         },
+        &etf_forward,
     )?;
     let snapshot_id = manifest::snapshot_id(&identity)?;
     Ok(SnapshotPlan {
@@ -1053,8 +1130,25 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
         industry,
         coverage,
         files: file_plans(&request),
+        etf_forward,
+        factor_basis,
         identity,
     })
+}
+
+/// The ETF 前复权 admission gate of a command-line export (§7.1 requirement 3).
+///
+/// `export_research` is a separate binary from `data_service`, so it resolves
+/// the store on its own — but with the **same** object and the same variable:
+/// [`crate::source_store::etf_factor_read_gate::ForwardGate::from_env`] reads
+/// `X_DATA_MCP_SOURCE_STORE` lazily, exactly as the MCP read face does. A store
+/// that is not configured or cannot be read is **not** an export failure: the
+/// gate fails closed per entity, so every ETF keeps its `daily_raw` rows,
+/// `daily_qfq` gets no ETF row, and the manifest lists each of them with
+/// `etf_factor_unverified` and the cause (design §7.1). Production exports run
+/// on vm2 and must set the variable; see `docs/data-catalog.md` §5.3.
+pub fn etf_source_gate() -> std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate> {
+    std::sync::Arc::new(crate::source_store::etf_factor_read_gate::ForwardGate::from_env())
 }
 
 /// Re-plan on a fresh read-only connection and require the same identity.
@@ -1065,8 +1159,20 @@ pub fn plan(c: &Connection, request: &ExportRequest) -> Result<SnapshotPlan, Err
 /// detects that (the manifest is written only after this succeeds), so a
 /// snapshot is never half old / half new.
 pub fn verify_unchanged(path: &Path, exported: &SnapshotPlan) -> Result<(), Error> {
+    verify_unchanged_with_gate(path, exported, etf_source_gate().as_ref())
+}
+
+/// [`verify_unchanged`] against an explicitly supplied gate (tests, and any
+/// caller that already holds one). The gate must be the same one the plan was
+/// made with: re-planning over a different check set changes the identity, and
+/// that is exactly the drift this guard exists to catch.
+pub fn verify_unchanged_with_gate(
+    path: &Path,
+    exported: &SnapshotPlan,
+    gate: &dyn crate::sqlite_market::series::EtfForwardGate,
+) -> Result<(), Error> {
     let c = open_read_only(path)?;
-    let current = plan(&c, &exported.request)?;
+    let current = plan_with_gate(&c, &exported.request, gate)?;
     if current.snapshot_id != exported.snapshot_id {
         return Err(Error::Drift(format!(
             "snapshot inputs changed during the export: planned {} but the database now binds {}",
@@ -1114,11 +1220,23 @@ pub const LIMITATIONS: &[&str] = &[
      proof: they change no membership, add no `aliases`, and must not be used to \
      collapse two histories; only certainty='confirmed' rows are canonical \
      (#446 §4.3)",
-    "ETF series (instrument_class=2) are 不复权 at price_scale=3 and appear only \
-     in daily_raw (volume in shares: hand-recorded bars are scaled x100 and carry \
-     volume_quantum=100); there is no ETF 前复权, no ETF factor event and no ETF \
-     yearly row in this snapshot, so daily_qfq, factors and any yearly \
-     derivation exclude ETFs (D-70 Q3/Q6)",
+    "ETF series (instrument_class=2) are 不复权 at price_scale=3 in daily_raw \
+     (volume in shares: hand-recorded bars are scaled x100 and carry \
+     volume_quantum=100). From #607 PR-E daily_qfq also carries ETF rows, at \
+     price_scale=6 and only for ETFs the read surface's 前复权 gate admits \
+     (etf_forward.blocked names every ETF it refused, with the same reason code \
+     market.daily returns in details.reason; those ETFs keep their daily_raw \
+     rows and get no daily_qfq row). An ETF's volume and amount in daily_qfq are \
+     the 不复权 bytes. ETF factor events (categories 1 and 11) appear in factors \
+     with their check verdict in basis_status. There is still no ETF yearly row, \
+     so any yearly derivation excludes ETFs (D-70 Q3/Q6, D-92 Q8 (a))",
+    "前复权 is the subtractive adjustment (D-89 §1, D-94): it preserves price \
+     DIFFERENCES, not ratios. Adjusted prices can therefore be <= 0 (negative or \
+     zero) in early history — 747 of 5,562 A shares and the ETFs sh.510050 and \
+     sh.510880 are affected (#621) — and a return computed as qfq[t]/qfq[t-1] is \
+     meaningless when either value is <= 0. Compute returns from daily_raw plus \
+     factors (ratio arithmetic), for A shares and ETFs alike; qfq is a \
+     difference-preserving level series, not a return series",
     "ETF membership is the set of published ETF series, not a catalog: ETFs the \
      exchange lists but whose .day member is absent have no bar rows (they still \
      appear in security_master, and in universe_intervals when a listing date is \

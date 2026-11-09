@@ -31,7 +31,12 @@ const USAGE: &str = "usage: export_research --db <sqlite-path> [--out <dir>] \
 [--start YYYY-MM-DD] [--end YYYY-MM-DD] \
 [--entities sh.600000,sz.000001 | --catalog-version <id>] \
 [--compression snappy|none] [--row-group-rows N] [--dry-run] [--quiet]\n\
-       export_research --list-snapshots [--out <dir>] [--db <sqlite-path>] [--acquire-db <path>] [--quiet]";
+       export_research --list-snapshots [--out <dir>] [--db <sqlite-path>] [--acquire-db <path>] [--quiet]\n\
+\n\
+X_DATA_MCP_SOURCE_STORE names the source store the ETF 前复权 check records \
+live in. It is the same variable data_service reads. Unset or unreadable is not \
+an error: no ETF enters daily_qfq and manifest.etf_forward.blocked names each of \
+them with its reason.";
 
 fn main() -> ExitCode {
     match run() {

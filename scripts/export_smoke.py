@@ -10,6 +10,14 @@ Two modes, both offline:
     DECIMAL(28,18) on fixed-length byte arrays, DATE, INT8, UINT32) are
     readable by both consumers. It does not exercise the Rust writer.
 
+    It also exercises the rules ``--snapshot-dir`` applies that are pure
+    functions of the manifest — the byte check, the per-file schema versions
+    and, since `#607` PR-E, the ETF 前复权 admission
+    ([`etf_admission_problems`]) — against hand-built manifests, including the
+    broken shapes each rule exists to reject. CI runs this mode before the
+    real-snapshot mode, so a rule that stops rejecting a bad snapshot fails
+    even when the snapshot of the day happens to be consistent.
+
 ``--snapshot-dir DIR``
     Read a real export directory: ``manifest.json`` first, then every file it
     lists, with ``pyarrow`` (row count, column order, arrow types) and
@@ -113,6 +121,12 @@ CONTRACT = {
         "c4": DECIMAL_18_2,
         "factor_a": DECIMAL_28_18,
         "factor_b": DECIMAL_28_18,
+        # `#607` PR-E (design §7.3): the evidence behind an event entering the
+        # 前复权 chain. ETF events carry their source-store check verdict
+        # (`verified_official` / `verified_announcement` / `no_effect`) or
+        # `unverified` when no record covers them; A-share events carry the
+        # fixed `gbbq-verified`.
+        "basis_status": pa.string(),
     },
     "calendar.parquet": {
         "trade_day": pa.date32(),
@@ -265,6 +279,12 @@ CONTRACT = {
 # names the ETF layout, so it never needs that look; it also carries
 # `producer`. A v2/v3 directory, and a v4 one without ETF columns, is checked
 # against the shorter contract it was written with.
+#
+# `#607` PR-E adds `factors.parquet.basis_status` and the `etf_forward` identity
+# block **without** moving the snapshot string: the daily files keep their v5
+# columns (design §7.2 (a)), and the factors file is versioned on its own, in
+# `files[].schema_version`. A v5 directory therefore has an eleven- or a
+# twelve-column factors file, and that field says which.
 SCHEMAS = {
     "x-data-mcp.research-snapshot.v2": 2,
     "x-data-mcp.research-snapshot.v3": 3,
@@ -307,8 +327,15 @@ def etf_layout(version: int, files: list[dict]) -> bool | None:
     return seen == {True}
 
 
-def contract_for(name: str, version: int) -> dict[str, pa.DataType] | None:
-    """The column contract of one listed file for the manifest's schema."""
+def contract_for(
+    name: str, version: int, entry: dict | None = None
+) -> dict[str, pa.DataType] | None:
+    """The column contract of one listed file for the manifest's schema.
+
+    `entry` is the file's own manifest record when the caller has it: a file
+    versioned on its own (`files[].schema_version`) is checked against the
+    version it declares, not against the snapshot string.
+    """
     expected = CONTRACT.get(name)
     if expected is None:
         return None
@@ -323,6 +350,16 @@ def contract_for(name: str, version: int) -> dict[str, pa.DataType] | None:
             for column, dtype in expected.items()
             if column not in V4_ADDED[name]
         }
+    if name == "factors.parquet":
+        # `#607` PR-E added `basis_status` to the factors file only. A record
+        # without `schema_version` predates it (or was written by a binary that
+        # did not version the file), so it is the eleven-column layout.
+        if (entry or {}).get("schema_version") is None:
+            return {
+                column: dtype
+                for column, dtype in expected.items()
+                if column != "basis_status"
+            }
     return expected
 
 # The day column each file orders by; the M2 files are intervals, so their
@@ -534,15 +571,29 @@ def check_with_duckdb(name: str, path: pathlib.Path, rows: int) -> None:
         connection.close()
 
 
-def check_etf_rows(directory: pathlib.Path) -> None:
-    """M3-2 PR-D semantics a column-type check cannot see (D-70 Q7, D-72).
+def check_etf_rows(directory: pathlib.Path, manifest: dict | None = None) -> None:
+    """M3-2 PR-D / `#607` PR-E semantics a column-type check cannot see.
+
+    D-70 Q7 / D-72:
 
     * `daily_raw`: class is 0 or 2; `no_trade` is NULL exactly on stock rows;
       an ETF `no_trade` row really has volume 0 and amount 0 and a traded ETF
       row does not; ETF prices are 3dp (`price_scale` 3).
-    * `daily_qfq`: no ETF row (an ETF has no 前复权 series).
     * `universe_intervals`: the two dates exist on ETF rows only, and the last
       traded day never falls after the termination date.
+
+    `#607` PR-E (design §7.1) — `daily_qfq` now carries the ETFs the read
+    surface's 前复权 gate admitted:
+
+    * every ETF row is `price_scale=6` (a 3dp ETF row here would be the 不复权
+      block leaking into the 前复权 file);
+    * every ETF entity in `daily_qfq` has a `qfq` entry in `manifest.series`
+      (i.e. a stored `Forward` row in `market_series`) **and** appears in
+      `manifest.etf_forward.admitted` — the file and the admission cannot
+      disagree;
+    * the admitted and blocked lists partition the ETF entities in `daily_raw`:
+      a blocked ETF keeps its 不复权 rows and is named with a reason, so no ETF
+      is silently missing from the snapshot.
     """
     if duckdb is None:
         return
@@ -575,10 +626,61 @@ def check_etf_rows(directory: pathlib.Path) -> None:
             print(f"ok   daily_raw.parquet: {etf_rows} ETF rows, {flagged} no_trade")
         qfq = directory / "daily_qfq.parquet"
         if qfq.is_file():
-            leaked = connection.execute(
-                f"SELECT count(*) FROM read_parquet({sql_path(qfq)}) WHERE instrument_class <> 0"
+            source = f"read_parquet({sql_path(qfq)})"
+            classes = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE instrument_class NOT IN (0, 2)"
             ).fetchone()[0]
-            check(leaked == 0, f"daily_qfq: {leaked} non-stock rows (ETF has no 前复权)")
+            check(classes == 0, f"daily_qfq: {classes} rows with a class other than 0/2")
+            scale = connection.execute(
+                f"SELECT count(*) FROM {source} WHERE instrument_class = 2 AND price_scale <> 6"
+            ).fetchone()[0]
+            check(scale == 0, f"daily_qfq: {scale} ETF rows not at price_scale 6")
+            etf_entities = sorted(
+                row[0]
+                for row in connection.execute(
+                    f"SELECT DISTINCT entity FROM {source} WHERE instrument_class = 2"
+                ).fetchall()
+            )
+            if etf_entities:
+                print(f"ok   daily_qfq.parquet: {len(etf_entities)} ETF entities at price_scale 6")
+            if manifest is not None:
+                forward = manifest.get("etf_forward") or {}
+                admitted = set(forward.get("admitted") or [])
+                blocked = {
+                    entry["entity"]: entry.get("reason") or ""
+                    for entry in forward.get("blocked") or []
+                }
+                qfq_series = {
+                    entry["entity"]
+                    for entry in manifest.get("series") or []
+                    if entry.get("adjustment") == "qfq"
+                    and entry.get("instrument_class") == "etf"
+                }
+                raw_etfs = []
+                if raw.is_file():
+                    raw_etfs = [
+                        row[0]
+                        for row in connection.execute(
+                            f"SELECT DISTINCT entity FROM read_parquet({sql_path(raw)}) "
+                            "WHERE instrument_class = 2"
+                        ).fetchall()
+                    ]
+                # One rule, exercised offline by `--self-check`: the file and
+                # the admission must tell one story, and no ETF may be missing
+                # from both lists.
+                problems = etf_admission_problems(
+                    qfq_entities=etf_entities,
+                    raw_entities=raw_etfs,
+                    qfq_series=qfq_series,
+                    admitted=admitted,
+                    blocked=blocked,
+                )
+                for problem in problems:
+                    check(False, f"etf_forward: {problem}")
+                print(
+                    f"ok   manifest.etf_forward: {len(admitted)} admitted, "
+                    f"{len(blocked)} blocked, {len(raw_etfs)} ETFs in daily_raw"
+                )
         universe = directory / "universe_intervals.parquet"
         if universe.is_file():
             source = f"read_parquet({sql_path(universe)})"
@@ -592,6 +694,62 @@ def check_etf_rows(directory: pathlib.Path) -> None:
             ).fetchone()[0]
             check(inverted == 0, f"universe_intervals: {inverted} rows trade after the termination date")
             print("ok   universe_intervals.parquet: ETF dates are consistent")
+    finally:
+        connection.close()
+
+
+def check_factor_basis(directory: pathlib.Path) -> None:
+    """`#607` PR-E (design §7.3): the `basis_status` column's value space.
+
+    A value outside the four ETF verdicts and the one A-share value would be a
+    verdict no reader can interpret, and an A-share event claiming a check
+    record would be a verification that does not exist. Both are cheap to see
+    here and expensive to notice downstream.
+    """
+    if duckdb is None:
+        return
+    path = directory / "factors.parquet"
+    if not path.is_file():
+        return
+    connection = duckdb.connect()
+    try:
+        source = f"read_parquet({sql_path(path)})"
+        # `DESCRIBE` needs a relation, not a table function call, so the file is
+        # registered as a view first.
+        connection.execute(f"CREATE VIEW factors AS SELECT * FROM {source}")
+        columns = [
+            row[0] for row in connection.execute("DESCRIBE factors").fetchall()
+        ]
+        if "basis_status" not in columns:
+            return
+        source = "factors"
+        allowed = (
+            "verified_official",
+            "verified_announcement",
+            "no_effect",
+            "unverified",
+            "gbbq-verified",
+        )
+        quoted = ", ".join(f"'{value}'" for value in allowed)
+        unknown = connection.execute(
+            f"SELECT count(*) FROM {source} WHERE basis_status NOT IN ({quoted})"
+        ).fetchone()[0]
+        check(unknown == 0, f"factors: {unknown} rows with an unknown basis_status")
+        # An ETF event can never carry the A-share constant, and vice versa:
+        # the value records which evidence admitted the event.
+        wrong_class = connection.execute(
+            f"SELECT count(*) FROM {source} WHERE "
+            "(basis_status = 'gbbq-verified' AND (entity LIKE 'sh.51%' OR entity LIKE 'sz.159%'))"
+        ).fetchone()[0]
+        check(
+            wrong_class == 0,
+            f"factors: {wrong_class} ETF rows claim the A-share basis value",
+        )
+        counts = connection.execute(
+            f"SELECT basis_status, count(*) FROM {source} GROUP BY 1 ORDER BY 1"
+        ).fetchall()
+        summary = ", ".join(f"{status}={count}" for status, count in counts)
+        print(f"ok   factors.parquet: basis_status {{{summary}}}")
     finally:
         connection.close()
 
@@ -682,7 +840,7 @@ def check_snapshot(directory: pathlib.Path, manifest_sha256: str | None = None) 
         check(path.is_file(), f"{name}: listed in the manifest but missing")
         if not path.is_file():
             continue
-        expected = contract_for(name, columns_version)
+        expected = contract_for(name, columns_version, entry)
         if expected is None:
             check(False, f"{name}: no type contract in this script for schema v{version}")
             continue
@@ -720,7 +878,8 @@ def check_snapshot(directory: pathlib.Path, manifest_sha256: str | None = None) 
     elif "producer" in manifest:
         check(False, f"schema v{version} must not carry a producer block")
     if layout:
-        check_etf_rows(directory)
+        check_etf_rows(directory, manifest)
+        check_factor_basis(directory)
 
     # The owner decision (#381 option 1, D-34): the column exists in the
     # exported schema even while M1 stores NULL.
@@ -829,6 +988,106 @@ def self_check_bytes() -> None:
     print("ok   byte check: consistent directory passes, 6 differences fail")
 
 
+def self_check_etf_admission() -> None:
+    """`#607` PR-E (design §7.1) admission rules, without duckdb.
+
+    The directory-level assertions need duckdb and run in `--snapshot-dir`; the
+    rules themselves are pure, so they are exercised here on the small
+    manifest shapes a broken exporter could produce.
+    """
+    admitted = {"sh.510050", "sz.159919"}
+    blocked = {"sz.159912": "etf_factor_unverified"}
+    # An ETF in daily_qfq that is not admitted is the disagreement this check
+    # exists for: the file and the manifest must tell one story.
+    check(
+        etf_admission_problems(
+            qfq_entities=["sh.510050"],
+            raw_entities=["sh.510050", "sz.159912"],
+            qfq_series={"sh.510050"},
+            admitted=admitted,
+            blocked=blocked,
+        )
+        == [],
+        "a consistent admission was rejected",
+    )
+    check(
+        etf_admission_problems(
+            qfq_entities=["sh.510050", "sh.510880"],
+            raw_entities=["sh.510050", "sh.510880"],
+            qfq_series={"sh.510050", "sh.510880"},
+            admitted=admitted,
+            blocked=blocked,
+        ),
+        "an unadmitted ETF in daily_qfq was accepted",
+    )
+    check(
+        etf_admission_problems(
+            qfq_entities=["sh.510050"],
+            raw_entities=["sh.510050"],
+            qfq_series=set(),
+            admitted=admitted,
+            blocked=blocked,
+        ),
+        "an ETF in daily_qfq without a qfq series entry was accepted",
+    )
+    check(
+        etf_admission_problems(
+            qfq_entities=[],
+            raw_entities=["sh.510050", "sh.510880"],
+            qfq_series=set(),
+            admitted=admitted,
+            blocked=blocked,
+        ),
+        "an ETF that is neither admitted nor blocked was accepted",
+    )
+    check(
+        etf_admission_problems(
+            qfq_entities=[],
+            raw_entities=[],
+            qfq_series=set(),
+            admitted=admitted | {"sz.159912"},
+            blocked=blocked,
+        ),
+        "an ETF both admitted and blocked was accepted",
+    )
+    print("ok   etf admission: 1 consistent shape accepted, 4 broken shapes rejected")
+
+
+def etf_admission_problems(
+    *,
+    qfq_entities: list[str],
+    raw_entities: list[str],
+    qfq_series: set[str],
+    admitted: set[str],
+    blocked: dict[str, str],
+) -> list[str]:
+    """Every way a snapshot's ETF admission can contradict itself (§7.1).
+
+    Returns one message per problem, so `--snapshot-dir` can print them and
+    `--self-check` can prove the rule rejects each shape. Pure: no file, no
+    duckdb.
+    """
+    problems = []
+    for entity in qfq_entities:
+        if entity not in qfq_series:
+            problems.append(
+                f"{entity} is in daily_qfq but has no qfq series entry (no stored Forward row)"
+            )
+        if entity not in admitted:
+            problems.append(f"{entity} is in daily_qfq but not in etf_forward.admitted")
+    for entity in sorted(admitted & set(blocked)):
+        problems.append(f"{entity} is both admitted and blocked")
+    for entity in sorted(set(raw_entities) - admitted - set(blocked)):
+        problems.append(
+            f"{entity} has daily_raw rows but is neither admitted nor blocked "
+            "(a silently missing ETF)"
+        )
+    for entity, reason in blocked.items():
+        if not reason:
+            problems.append(f"{entity} is blocked with no reason")
+    return problems
+
+
 def self_check() -> None:
     """Exercise the readers and the §7.4 type contract without Rust."""
     import decimal
@@ -870,7 +1129,34 @@ def self_check() -> None:
     check(etf_layout(5, short) is True, "v5 is the ETF layout whatever it lists")
     check(etf_layout(3, long) is False, "v3 has no ETF layout")
 
+    # `#607` PR-E: `factors.parquet` is versioned on its own, so the snapshot
+    # string stays v5 and `files[].schema_version` says which layout the file
+    # is. An unversioned record is the pre-PR-E eleven-column file.
+    v1_factors = list(contract_for("factors.parquet", 5))
+    v2_factors = list(contract_for("factors.parquet", 5, {"schema_version": 2}))
+    check(
+        "basis_status" not in v1_factors,
+        "an unversioned factors file must not require basis_status",
+    )
+    check(
+        v2_factors == v1_factors + ["basis_status"],
+        "factors v2 columns are not the v1 ones plus basis_status",
+    )
+    check(
+        list(contract_for("factors.parquet", 5, {"schema_version": None}))
+        == v1_factors,
+        "an explicit null schema_version is the v1 layout",
+    )
+    # The daily files are not versioned on their own: PR-E added no column.
+    for name in ("daily_raw.parquet", "daily_qfq.parquet"):
+        check(
+            list(contract_for(name, 5, {"schema_version": None}))
+            == list(contract_for(name, 5, {"schema_version": 2})),
+            f"{name}: an own schema version must not change the daily columns",
+        )
+
     self_check_bytes()
+    self_check_etf_admission()
 
     for name, expected in CONTRACT.items():
         with tempfile.TemporaryDirectory() as tmp:
