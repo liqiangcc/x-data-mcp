@@ -226,9 +226,16 @@ v9 起同源的四个派生 item（`derived:security_master`、`derived:security
   `refresh_exchange_sources({"status_of":<run_id>})` 轮询到 `succeeded` 或 `failed` 再继续。
   同步跑会在客户端 60 s 预算后超时（探针触发整表时最多 549 个请求、1 req/s 下约 13 分钟），
   所以**不要**把它当成一次能拿回报告的调用，也不要重复发 `tail` 等它。终态后按 run 记录的
-  `status`、`requests`、`failed_windows`、`unobserved_windows`、`verified_through` 复核；
+  `status`、`requests`、`reused`、`failed_windows`、`unobserved_windows`、`verified_through` 复核；
   `status_of` 不回 per-source 行与 `revisions`（与 `full` 相同）。
   `dry_run:true` 只列计划、不发请求。
+- **`tail` 复用已关闭窗口（D-87，自 preview.47（D-87）起）**：窗口类来源
+  （`szse_etf_notice_ann`、`sse_bulletin`、`sse_suspension`、`sse_fund_delist_ann`）的**已关闭
+  窗口**（上一自然季度）不再发请求，直接读穿来源库（sha256 校验后重新解析，任一项不符即
+  fail-closed）。所以同一天的 `tail` 里 `requests` 比以前少、某来源的 `reused` 大于 0 都是
+  **正常读数，不是漏抓**：`requests` 只计真正发出的请求，复用页数在 `reused` 里。**开窗照常
+  抓取**（当前季度窗口一律重新请求，同一天两次 `tail` 也是两次抓取），`full` 任何窗口都不复用。
+  代价是已关闭季度里的修订只有 `full` 能发现，见下面两条。
 - 每周一次：`refresh_exchange_sources({"mode":"full"})`（低峰，周末候选），放在当天
   `run_market_update` **终态之后**（或单独在低峰跑），不要插在 `tail` 与 plan/run 之间。
   `full` **异步**：调用立刻返回 `{"status":"running","run_id":…}`，抓取在本进程后台线程；
@@ -237,6 +244,14 @@ v9 起同源的四个派生 item（`derived:security_master`、`derived:security
   上一自然季度，不能单独让 `H` 闸门长期通过。`full` 终态后把 `run_id` 与起止时间写进报告：
   `finished_at − started_at` 就是 G2 的 <60min 读数；per-table 的 `elapsed_ms` 不在
   `status_of` 回包，由 operator 按 runbook 查 run 表。
+- **每周 `full` 是硬性步骤（D-87，自 preview.47（D-87）起）**：`tail` 复用的已关闭窗口里
+  只有 `full` 能发现修订（公告改标题、停牌更正），所以每周一次 `full` 从「建议」变为日更
+  operator 的**硬性步骤**，不得因为 `tail` 成功而跳过。
+- **`tail` 报 `source_refresh_overdue` 时先 `full`（D-87，自 preview.47（D-87）起）**：说明
+  该来源最近一次 `complete=1` 的 `succeeded` run 的 `verified_through` 已超过 `H=14` 天，
+  已关闭窗口的抓取项 fail-closed 记失败、run 为 `failed`。处理顺序固定：先
+  `refresh_exchange_sources({"mode":"full"})` 并轮询到 `succeeded`，再重跑当天的 `tail`；
+  **不要绕过**（不重抓已关闭窗口、不改 `H`、不跳步直接 plan/run）。
 - 返回 `refresh_already_running`（已有运行中的刷新，含别的日更或 operator 起的）：读
   `details.run_id`，轮询**那个** run 到终态，不要再起新 run；`tail`/`full` 互斥，也不要在
   `full` 未结束时插 `tail`。
