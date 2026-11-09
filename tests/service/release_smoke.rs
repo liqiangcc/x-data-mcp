@@ -10,8 +10,6 @@ const SMOKE_BINARIES: &[&str] = &[
     "mcp_connect",
     "acquire_service",
     "task_sqlite",
-    // #625: the acquire helper's streaming half; bin-dir-only package check.
-    "tdx-fetch-progress",
 ];
 
 fn smoke_bin_dir(built: &std::path::Path, isolated: &std::path::Path, export: bool) {

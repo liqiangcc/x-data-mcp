@@ -1,150 +1,212 @@
 #!/usr/bin/env python3
-"""Tests for `scripts/tdx_fetch.py`'s #625 progress delegation.
+"""Tests for `scripts/tdx_fetch.py` (#625 progress reporting).
 
 The helper is the only thing the acquire service shells out to, so its
-contract is: `head` prints the head object; `fetch` prints one `{"bytes": N}`
-line per landed chunk (when a native streaming helper answers) and the result
-object last; without `X_DATA_MCP_TDX_FETCH_NATIVE` nothing changes.
+stdout contract is what the service's `bytes_done` depends on: `head` prints
+the head object; `fetch` prints one `{"bytes": N}` line per landed chunk and
+the result object last.
 
-No network: the "native" helper is a small script the test writes, so the
-delegation, the progress relay and the byte/digest re-check are exercised
-exactly as the service does.
+The fixture is a local HTTP server on 127.0.0.1 with a wall-clock pause
+between chunks, so the test can prove the progress lines leave the helper
+*while the download is still running* rather than all at the end. No outbound
+network.
 """
+import hashlib
 import json
 import os
 import subprocess
 import sys
-import tempfile
-import textwrap
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("tdx_fetch.py")
 
-
-def run_helper(args, env=None):
-    merged = {k: v for k, v in os.environ.items() if k != "X_DATA_MCP_TDX_FETCH_NATIVE"}
-    merged.update(env or {})
-    return subprocess.run(
-        [sys.executable, str(SCRIPT)] + list(args),
-        capture_output=True,
-        text=True,
-        env=merged,
-    )
+# The helper reads 1 MiB at a time (`CHUNK`), so the payload must span several
+# chunks for more than one progress line to appear.
+PAYLOAD = bytes(range(256)) * (3 * 4096)  # 3 MiB
+CHUNK = 1 << 20
+PAUSE = 0.15
 
 
-class NativeDelegation(unittest.TestCase):
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args):  # keep the test output quiet
+        pass
+
+    def _declared(self):
+        """Only `/base.zip` exists; anything else is a 404 like the feed."""
+        if self.path == "/base.zip":
+            return True
+        self.send_error(404)
+        return False
+
+    def do_HEAD(self):
+        if not self._declared():
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(PAYLOAD)))
+        self.send_header("ETag", '"fixture"')
+        self.end_headers()
+
+    def do_GET(self):
+        if not self._declared():
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(PAYLOAD)))
+        self.send_header("ETag", '"fixture"')
+        self.end_headers()
+        for start in range(0, len(PAYLOAD), CHUNK):
+            self.wfile.write(PAYLOAD[start : start + CHUNK])
+            self.wfile.flush()
+            time.sleep(PAUSE)
+
+
+class HelperProgress(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        cls.url = f"http://127.0.0.1:{cls.server.server_address[1]}/base.zip"
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
     def setUp(self):
+        import tempfile
+
         self.dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.dir.name)
-        self.payload = bytes(range(256)) * 3
+        self.dest = Path(self.dir.name) / "base.zip"
 
     def tearDown(self):
         self.dir.cleanup()
 
-    def write_native(self, body):
-        path = self.root / "native.py"
-        path.write_text("#!/usr/bin/env python3\n" + textwrap.dedent(body), encoding="utf-8")
-        path.chmod(0o755)
-        return path
-
-    def test_without_the_variable_the_helper_runs_as_before(self):
-        # `head` never delegates: the variable must not change that path, so a
-        # URL the local machine cannot reach still fails inside the helper's
-        # own urllib code rather than in the delegation.
-        result = run_helper(
-            ["head", "https://127.0.0.1:9/never-listening"],
-            {"X_DATA_MCP_TDX_FETCH_NATIVE": "/nonexistent/native"},
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("_head", result.stderr, "the helper's own head path ran")
-        self.assertNotIn("nonexistent", result.stderr)
-
-    def test_progress_lines_are_relayed_and_the_result_is_validated(self):
-        payload = self.payload
-        dest = self.root / "base.zip"
-        native = self.write_native(
-            f"""
-            import hashlib, json, sys
-            payload = bytes(range(256)) * 3
-            url, dest = sys.argv[1], sys.argv[2]
-            with open(dest, "wb") as out:
-                for index in range(0, len(payload), 128):
-                    out.write(payload[index:index + 128])
-                    print(json.dumps({{"bytes": min(index + 128, len(payload))}}), flush=True)
-            print(json.dumps({{"status": 200, "etag": '"abc"', "last_modified": None,
-                              "content_length": len(payload), "bytes": len(payload),
-                              "sha256": hashlib.sha256(payload).hexdigest()}}), flush=True)
-            """
-        )
-        result = run_helper(
-            ["fetch", "https://data.tdx.com.cn/vipdoc/base.zip", str(dest)],
-            {"X_DATA_MCP_TDX_FETCH_NATIVE": str(native)},
+    def test_head_prints_one_object(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "head", self.url],
+            capture_output=True,
+            text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        lines = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
-        self.assertEqual(len(lines), 7, lines)
-        self.assertTrue(all(set(line) == {"bytes"} for line in lines[:-1]), lines)
-        self.assertEqual([line["bytes"] for line in lines[:-1]], sorted(line["bytes"] for line in lines[:-1]))
-        self.assertEqual(lines[-1]["bytes"], len(payload))
-        self.assertEqual(lines[-1]["sha256"], __import__("hashlib").sha256(payload).hexdigest())
-        self.assertEqual(dest.read_bytes(), payload)
+        head = json.loads(result.stdout)
+        self.assertEqual(head["status"], 200)
+        self.assertEqual(head["content_length"], len(PAYLOAD))
+        self.assertEqual(head["etag"], '"fixture"')
 
-    def test_a_mismatched_digest_fails_closed(self):
-        dest = self.root / "base.zip"
-        native = self.write_native(
-            """
-            import json, sys
-            payload = bytes(range(256)) * 3
-            with open(sys.argv[2], "wb") as out:
-                out.write(payload)
-            print(json.dumps({"status": 200, "etag": None, "last_modified": None,
-                              "content_length": len(payload), "bytes": len(payload),
-                              "sha256": "0" * 64}), flush=True)
-            """
+    def test_fetch_reports_progress_while_the_download_runs(self):
+        proc = subprocess.Popen(
+            [sys.executable, str(SCRIPT), "fetch", self.url, str(self.dest)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
-        result = run_helper(
-            ["fetch", "https://data.tdx.com.cn/vipdoc/base.zip", str(dest)],
-            {"X_DATA_MCP_TDX_FETCH_NATIVE": str(native)},
+        lines = []
+        seen_before_exit = 0
+        # Read stdout with the child still alive: this is what the service
+        # does, and it is the property the old `output()` call broke.
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            payload = json.loads(line)
+            if "sha256" in payload:
+                lines.append(payload)
+                break
+            seen_before_exit += 1
+            self.assertIsNone(proc.poll(), "a progress line arrived after the exit")
+            lines.append(payload)
+        stderr = proc.stderr.read()
+        self.assertEqual(proc.wait(), 0, stderr)
+        proc.stdout.close()
+        proc.stderr.close()
+
+        progress = [line for line in lines if "sha256" not in line]
+        self.assertGreaterEqual(
+            len(progress),
+            3,
+            f"one progress line per landed chunk, got {lines}",
+        )
+        self.assertEqual(
+            [line["bytes"] for line in progress],
+            sorted(line["bytes"] for line in progress),
+            "progress must be monotonic",
+        )
+        self.assertGreater(seen_before_exit, 0, "no progress during the download")
+        result = lines[-1]
+        self.assertEqual(result["bytes"], len(PAYLOAD))
+        self.assertEqual(result["sha256"], hashlib.sha256(PAYLOAD).hexdigest())
+        self.assertEqual(result["content_length"], len(PAYLOAD))
+        self.assertEqual(self.dest.read_bytes(), PAYLOAD)
+
+    def test_a_failed_fetch_prints_no_result_object(self):
+        destination = Path(self.dir.name) / "missing.zip"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "fetch",
+                self.url.rsplit("/", 1)[0] + "/nope.zip",
+                str(destination),
+            ],
+            capture_output=True,
+            text=True,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("native result mismatch", result.stderr)
-        # The helper prints no result object, so the service never records the
-        # bad bytes as a fetched file.
+        self.assertIn("404", result.stderr)
         self.assertNotIn('"sha256"', result.stdout)
+        self.assertFalse(destination.exists())
 
-    def test_a_failing_native_helper_fails_the_fetch(self):
-        dest = self.root / "base.zip"
-        native = self.write_native(
-            """
-            import sys
-            sys.stderr.write("upstream refused\\n")
-            sys.exit(3)
-            """
-        )
-        result = run_helper(
-            ["fetch", "https://data.tdx.com.cn/vipdoc/base.zip", str(dest)],
-            {"X_DATA_MCP_TDX_FETCH_NATIVE": str(native)},
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("upstream refused", result.stderr)
+    def test_a_truncated_body_fails_closed(self):
+        # The head promises more than the server sends: the size check must
+        # reject it rather than publish a short file.
+        short = len(PAYLOAD) + 4096
 
-    def test_a_missing_result_line_is_an_error(self):
-        dest = self.root / "base.zip"
-        native = self.write_native(
-            """
-            import json, sys
-            with open(sys.argv[2], "wb") as out:
-                out.write(b"x")
-            print(json.dumps({"bytes": 1}), flush=True)
-            """
-        )
-        result = run_helper(
-            ["fetch", "https://data.tdx.com.cn/vipdoc/base.zip", str(dest)],
-            {"X_DATA_MCP_TDX_FETCH_NATIVE": str(native)},
-        )
+        class Truncating(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def do_HEAD(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(short))
+                self.end_headers()
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(short))
+                self.end_headers()
+                self.wfile.write(PAYLOAD)
+                self.wfile.flush()
+                self.close_connection = True
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Truncating)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            destination = Path(self.dir.name) / "short.zip"
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "fetch",
+                    f"http://127.0.0.1:{server.server_address[1]}/hsjday.zip",
+                    str(destination),
+                ],
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("no result line", result.stderr)
+        self.assertIn("size mismatch", result.stderr)
+        self.assertFalse(destination.exists(), "a rejected fetch leaves no file")
 
 
 if __name__ == "__main__":

@@ -86,12 +86,17 @@ refresh_exchange_sources {"status_of":"refresh-full-1794120245537117945","wait_s
 - 写失败不影响下载：进度写失败只记一行日志，任务继续。
 - `bytes_done` 推进不代表阶段变化，也不改变 `state`/`stage`。
 
-实现：服务仍然只托管一个 socket、不自己下载字节。`scripts/tdx_fetch.py` 在
-`X_DATA_MCP_TDX_FETCH_NATIVE` 指向 `tdx-fetch-progress` 时把下载交给这个 Rust 助手，
-助手每落盘一个 1 MiB 分块打印一行 `{"bytes":N}`，最后打印与 helper 相同的结果行；
-helper 再把结果行的字节数与 sha256 对着落盘文件复核一遍后才输出。变量不存在时 helper
-走原路径（逐块下载、结束时一次性输出），行为与 v12 相同。两种路径的
-`bytes`/`sha256`/`Content-Length` 校验、temp+rename+fsync 与 manifest 契约不变。
+实现：服务仍然只托管一个 socket、不自己下载字节。`scripts/tdx_fetch.py` 本来就是按
+1 MiB 分块读取写入的循环，现在每落盘一块就在 stdout 打印并 flush 一行 `{"bytes":N}`，
+结果对象照旧最后打印。字节搬运、`bytes`/`sha256`/`Content-Length` 校验、temp+rename+fsync
+与 manifest 契约全部不变，helper 仍然只用标准库、不新增依赖，release 包也不新增二进制。
+
+服务侧（`src/acquire/fetch.rs`）必须**边跑边读**：用 `Command::spawn()` 配
+`Stdio::piped()`，在 `BufReader::lines()` 上逐行读 stdout，每读到一行进度就上报；
+stderr 由单独线程收集，避免管道写满互相阻塞。`Command::output()` 会等子进程退出才返回，
+用它就只能在下完之后拿到全部进度行，`bytes_done` 在下载期间仍是 0。
+
+进度行只是进度：结果对象永远是最后一行，只读结果的调用方取最后一行即可。
 
 ## 6. 能力 revision：v12 → v13
 
@@ -109,15 +114,16 @@ helper 再把结果行的字节数与 sha256 对着落盘文件复核一遍后�
 
 ## 7. 部署顺序与部署前的影响
 
-1. 部署二进制（含 `tdx-fetch-progress` 落在 `<package>/bin/` 里）即可生效，无需迁移。
+1. 部署二进制与 `scripts/tdx_fetch.py` 即可生效，无需迁移、无需新增包内容。
 2. 不部署时，行为与 v12 完全相同：`latest`/`wait_seconds` 会因 `deny_unknown_fields` 被判
    `invalid_arguments`，客户端在发请求前即可用 `capability_revision` 区分。
-3. `X_DATA_MCP_TDX_FETCH_NATIVE` 由服务在调用 helper 时设置，部署单元不需要配置；
-   二进制缺失时 helper 自动走原路径。
+3. helper 与服务的发布节奏必须一起走：进度行是 helper 打印的，新服务配旧 helper 只会
+   拿到最后的结果行（`bytes_done` 退回 v12 行为，不报错），旧服务配新 helper 则把多余的
+   进度行当解析错误拒绝。`scripts/build_release.sh` 已经把 helper 打进同一个 release 包。
 
 ## 8. 未验证
 
 - 未在 vm2-126 上部署，也没有用真实交易所/官方下载量过进度写频率；进度节流与单调性由
   单元测试（注入 fetcher）覆盖，实际 550 MB 归档的写入次数待部署后采集。
-- `tdx-fetch-progress` 的真实网络路径未在 CI 中跑（CI 不出网）；helper 的委托路径由
-  Python 侧夹具覆盖。
+- 真实官方下载（550 MB 日档）的网络路径未在 CI 中跑（CI 不出网）；helper 的进度行与
+  服务的边跑边读分别由本地 HTTP 夹具与真子进程夹具覆盖。

@@ -57,20 +57,6 @@ pub trait Fetcher: Send + Sync {
 /// Environment variable naming the helper script. Production units set it;
 /// when set it wins outright and its value is used as-is.
 pub const TDX_FETCH_ENV: &str = "X_DATA_MCP_TDX_FETCH";
-/// #625: set (from the legacy-helper bridge) only on the fetch call, to point
-/// the helper at the Rust `tdx-fetch-progress` implementation. Absent means
-/// the helper runs as before.
-const PROGRESS_ENV: &str = "X_DATA_MCP_TDX_FETCH_NATIVE";
-
-/// The `tdx-fetch-progress` binary next to this executable, when it is there
-/// (#625). The packaged release layout puts both in `<package>/bin/`, so the
-/// lookup is the executable's own directory and nothing else; a miss simply
-/// leaves the helper on its pre-#625 path.
-fn native() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let candidate = exe.parent()?.join("tdx-fetch-progress");
-    candidate.is_file().then_some(candidate)
-}
 /// Release-package layout (`scripts/build_release.sh`): binaries land in
 /// `<package>/bin/`, the helper in `<package>/scripts/tdx_fetch.py`.
 const PACKAGED_HELPER: &str = "../scripts/tdx_fetch.py";
@@ -85,6 +71,13 @@ impl Helper {
         let exe = std::env::current_exe().ok();
         let script = Self::resolve(std::env::var_os(TDX_FETCH_ENV), exe.as_deref())?;
         Ok(Self { script })
+    }
+    /// The helper at an explicit path, for tests that drive the real
+    /// spawn-and-stream code with a fixture script.
+    pub fn at(script: impl Into<PathBuf>) -> Self {
+        Self {
+            script: script.into(),
+        }
     }
     /// Resolve the helper path without touching the environment, so the
     /// rules are directly testable. There is deliberately no compile-time
@@ -126,6 +119,52 @@ impl Helper {
             ));
         }
         serde_json::from_slice(&output.stdout).map_err(|e| Error::Output(e.to_string()))
+    }
+    /// #625: run the helper with its stdout streamed line by line, so the
+    /// caller sees each `{"bytes": N}` while the download is still running.
+    ///
+    /// `Command::output()` collects everything and only returns once the child
+    /// has exited, which would leave `bytes_done` at zero for the whole
+    /// download — the thing this is for. So: spawn with a piped stdout, read it
+    /// as it arrives, and collect stderr on its own thread (a helper that
+    /// writes more than a pipe buffer to stderr would otherwise deadlock the
+    /// pair).
+    fn stream(&self, args: &[&str], on_line: &mut dyn FnMut(&str)) -> Result<(), Error> {
+        use std::io::{BufRead, BufReader, Read};
+        let mut child = Command::new("python3")
+            .arg(&self.script)
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Failed(e.to_string()))?;
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
+        let collector = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut reader = BufReader::new(stderr);
+            let _ = reader.read_to_end(&mut buf);
+            buf
+        });
+        for line in BufReader::new(stdout).lines() {
+            let line = match line {
+                Ok(line) => line,
+                // A read error ends the stream; `wait` still decides the
+                // outcome, so this is not an error on its own.
+                Err(_) => break,
+            };
+            if !line.trim().is_empty() {
+                on_line(line.trim());
+            }
+        }
+        let status = child.wait().map_err(|e| Error::Failed(e.to_string()))?;
+        let stderr = collector.join().unwrap_or_default();
+        if !status.success() {
+            return Err(Error::Failed(
+                String::from_utf8_lossy(&stderr).trim().to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 #[derive(Deserialize)]
@@ -172,48 +211,27 @@ impl Fetcher for Helper {
             sha256: f.sha256,
         })
     }
-    /// #625: the helper prints one JSON line per landed chunk on stdout and
-    /// the final result line last, so the service can publish progress while
-    /// the download is still running — the day archive takes minutes at the
-    /// feed's pace and used to show `bytes_done: 0` for all of it.
+    /// #625: the helper prints one `{"bytes": N}` line per landed chunk on
+    /// stdout and the result object last, so the service can publish progress
+    /// while the download is still running — the day archive takes minutes at
+    /// the feed's pace and used to show `bytes_done: 0` for all of it.
     fn fetch_with_progress(
         &self,
         url: &str,
         dest: &Path,
         progress: &crate::acquire::ProgressFn<'_>,
     ) -> Result<FetchResult, Error> {
-        let mut command = Command::new("python3");
-        command
-            .arg(&self.script)
-            .args(["fetch", url, &dest.to_string_lossy()]);
-        if let Some(native) = native() {
-            command.env(PROGRESS_ENV, native.as_os_str());
-        }
-        let output = command.output().map_err(|e| Error::Failed(e.to_string()))?;
-        if !output.status.success() {
-            return Err(Error::Failed(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut final_line: Option<&str> = None;
-        for line in stdout
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-        {
+        let mut final_line: Option<String> = None;
+        self.stream(&["fetch", url, &dest.to_string_lossy()], &mut |line| {
             match serde_json::from_str::<ProgressJson>(line) {
                 Ok(reported) => progress(reported.bytes),
-                Err(_) => final_line = Some(line),
+                // Anything else is the result object, which arrives last.
+                Err(_) => final_line = Some(line.to_string()),
             }
-        }
-        let text = final_line.ok_or_else(|| {
-            Error::Output(format!(
-                "the fetch helper printed no result line: {}",
-                stdout.trim()
-            ))
         })?;
-        decode_fetch(text)
+        let text = final_line
+            .ok_or_else(|| Error::Output("the fetch helper printed no result line".to_string()))?;
+        decode_fetch(&text)
     }
 }
 

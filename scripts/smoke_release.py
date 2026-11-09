@@ -318,13 +318,6 @@ def package_manifest_smoke(binaries):
     assert manifest["binaries"]["export_research"]["bytes"] == (
         binaries / "export_research"
     ).stat().st_size, manifest["binaries"]["export_research"]
-    # #625: the acquire helper's streaming half ships in the same bin directory,
-    # because `scripts/tdx_fetch.py` resolves it next to the executing binary.
-    # A package without it silently loses in-download progress reporting.
-    assert manifest["binaries"]["tdx-fetch-progress"]["bytes"] == (
-        binaries / "tdx-fetch-progress"
-    ).stat().st_size, manifest["binaries"]["tdx-fetch-progress"]
-    assert (binaries / "tdx-fetch-progress").is_file(), "tdx-fetch-progress is missing"
     return True
 
 
