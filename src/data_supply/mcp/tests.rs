@@ -3870,10 +3870,73 @@ fn etf_adjustment_failures_have_stable_error_codes() {
         "adjustment_required_for_etf: specify adjustment".into(),
     ));
     assert_eq!(missing.code, "adjustment_required_for_etf");
-    let unavailable = super::mapped(crate::market_storage::Error::Invalid(
-        "adjustment_unavailable: ETF 前复权 is not delivered".into(),
-    ));
-    assert_eq!(unavailable.code, "adjustment_unavailable");
+}
+
+/// `#607` PR-D (D-92 Q7 (a), design §3.2/§6.3): the ETF 前复权 block keeps the
+/// existing code and puts the reason in `details`. One case per reason code, so
+/// the envelope shape is pinned for every value a client can branch on.
+#[test]
+fn a_blocked_etf_qfq_carries_the_reason_in_details() {
+    use crate::source_store::etf_factor_gate::BlockReason;
+    let reasons = [
+        BlockReason::FactorUnverified,
+        BlockReason::EventOrderUnverified,
+        BlockReason::EventCategoryUnexpected,
+        BlockReason::FactorUnparsable,
+        BlockReason::QfqNotBuilt,
+    ];
+    for reason in reasons {
+        let error = super::mapped(crate::market_storage::Error::AdjustmentUnavailable {
+            message: "ETF sh.510050 has no verified 前复权 series".into(),
+            reason: reason.as_str(),
+            blocking_events: 12,
+            categories: vec![1, 11],
+        });
+        assert_eq!(error.code, "adjustment_unavailable", "{reason}");
+        assert_eq!(
+            error.message, "adjustment_unavailable: ETF sh.510050 has no verified 前复权 series",
+            "{reason}: the code prefix is part of the message, as before"
+        );
+        let details = error.details.expect("details").to_string();
+        assert_eq!(
+            details,
+            json!({
+                "reason": reason.as_str(),
+                "blocking_events": 12,
+                "categories": [1, 11],
+            })
+            .to_string(),
+            "{reason}: the §3.2 details shape"
+        );
+    }
+    // The digest of the check set is the only extra key on an admitted read,
+    // and it never appears on an error.
+    let admitted = crate::data_supply::wire::Metadata {
+        source: "s".into(),
+        published_at: chrono::Utc::now(),
+        coverage_status: "complete".into(),
+        coverage_reason: String::new(),
+        units: vec![],
+        adjustment: None,
+        lineage: None,
+        index: None,
+        verified_through: None,
+        price_scale: Some(6),
+        last_trade_date: None,
+        delisting_date: None,
+        etf_checks_digest: Some("f".repeat(64)),
+    };
+    let encoded = serde_json::to_value(&admitted).unwrap();
+    assert_eq!(encoded["etf_checks_digest"], json!("f".repeat(64)));
+    let mut without = admitted.clone();
+    without.etf_checks_digest = None;
+    assert!(
+        serde_json::to_value(&without)
+            .unwrap()
+            .get("etf_checks_digest")
+            .is_none(),
+        "every other shape keeps its bytes"
+    );
 }
 
 /// `get_data_capabilities` carries the series shapes as data: the ETF raw
@@ -3899,6 +3962,43 @@ fn capabilities_express_the_etf_raw_shape_and_units() {
     assert_eq!(etf["volume_unit"], json!("share"));
     assert_eq!(etf["volume_quantum"], json!(100));
     assert_eq!(etf["default"], json!(false));
+    // `#607` PR-D: the 前复权 shape is listed too (the capability exists; a
+    // blocked entity is an entity-level fact, §6.3). It is not a default: an
+    // ETF still needs an explicit `adjustment`.
+    let qfq = caps["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| {
+            row["dataset"] == json!("market.daily")
+                && row["instrument_class"] == json!("etf")
+                && row["adjustment"] == json!("qfq")
+        })
+        .expect("ETF 前复权 shape is declared");
+    assert_eq!(qfq["price_scale"], json!(6));
+    assert_eq!(qfq["price_unit"], json!("yuan"));
+    assert_eq!(qfq["volume_unit"], json!("share"));
+    assert_eq!(qfq["volume_quantum"], json!(100));
+    assert_eq!(qfq["default"], json!(false));
+    // The derivation labels come from code constants, not copies.
+    assert_eq!(
+        caps["algorithm_versions"],
+        json!({
+            "qfq": crate::qfq::ALGORITHM_VERSION,
+            "etf_factor_checks": crate::source_store::etf_factor_checks::CHECKS_VERSION,
+        })
+    );
+    assert_eq!(
+        caps["capability_revision"],
+        json!("generic-data-v12"),
+        "the ETF 前复权 read surface is a wire-visible change (D-70 Q10)"
+    );
+    // The compact catalog keeps its bytes: neither block appears without a
+    // dataset/operation request.
+    let compact = f.api.call("get_data_capabilities", json!({})).unwrap();
+    assert!(compact.get("series").is_none());
+    assert!(compact.get("algorithm_versions").is_none());
+    assert_eq!(compact["capability_revision"], json!("generic-data-v12"));
 }
 
 #[test]
@@ -4149,6 +4249,21 @@ fn get_daily_bars_keeps_the_etf_and_batch_rules() {
         )
         .unwrap_err();
     assert_eq!(qfq.code, "adjustment_unavailable");
+    // The fixture stores no 前复权 series for this ETF, so the reason names
+    // exactly that (PR-D: a distinct code from "stored but unverified").
+    assert_eq!(
+        qfq.details.as_ref().map(|d| d.to_string()).as_deref(),
+        Some(
+            json!({
+                "reason": "etf_qfq_not_built",
+                "blocking_events": 0,
+                "categories": [],
+            })
+            .to_string()
+            .as_str()
+        ),
+        "{qfq:?}"
+    );
     // A mixed batch without an adjustment is refused because of its ETF member.
     let mixed = f
         .api

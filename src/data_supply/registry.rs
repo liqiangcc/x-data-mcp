@@ -409,6 +409,21 @@ pub fn series_capabilities() -> Vec<SeriesCapability> {
             Some(100),
             false,
         ),
+        // `#607` PR-D: the 前复权 shape is delivered per entity once the
+        // factor-check gate admits it (D-89 §6). `default=false` — an ETF still
+        // requires an explicit `adjustment`, so a request without one keeps
+        // failing closed (D-70 Q4). A blocked entity is an entity-level fact,
+        // not a missing capability (§6.3): the row stays listed.
+        row(
+            Dataset::Daily,
+            "etf",
+            "qfq",
+            6,
+            "yuan",
+            "share",
+            Some(100),
+            false,
+        ),
         row(
             Dataset::Yearly,
             "stock",
@@ -442,6 +457,14 @@ pub struct Capabilities {
     /// stays a pure tool table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub series: Option<Vec<SeriesCapability>>,
+    /// Derivation labels this instance can produce, read from code constants
+    /// (never hand-written). Present with the detailed view only, so the
+    /// compact catalog stays byte-identical. `etf_factor_checks` is the parser
+    /// version of the factor-check records behind an admitted ETF 前复权 answer
+    /// (`#607` PR-D, D-92 Q2 (c)); pair it with the response's
+    /// `etf_checks_digest` to name the exact evidence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub algorithm_versions: Option<std::collections::BTreeMap<String, String>>,
     pub max_batch_entities: usize,
     pub max_page_size: usize,
     pub max_snapshot_rows: usize,

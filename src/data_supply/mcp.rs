@@ -30,6 +30,10 @@ pub struct DataApi {
     /// the default keeps the pre-existing `pending_source` answer, and the
     /// service sets `Required` for the ops entry on a compact backend.
     source_store_policy: crate::source_store::Policy,
+    /// The ETF 前复权 admission gate (`#607` PR-D). The default resolves
+    /// `X_DATA_MCP_SOURCE_STORE` lazily and fails closed when it is unset;
+    /// tests replace it with one over a fixture store.
+    etf_gate: Option<std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate>>,
     #[cfg(target_os = "linux")]
     worker_gate: Option<std::sync::Arc<crate::local_runtime::WorkerGate>>,
 }
@@ -82,12 +86,19 @@ impl DataApi {
         access: Access,
         generation: Option<super::generation::GenerationSource>,
     ) -> Result<Self, crate::task_control::Error> {
+        // `#607` PR-D: every read surface asks this gate before serving an ETF
+        // `qfq`. The env-resolved gate is lazy, so an unset
+        // `X_DATA_MCP_SOURCE_STORE` is a per-request fail-closed answer with a
+        // reason instead of a start-up failure.
+        let etf_gate: std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate> =
+            std::sync::Arc::new(crate::source_store::etf_factor_read_gate::ForwardGate::from_env());
         let repository = SqliteSupply {
             market: match backend {
                 Some(backend) => backend,
                 None => crate::sqlite_market::backend::MarketBackend::open(&tasks)
                     .map_err(|e| crate::task_control::Error::StorageUnavailable(e.to_string()))?,
             },
+            etf_gate: Some(etf_gate.clone()),
         };
         // Wraps the contracts whose executors read official files so every
         // accepted item freezes source_generation_id at acceptance.
@@ -190,6 +201,7 @@ impl DataApi {
             market_source: crate::official_market::TdxMarketSource::from_env(),
             generation,
             source_store_policy: crate::source_store::Policy::Optional,
+            etf_gate: Some(etf_gate),
             #[cfg(target_os = "linux")]
             worker_gate: None,
         })
@@ -214,6 +226,16 @@ impl DataApi {
     /// unconfigured store stays `pending_source`.
     pub fn with_source_store_policy(mut self, policy: crate::source_store::Policy) -> Self {
         self.source_store_policy = policy;
+        self
+    }
+    /// Replace the ETF 前复权 admission gate (`#607` PR-D). Tests point it at
+    /// a fixture source store; `None` makes every ETF `qfq` fail closed.
+    pub fn with_etf_gate(
+        mut self,
+        gate: Option<std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate>>,
+    ) -> Self {
+        self.queries.repository.etf_gate = gate.clone();
+        self.etf_gate = gate;
         self
     }
     /// Override the env-installed official-file snapshot source (tests).
@@ -450,10 +472,23 @@ impl DataApi {
                 .filter(|row| args.dataset.is_none_or(|dataset| row.dataset == dataset))
                 .collect()
         });
+        // Derivation labels, taken from the code constants (never copied), so a
+        // client can name the evidence behind a derived answer. Same gate as
+        // `series`: the compact catalog keeps its byte budget.
+        let algorithm_versions = (detailed || args.dataset.is_some()).then(|| {
+            std::collections::BTreeMap::from([
+                ("qfq".to_string(), crate::qfq::ALGORITHM_VERSION.to_string()),
+                (
+                    "etf_factor_checks".to_string(),
+                    crate::source_store::etf_factor_checks::CHECKS_VERSION.to_string(),
+                ),
+            ])
+        });
         encode(Capabilities {
-            capability_revision: "generic-data-v11".into(),
+            capability_revision: "generic-data-v12".into(),
             items,
             series,
+            algorithm_versions,
             max_batch_entities: 100,
             max_page_size: 1000,
             max_snapshot_rows: 100000,
@@ -829,6 +864,28 @@ fn plan_dataset_name(dataset: Dataset) -> &'static str {
 fn mapped(e: Error) -> ApiError {
     if let Error::Task(task) = e {
         return task_error(task);
+    }
+    // `#607` PR-D (D-92 Q7 (a)): the wire code stays `adjustment_unavailable`,
+    // so existing client branches keep working; the stable reason code and the
+    // size of the blocking set go in `details` (§3.2/§6.3). The event list is
+    // never inlined — a blocking set is unbounded.
+    if let Error::AdjustmentUnavailable {
+        ref message,
+        reason,
+        blocking_events,
+        ref categories,
+    } = e
+    {
+        let mut error = ApiError::new(
+            "adjustment_unavailable",
+            format!("adjustment_unavailable: {message}"),
+        );
+        error.details = Some(Box::new(json!({
+            "reason": reason,
+            "blocking_events": blocking_events,
+            "categories": categories,
+        })));
+        return error;
     }
     let code = match &e {
         Error::Invalid(s) if s == "forbidden" => "forbidden",

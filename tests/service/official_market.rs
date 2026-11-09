@@ -932,6 +932,7 @@ struct Rig {
 fn accept_daily(market: &SqliteMarket, run: &str, exchange: &str, code: &str) -> Rig {
     let supply = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        etf_gate: None,
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -1032,6 +1033,7 @@ fn worker_dispatch_routes_daily_collection_to_installed_source() {
     let market = opened(&dir);
     let supply = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        etf_gate: None,
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -1139,6 +1141,7 @@ fn non_daily_collection_items_remain_blocked() {
     let market = SqliteMarket::new(tasks.clone());
     let supply = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        etf_gate: None,
     };
     let control = TaskControl::new(
         tasks,

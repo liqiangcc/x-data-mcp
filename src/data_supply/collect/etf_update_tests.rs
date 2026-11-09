@@ -444,7 +444,16 @@ fn setup() -> Env {
         Access::local(),
         Some(generation.clone()),
     )
-    .unwrap();
+    .unwrap()
+    // `#607` PR-D: this fixture measures the *storage* half (PR-C), so the
+    // admission gate is pinned closed instead of depending on the ambient
+    // `X_DATA_MCP_SOURCE_STORE`. Every ETF `qfq` read here is fail-closed in
+    // both arms, which is what the equivalence test asserts.
+    .with_etf_gate(Some(std::sync::Arc::new(
+        crate::source_store::etf_factor_read_gate::ForwardGate::unavailable(
+            "the storage fixture wires no source store",
+        ),
+    )));
     api.call(
         "start_collection",
         json!({
@@ -562,6 +571,7 @@ impl Env {
         .unwrap();
         Queries::new(SqliteSupply {
             market: self.backend.clone(),
+            etf_gate: None,
         })
         .query(query, &Access::local())
         .unwrap()
@@ -1266,6 +1276,7 @@ fn etf_factor_reads_have_no_universe_scope_and_respect_access() {
         .unwrap();
         Queries::new(SqliteSupply {
             market: env.backend.clone(),
+            etf_gate: None,
         })
         .query_v2(query, access)
     };
@@ -1789,6 +1800,7 @@ impl Env {
                         "code": error.code,
                         "message": error.message,
                         "outcome_certainty": error.outcome_certainty,
+                        "details": error.details,
                     }
                 }),
             }
@@ -1938,11 +1950,61 @@ fn a_stored_etf_forward_series_changes_no_read_or_maintenance_surface() {
             other => other.clone(),
         }
     }
-    for ((name, a), (_, b)) in present.iter().zip(absent.iter()) {
+    // `#607` PR-D: the `qfq` surfaces are the one place the two arms must now
+    // differ, because the derived rows exist only in the first. Both must be
+    // fail-closed with the gate closed — no rows, one error code — and the
+    // reason code is exactly what distinguishes them (`etf_factor_unverified`
+    // for a stored-but-unverified series, `etf_qfq_not_built` when nothing is
+    // stored). Everything else stays byte-identical (the PR-C claim).
+    let qfq = |surfaces: &[(String, serde_json::Value)]| -> Vec<(String, serde_json::Value)> {
+        surfaces
+            .iter()
+            .filter(|(name, _)| name.contains(" qfq "))
+            .cloned()
+            .collect()
+    };
+    let rest = |surfaces: &[(String, serde_json::Value)]| -> Vec<(String, serde_json::Value)> {
+        surfaces
+            .iter()
+            .filter(|(name, _)| !name.contains(" qfq "))
+            .cloned()
+            .collect()
+    };
+    let (present_rest, absent_rest) = (rest(&present), rest(&absent));
+    assert_eq!(present_rest.len(), absent_rest.len());
+    for ((name, a), (_, b)) in present_rest.iter().zip(absent_rest.iter()) {
         assert_eq!(
             volatile_free(a),
             volatile_free(b),
             "surface {name} differs once the 前复权 rows exist"
+        );
+    }
+    let (present_qfq, absent_qfq) = (qfq(&present), qfq(&absent));
+    assert!(
+        !present_qfq.is_empty(),
+        "the fixture asks every qfq surface"
+    );
+    let reason = |value: &serde_json::Value| -> String {
+        value["error"]["details"]["reason"]
+            .as_str()
+            .unwrap_or_else(|| panic!("expected a fail-closed error, got {value}"))
+            .to_string()
+    };
+    for ((name, a), (_, b)) in present_qfq.iter().zip(absent_qfq.iter()) {
+        assert_eq!(
+            a["error"]["code"], "adjustment_unavailable",
+            "{name} must stay fail-closed, never an empty page"
+        );
+        assert_eq!(b["error"]["code"], "adjustment_unavailable", "{name}");
+        assert_eq!(
+            reason(a),
+            "etf_factor_unverified",
+            "{name}: a stored 前复权 series nobody verified is blocked"
+        );
+        assert_eq!(
+            reason(b),
+            "etf_qfq_not_built",
+            "{name}: no stored series is a different, distinct reason"
         );
     }
 }

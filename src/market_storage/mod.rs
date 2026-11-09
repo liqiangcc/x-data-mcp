@@ -35,6 +35,24 @@ pub enum Error {
     Stale(String),
     #[error("INVALID_MARKET_COMMAND: {0}")]
     Invalid(String),
+    /// An ETF 前复权 read the delivery gate refuses (`#607` PR-D, D-92 Q7
+    /// (a)). The wire code stays `adjustment_unavailable` and the envelope
+    /// carries `details.reason` — the stable reason code of
+    /// `source_store::etf_factor_gate::BlockReason` — plus
+    /// `details.blocking_events`/`details.categories`. It is a distinct
+    /// variant rather than an `Invalid(String)` so the reason cannot be lost
+    /// between the storage layer and the protocol mapping.
+    #[error("adjustment_unavailable: {message}")]
+    AdjustmentUnavailable {
+        /// Message body after the stable code prefix.
+        message: String,
+        /// Stable reason code (`docs/tasks/issue-607-etf-qfq.md` §3.2).
+        reason: &'static str,
+        /// How many events the reason applies to (never the event list).
+        blocking_events: usize,
+        /// Categories of those events, ascending and deduplicated.
+        categories: Vec<u8>,
+    },
     #[error("PUBLISH_OUTCOME_UNKNOWN: {0}; inspect the same publication_id")]
     OutcomeUnknown(String),
     #[error("GAP_BASIS_NOT_VERIFIED: {0}")]

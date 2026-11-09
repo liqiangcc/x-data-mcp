@@ -28,6 +28,7 @@ fn paged_query_shares_one_snapshot_and_byte_cap_evicts_lru() {
     market::published_fixture(&store, &market::samples()[0]["record"]);
     let repo = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        etf_gate: None,
     };
     let access = Access::local();
 

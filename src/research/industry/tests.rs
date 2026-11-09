@@ -170,6 +170,7 @@ impl Fixture {
     fn supply(&self) -> SqliteSupply {
         SqliteSupply {
             market: MarketBackend::open(&SqliteTasks::new(&self.path)).unwrap(),
+            etf_gate: None,
         }
     }
 }

@@ -190,7 +190,8 @@ pub(crate) fn head(c: &Connection, scope: &Scope) -> Result<Option<String>, Erro
         // predicate lives in `series::read_public_series` so head resolution
         // and version listing cannot drift apart.
         return Ok(
-            series::read_public_series(c, &scope.symbol, scope.period)?.map(|row| row.version_id)
+            series::read_public_series(c, &scope.symbol, scope.period, None)?
+                .map(|row| row.version_id),
         );
     }
     if is_compact_schema(c)? {

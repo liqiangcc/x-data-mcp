@@ -249,6 +249,7 @@ fn manifest(identity: &Identity) -> ManifestEntry {
             price_scale: None,
             last_trade_date: None,
             delisting_date: None,
+            etf_checks_digest: None,
         }),
         stale: None,
         as_of_day: None,

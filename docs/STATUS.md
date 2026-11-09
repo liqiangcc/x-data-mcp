@@ -22,6 +22,14 @@ vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
 已关闭窗口（Refs #604）。schema 仍为 27，capability revision 仍为 `generic-data-v11`，工具数不变，
 只换二进制（部署后在同一 PR 更新本文件）。
 
+**代码面已到 `generic-data-v12`（未部署，2026-11-08）**：#607 PR-D 把
+`market.daily` + ETF + `adjustment=qfq` 从「必然 `adjustment_unavailable`」改成按实体核对门槛
+放行或带 `details.reason` 阻断（D-89/D-92），`get_data_capabilities` 新增 ETF `qfq` 的
+`series` 行与 `algorithm_versions`（`qfq`、`etf_factor_checks`），放行的响应带
+`etf_checks_digest`。schema 仍为 27，工具数与工具签名不变，只换二进制。**部署面仍是
+`generic-data-v11`**；部署顺序与部署前的影响见 [generic-data-v12 §7](contracts/generic-data-v12.md)
+（先部署 → 全部 ETF `qfq` 报 `etf_factor_unverified`，owner 批准导入核对记录后放行，不需要重启）。
+
 **preview.46 已部署（2026-11-07T16:52Z）**：vm2-126 已切到 `v0.2.0-preview.46` /
 `c35b425f727fa74ad2cca0f6c9c683213e256b21`（switch 报告
 `/opt/x-data-mcp-preview/reports/preview46-switch-20261107T165152Z.json`：`status=PASS`、

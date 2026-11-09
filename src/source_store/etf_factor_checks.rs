@@ -372,15 +372,7 @@ impl CheckSet {
     /// records that took part in a decision), so a response can name the exact
     /// evidence behind its verdict (design §3.2.2 "复现").
     pub fn digest(&self) -> String {
-        let mut hasher = Vec::new();
-        hasher.extend_from_slice(b"etf-checks-v1\0");
-        let mut ids: Vec<&str> = self.shas.iter().map(String::as_str).collect();
-        ids.sort_unstable();
-        for id in ids {
-            hasher.extend_from_slice(id.as_bytes());
-            hasher.push(0);
-        }
-        crate::hash::sha256(&hasher)
+        digest_of(self.shas.iter().map(String::as_str))
     }
 
     /// Every record of `entity`, in store order (see [`Self::records`]).
@@ -409,6 +401,42 @@ impl CheckSet {
             .map(|(key, (record, _))| (key, record))
             .collect()
     }
+}
+
+/// `etf_checks_digest` over a set of record ids: `sha256("etf-checks-v1\0" ||
+/// sorted id || 0 ...)`. Order-free and duplicate-free, so the same record set
+/// always names the same digest.
+fn digest_of<'a>(ids: impl Iterator<Item = &'a str>) -> String {
+    let mut hasher = Vec::new();
+    hasher.extend_from_slice(b"etf-checks-v1\0");
+    let mut ids: Vec<&str> = ids.collect();
+    ids.sort_unstable();
+    ids.dedup();
+    for id in ids {
+        hasher.extend_from_slice(id.as_bytes());
+        hasher.push(0);
+    }
+    crate::hash::sha256(&hasher)
+}
+
+/// The same `etf_checks_digest` [`CheckSet::digest`] reports, computed from the
+/// manifest alone: no blob is opened and no record is parsed.
+///
+/// This is the read gate's **cheap probe** (`#607` PR-D, design §3.2.2): the
+/// gate re-reads the check set only when this digest differs from the one its
+/// loader holds, so an import is picked up without a restart and a request
+/// that changes nothing pays one manifest scan, not one blob read per record.
+/// It equals [`CheckSet::digest`] whenever every blob verifies; a manifest that
+/// names a missing or corrupt blob still compares equal here, and the full
+/// [`read`] then fails closed on it.
+pub fn manifest_digest(store: &SourceStore) -> Result<String, StoreError> {
+    let mut ids: BTreeSet<String> = BTreeSet::new();
+    for record in store.records()? {
+        if record.source_id == CHECKS_SOURCE_ID {
+            ids.insert(record.sha256);
+        }
+    }
+    Ok(digest_of(ids.iter().map(String::as_str)))
 }
 
 /// Read and verify every frozen check record in `store`. Blob digests are
