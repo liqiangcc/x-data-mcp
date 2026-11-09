@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use chrono::{Duration, NaiveDate};
 use rusqlite::{Connection, params};
 use rust_decimal::Decimal;
+use std::str::FromStr as _;
 use serde_json::json;
 
 use super::read::{
@@ -25,7 +26,8 @@ use super::{
     AdjustmentSelection, DatasetSelection, EntitySelection, ExportRequest, plan, verify_unchanged,
 };
 use crate::compact_market::{
-    CompactBar, Digest, EvidenceKind, ExcludedBar, SourceBinding, VersionEvidence,
+    CompactBar, Digest, EvidenceKind, ExcludedBar, PRICE_SCALE_QFQ, SourceBinding,
+    VersionEvidence,
 };
 use crate::market_data::{
     Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, CalendarBatch,
@@ -54,6 +56,74 @@ const CREATED_AT: &str = "2026-10-26T00:00:00Z";
 
 fn tempdir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
+}
+
+/// The two fixture ETFs that carry a 前复权 series
+/// ([`Fixture::populate_etf_forward_series`]).
+const ETF_FORWARD_ENTITIES: [&str; 2] = ["sh.510050", "sz.159919"];
+
+/// `date` as the raw `yyyymmdd` integer the gbbq chain keys events on.
+fn yyyymmdd(date: NaiveDate) -> u32 {
+    use chrono::Datelike as _;
+    date.year() as u32 * 10_000 + date.month() * 100 + date.day()
+}
+
+/// The 前复权 bars of `entity` over `events`, at `price_scale=6`, with the
+/// 不复权 volume/amount/`r7` copied verbatim — the arithmetic
+/// [`crate::sqlite_market::etf_forward`] writes, so the fixture cannot describe
+/// a shape the writer does not produce.
+fn etf_forward_bars(
+    c: &Connection,
+    entity: &str,
+    events: &[crate::etf_qfq::EtfEvent],
+) -> Vec<CompactBar> {
+    let raw = series::read_series_adjusted(c, entity, Period::Day, Adjustment::Raw)
+        .unwrap()
+        .expect("fixture ETF 不复权 series");
+    let stored = series::all_bars(c, raw.series_key).unwrap();
+    let records: Vec<crate::day_file::RawDayRecord> = stored
+        .iter()
+        .map(|bar| {
+            let cents = |units: i64| u32::try_from(units).unwrap();
+            crate::day_file::RawDayRecord {
+                date: crate::compact_market::epoch_date(bar.trade_day).unwrap(),
+                ohlc_raw: [
+                    cents(bar.open_units),
+                    cents(bar.high_units),
+                    cents(bar.low_units),
+                    cents(bar.close_units),
+                ],
+                amount_float32_bits: bar
+                    .amount
+                    .as_deref()
+                    .and_then(|text| text.parse::<f32>().ok())
+                    .map(f32::to_bits)
+                    .unwrap_or(0),
+                volume_raw: bar.volume.map(|v| u32::try_from(v).unwrap()).unwrap_or(0),
+                r7_raw: bar.r7_raw.unwrap_or(0),
+            }
+        })
+        .collect();
+    let adjusted =
+        crate::etf_qfq::etf_forward_adjust_exact(&records, events, PRICE_SCALE_QFQ).unwrap();
+    use num_traits::ToPrimitive as _;
+    let units = |value: Decimal| -> i64 {
+        (value * Decimal::from(10u32.pow(PRICE_SCALE_QFQ)))
+            .to_i64()
+            .unwrap()
+    };
+    stored
+        .iter()
+        .zip(adjusted.iter())
+        .map(|(bar, adj)| CompactBar {
+            open_units: units(adj.open),
+            high_units: units(adj.high),
+            low_units: units(adj.low),
+            close_units: units(adj.close),
+            // The 前复权 series' volume/amount are the 不复权 bytes (design §4.1).
+            ..bar.clone()
+        })
+        .collect()
 }
 
 fn day(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -382,6 +452,7 @@ impl Fixture {
 
         if etf {
             Self::populate_etf_series(c, binding, version_evidence);
+            Self::populate_etf_forward_series(c, binding, version_evidence);
         }
         Self::populate_security_master(c, binding, etf, delisted);
         Self::populate_industry(c, delisted);
@@ -437,6 +508,57 @@ impl Fixture {
                     instrument_class: crate::market_data::INSTRUMENT_CLASS_ETF,
                     price_scale: crate::compact_market::PRICE_SCALE_LI,
                     content_digest: digest(seed),
+                    record_count: bars.len() as i64,
+                    first_day: bars[0].trade_day,
+                    last_day: bars[bars.len() - 1].trade_day,
+                    coverage_status: CoverageStatus::Complete,
+                    source_binding_digest: binding,
+                    evidence_digest: version_evidence,
+                    last_event_seq: 1,
+                    created_at: CREATED_AT.into(),
+                    updated_at: CREATED_AT.into(),
+                },
+            )
+            .unwrap();
+            series::insert_bars(c, key, &bars).unwrap();
+        }
+    }
+
+    /// The 前复权 series of the two ETF bars above, derived through the
+    /// production arithmetic ([`crate::etf_qfq::etf_forward_adjust_exact`] over
+    /// the fixture's stored owner events), at `price_scale=6` and with the
+    /// 不复权 volume/amount copied verbatim — the shape PR-C's writer produces.
+    ///
+    /// `sh.510050` gets one owner event and `sz.159919` none, so the export
+    /// carries one ETF factor set and the "no record → unverified" case has a
+    /// subject that actually has an event to report.
+    fn populate_etf_forward_series(c: &Connection, binding: Digest, version_evidence: Digest) {
+        let event_day = days()[1];
+        for (index, entity) in ETF_FORWARD_ENTITIES.iter().enumerate() {
+            let events = if *entity == "sh.510050" {
+                vec![crate::etf_qfq::etf_event(
+                    yyyymmdd(event_day),
+                    crate::etf_qfq::ETF_CATEGORY_SCALE,
+                    [
+                        Decimal::ZERO,
+                        Decimal::ZERO,
+                        Decimal::from_str("2.5").unwrap(),
+                        Decimal::ZERO,
+                    ],
+                )]
+            } else {
+                Vec::new()
+            };
+            let bars = etf_forward_bars(c, entity, &events);
+            let key = series::insert_series(
+                c,
+                &NewSeries {
+                    entity: (*entity).into(),
+                    period: Period::Day,
+                    adjustment: Adjustment::Forward,
+                    instrument_class: crate::market_data::INSTRUMENT_CLASS_ETF,
+                    price_scale: crate::compact_market::PRICE_SCALE_QFQ,
+                    content_digest: digest(0x70 + index as u8),
                     record_count: bars.len() as i64,
                     first_day: bars[0].trade_day,
                     last_day: bars[bars.len() - 1].trade_day,
