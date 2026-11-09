@@ -255,7 +255,7 @@ pub fn identity(
             "assignment_rows": binding.assignment_rows,
         })
     });
-    Ok(json!({
+    let mut identity = json!({
         "schema": SCHEMA,
         "request": request_value(request),
         "catalog": {
@@ -278,25 +278,35 @@ pub fn identity(
         "industry": industry,
         "series": series,
         "derived": derived,
-        // `#607` PR-E (design §7.1/§7.3): the ETF 前复权 admission. In the
-        // identity because a different check set is a different input: two
-        // exports of one database that differ only in which ETFs the gate
-        // admitted must not share a `snapshot_id`. Omitted entirely when no
-        // 前复权 row was requested, so a `--adjustment raw` snapshot keeps its
-        // previous identity.
-        "etf_forward": etf_forward_value(etf_forward),
-    }))
+    });
+    // `#607` PR-E (design §7.1/§7.3): the ETF 前复权 admission. In the identity
+    // because a different check set is a different input: two exports of one
+    // database that differ only in which ETFs the gate admitted must not share
+    // a `snapshot_id`.
+    //
+    // **Absent**, not `null`, when no 前复权 row was requested and no check set
+    // was read: a key whose value is `null` is still a key in the canonical
+    // JSON, so writing one would move the `snapshot_id` of a
+    // `--adjustment raw --dataset daily` export away from the id the same
+    // database and request produced before PR-E. Absence keeps that identity
+    // stable, and D-83's same-id deduplication keeps working.
+    if let Some(block) = etf_forward_value(etf_forward) {
+        identity["etf_forward"] = block;
+    }
+    Ok(identity)
 }
 
 /// The `etf_forward` identity block: the check set every admission was judged
 /// with, and the entities it refused with the read face's reason code.
-fn etf_forward_value(report: &super::read::EtfForwardReport) -> Value {
-    // `null` only when neither an admission was asked nor a check set was
-    // read: then nothing in the snapshot depends on the source store.
+///
+/// `None` when neither an admission was asked nor a check set was read: then
+/// nothing in the snapshot depends on the source store, and the identity must
+/// not grow a key (see the caller).
+fn etf_forward_value(report: &super::read::EtfForwardReport) -> Option<Value> {
     if !report.is_judged() && report.checks_digest.is_none() {
-        return Value::Null;
+        return None;
     }
-    Value::Object(
+    Some(Value::Object(
         [
             (
                 "checks_digest".to_string(),
@@ -329,7 +339,7 @@ fn etf_forward_value(report: &super::read::EtfForwardReport) -> Value {
         ]
         .into_iter()
         .collect(),
-    )
+    ))
 }
 
 /// `snapshot-<32 hex>` of the canonical identity (§7.3, AC-M1-7).

@@ -671,7 +671,7 @@ fn write_factors(
         let etf = instrument_classes
             .get(&entry.key)
             .is_some_and(|class| *class == INSTRUMENT_CLASS_ETF);
-        let basis = read::basis_lookup(etf, &plan.factor_basis);
+        let basis = read::basis_lookup(&entry.key, etf, &plan.factor_basis);
         let count = read::for_each_factor(
             c,
             &entry.key,

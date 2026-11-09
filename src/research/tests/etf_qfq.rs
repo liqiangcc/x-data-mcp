@@ -826,3 +826,103 @@ fn etf_qfq_export_cost() {
     );
     assert_eq!(qfq.rows as usize, 2 * BARS_PER_ETF);
 }
+
+// ---------------------------------------------------------------------------
+// r1 review (minor 1/2/3)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_raw_only_daily_identity_carries_no_etf_forward_key() {
+    // Review r1 minor 1: a `null` value would still be a key in the canonical
+    // JSON, so it would move the `snapshot_id` of an export that never asked
+    // for a 前复权 row away from the id the same request produced before PR-E.
+    // The block must be **absent**, not `null`.
+    let fixture = Fixture::with_etf();
+    let c = fixture.read();
+    let request = ExportRequest {
+        dataset: DatasetSelection::Daily,
+        adjustment: AdjustmentSelection::Raw,
+        ..ExportRequest::default()
+    };
+    let planned = plan(&c, &request).unwrap();
+    assert!(
+        planned.identity.get("etf_forward").is_none(),
+        "raw-only daily identity grew an etf_forward key: {}",
+        planned.identity
+    );
+    // Same for a dataset that carries neither daily rows nor factors: nothing
+    // in it can depend on the check set.
+    let calendar_only = ExportRequest {
+        dataset: DatasetSelection::Calendar,
+        ..ExportRequest::default()
+    };
+    let planned = plan(&c, &calendar_only).unwrap();
+    assert!(planned.identity.get("etf_forward").is_none());
+
+    // And the block does appear as soon as one is judged, so the absence above
+    // is the exception and not a missing wiring.
+    let judged = ExportRequest::default();
+    let planned = plan(&c, &judged).unwrap();
+    assert!(planned.identity.get("etf_forward").is_some());
+}
+
+#[test]
+fn a_conflicting_instrument_class_leaves_the_entity_unclassified() {
+    // Review r1 minor 2: the doc promised "no entry" for a code the main table
+    // gives two classes to; the code used to keep whichever row was read last.
+    let fixture = Fixture::with_etf();
+    let c = fixture.write();
+    let before = crate::research::read::instrument_classes(&c).unwrap();
+    assert_eq!(before.get("sh.510050"), Some(&2));
+
+    // A second lifecycle row for the same code with the stock class: legal
+    // under the primary key `(exchange, code, effective_from)`.
+    c.execute(
+        "INSERT INTO security_master( \
+             exchange,code,effective_from,effective_to,instrument_class,issuer_key, \
+             issuer_resolution,listing_date,listing_date_tdx,listing_source,b_listing_date, \
+             delisting_date,delisting_date_tdx,delisting_source,delisting_reason_class, \
+             arrangement_start,arrangement_end,listing_conflict,delisting_conflict,known_at, \
+             source_binding_digest,evidence_digest) \
+         SELECT exchange,code,effective_from+1,NULL,0,issuer_key,issuer_resolution, \
+             listing_date,listing_date_tdx,listing_source,b_listing_date,delisting_date, \
+             delisting_date_tdx,delisting_source,delisting_reason_class,arrangement_start, \
+             arrangement_end,listing_conflict,delisting_conflict,known_at, \
+             source_binding_digest,evidence_digest \
+         FROM security_master WHERE exchange='sh' AND code='510050'",
+        [],
+    )
+    .unwrap();
+    let after = crate::research::read::instrument_classes(&c).unwrap();
+    assert_eq!(
+        after.get("sh.510050"),
+        None,
+        "a code with two classes must have no entry"
+    );
+    // The other entities are unaffected: the conflict is per code.
+    assert_eq!(after.get("sz.159919"), Some(&2));
+    assert_eq!(after.get("sh.600000"), Some(&0));
+}
+
+#[test]
+fn a_check_record_only_applies_to_its_own_entity() {
+    // Review r1 minor 3: the lookup keys on `(entity, ordinal, evidence_digest)`
+    // rather than relying on `evidence_digest` happening to be per entity.
+    use crate::research::read::{FactorBasisStatus, basis_lookup};
+    let key = |entity: &str| (entity.to_string(), 0i64, "aa".to_string());
+    let mut checks = std::collections::BTreeMap::new();
+    checks.insert(key("sh.510050"), CheckStatus::VerifiedOfficial);
+
+    let mut own = basis_lookup("sh.510050", true, &checks);
+    assert_eq!(
+        own(0, "aa"),
+        FactorBasisStatus::Check(CheckStatus::VerifiedOfficial)
+    );
+    // Same ordinal and same digest, different entity: no record, so the event
+    // cannot borrow another entity's verdict.
+    let mut other = basis_lookup("sz.159919", true, &checks);
+    assert_eq!(other(0, "aa"), FactorBasisStatus::Unverified);
+    // A non-ETF entity never consults the records at all.
+    let mut stock = basis_lookup("sh.510050", false, &checks);
+    assert_eq!(stock(0, "aa"), FactorBasisStatus::Stock);
+}

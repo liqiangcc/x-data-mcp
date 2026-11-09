@@ -702,10 +702,14 @@ pub(crate) fn factor_sets(
 
 /// `entity` → `security_master.instrument_class` for the entities the factor
 /// file can name. UTF-8 codes are read straight from the table (the file's
-/// `entity` column is `exchange.code`); a code with conflicting classes has no
-/// entry, and its events then take the stock value — a row the export never
-/// assigns a class to cannot claim a check verdict, and the read surface
-/// already fails closed on the conflict (`master_instrument_class`).
+/// `entity` column is `exchange.code`).
+///
+/// A code the main table gives **conflicting** classes to (two lifecycle rows,
+/// different `instrument_class`) has no entry: the export never assigns a class
+/// it cannot prove, and a row it cannot classify cannot claim a check verdict,
+/// so that entity's events take the stock value. The read surface fails closed
+/// on the same conflict (`master_instrument_class`), so this is a corruption
+/// fallback, not a classification.
 pub fn instrument_classes(c: &Connection) -> Result<BTreeMap<String, i64>, Error> {
     let mut statement = c
         .prepare("SELECT DISTINCT exchange, code, instrument_class FROM security_master")
@@ -720,9 +724,24 @@ pub fn instrument_classes(c: &Connection) -> Result<BTreeMap<String, i64>, Error
         })
         .map_err(db)?;
     let mut out: BTreeMap<String, i64> = BTreeMap::new();
+    let mut conflicting: BTreeSet<String> = BTreeSet::new();
     for row in rows {
         let (exchange, code, class) = row.map_err(db)?;
-        out.insert(format!("{exchange}.{code}"), class);
+        let entity = format!("{exchange}.{code}");
+        // Sticky: once two classes were seen, no later row re-admits the code.
+        if conflicting.contains(&entity) {
+            continue;
+        }
+        match out.get(&entity) {
+            Some(seen) if *seen != class => {
+                out.remove(&entity);
+                conflicting.insert(entity);
+            }
+            Some(_) => {}
+            None => {
+                out.insert(entity, class);
+            }
+        }
     }
     Ok(out)
 }
@@ -752,7 +771,13 @@ pub fn check_status_index(
 /// `unverified`; every other entity gets the fixed M1 value. The caller passes
 /// the entity's class, not a code prefix (design §1.3: membership comes from
 /// the main table, never from the shape of a code).
+///
+/// The entity is part of the key, not just a label: a record belongs to one
+/// entity's event, and matching on `(ordinal, evidence_digest)` alone would
+/// only work because `evidence_digest` happens to be computed per entity. A
+/// direct `get` states the requirement instead of relying on that.
 pub fn basis_lookup<'a>(
+    entity: &'a str,
     etf: bool,
     checks: &'a BTreeMap<(String, i64, String), CheckStatus>,
 ) -> impl FnMut(i64, &str) -> FactorBasisStatus + 'a {
@@ -761,9 +786,8 @@ pub fn basis_lookup<'a>(
             return FactorBasisStatus::Stock;
         }
         checks
-            .iter()
-            .find(|((_, row, digest), _)| *row == ordinal && digest == evidence_digest)
-            .map_or(FactorBasisStatus::Unverified, |(_, status)| {
+            .get(&(entity.to_string(), ordinal, evidence_digest.to_string()))
+            .map_or(FactorBasisStatus::Unverified, |status| {
                 FactorBasisStatus::Check(*status)
             })
     }
