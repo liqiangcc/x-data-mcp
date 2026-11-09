@@ -77,6 +77,7 @@ fn metadata(i: usize) -> Metadata {
         price_scale: None,
         last_trade_date: None,
         delisting_date: None,
+        etf_checks_digest: None,
     }
 }
 

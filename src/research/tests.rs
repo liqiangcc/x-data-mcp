@@ -1566,17 +1566,17 @@ fn the_public_read_surface_cannot_see_the_export_only_datasets() {
     let c = fixture.read();
     // AC-M1-10: the one visibility predicate the MCP read path uses.
     assert!(
-        series::read_public_series(&c, "sh.000300", Period::Day)
+        series::read_public_series(&c, "sh.000300", Period::Day, None)
             .unwrap()
             .is_none(),
         "index series must stay invisible to the MCP read surface"
     );
-    let stock = series::read_public_series(&c, "sh.600000", Period::Day)
+    let stock = series::read_public_series(&c, "sh.600000", Period::Day, None)
         .unwrap()
         .expect("the stock 前复权 series is visible");
     assert_eq!(stock.adjustment, Adjustment::Forward);
     assert!(
-        series::read_public_series(&c, "sh.600000", Period::Year)
+        series::read_public_series(&c, "sh.600000", Period::Year, None)
             .unwrap()
             .is_none()
     );

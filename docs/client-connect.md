@@ -136,8 +136,15 @@ ssh -o BatchMode=yes vm2-126 \
 }}
 ```
 
-ETF 省略 `adjustment` 会返回 `adjustment_required_for_etf`；`qfq` 对 ETF 当前 fail-closed
-（`adjustment_unavailable`）。这是数据契约，不是连接问题，见 [generic-data-v11](contracts/generic-data-v11.md)。
+ETF 省略 `adjustment` 会返回 `adjustment_required_for_etf`；`qfq` 在部署面（`generic-data-v11`）
+上对 ETF 一律 fail-closed（`adjustment_unavailable`），代码面（`generic-data-v12`，未部署）改成按实体的
+核对门槛放行或带 `details.reason` 阻断。这是数据契约，不是连接问题，见
+[generic-data-v11](contracts/generic-data-v11.md) 与 [generic-data-v12](contracts/generic-data-v12.md)。
+
+**前复权价的 ≤0 值（D-94，A 股与 ETF 都适用）**：减法前复权保留的是价差、不是比例，早期价格可能 ≤0
+（ETF 如 `sh.510050`、`sh.510880`；A 股 747 只 / 777,958 根 bar，[#621](https://github.com/liqiangcc/x-data-mcp/issues/621)）。
+这类价格照原值返回，不阻断也不截断；**不要直接用前复权序列算收益率**，要收益率时用不复权价 + 因子还原。
+见 [generic-data-v12 §4](contracts/generic-data-v12.md)。
 
 ## 7. 与 aws-node tunnel 的关系
 

@@ -550,8 +550,8 @@ mod tests {
     /// a known behaviour instead of an accidental one.
     #[test]
     fn a_negative_forward_price_is_derived_and_stored_as_computed() {
-        // The cat1 `c1` value is in 角 (the chain subtracts `c1/10` 元), so
-        // c1 = 5.0 is a 0.500 元 dividend on a 0.300 元 bar → −0.200 元.
+        // The cat1 `c1` value is 元/10 份 (the chain subtracts `c1/10` 元 per
+        // 份), so c1 = 5.0 is a 0.500 元 dividend on a 0.300 元 bar → −0.200 元.
         let bars = [compact(day(2025, 3, 28), 300)];
         let events = [event(
             20250331,

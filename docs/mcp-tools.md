@@ -16,7 +16,11 @@ M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的
 （精确有理数链、末次一次舍入，尾随零不补）；部署已到 schema 27，不再有 schema 21 的
 2 位小数实例（历史数值可能与旧 2dp 在"恰好落在半分位"的 bar 上差 1 分——这不是回归，
 是旧 2dp 本身依赖中间精度、不可跨实现复现，[issue-383 设计](tasks/issue-383-m1-research-data.md)
-§4.3）。部署版本、
+§4.3）。
+**代码面（main）的 capability revision 已是 `generic-data-v12`（未部署，#607 PR-D 的 ETF 前复权读面；
+部署面仍是 `generic-data-v11`）**：本修订不改 schema（仍 27）、不改工具签名与工具数，只改
+`market.daily` + ETF + `adjustment=qfq` 的结果与 `adjustment_unavailable` 的 `details`，
+详见 [generic-data-v12](contracts/generic-data-v12.md) 与下面的「ETF 前复权」条。部署版本、
 generation、catalog 与行情数据量等机器事实只在
 [STATUS](STATUS.md) 维护，本文不复述；工具数不是稳定业务契约；客户端必须以
 运行实例的 `tools/list` 与 capability descriptor 为准。旧 strict Skill 会话遇
@@ -349,7 +353,9 @@ D-75 / [#525](https://github.com/liqiangcc/x-data-mcp/issues/525)：在 `researc
   - 响应的 `limitations` 写明：名称历史从首次观测日开始，更早的改名不可得；`华夏300`、`广发500` 这类交易所短写法搜不到；退市 ETF 可能没有名称（`name: null`、`name_basis: unavailable`），用代码找；`delisted` 的含义。结果为 0 行时同样带这些说明。
   - `kind=etf` 不接受 `industry_code`（ETF 没有行业）；其他非法值（`ETF`、`all`、空串、非字符串）和多余字段都返回 `invalid_arguments`。ETF 名称只来自 PR-2 写入的 `exchange_snapshot` 行；`market.security_names` 与 `get_security_*` 对 ETF 的读取不变（仍不返回这些行，见 [etf-name-search](tasks/etf-name-search.md) §5.3）。
   - 退市 ETF 的名称（PR-4）未做：2026-11-03 之前退市的存量没有名称。
-- `get_daily_bars`：A 股默认 `qfq`。ETF 不传 `adjustment` 返回 `adjustment_required_for_etf`，传 `qfq` 返回 `adjustment_unavailable`；A 股与 ETF 混查时传 `raw`，全部返回不复权。
+- `get_daily_bars`：A 股默认 `qfq`。ETF 不传 `adjustment` 返回 `adjustment_required_for_etf`；传 `qfq` 时按实体的核对门槛放行或返回 `adjustment_unavailable`（`details.reason` 说明原因，见下一条）；A 股与 ETF 混查时传 `raw`，全部返回不复权。
+- ETF 前复权（`#607` PR-D，代码面 `generic-data-v12`，未部署）：放行时返回 `price_scale=6` 的前复权行（尾随零不补，如 `4.0449`），`volume`/`amount` 与不复权逐字节相同，`metadata.etf_checks_digest` 写明判定所用的核对记录集合；阻断时 `adjustment_unavailable` 的 `details` 为 `{reason, blocking_events, categories}`，`reason` 取 `etf_factor_unverified` / `etf_event_order_unverified` / `etf_event_category_unexpected` / `etf_factor_unparsable` / `etf_qfq_not_built`。阻断是实体级的，`versions` 与 `get_data_availability` 同样报这个错。`get_data_capabilities` 照实列出 ETF `qfq` 的 `series` 行（`default=false`）和 `algorithm_versions`（`qfq`、`etf_factor_checks`）。契约见 [generic-data-v12](contracts/generic-data-v12.md)。
+- **前复权价的 ≤0 值（D-94，A 股与 ETF 都适用）**：减法前复权保留价差、不保留比例，早期价格可能 ≤0（ETF 如 `sh.510050`、`sh.510880`；A 股 747 只 / 777,958 根 bar，[#621](https://github.com/liqiangcc/x-data-mcp/issues/621)）。这类价格**照原值返回**，不阻断、不截断、不改成 0。因此**不要直接用前复权序列算收益率**（比例关系在 ≤0 的 bar 上不成立），要收益率时用不复权价 + 因子自行还原。见 [generic-data-v12 §4](contracts/generic-data-v12.md)。
   传入登记的指数（`index_registry`，含别名 `sz.399300`、`sz.399905`）返回 `invalid_arguments`，消息指向 `get_index_bars`；整批拒绝，不丢弃指数。
   `query_data` 查指数的行为不变，仍返回 `absent` 和 0 行。
 - `get_yearly_bars`：只有 A 股，由前复权日线按自然年派生，没有 `adjustment` 参数。ETF 的 `versions[].status` 为 `absent`、0 行，不影响同批 A 股。

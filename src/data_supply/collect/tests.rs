@@ -461,6 +461,7 @@ fn control(f: &Fixture) -> TaskControl<SqliteTasks> {
     let tasks = f.backend.tasks();
     let supply = SqliteSupply {
         market: f.backend.clone(),
+        etf_gate: None,
     };
     TaskControl::new(
         tasks,
@@ -532,7 +533,10 @@ fn scope_value_decodes_only_as_the_listed_ever_variant() {
 #[test]
 fn v1_rejects_the_scope_selection() {
     let (backend, _dir) = market();
-    let supply = SqliteSupply { market: backend };
+    let supply = SqliteSupply {
+        market: backend,
+        etf_gate: None,
+    };
     let v1 = CollectionContract {
         dataset: Dataset::Daily,
         repository: supply.clone(),
@@ -548,7 +552,10 @@ fn catalog_write_rejects_the_scope_instead_of_degrading() {
     let (backend, _dir) = market();
     let catalog = CollectionContract {
         dataset: Dataset::Catalog,
-        repository: SqliteSupply { market: backend },
+        repository: SqliteSupply {
+            market: backend,
+            etf_gate: None,
+        },
     };
     let error = catalog
         .normalize(json!({
@@ -601,7 +608,10 @@ fn etf_scopes_are_wire_values_but_catalog_rejects_them() {
 fn v2_scope_collection_accepts_the_etf_scopes() {
     let (backend, _dir) = market();
     let contract = ListedEverCollectionContract {
-        repository: SqliteSupply { market: backend },
+        repository: SqliteSupply {
+            market: backend,
+            etf_gate: None,
+        },
         generation: None,
     };
     for scope in ["sh_sz_etf_current", "sh_sz_etf_listed_ever"] {
@@ -858,6 +868,7 @@ fn etf_listed_ever_collects_raw_daily_and_reports_absent() {
     // with 3dp values and the D-72 trade/delisting facts in metadata.
     let queries = Queries::new(SqliteSupply {
         market: f.backend.clone(),
+        etf_gate: None,
     });
     let page = queries
         .query(daily_read("510050", Some("raw")), &Access::local())

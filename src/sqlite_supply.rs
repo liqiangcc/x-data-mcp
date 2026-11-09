@@ -14,6 +14,9 @@ mod m2;
 #[derive(Clone)]
 pub struct SqliteSupply {
     pub market: MarketBackend,
+    /// The ETF 前复权 admission gate (`#607` PR-D, design §3.2.2). Injected by
+    /// the caller that owns a source store; `None` fails closed for ETF `qfq`.
+    pub etf_gate: Option<std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate>>,
 }
 fn storage(e: impl std::fmt::Display) -> Error {
     Error::Storage(e.to_string())
@@ -227,7 +230,7 @@ impl ReadRepository for SqliteSupply {
     fn query(&self, plan: &QueryPlan, access: &Access) -> Result<QuerySnapshot, Error> {
         self.market.read(|c| {
             let mut ctx = VerifyCtx;
-            query(c, &mut ctx, plan, access)
+            query(c, &mut ctx, plan, access, self.etf_gate.as_deref())
         })
     }
     fn verify(&self, refs: &[VersionRef]) -> Result<(), Error> {
@@ -310,11 +313,12 @@ impl ReadRepository for SqliteSupply {
                         // AC-M1-10 / M3-2 PR-C: the public version list
                         // resolves the same entity shape as head/query. An
                         // ETF without explicit `adjustment=raw` fails closed.
-                        let Some(shape) = dataset_shape(
+                        let Some(resolved) = dataset_shape(
                             c,
                             args.dataset,
                             &entity,
                             requested_adjustment(args.adjustment),
+                            self.etf_gate.as_deref(),
                         )?
                         else {
                             continue;
@@ -323,7 +327,7 @@ impl ReadRepository for SqliteSupply {
                             c,
                             &entity.symbol(),
                             args.dataset.period().unwrap(),
-                            shape,
+                            resolved.shape,
                         )? {
                             result.push(VersionInfo{version_ref:series_version_ref(args.dataset,&entity,&row),published_at:series_timestamp(&row.updated_at)?});
                         }
@@ -542,11 +546,25 @@ fn dataset_shape(
     dataset: Dataset,
     entity: &Security,
     requested: Option<crate::market_data::Adjustment>,
-) -> Result<Option<crate::sqlite_market::series::SeriesShape>, Error> {
+    gate: Option<&dyn crate::sqlite_market::series::EtfForwardGate>,
+) -> Result<Option<crate::sqlite_market::series::ResolvedShape>, Error> {
     let Some(kind) = read_series_kind(dataset) else {
         return Ok(None);
     };
-    crate::sqlite_market::series::resolve_read_shape(c, &entity.symbol(), kind, requested)
+    crate::sqlite_market::series::resolve_read_shape_with_digest(
+        c,
+        &entity.symbol(),
+        kind,
+        requested,
+        gate,
+    )
+}
+
+/// The head id plus the admission evidence: `etf_checks_digest` is `Some` only
+/// when the shape was admitted through the ETF 前复权 gate.
+struct DatasetHead {
+    id: Option<String>,
+    etf_checks_digest: Option<String>,
 }
 
 /// Head resolution for one dataset: schema 22 asks the dataset's own shape;
@@ -556,54 +574,68 @@ fn dataset_head(
     dataset: Dataset,
     entity: &Security,
     requested: Option<crate::market_data::Adjustment>,
-) -> Result<Option<String>, Error> {
+    gate: Option<&dyn crate::sqlite_market::series::EtfForwardGate>,
+) -> Result<DatasetHead, Error> {
     let period = dataset
         .period()
         .ok_or_else(|| invalid("dataset has no price series"))?;
     if !crate::sqlite_market::is_latest_only_schema(c)? {
-        return crate::sqlite_market::head(
-            c,
-            &Scope {
-                symbol: entity.symbol(),
-                period,
-            },
-        );
+        return Ok(DatasetHead {
+            id: crate::sqlite_market::head(
+                c,
+                &Scope {
+                    symbol: entity.symbol(),
+                    period,
+                },
+            )?,
+            etf_checks_digest: None,
+        });
     }
-    let Some(shape) = dataset_shape(c, dataset, entity, requested)? else {
-        return Ok(None);
+    let Some(resolved) = dataset_shape(c, dataset, entity, requested, gate)? else {
+        return Ok(DatasetHead {
+            id: None,
+            etf_checks_digest: None,
+        });
     };
-    Ok(
-        crate::sqlite_market::series::read_visible_shaped(c, &entity.symbol(), period, shape)?
-            .map(|row| row.version_id),
-    )
+    Ok(DatasetHead {
+        id: crate::sqlite_market::series::read_visible_shaped(
+            c,
+            &entity.symbol(),
+            period,
+            resolved.shape,
+        )?
+        .map(|row| row.version_id),
+        etf_checks_digest: resolved.etf_checks_digest,
+    })
 }
 
 /// True when a pinned id belongs to another dataset's shape. Replaces the
 /// single `instrument_class=0` check (M1 PR-5) with the same dataset-aware
-/// predicate head resolution uses.
+/// predicate head resolution uses. The second value is the admission digest,
+/// so a pinned ETF 前复权 read carries the same evidence as an unpinned one.
 fn dataset_invisible(
     c: &Connection,
     dataset: Dataset,
     entity: &Security,
     id: &str,
     requested: Option<crate::market_data::Adjustment>,
-) -> Result<bool, Error> {
+    gate: Option<&dyn crate::sqlite_market::series::EtfForwardGate>,
+) -> Result<(bool, Option<String>), Error> {
     if !crate::sqlite_market::is_latest_only_schema(c)? {
-        return Ok(false);
+        return Ok((false, None));
     }
     if read_series_kind(dataset).is_none() {
-        return Ok(false);
+        return Ok((false, None));
     }
-    let Some(shape) = dataset_shape(c, dataset, entity, requested)? else {
+    let Some(resolved) = dataset_shape(c, dataset, entity, requested, gate)? else {
         // A price dataset that serves no shape for this entity (for example
         // an index asked through `market.daily`) never becomes readable just
         // because the version id is known.
-        return Ok(true);
+        return Ok((true, None));
     };
-    Ok(
-        crate::sqlite_market::series::read_series_by_version_id(c, id)?
-            .is_some_and(|row| row.shape() != shape),
-    )
+    let invisible = crate::sqlite_market::series::read_series_by_version_id(c, id)?
+        .is_some_and(|row| row.shape() != resolved.shape);
+    Ok((invisible, resolved.etf_checks_digest))
 }
 
 fn derived_reference(
@@ -650,6 +682,7 @@ fn derived_manifest(
             price_scale: None,
             last_trade_date: None,
             delisting_date: None,
+            etf_checks_digest: None,
         }),
         stale: None,
         as_of_day: None,
@@ -760,6 +793,7 @@ pub(crate) fn query(
     ctx: &mut VerifyCtx,
     plan: &QueryPlan,
     access: &Access,
+    gate: Option<&dyn crate::sqlite_market::series::EtfForwardGate>,
 ) -> Result<QuerySnapshot, Error> {
     if plan.args.dataset.is_m2() {
         return m2::query(c, plan, access);
@@ -818,6 +852,7 @@ pub(crate) fn query(
                 price_scale: None,
                 last_trade_date: None,
                 delisting_date: None,
+                etf_checks_digest: None,
             }),
 
             stale: None,
@@ -874,12 +909,18 @@ pub(crate) fn query(
         let latest_only = crate::sqlite_market::is_latest_only_schema(c)?;
         let requested = requested_adjustment(plan.args.adjustment);
         for entity in &plan.entities {
-            let id = match &plan.args.version {
-                VersionChoice::ExplicitVersionMap { versions } => versions
-                    .iter()
-                    .find(|v| &v.entity == entity)
-                    .map(|v| v.version_id.clone()),
-                _ => dataset_head(c, plan.args.dataset, entity, requested)?,
+            let (id, mut etf_checks_digest) = match &plan.args.version {
+                VersionChoice::ExplicitVersionMap { versions } => (
+                    versions
+                        .iter()
+                        .find(|v| &v.entity == entity)
+                        .map(|v| v.version_id.clone()),
+                    None,
+                ),
+                _ => {
+                    let head = dataset_head(c, plan.args.dataset, entity, requested, gate)?;
+                    (head.id, head.etf_checks_digest)
+                }
             };
             let Some(id) = id else {
                 result.manifest.push(ManifestEntry {
@@ -897,20 +938,25 @@ pub(crate) fn query(
             // AC-M1-10: an explicitly pinned version id is still subject to
             // the public visibility boundary — an index series never becomes
             // readable just because its id is known.
-            if latest_only
-                && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
-                && dataset_invisible(c, plan.args.dataset, entity, &id, requested)?
+            if latest_only && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
             {
-                result.manifest.push(ManifestEntry {
-                    entity: Some(entity.clone()),
-                    version_ref: None,
-                    status: ManifestStatus::Absent,
-                    metadata: None,
-                    stale: None,
-                    as_of_day: None,
-                    reason: None,
-                });
-                continue;
+                // A pinned id still has to pass the shape (and, for an ETF
+                // `qfq`, the admission) gate; the digest comes with it.
+                let (invisible, digest) =
+                    dataset_invisible(c, plan.args.dataset, entity, &id, requested, gate)?;
+                if invisible {
+                    result.manifest.push(ManifestEntry {
+                        entity: Some(entity.clone()),
+                        version_ref: None,
+                        status: ManifestStatus::Absent,
+                        metadata: None,
+                        stale: None,
+                        as_of_day: None,
+                        reason: None,
+                    });
+                    continue;
+                }
+                etf_checks_digest = digest;
             }
             let series = if latest_only {
                 crate::sqlite_market::series::read_series_by_version_id(c, &id)?
@@ -966,7 +1012,7 @@ pub(crate) fn query(
             // same series row (and version evidence) that `stats` uses, so
             // fields such as the index exclusion count cannot drift between
             // the two read surfaces.
-            let meta = if latest_only {
+            let mut meta = if latest_only {
                 let series = series
                     .as_ref()
                     .ok_or_else(|| Error::Integrity("version id names no current series".into()))?;
@@ -974,6 +1020,9 @@ pub(crate) fn query(
             } else {
                 metadata(c, &r, plan.args.dataset)
             };
+            // Reproducibility (`#607` PR-D, design §3.2.2): an admitted ETF
+            // 前复权 response names the exact check set behind its verdict.
+            meta.etf_checks_digest = etf_checks_digest;
             let etf_series = series.as_ref().is_some_and(|series| {
                 series.instrument_class == crate::market_data::INSTRUMENT_CLASS_ETF
             });
@@ -1078,10 +1127,11 @@ fn availability_stats(
     plan: &QueryPlan,
     entity: Option<&Security>,
     access: &Access,
+    gate: Option<&dyn crate::sqlite_market::series::EtfForwardGate>,
 ) -> Result<AvailabilityStats, Error> {
     let Some(entity) = entity else {
         // Entity-less selections (catalog) reuse the generic projection.
-        let s = query(c, ctx, plan, access)?;
+        let s = query(c, ctx, plan, access, gate)?;
         let dates = s
             .rows
             .iter()
@@ -1102,12 +1152,18 @@ fn availability_stats(
         return event_stats(c, plan, entity);
     }
     let requested = requested_adjustment(plan.args.adjustment);
-    let id = match &plan.args.version {
-        VersionChoice::ExplicitVersionMap { versions } => versions
-            .iter()
-            .find(|v| &v.entity == entity)
-            .map(|v| v.version_id.clone()),
-        _ => dataset_head(c, plan.args.dataset, entity, requested)?,
+    let (id, mut etf_checks_digest) = match &plan.args.version {
+        VersionChoice::ExplicitVersionMap { versions } => (
+            versions
+                .iter()
+                .find(|v| &v.entity == entity)
+                .map(|v| v.version_id.clone()),
+            None,
+        ),
+        _ => {
+            let head = dataset_head(c, plan.args.dataset, entity, requested, gate)?;
+            (head.id, head.etf_checks_digest)
+        }
     };
     let Some(id) = id else {
         return Ok((
@@ -1129,25 +1185,29 @@ fn availability_stats(
     // AC-M1-10: same visibility boundary as `query`, including explicit pins.
     if crate::sqlite_market::is_latest_only_schema(c)?
         && matches!(&plan.args.version, VersionChoice::ExplicitVersionMap { .. })
-        && dataset_invisible(c, plan.args.dataset, entity, &id, requested)?
     {
-        return Ok((
-            Some(ManifestEntry {
-                entity: Some(entity.clone()),
-                version_ref: None,
-                status: ManifestStatus::Absent,
-                metadata: None,
-                stale: None,
-                as_of_day: None,
-                reason: None,
-            }),
-            None,
-            None,
-            0,
-        ));
+        let (invisible, digest) =
+            dataset_invisible(c, plan.args.dataset, entity, &id, requested, gate)?;
+        etf_checks_digest = digest;
+        if invisible {
+            return Ok((
+                Some(ManifestEntry {
+                    entity: Some(entity.clone()),
+                    version_ref: None,
+                    status: ManifestStatus::Absent,
+                    metadata: None,
+                    stale: None,
+                    as_of_day: None,
+                    reason: None,
+                }),
+                None,
+                None,
+                0,
+            ));
+        }
     }
     if crate::sqlite_market::is_latest_only_schema(c)? {
-        return series_stats(c, plan, entity, &id);
+        return series_stats(c, plan, entity, &id, gate, etf_checks_digest);
     }
     let r = read_market(c, ctx, plan.args.dataset, entity, &id)?;
     let manifest = ManifestEntry {
@@ -1388,6 +1448,7 @@ fn metadata(
         price_scale: None,
         last_trade_date: None,
         delisting_date: None,
+        etf_checks_digest: None,
     }
 }
 
@@ -2221,10 +2282,12 @@ fn verify_versions_meta_conn(
                 if row.entity != entity.symbol() || Some(row.period) != r.dataset.period() {
                     return Err(Error::Integrity("version entity/dataset mismatch".into()));
                 }
-                let Some(shape) = dataset_shape(c, r.dataset, entity, Some(row.adjustment))? else {
+                let Some(resolved) =
+                    dataset_shape(c, r.dataset, entity, Some(row.adjustment), None)?
+                else {
                     return Err(Error::Integrity("version dataset shape mismatch".into()));
                 };
-                if row.shape() != shape {
+                if row.shape() != resolved.shape {
                     return Err(Error::Integrity("version dataset shape mismatch".into()));
                 }
                 series_version_ref(r.dataset, entity, &row)
@@ -2593,7 +2656,14 @@ impl ObservationRepository for SqliteSupply {
                 };
                 match match &m2_snapshot {
                     Some(snapshot) => Ok(m2::stats(snapshot, entity.as_ref())),
-                    None => availability_stats(c, &mut ctx, plan, entity.as_ref(), access),
+                    None => availability_stats(
+                        c,
+                        &mut ctx,
+                        plan,
+                        entity.as_ref(),
+                        access,
+                        self.etf_gate.as_deref(),
+                    ),
                 } {
                     Ok((manifest, first_record, last_record, record_count)) => {
                         out.push(AvailabilityFacts {
@@ -2848,6 +2918,7 @@ fn series_metadata(
         price_scale,
         last_trade_date,
         delisting_date,
+        etf_checks_digest: None,
     })
 }
 
@@ -2860,17 +2931,23 @@ fn series_stats(
     plan: &QueryPlan,
     entity: &Security,
     id: &str,
+    gate: Option<&dyn crate::sqlite_market::series::EtfForwardGate>,
+    etf_checks_digest: Option<String>,
 ) -> Result<AvailabilityStats, Error> {
     let series = crate::sqlite_market::series::require_series(c, id)?;
     if series.entity != entity.symbol() || Some(series.period) != plan.args.dataset.period() {
         return Err(Error::Integrity("version entity/dataset mismatch".into()));
     }
-    if let Some(shape) = dataset_shape(
+    // The head already resolved the shape through the gate; `versions` and
+    // `availability` must ask the same question (`#607` PR-D), so the gate is
+    // passed down and a stale id cannot bypass it.
+    if let Some(resolved) = dataset_shape(
         c,
         plan.args.dataset,
         entity,
         requested_adjustment(plan.args.adjustment),
-    )? && series.shape() != shape
+        gate,
+    )? && series.shape() != resolved.shape
     {
         return Err(Error::Integrity("version dataset shape mismatch".into()));
     }
@@ -2920,11 +2997,13 @@ fn series_stats(
     if count > MAX_ROWS {
         return Err(invalid("snapshot row budget exceeded"));
     }
+    let mut metadata = series_metadata(c, &series)?;
+    metadata.etf_checks_digest = etf_checks_digest;
     let manifest = ManifestEntry {
         entity: Some(entity.clone()),
         version_ref: Some(series_version_ref(plan.args.dataset, entity, &series)),
         status: ManifestStatus::Present,
-        metadata: Some(series_metadata(c, &series)?),
+        metadata: Some(metadata),
         stale: stale_mark.as_ref().map(|m| m.0.clone()),
         as_of_day: stale_mark.as_ref().map(|m| m.1),
         reason: None,

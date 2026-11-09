@@ -715,6 +715,7 @@ fn resolve_etf_daily_on(
             &symbol,
             series::ReadSeriesKind::Daily,
             Some(Adjustment::Raw),
+            None,
         )
         .map_err(|e| istorage(format!("ETF shape read: {e}")))?
         else {

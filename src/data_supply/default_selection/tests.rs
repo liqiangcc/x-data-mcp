@@ -81,6 +81,7 @@ fn ctl(db: &SqliteTasks, run: &str) -> TaskControl<SqliteTasks> {
                     market: crate::sqlite_market::backend::MarketBackend::Legacy(
                         SqliteMarket::new(db.clone()),
                     ),
+                    etf_gate: None,
                 },
             }),
             Box::new(LegacyCollection),

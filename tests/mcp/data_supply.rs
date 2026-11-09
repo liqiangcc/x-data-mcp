@@ -34,6 +34,7 @@ fn absent_is_explicit_and_read_never_creates_a_task() {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(
             t.clone(),
         )),
+        etf_gate: None,
     });
     let page = q.query(args(), &Access::local()).unwrap();
     assert_eq!(page.version_manifest[0].status, ManifestStatus::Absent);
@@ -52,6 +53,7 @@ fn forbidden_selection_is_rejected_before_storage_access() {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(
             SqliteTasks::new(&p),
         )),
+        etf_gate: None,
     });
     let mut access = Access::local();
     access.securities = Some(Default::default());
@@ -76,6 +78,7 @@ fn real_batch_manifest_pages_pin_versions_and_reject_any_later_damage() {
     market::published_fixture(&store, &raw);
     let q = Queries::new(SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store.clone()).clone(),
+        etf_gate: None,
     });
     let mut a = args();
     a.selection = Selection::Batch {
@@ -149,6 +152,7 @@ fn real_task_list_and_progress_freeze_state_and_enforce_authorization() {
     let observer = Observer::new(
         SqliteSupply {
             market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(t)),
+            etf_gate: None,
         },
         "run".into(),
     );
@@ -286,6 +290,7 @@ fn availability_classifies_corrupt_version_but_not_bad_database_as_absent() {
     let o = Observer::new(
         SqliteSupply {
             market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+            etf_gate: None,
         },
         "run".into(),
     );
@@ -316,6 +321,7 @@ fn query_budgets_cursor_instance_eviction_and_permissions_are_enforced() {
     market::published_fixture(&store, &market::samples()[0]["record"]);
     let repo = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        etf_gate: None,
     };
     let q = Queries::new(repo.clone());
     for size in [0, 1001] {
@@ -544,6 +550,7 @@ fn yearly_query_returns_actual_participation_and_unfinished_semantics() {
     };
     let q = Queries::new(SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store),
+        etf_gate: None,
     });
     let p = q.query(a, &Access::local()).unwrap();
     match &p.records[0] {
@@ -640,6 +647,7 @@ fn availability_reports_open_proven_gaps_with_canonical_evidence() {
         SqliteSupply {
             market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store.clone())
                 .clone(),
+            etf_gate: None,
         },
         "run".into(),
     );
@@ -719,6 +727,7 @@ fn availability_maps_yearly_gaps_and_fails_closed_on_unnatural_year_range() {
         SqliteSupply {
             market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(store.clone())
                 .clone(),
+            etf_gate: None,
         },
         "run".into(),
     );
@@ -780,6 +789,7 @@ fn catalog_availability_never_reports_proven_gaps() {
     let o = Observer::new(
         SqliteSupply {
             market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(SqliteMarket::new(t)),
+            etf_gate: None,
         },
         "run".into(),
     );

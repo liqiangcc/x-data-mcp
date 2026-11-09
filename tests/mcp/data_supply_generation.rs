@@ -159,6 +159,7 @@ fn acceptance_freezes_source_generation_id_and_worker_reads_it() {
     let market = opened(&dir);
     let supply = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        etf_gate: None,
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -224,6 +225,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     let market = opened(&dir);
     let supply = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        etf_gate: None,
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -266,6 +268,7 @@ fn missing_and_null_bindings_refuse_the_source() {
     let market2 = opened(&dir2);
     let supply2 = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market2.clone()),
+        etf_gate: None,
     };
     let control2 = TaskControl::new(
         market2.tasks.clone(),
@@ -403,6 +406,7 @@ fn yearly_derivation_runs_against_bound_generation() {
     let market = opened(&dir);
     let supply = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        etf_gate: None,
     };
     let yearly = YearlyContract {
         operation: Operation::Update,
@@ -505,6 +509,7 @@ fn yearly_derivation_without_binding_refuses() {
     let market = opened(&dir);
     let supply = SqliteSupply {
         market: x_data_mcp::sqlite_market::backend::MarketBackend::Legacy(market.clone()),
+        etf_gate: None,
     };
     let control = TaskControl::new(
         market.tasks.clone(),
@@ -676,6 +681,7 @@ fn explicit_daily_update_appends_across_generations_on_compact() {
     let tasks = backend.tasks();
     let supply = SqliteSupply {
         market: backend.clone(),
+        etf_gate: None,
     };
     let range = RangeContract {
         operation: Operation::Update,
@@ -868,6 +874,7 @@ fn staged_records_empty_after_full_cycle_on_compact() {
     let tasks = backend.tasks();
     let supply = SqliteSupply {
         market: backend.clone(),
+        etf_gate: None,
     };
     let range = RangeContract {
         operation: Operation::Update,
@@ -1048,6 +1055,7 @@ fn explicit_daily_update_rewrites_history_on_compact() {
     let tasks = backend.tasks();
     let supply = SqliteSupply {
         market: backend.clone(),
+        etf_gate: None,
     };
     let range = RangeContract {
         operation: Operation::Update,
@@ -1200,6 +1208,7 @@ fn explicit_daily_update_rewrite_dropping_base_date_fails_closed() {
     let tasks = backend.tasks();
     let supply = SqliteSupply {
         market: backend.clone(),
+        etf_gate: None,
     };
     let range = RangeContract {
         operation: Operation::Update,

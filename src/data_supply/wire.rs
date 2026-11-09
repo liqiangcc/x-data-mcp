@@ -826,6 +826,12 @@ pub struct Metadata {
     /// unknown (no D-72 extraction yet), never inferred from the last bar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delisting_date: Option<chrono::NaiveDate>,
+    /// `etf_checks_digest` (`#607` PR-D, design §3.2.2): the sha256 of the
+    /// factor-check record set that admitted this ETF 前复权 response. Present
+    /// only on an admitted ETF `qfq` read, so every other response keeps its
+    /// bytes; a client can reproduce the verdict by naming the same record set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub etf_checks_digest: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

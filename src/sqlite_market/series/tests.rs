@@ -427,7 +427,7 @@ fn a_stored_etf_yearly_series_is_an_integrity_failure() {
         params![binding.as_slice(), evidence.as_slice()],
     )
     .unwrap();
-    let error = resolve_read_shape(&c, entity, ReadSeriesKind::Yearly, None).unwrap_err();
+    let error = resolve_read_shape(&c, entity, ReadSeriesKind::Yearly, None, None).unwrap_err();
     assert!(
         error
             .to_string()
@@ -908,6 +908,7 @@ fn supply_reads_on_schema21() {
     let backend = crate::sqlite_market::backend::MarketBackend::open(&tasks).unwrap();
     let supply = crate::sqlite_supply::SqliteSupply {
         market: backend.clone(),
+        etf_gate: None,
     };
     let access = Access::local();
     let sec = security();
@@ -941,8 +942,8 @@ fn supply_reads_on_schema21() {
                 entity: sec.clone(),
             },
             filter: Filter::Daily {
-                start_date: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
-                end_date: NaiveDate::from_ymd_opt(2025, 12, 31).unwrap(),
+                start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2030, 12, 31).unwrap(),
                 as_of: None,
             },
             version: VersionChoice::LatestPerEntity {},
@@ -1091,6 +1092,7 @@ fn presence_reasons_distinguish_superseded_from_never_seen() {
     let backend = crate::sqlite_market::backend::MarketBackend::open(&tasks).unwrap();
     let supply = crate::sqlite_supply::SqliteSupply {
         market: backend.clone(),
+        etf_gate: None,
     };
     let access = Access::local();
     // A well-formed digest that was never committed anywhere, on a second
@@ -1358,4 +1360,506 @@ fn deep_check_flags_forged_yearly_lineage() {
         findings.iter().any(|f| f.contains("yearly lineage")),
         "forged lineage must surface in findings: {findings:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `#607` PR-D — the ETF 前复权 read surface.
+//
+// The gate itself is PR-B/PR-D's own module; these tests pin the *read*
+// contract: the facts handed to the gate come from storage, an admitted entity
+// is served the stored 前复权 rows (price_scale 6, volume/amount identical to
+// 不复权) with `etf_checks_digest`, and a blocked entity fails closed on rows,
+// versions and availability through the same resolution.
+// ---------------------------------------------------------------------------
+
+/// A gate over a fixed entity list that records what the read face handed it.
+struct FixtureGate {
+    admitted: Vec<String>,
+    digest: String,
+    seen: std::sync::Mutex<Vec<EtfForwardFacts>>,
+}
+
+impl FixtureGate {
+    fn new(admitted: &[&str]) -> Self {
+        Self {
+            admitted: admitted.iter().map(|e| (*e).to_string()).collect(),
+            digest: "f".repeat(64),
+            seen: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn seen(&self) -> Vec<EtfForwardFacts> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl EtfForwardGate for FixtureGate {
+    fn admit(&self, facts: &EtfForwardFacts) -> EtfForwardAdmission {
+        self.seen.lock().unwrap().push(facts.clone());
+        if self.admitted.contains(&facts.entity) {
+            EtfForwardAdmission::Admitted {
+                checks_digest: self.digest.clone(),
+            }
+        } else {
+            EtfForwardAdmission::Blocked {
+                reason: crate::source_store::etf_factor_gate::BlockReason::FactorUnverified
+                    .as_str(),
+                blocking_events: facts.facts.len(),
+                categories: vec![1],
+                detail: None,
+            }
+        }
+    }
+}
+
+fn etf_security(code: &str) -> Security {
+    Security {
+        exchange: Exchange::Sz,
+        code: code.into(),
+    }
+}
+
+/// A stored daily series of the given shape (the read face resolves by shape).
+fn seed_shape(
+    c: &Connection,
+    entity: &str,
+    shape: SeriesShape,
+    bars: &[CompactBar],
+    evidence: Digest,
+    binding: Digest,
+    tag: &str,
+) -> SeriesRow {
+    let digest = fold_bars(entity, Period::Day, shape, bars).unwrap();
+    let seq = commit_event(
+        c,
+        event(
+            entity,
+            Period::Day,
+            "first_publish",
+            None,
+            digest,
+            (evidence, binding),
+            tag,
+        ),
+        tag,
+    );
+    let key = insert_series(
+        c,
+        &NewSeries {
+            entity: entity.into(),
+            period: Period::Day,
+            adjustment: shape.adjustment,
+            instrument_class: shape.instrument_class,
+            price_scale: shape.price_scale,
+            content_digest: digest,
+            record_count: bars.len() as i64,
+            first_day: bars[0].trade_day,
+            last_day: bars.last().unwrap().trade_day,
+            coverage_status: CoverageStatus::Complete,
+            source_binding_digest: binding,
+            evidence_digest: evidence,
+            last_event_seq: seq,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        },
+    )
+    .unwrap();
+    insert_bars(c, key, bars).unwrap();
+    read_series_adjusted(c, entity, Period::Day, shape.adjustment)
+        .unwrap()
+        .unwrap()
+}
+
+fn seed_etf_master(c: &Connection, code: &str, binding: Digest, evidence: Digest) {
+    c.execute(
+        "INSERT INTO security_master(exchange,code,effective_from,effective_to,\
+         instrument_class,issuer_resolution,listing_date,listing_source,\
+         delisting_date,delisting_source,delisting_reason_class,listing_conflict,\
+         delisting_conflict,source_binding_digest,evidence_digest) \
+         VALUES('sz',?1,0,NULL,2,'code_date',0,'exchange_list',\
+         NULL,'unknown','other',0,0,?2,?3)",
+        params![code, binding.as_slice(), evidence.as_slice()],
+    )
+    .unwrap();
+}
+
+/// Store the factor facts the gate judges (PR-C writes these; PR-D only reads
+/// them). Returns the stored `evidence_digest` of each event.
+fn seed_events(
+    c: &Connection,
+    entity: &str,
+    events: Vec<(u32, u8, [&str; 4])>,
+    binding: Digest,
+) -> Vec<String> {
+    let set = crate::market_data::AdjustmentEventSet {
+        entity: entity.into(),
+        events: events
+            .into_iter()
+            .enumerate()
+            .map(|(index, (effective_day, category, factors))| {
+                crate::market_data::AdjustmentEvent {
+                    ordinal: index as i64,
+                    effective_day: NaiveDate::from_ymd_opt(
+                        (effective_day / 10000) as i32,
+                        effective_day / 100 % 100,
+                        effective_day % 100,
+                    )
+                    .unwrap(),
+                    category,
+                    // The store validates the decimal against the source f32
+                    // shortest round-trip, so the bits come from the same
+                    // literals rather than being hand-written.
+                    c_bits: factors.map(|f| f.parse::<f32>().unwrap().to_bits()),
+                    factors: factors.map(|f| f.parse().unwrap()),
+                    known_at: None,
+                    basis_status: crate::market_data::FactorBasisStatus::Pending,
+                }
+            })
+            .collect(),
+        excluded: 0,
+        precision: crate::market_data::FactorPrecision::EtfF32Shortest,
+    };
+    crate::sqlite_market::derived::replace_adjustment_events(c, &set, binding, "task", "item")
+        .unwrap()
+        .expect("the factor facts are stored");
+    crate::sqlite_market::derived::read_adjustment_events_with_evidence(c, entity)
+        .unwrap()
+        .into_iter()
+        .map(|stored| {
+            stored
+                .evidence_digest
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        })
+        .collect()
+}
+
+fn qfq_plan(
+    entity: Security,
+    adjustment: Option<crate::data_supply::wire::AdjustmentChoice>,
+) -> QueryPlan {
+    QueryPlan::new(
+        Query {
+            dataset: Dataset::Daily,
+            contract_version: crate::data_supply::wire::ReadContractVersion::V1,
+            selection: Selection::Single { entity },
+            filter: Filter::Daily {
+                start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2030, 12, 31).unwrap(),
+                as_of: None,
+            },
+            version: VersionChoice::LatestPerEntity {},
+            adjustment,
+            page_size: 100,
+            cursor: None,
+            fields: None,
+            known_at: None,
+        },
+        &Access::local(),
+    )
+    .unwrap()
+}
+
+fn close_of(row: &crate::data_supply::wire::Row) -> (&str, Option<&str>, Option<&str>) {
+    match row {
+        crate::data_supply::wire::Row::Market {
+            close,
+            volume,
+            amount,
+            ..
+        } => (close, volume.as_deref(), amount.as_deref()),
+        other => panic!("expected a market row, got {other:?}"),
+    }
+}
+
+/// One ETF with a stored 不复权 bar, its derived 前复权 bar and its factor
+/// facts. `code` picks the PR-C fixture numbers (see the callers).
+struct EtfSeed<'a> {
+    code: &'a str,
+    raw_units: i64,
+    forward_units: i64,
+    bar_day: i64,
+    events: Vec<(u32, u8, [&'a str; 4])>,
+    tag: &'a str,
+    evidence: Digest,
+    binding: Digest,
+}
+
+fn seed_etf(c: &Connection, seed: EtfSeed<'_>) {
+    let EtfSeed {
+        code,
+        raw_units,
+        forward_units,
+        bar_day,
+        events,
+        tag,
+        evidence: ev,
+        binding,
+    } = seed;
+    seed_etf_master(c, code, binding, ev);
+    let entity = format!("sz.{code}");
+    seed_shape(
+        c,
+        &entity,
+        SeriesShape::etf(Adjustment::Raw),
+        &[bar(bar_day, raw_units)],
+        ev,
+        binding,
+        &format!("{tag}-raw"),
+    );
+    seed_shape(
+        c,
+        &entity,
+        SeriesShape::etf(Adjustment::Forward),
+        &[bar(bar_day, forward_units)],
+        ev,
+        binding,
+        &format!("{tag}-qfq"),
+    );
+    assert_eq!(seed_events(c, &entity, events, binding).len(), 1);
+}
+
+fn supply_with(
+    tasks: &SqliteTasks,
+    admitted: &[&str],
+) -> (
+    std::sync::Arc<FixtureGate>,
+    crate::sqlite_supply::SqliteSupply,
+) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(tasks.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+    let backend = crate::sqlite_market::backend::MarketBackend::open(tasks).unwrap();
+    let gate = std::sync::Arc::new(FixtureGate::new(admitted));
+    let supply = crate::sqlite_supply::SqliteSupply {
+        market: backend,
+        etf_gate: Some(gate.clone()),
+    };
+    (gate, supply)
+}
+
+#[test]
+fn an_admitted_etf_qfq_read_serves_the_stored_forward_rows() {
+    let (_dir, tasks, c) = db();
+    let (ev, gen_ev) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, gen_ev);
+    // 4.111 元 − 0.661/10 元 = 4.0449 元 (PR-C's `sz.159919` numbers).
+    seed_etf(
+        &c,
+        EtfSeed {
+            code: "159919",
+            raw_units: 4_111,
+            forward_units: 4_044_900,
+            bar_day: day(2025, 3, 28),
+            events: vec![(20250331, 1, ["0.661", "0", "0", "0"])],
+            tag: "a",
+            evidence: ev,
+            binding,
+        },
+    );
+    // 6.159 / 2.5 − 1.292/10 = 2.3344 元 (PR-C's `sz.159922` numbers).
+    seed_etf(
+        &c,
+        EtfSeed {
+            code: "159922",
+            raw_units: 6_159,
+            forward_units: 2_334_400,
+            bar_day: day(2024, 11, 29),
+            events: vec![(20241202, 1, ["1.292", "0", "0", "0"])],
+            tag: "b",
+            evidence: ev,
+            binding,
+        },
+    );
+    drop(c);
+    let (gate, supply) = supply_with(&tasks, &["sz.159919", "sz.159922"]);
+    let access = Access::local();
+    // `price_scale=6` means the value is exact to 1e-6 元; trailing zeros are
+    // not padded (the v11/v12 6dp contract), so 4,044,900 units reads back as
+    // `4.0449` and 2,334,400 as `2.3344`.
+    for (code, expected, raw_expected) in
+        [("159919", "4.0449", "4.111"), ("159922", "2.3344", "6.159")]
+    {
+        let entity = etf_security(code);
+        let qfq = supply
+            .query(
+                &qfq_plan(
+                    entity.clone(),
+                    Some(crate::data_supply::wire::AdjustmentChoice::Qfq),
+                ),
+                &access,
+            )
+            .unwrap();
+        assert_eq!(qfq.rows.len(), 1, "{code}");
+        let (close, volume, amount) = close_of(&qfq.rows[0]);
+        assert_eq!(close, expected, "{code}: the derived value");
+        assert_eq!(volume, Some("100"), "{code}: volume is 不复权 bytes");
+        assert_eq!(amount, Some("123.45"), "{code}: amount is 不复权 bytes");
+        let metadata = qfq.manifest[0].metadata.as_ref().expect("metadata");
+        assert_eq!(metadata.price_scale, Some(6), "{code}");
+        assert_eq!(
+            metadata.etf_checks_digest.as_deref(),
+            Some(gate.digest.as_str()),
+            "{code}: an admitted response names the check set it used"
+        );
+
+        // The 不复权 read of the same entity is unchanged: 3dp, no digest.
+        let raw = supply
+            .query(
+                &qfq_plan(
+                    entity,
+                    Some(crate::data_supply::wire::AdjustmentChoice::Raw),
+                ),
+                &access,
+            )
+            .unwrap();
+        let (raw_close, raw_volume, raw_amount) = close_of(&raw.rows[0]);
+        assert_eq!(raw_close, raw_expected);
+        assert_eq!(raw_volume, volume);
+        assert_eq!(raw_amount, amount);
+        let raw_metadata = raw.manifest[0].metadata.as_ref().unwrap();
+        assert_eq!(raw_metadata.price_scale, Some(3));
+        assert_eq!(raw_metadata.etf_checks_digest, None);
+    }
+    // The gate saw storage facts, not a startup snapshot: the 不复权 first bar
+    // the "before the first bar" rule needs and the stored evidence digests.
+    let seen = gate.seen();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(seen[0].entity, "sz.159919");
+    assert_eq!(seen[0].first_bar_day, NaiveDate::from_ymd_opt(2025, 3, 28));
+    assert!(seen[0].forward_built);
+    assert_eq!(seen[0].facts.len(), 1);
+    assert_eq!(seen[0].facts[0].category, 1);
+    assert_eq!(seen[0].facts[0].evidence_digest.len(), 64);
+    assert_eq!(seen[1].entity, "sz.159922");
+    assert_eq!(seen[1].facts.len(), 1);
+}
+
+#[test]
+fn a_forward_price_at_or_below_zero_is_delivered_as_stored() {
+    // D-94: subtraction preserves price *differences*, not ratios, so an early
+    // bar can come out ≤0. The read face delivers it as stored — no block, no
+    // clamp, no recode — and the response value is the stored value.
+    let (_dir, tasks, c) = db();
+    let (ev, gen_ev) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, gen_ev);
+    seed_etf(
+        &c,
+        EtfSeed {
+            code: "159919",
+            raw_units: 300,
+            forward_units: -200_000,
+            bar_day: day(2025, 3, 28),
+            events: vec![(20250331, 1, ["5", "0", "0", "0"])],
+            tag: "neg",
+            evidence: ev,
+            binding,
+        },
+    );
+    drop(c);
+    let (_gate, supply) = supply_with(&tasks, &["sz.159919"]);
+    let access = Access::local();
+    let page = supply
+        .query(
+            &qfq_plan(
+                etf_security("159919"),
+                Some(crate::data_supply::wire::AdjustmentChoice::Qfq),
+            ),
+            &access,
+        )
+        .unwrap();
+    assert_eq!(page.rows.len(), 1);
+    let (close, volume, _) = close_of(&page.rows[0]);
+    assert_eq!(close, "-0.2", "the stored value, signed and exact");
+    assert_eq!(volume, Some("100"));
+    let metadata = page.manifest[0].metadata.as_ref().unwrap();
+    assert_eq!(metadata.price_scale, Some(6));
+    assert!(
+        metadata.etf_checks_digest.is_some(),
+        "an admitted negative price is still an admitted read"
+    );
+}
+
+#[test]
+fn a_blocked_entity_fails_closed_on_rows_versions_and_availability() {
+    let (_dir, tasks, c) = db();
+    let (ev, gen_ev) = put_test_evidence(&c);
+    let binding = put_test_binding(&c, gen_ev);
+    seed_etf(
+        &c,
+        EtfSeed {
+            code: "159901",
+            raw_units: 4_111,
+            forward_units: 4_044_900,
+            bar_day: day(2025, 3, 28),
+            events: vec![(20250331, 1, ["0.661", "0", "0", "0"])],
+            tag: "blk",
+            evidence: ev,
+            binding,
+        },
+    );
+    drop(c);
+    // The gate admits nobody: the stored 前复权 series exists but is unverified.
+    let (_gate, supply) = supply_with(&tasks, &[]);
+    let access = Access::local();
+    let entity = etf_security("159901");
+    let plan = qfq_plan(
+        entity.clone(),
+        Some(crate::data_supply::wire::AdjustmentChoice::Qfq),
+    );
+    match supply.query(&plan, &access) {
+        Ok(_) => panic!("a blocked entity must not answer with rows"),
+        Err(error) => match error {
+            crate::market_storage::Error::AdjustmentUnavailable {
+                reason,
+                blocking_events,
+                categories,
+                ..
+            } => {
+                assert_eq!(reason, "etf_factor_unverified");
+                assert_eq!(blocking_events, 1);
+                assert_eq!(categories, vec![1]);
+            }
+            other => panic!("expected adjustment_unavailable, got {other:?}"),
+        },
+    }
+    // versions and availability resolve the same shape, so they refuse too.
+    match supply.versions(
+        &VersionsQuery {
+            dataset: Dataset::Daily,
+            contract_version: crate::data_supply::wire::ReadContractVersion::V1,
+            selection: Selection::Single {
+                entity: entity.clone(),
+            },
+            adjustment: Some(crate::data_supply::wire::AdjustmentChoice::Qfq),
+            page_size: 10,
+            cursor: None,
+        },
+        &access,
+    ) {
+        Ok(_) => panic!("versions must not list a blocked entity"),
+        Err(crate::market_storage::Error::AdjustmentUnavailable { reason, .. }) => {
+            assert_eq!(reason, "etf_factor_unverified");
+        }
+        Err(other) => panic!("expected adjustment_unavailable, got {other:?}"),
+    }
+    match crate::data_supply::observe::ObservationRepository::availability(&supply, &plan, &access)
+    {
+        Ok(_) => panic!("availability must not report a blocked entity"),
+        Err(crate::market_storage::Error::AdjustmentUnavailable { reason, .. }) => {
+            assert_eq!(reason, "etf_factor_unverified");
+        }
+        Err(other) => panic!("expected adjustment_unavailable, got {other:?}"),
+    }
+    // The 不复权 read of the same entity still works: the block is per 口径.
+    let raw = supply
+        .query(
+            &qfq_plan(
+                entity,
+                Some(crate::data_supply::wire::AdjustmentChoice::Raw),
+            ),
+            &access,
+        )
+        .unwrap();
+    assert_eq!(raw.rows.len(), 1);
 }

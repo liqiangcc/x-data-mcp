@@ -370,6 +370,7 @@ fn etf_series(
             &entry.entity,
             ReadSeriesKind::Daily,
             Some(Adjustment::Raw),
+            None,
         )
         .map_err(Error::from)?
         .ok_or_else(|| {

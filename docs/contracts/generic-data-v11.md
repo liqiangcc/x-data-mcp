@@ -1,6 +1,6 @@
 # generic-data-v11 契约（读取工具，D-75）
 
-**状态**：**已部署**（preview.46，2026-11-07T16:52Z 切到 vm2-126；部署版本 `generic-data-v11` / compact schema 27，`research` 入口 17 项工具）。
+**状态**：历史（preview.46 部署过，2026-11-07T16:52Z 切到 vm2-126；现由 [`generic-data-v12`](generic-data-v12.md) 在代码面取代，部署面仍是 v11）。
 本文件记录 D-75（[#525](https://github.com/liqiangcc/x-data-mcp/issues/525)）在 `research` 入口新增的 10 个只读工具、D-82（[#433](https://github.com/liqiangcc/x-data-mcp/issues/433)）的 `get_tradability`/`get_market_cap`，以及 `tools/list` 的 schema 变化。
 设计与裁决见 [issue-525-read-tools](../tasks/issue-525-read-tools.md)；工具表见 [mcp-tools](../mcp-tools.md)「读取工具」。
 preview.46 部署时已翻转 Skill 钉值和 `scripts/check_current_facts.py` 的 `EXPECTED_DEPLOYED_CAPABILITY_REVISION`、`EXPECTED_SKILL_CAPABILITY_REVISION`。

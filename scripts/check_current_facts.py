@@ -48,10 +48,12 @@ ENTRY_ALLOWLIST_CONST = {
     "ops": "OPS_TOOLS",
     "maint": "MAINT_TOOLS",
 }
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v11"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v12"
 # The revision the deployed docs/contracts/Skills describe. Since preview.46
 # (2026-11-07 on vm2-126) the deployed contract is v11 (D-75 read tools and
-# D-82 tradability tools); code and deployment are back in sync.
+# D-82 tradability tools). The code is ahead at v12 (#607 PR-D, ETF 前复权 read
+# surface, not deployed); flip this with the Skills at the deployment that
+# ships v12.
 EXPECTED_DEPLOYED_CAPABILITY_REVISION = "generic-data-v11"
 # The strict Skills describe the DEPLOYED contract (v11 since preview.46 on
 # vm2-126). The same deployed revision keys the strict-Skill checks and the

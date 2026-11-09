@@ -525,14 +525,88 @@ fn master_instrument_class(c: &Connection, entity: &str) -> Result<Option<i64>, 
     }
 }
 
+/// One factor fact of an ETF, as the 前复权 admission gate sees it (`#607`
+/// PR-D). This is the market-side half of PR-B's `EntityFacts`: `sqlite_market`
+/// owns the read, `source_store::etf_factor_gate` owns the decision, and the
+/// two are joined by [`EtfForwardGate`] so this layer never depends on the
+/// source store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EtfForwardFact {
+    /// `adjustment_events.ordinal` of the stored event.
+    pub ordinal: i64,
+    /// The gbbq event day (D-93: the ex-rights/ex-dividend day `E`).
+    pub effective_day: NaiveDate,
+    pub category: u8,
+    pub factors: [rust_decimal::Decimal; 4],
+    /// Hex of the 32-byte `adjustment_events.evidence_digest` the row was
+    /// written with; the check records are keyed by it (D-92 Q2 (c)).
+    pub evidence_digest: String,
+}
+
+/// Everything the admission gate needs to know about one entity, read from the
+/// market database at request time (design §3.2.2: never a startup snapshot).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EtfForwardFacts {
+    pub entity: String,
+    /// First bar of the entity's 不复权 series. Events strictly before it
+    /// cannot affect the sequence and do not take part (D-91 §3). `None` when
+    /// the entity has no 不复权 series at all.
+    pub first_bar_day: Option<NaiveDate>,
+    /// Whether a stored 前复权 series exists. `false` is `etf_qfq_not_built`;
+    /// the reason code stays in the gate (PR-B) so it has one home.
+    pub forward_built: bool,
+    pub facts: Vec<EtfForwardFact>,
+}
+
+/// The injected ETF 前复权 admission decision (`#607` PR-D, design §3.2.2).
+///
+/// `sqlite_market` must not depend on the source store (the source store
+/// depends on it), so the decision is a caller-supplied object: the read face
+/// builds one over the store, tests build one over a fixture, and a read path
+/// without one fails closed.
+pub trait EtfForwardGate: Send + Sync {
+    fn admit(&self, facts: &EtfForwardFacts) -> EtfForwardAdmission;
+}
+
+/// The gate's answer for one entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EtfForwardAdmission {
+    /// The whole entity is admitted; the response carries `checks_digest`
+    /// (`etf_checks_digest`) so the verdict is reproducible (design §3.2.2).
+    Admitted { checks_digest: String },
+    /// Whole-entity fail-closed (design §3.3 option (a)).
+    Blocked {
+        /// Stable reason code (§3.2) — `BlockReason::as_str`.
+        reason: &'static str,
+        blocking_events: usize,
+        categories: Vec<u8>,
+        /// Why the gate could not decide, when that is the cause (a source
+        /// store that is unconfigured or unreadable). `None` when the stored
+        /// facts themselves are the reason.
+        detail: Option<String>,
+    },
+}
+
+/// A resolved read shape plus the evidence digest of the check set that
+/// admitted it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedShape {
+    pub shape: SeriesShape,
+    /// `etf_checks_digest` of the check set that admitted an ETF 前复权 shape;
+    /// `None` for every other shape (so their response bytes do not change).
+    pub etf_checks_digest: Option<String>,
+}
+
 /// Resolve the one shape the public read surface serves for `(entity, kind)`.
 ///
 /// The stored `market_series` row is authoritative for 品种/精度, and the main
 /// table must agree with it (M3-2 PR-C, Claude review of PR-A #511):
 ///
-/// * an ETF needs an explicit `adjustment=raw`; omitting it or asking `qfq`
-///   fails closed (`adjustment_required_for_etf` / `adjustment_unavailable`),
-///   never a silent raw answer or an empty page;
+/// * an ETF needs an explicit `adjustment`; omitting it fails closed
+///   (`adjustment_required_for_etf`, D-70 Q4, unchanged by PR-D);
+/// * an ETF `qfq` is served only when the injected [`EtfForwardGate`] admits
+///   the entity, otherwise it fails closed with `adjustment_unavailable` and
+///   a reason code (`#607` PR-D, D-89 §6);
 /// * a stored ETF row without a `security_master` row is an integrity failure,
 ///   never a fallback to the stock 2dp shape;
 /// * a stored row whose class/scale disagrees with the resolved shape fails;
@@ -544,9 +618,29 @@ pub(crate) fn resolve_read_shape(
     entity: &str,
     kind: ReadSeriesKind,
     requested: Option<Adjustment>,
+    gate: Option<&dyn EtfForwardGate>,
 ) -> Result<Option<SeriesShape>, Error> {
+    Ok(
+        resolve_read_shape_with_digest(c, entity, kind, requested, gate)?
+            .map(|resolved| resolved.shape),
+    )
+}
+
+/// [`resolve_read_shape`] keeping the admission digest: the rows path puts it
+/// in the response (`etf_checks_digest`, design §3.2.2).
+pub(crate) fn resolve_read_shape_with_digest(
+    c: &Connection,
+    entity: &str,
+    kind: ReadSeriesKind,
+    requested: Option<Adjustment>,
+    gate: Option<&dyn EtfForwardGate>,
+) -> Result<Option<ResolvedShape>, Error> {
     let period = kind.period();
     let stored = stored_shapes(c, entity, period)?;
+    let plain = |shape: SeriesShape| ResolvedShape {
+        shape,
+        etf_checks_digest: None,
+    };
     if kind == ReadSeriesKind::Index {
         let shape = SeriesShape::INDEX_UNITS;
         for row in &stored {
@@ -560,7 +654,7 @@ pub(crate) fn resolve_read_shape(
                 )));
             }
         }
-        return Ok(Some(shape));
+        return Ok(Some(plain(shape)));
     }
     let master = master_instrument_class(c, entity)?;
     let Some(master_class) = master else {
@@ -585,7 +679,7 @@ pub(crate) fn resolve_read_shape(
         }
         let shape = SeriesShape::stock(requested.unwrap_or(Adjustment::Forward));
         validate_expected_shape(entity, &stored, shape)?;
-        return Ok(Some(shape));
+        return Ok(Some(plain(shape)));
     };
     if master_class == crate::market_data::INSTRUMENT_CLASS_INDEX {
         // `market.daily`/`market.yearly` never serve an index level; the
@@ -612,18 +706,42 @@ pub(crate) fn resolve_read_shape(
         }
         return Ok(None);
     }
+    let mut checks_digest: Option<String> = None;
     let shape = match master_class {
         INSTRUMENT_CLASS_STOCK => SeriesShape::stock(requested.unwrap_or(Adjustment::Forward)),
         crate::market_data::INSTRUMENT_CLASS_ETF => match requested {
             None => {
                 return Err(invalid(
-                    "adjustment_required_for_etf: market.daily serves an ETF only at adjustment=raw; specify adjustment explicitly",
+                    "adjustment_required_for_etf: market.daily serves an ETF only at adjustment=raw or adjustment=qfq; specify adjustment explicitly",
                 ));
             }
             Some(Adjustment::Forward) => {
-                return Err(invalid(
-                    "adjustment_unavailable: ETF 前复权 is not delivered; use adjustment=raw",
-                ));
+                let forward_built = stored
+                    .iter()
+                    .any(|row| row.adjustment == Adjustment::Forward);
+                let facts = etf_forward_facts(c, entity, period, forward_built)?;
+                match admit_etf_forward(&facts, gate) {
+                    EtfForwardAdmission::Admitted {
+                        checks_digest: digest,
+                    } => {
+                        checks_digest = Some(digest);
+                        SeriesShape::etf(Adjustment::Forward)
+                    }
+                    EtfForwardAdmission::Blocked {
+                        reason,
+                        blocking_events,
+                        categories,
+                        detail,
+                    } => {
+                        return Err(etf_forward_unavailable(
+                            entity,
+                            reason,
+                            blocking_events,
+                            categories,
+                            detail,
+                        ));
+                    }
+                }
             }
             Some(Adjustment::Raw) => SeriesShape::etf(Adjustment::Raw),
         },
@@ -634,7 +752,83 @@ pub(crate) fn resolve_read_shape(
         }
     };
     validate_expected_shape(entity, &stored, shape)?;
-    Ok(Some(shape))
+    Ok(Some(ResolvedShape {
+        shape,
+        etf_checks_digest: checks_digest,
+    }))
+}
+
+/// Ask the injected gate, or fail closed when the read path has none: an ETF
+/// `qfq` request without a check source is exactly the silent delivery D-89 §6
+/// forbids.
+fn admit_etf_forward(
+    facts: &EtfForwardFacts,
+    gate: Option<&dyn EtfForwardGate>,
+) -> EtfForwardAdmission {
+    match gate {
+        Some(gate) => gate.admit(facts),
+        None => EtfForwardAdmission::Blocked {
+            reason: crate::source_store::etf_factor_gate::BlockReason::FactorUnverified.as_str(),
+            blocking_events: 0,
+            categories: Vec::new(),
+            detail: Some(
+                "no ETF factor-check source is wired into this read path; \
+                 ETF 前复权 stays closed"
+                    .into(),
+            ),
+        },
+    }
+}
+
+/// The wire-shaped `adjustment_unavailable` error for a blocked entity.
+fn etf_forward_unavailable(
+    entity: &str,
+    reason: &'static str,
+    blocking_events: usize,
+    categories: Vec<u8>,
+    detail: Option<String>,
+) -> Error {
+    let message = match detail {
+        Some(detail) => format!("ETF {entity} has no verified 前复权 series ({detail})"),
+        None => format!("ETF {entity} has no verified 前复权 series"),
+    };
+    Error::AdjustmentUnavailable {
+        message,
+        reason,
+        blocking_events,
+        categories,
+    }
+}
+
+/// The entity's stored factor facts and the two boundaries the decision needs.
+/// Read on every request (design §3.2.2): a factor row that arrived with the
+/// last daily run must block the next read without any offline sync step.
+fn etf_forward_facts(
+    c: &Connection,
+    entity: &str,
+    period: Period,
+    forward_built: bool,
+) -> Result<EtfForwardFacts, Error> {
+    let first_bar_day = read_series_adjusted(c, entity, period, Adjustment::Raw)?
+        .map(|row| compact_market::epoch_date(row.first_day))
+        .transpose()
+        .map_err(integrity)?;
+    let facts = super::derived::read_adjustment_events_with_evidence(c, entity)?
+        .into_iter()
+        .map(|stored| EtfForwardFact {
+            ordinal: stored.event.ordinal,
+            effective_day: stored.event.effective_day,
+            category: stored.event.category,
+            factors: stored.event.factors,
+            evidence_digest: compact_market::digest_hex(&stored.evidence_digest),
+        })
+        .collect();
+    Ok(EtfForwardFacts {
+        entity: entity.to_string(),
+        first_bar_day,
+        forward_built,
+        facts,
+    })
 }
 
 /// The stored row for `shape.adjustment`, when present, must carry exactly the
@@ -670,13 +864,19 @@ fn validate_expected_shape(
 /// cache from the distinct entities they see.
 ///
 /// The answer depends only on `security_master.instrument_class`: stocks
-/// publish forward, ETFs publish raw until PR-D admits their derived series,
-/// and indexes have no forward series at all.
+/// publish forward, ETFs publish raw, and indexes have no forward series at
+/// all. The derived ETF 前复权 series that `#607` PR-D serves on the read
+/// surface is not a published series (no export, no publication basis), so the
+/// ETF answer stays `false` after PR-D.
 pub(crate) fn publishes_forward(c: &Connection, entity: &str) -> Result<bool, Error> {
-    Ok(
-        resolve_read_shape(c, entity, ReadSeriesKind::Daily, Some(Adjustment::Raw))?
-            .is_some_and(|shape| shape.instrument_class == INSTRUMENT_CLASS_STOCK),
-    )
+    Ok(resolve_read_shape(
+        c,
+        entity,
+        ReadSeriesKind::Daily,
+        Some(Adjustment::Raw),
+        None,
+    )?
+    .is_some_and(|shape| shape.instrument_class == INSTRUMENT_CLASS_STOCK))
 }
 
 /// Per-entity memo of [`publishes_forward`], built once per task projection.
@@ -707,16 +907,21 @@ impl<'a> PublishBasis<'a> {
 /// The series the public (MCP) read surface resolves. It shares
 /// [`resolve_read_shape`] with head/visibility/availability, so a new 品种
 /// cannot be visible on one path and hidden on another.
+///
+/// This is the "default `Forward`" lookup, so it asks for `Forward`; an ETF
+/// therefore needs the admission gate (PR-D). A caller without one (the legacy
+/// `head` path, which has no ETF series) fails closed rather than admitting.
 pub(crate) fn read_public_series(
     c: &Connection,
     entity: &str,
     period: Period,
+    gate: Option<&dyn EtfForwardGate>,
 ) -> Result<Option<SeriesRow>, Error> {
     let kind = match period {
         Period::Day => ReadSeriesKind::Daily,
         Period::Year => ReadSeriesKind::Yearly,
     };
-    let Some(shape) = resolve_read_shape(c, entity, kind, Some(Adjustment::Forward))? else {
+    let Some(shape) = resolve_read_shape(c, entity, kind, Some(Adjustment::Forward), gate)? else {
         return Ok(None);
     };
     read_visible_shaped(c, entity, period, shape)

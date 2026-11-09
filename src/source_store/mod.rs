@@ -43,6 +43,9 @@ pub mod etf_factor_checks;
 pub mod etf_factor_gate;
 /// Read-only loader with the `(entity, evidence_digest)` verdict cache.
 pub mod etf_factor_loader;
+/// `#607` PR-D: the gate the read surface injects — store resolution, the
+/// cheap change probe and the fail-closed answers around PR-B's decision.
+pub mod etf_factor_read_gate;
 
 mod lock;
 
