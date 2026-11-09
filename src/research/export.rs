@@ -149,7 +149,6 @@ pub struct SnapshotWriter {
 /// is the natural form here (`EtfForwardGate` is `Send + Sync`).
 type SharedGate = std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate>;
 
-
 impl SnapshotWriter {
     /// Plan the snapshot and reserve the temporary directory.
     ///

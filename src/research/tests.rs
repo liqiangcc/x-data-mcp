@@ -16,8 +16,8 @@ use std::path::{Path, PathBuf};
 use chrono::{Duration, NaiveDate};
 use rusqlite::{Connection, params};
 use rust_decimal::Decimal;
-use std::str::FromStr as _;
 use serde_json::json;
+use std::str::FromStr as _;
 
 use super::read::{
     for_each_bar, for_each_calendar_day, for_each_factor, price_units, scaled_units,
@@ -26,8 +26,7 @@ use super::{
     AdjustmentSelection, DatasetSelection, EntitySelection, ExportRequest, plan, verify_unchanged,
 };
 use crate::compact_market::{
-    CompactBar, Digest, EvidenceKind, ExcludedBar, PRICE_SCALE_QFQ, SourceBinding,
-    VersionEvidence,
+    CompactBar, Digest, EvidenceKind, ExcludedBar, PRICE_SCALE_QFQ, SourceBinding, VersionEvidence,
 };
 use crate::market_data::{
     Adjustment, AdjustmentEvent, AdjustmentEventSet, AdjustmentEvidence, CalendarBatch,
@@ -68,7 +67,7 @@ fn etf_check_record(
     entity: &str,
     status: crate::source_store::etf_factor_checks::CheckStatus,
 ) -> crate::source_store::etf_factor_checks::EtfFactorCheck {
-    use crate::source_store::etf_factor_checks::{CheckBasis, CHECKS_VERSION};
+    use crate::source_store::etf_factor_checks::{CHECKS_VERSION, CheckBasis};
     let c = fixture.read();
     let events =
         crate::sqlite_market::derived::read_adjustment_events_with_evidence(&c, entity).unwrap();
@@ -529,7 +528,12 @@ impl Fixture {
                         f32::to_bits(2.5),
                         f32::to_bits(0.0),
                     ],
-                    factors: [Decimal::ZERO, Decimal::ZERO, Decimal::new(25, 1), Decimal::ZERO],
+                    factors: [
+                        Decimal::ZERO,
+                        Decimal::ZERO,
+                        Decimal::new(25, 1),
+                        Decimal::ZERO,
+                    ],
                     known_at: None,
                     basis_status: crate::market_data::FactorBasisStatus::Verified,
                 }],

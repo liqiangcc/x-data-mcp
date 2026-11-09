@@ -24,17 +24,17 @@ use rust_decimal::Decimal;
 use rust_decimal::RoundingStrategy;
 
 use super::{
-    CatalogBinding, DerivedDataset, DerivedEntry, EntitySelection, EtfBinding,
-    ExportRequest, GenerationBinding, IndexBinding, SeriesEntry,
+    CatalogBinding, DerivedDataset, DerivedEntry, EntitySelection, EtfBinding, ExportRequest,
+    GenerationBinding, IndexBinding, SeriesEntry,
 };
 use crate::compact_market;
-use crate::source_store::etf_factor_checks::CheckStatus;
-use crate::sqlite_market::series::EtfForwardGate;
 use crate::market_data::{
     Adjustment, CoverageStatus, INSTRUMENT_CLASS_ETF, INSTRUMENT_CLASS_INDEX,
     INSTRUMENT_CLASS_STOCK, Period,
 };
 use crate::research::Error;
+use crate::source_store::etf_factor_checks::CheckStatus;
+use crate::sqlite_market::series::EtfForwardGate;
 use crate::sqlite_market::{compact_repo, derived};
 
 fn integrity(message: impl std::fmt::Display) -> Error {
@@ -534,7 +534,6 @@ impl EtfForwardReport {
         !self.admitted.is_empty() || !self.blocked.is_empty()
     }
 }
-
 
 fn etf_binding(c: &Connection, entry: &SeriesEntry) -> Result<EtfBinding, Error> {
     Ok(EtfBinding {

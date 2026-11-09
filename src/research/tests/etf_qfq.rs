@@ -41,10 +41,7 @@ fn check_record(fixture: &Fixture, entity: &str, status: CheckStatus) -> EtfFact
     etf_check_record(fixture, entity, status)
 }
 
-fn gate_with(
-    dir: &tempfile::TempDir,
-    records: &[EtfFactorCheck],
-) -> std::sync::Arc<ForwardGate> {
+fn gate_with(dir: &tempfile::TempDir, records: &[EtfFactorCheck]) -> std::sync::Arc<ForwardGate> {
     etf_gate_with(dir.path(), records)
 }
 
@@ -78,7 +75,8 @@ fn text(row: &Row, column: &str) -> String {
 }
 
 fn manifest(directory: &Path) -> serde_json::Value {
-    serde_json::from_str(&std::fs::read_to_string(directory.join("manifest.json")).unwrap()).unwrap()
+    serde_json::from_str(&std::fs::read_to_string(directory.join("manifest.json")).unwrap())
+        .unwrap()
 }
 
 /// The manifest's `etf_forward` block.
@@ -105,12 +103,16 @@ fn an_admitted_etf_export_carries_the_read_face_qfq_bytes() {
     let store = tempdir();
     let gate = gate_with(
         &store,
-        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+        &[check_record(
+            &fixture,
+            "sh.510050",
+            CheckStatus::VerifiedOfficial,
+        )],
     );
     let out = tempdir();
     let request = ExportRequest::default();
-    let outcome = export_with_gate(fixture.path(), &request, &options(out.path()), gate.clone())
-        .unwrap();
+    let outcome =
+        export_with_gate(fixture.path(), &request, &options(out.path()), gate.clone()).unwrap();
     let directory = outcome.directory.clone();
 
     // `sz.159919` has no event, so nothing to verify and nothing to block; the
@@ -185,12 +187,20 @@ fn an_admitted_etf_export_matches_the_stored_forward_series_row_for_row() {
     let store = tempdir();
     let gate = gate_with(
         &store,
-        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+        &[check_record(
+            &fixture,
+            "sh.510050",
+            CheckStatus::VerifiedOfficial,
+        )],
     );
     let out = tempdir();
-    let outcome =
-        export_with_gate(fixture.path(), &ExportRequest::default(), &options(out.path()), gate)
-            .unwrap();
+    let outcome = export_with_gate(
+        fixture.path(),
+        &ExportRequest::default(),
+        &options(out.path()),
+        gate,
+    )
+    .unwrap();
     let exported = rows_of(&outcome.directory, crate::research::DAILY_QFQ_FILE);
 
     let c = fixture.read();
@@ -207,7 +217,9 @@ fn an_admitted_etf_export_matches_the_stored_forward_series_row_for_row() {
         let stored = crate::sqlite_market::series::all_bars(&c, row.series_key).unwrap();
         let mut seen = 0;
         for bar in &stored {
-            let day = crate::compact_market::epoch_date(bar.trade_day).unwrap().to_string();
+            let day = crate::compact_market::epoch_date(bar.trade_day)
+                .unwrap()
+                .to_string();
             let found = exported
                 .iter()
                 .find(|row| text(row, "entity") == entity && text(row, "trade_day") == day)
@@ -247,15 +259,18 @@ fn a_blocked_etf_is_absent_from_daily_qfq_and_named_in_the_manifest() {
         &[check_record(&fixture, "sh.510050", CheckStatus::Unverified)],
     );
     let out = tempdir();
-    let outcome =
-        export_with_gate(fixture.path(), &ExportRequest::default(), &options(out.path()), gate)
-            .unwrap();
+    let outcome = export_with_gate(
+        fixture.path(),
+        &ExportRequest::default(),
+        &options(out.path()),
+        gate,
+    )
+    .unwrap();
     let directory = outcome.directory.clone();
 
     let qfq = rows_of(&directory, crate::research::DAILY_QFQ_FILE);
     assert!(
-        qfq.iter()
-            .all(|row| text(row, "entity") != "sh.510050"),
+        qfq.iter().all(|row| text(row, "entity") != "sh.510050"),
         "a blocked ETF must not reach daily_qfq"
     );
     // Its 不复权 rows stay: blocking is about 前复权, never about dropping data.
@@ -286,7 +301,12 @@ fn a_missing_source_store_blocks_every_etf_without_failing_the_export() {
     // the production-misconfiguration path.
     let fixture = Fixture::with_etf();
     let out = tempdir();
-    let outcome = export(fixture.path(), &ExportRequest::default(), &options(out.path())).unwrap();
+    let outcome = export(
+        fixture.path(),
+        &ExportRequest::default(),
+        &options(out.path()),
+    )
+    .unwrap();
     let directory = outcome.directory.clone();
 
     let blocked = blocked_entities(&directory);
@@ -326,7 +346,11 @@ fn a_raw_only_export_writes_no_etf_qfq_row_and_its_daily_bytes_are_store_indepen
     let store = tempdir();
     let gate = gate_with(
         &store,
-        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+        &[check_record(
+            &fixture,
+            "sh.510050",
+            CheckStatus::VerifiedOfficial,
+        )],
     );
     let stored = tempdir();
     let with_store =
@@ -376,12 +400,20 @@ fn factors_basis_status_reports_the_check_verdict_and_the_fixed_a_share_value() 
     let store = tempdir();
     let gate = gate_with(
         &store,
-        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedAnnouncement)],
+        &[check_record(
+            &fixture,
+            "sh.510050",
+            CheckStatus::VerifiedAnnouncement,
+        )],
     );
     let out = tempdir();
-    let outcome =
-        export_with_gate(fixture.path(), &ExportRequest::default(), &options(out.path()), gate)
-            .unwrap();
+    let outcome = export_with_gate(
+        fixture.path(),
+        &ExportRequest::default(),
+        &options(out.path()),
+        gate,
+    )
+    .unwrap();
     let rows = rows_of(&outcome.directory, crate::research::FACTORS_FILE);
     assert!(!rows.is_empty());
     let mut etf_rows = 0;
@@ -438,7 +470,12 @@ fn an_etf_factor_event_without_a_check_record_is_unverified() {
     // rather than borrowing the A-share value.
     let fixture = Fixture::with_etf();
     let out = tempdir();
-    let outcome = export(fixture.path(), &ExportRequest::default(), &options(out.path())).unwrap();
+    let outcome = export(
+        fixture.path(),
+        &ExportRequest::default(),
+        &options(out.path()),
+    )
+    .unwrap();
     let rows = rows_of(&outcome.directory, crate::research::FACTORS_FILE);
     let etf = rows
         .iter()
@@ -508,7 +545,11 @@ fn a_different_check_set_is_a_different_snapshot() {
         &options(admitted.path()),
         gate_with(
             &admitted_store,
-            &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+            &[check_record(
+                &fixture,
+                "sh.510050",
+                CheckStatus::VerifiedOfficial,
+            )],
         ),
     )
     .unwrap();
@@ -611,12 +652,20 @@ fn the_plan_holds_the_same_admission_the_read_face_answers() {
     let store = tempdir();
     let gate = gate_with(
         &store,
-        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+        &[check_record(
+            &fixture,
+            "sh.510050",
+            CheckStatus::VerifiedOfficial,
+        )],
     );
     let out = tempdir();
-    let outcome =
-        export_with_gate(fixture.path(), &ExportRequest::default(), &options(out.path()), gate)
-            .unwrap();
+    let outcome = export_with_gate(
+        fixture.path(),
+        &ExportRequest::default(),
+        &options(out.path()),
+        gate,
+    )
+    .unwrap();
     let rows = rows_of(&outcome.directory, crate::research::DAILY_QFQ_FILE);
     let close_of = |entity: &str, day: &str| -> String {
         rows.iter()
@@ -659,7 +708,6 @@ fn the_plan_carries_the_per_entity_verdicts() {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // cost
 // ---------------------------------------------------------------------------
@@ -694,7 +742,10 @@ fn etf_qfq_export_cost() {
                 )
                 .unwrap();
             let removed = tx
-                .execute("DELETE FROM series_bars WHERE series_key=?1", params![series_key])
+                .execute(
+                    "DELETE FROM series_bars WHERE series_key=?1",
+                    params![series_key],
+                )
                 .unwrap();
             assert_eq!(removed, 3, "{entity}: the fixture's 3 stored bars");
             // 1.65M rows in total: the production-scale block this release adds.
@@ -731,7 +782,11 @@ fn etf_qfq_export_cost() {
     let store = tempdir();
     let gate = gate_with(
         &store,
-        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+        &[check_record(
+            &fixture,
+            "sh.510050",
+            CheckStatus::VerifiedOfficial,
+        )],
     );
     let out = tempdir();
     let started = std::time::Instant::now();

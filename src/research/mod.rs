@@ -956,7 +956,8 @@ pub struct SnapshotPlan {
     /// `basis_status` column of `factors.parquet` (§7.3). Not part of the
     /// identity on its own — it is a function of the same check set the
     /// `etf_checks_digest` in the identity names.
-    pub factor_basis: BTreeMap<(String, i64, String), crate::source_store::etf_factor_checks::CheckStatus>,
+    pub factor_basis:
+        BTreeMap<(String, i64, String), crate::source_store::etf_factor_checks::CheckStatus>,
     /// The canonical identity document the `snapshot_id` hashes. Printed by
     /// `--dry-run`; also the base of `manifest.json`.
     pub identity: Value,
