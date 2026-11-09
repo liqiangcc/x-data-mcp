@@ -457,6 +457,8 @@ fn request(mode: RefreshMode, sources: &[&str]) -> RefreshRequest {
         sources: sources.iter().map(|source| source.to_string()).collect(),
         dry_run: false,
         status_of: None,
+        latest: None,
+        wait_seconds: None,
     }
 }
 
@@ -938,6 +940,8 @@ fn dry_run_lists_the_plan_and_touches_nothing() {
             sources: Vec::new(),
             dry_run: true,
             status_of: None,
+            latest: None,
+            wait_seconds: None,
         },
     )
     .unwrap();
@@ -2058,4 +2062,285 @@ fn a_tail_beyond_the_age_bound_fails_closed_instead_of_refetching() {
         .unwrap();
     assert!(!recorded.complete);
     assert_eq!(recorded.failed_windows as usize, failures.len());
+}
+
+// ---------- #625: server-side long poll for `status_of` ----------
+
+/// A run that stays `running` for the whole wait returns the same record the
+/// immediate call would, and the call itself lasts about the budget.
+#[test]
+fn status_of_without_wait_seconds_returns_at_once() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let open = super::start(&backend, day(2026, 11, 2), RefreshMode::Full, &[], INSTANCE).unwrap();
+
+    // Absent and 0 are the immediate read: a `running` row comes back at once.
+    for wait in [None, Some(0)] {
+        let started = std::time::Instant::now();
+        let report = super::status_of_waiting(&backend, &open.run_id, wait).unwrap();
+        assert_eq!(report.status, RefreshStatus::Running);
+        assert_eq!(report.run_id.as_deref(), Some(open.run_id.as_str()));
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "an absent or zero wait_seconds must not sleep ({:?})",
+            started.elapsed()
+        );
+    }
+}
+
+/// The wait ends as soon as the run settles — well before its budget — and
+/// returns the terminal record, not the `running` one it entered with.
+#[test]
+fn status_of_wait_returns_early_when_the_run_settles() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    fixture.pause();
+    let started_run = super::start_in_background(
+        scenario.store(),
+        backend.clone(),
+        client(&fixture),
+        day(2026, 11, 2),
+        request(RefreshMode::Tail, &["szse_delisting"]),
+        INSTANCE,
+    )
+    .unwrap();
+    let run_id = started_run.run_id.clone().unwrap();
+
+    // Release the transport from another thread once the waiter is asleep:
+    // the wait must notice the settled row on its next 400 ms re-read.
+    let real = fixture.clone();
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        real.release();
+    });
+    let started = std::time::Instant::now();
+    let report = super::status_of_waiting(&backend, &run_id, Some(20)).unwrap();
+    let elapsed = started.elapsed();
+    releaser.join().unwrap();
+
+    assert_eq!(report.status, RefreshStatus::Succeeded);
+    assert!(report.finished_at.is_some());
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "a settling run must end the wait early, took {elapsed:?}"
+    );
+}
+
+/// A run that never settles inside the budget returns the state it is in at
+/// the deadline — a `running` record, not an error and not a terminal one.
+#[test]
+fn status_of_wait_returns_the_running_state_on_timeout() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let open = super::start(&backend, day(2026, 11, 2), RefreshMode::Full, &[], INSTANCE).unwrap();
+
+    let started = std::time::Instant::now();
+    let report = super::status_of_waiting(&backend, &open.run_id, Some(1)).unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(report.status, RefreshStatus::Running);
+    assert!(report.finished_at.is_none());
+    assert!(
+        elapsed >= std::time::Duration::from_secs(1),
+        "a 1 s wait must actually wait, took {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a 1 s wait must not overrun its budget, took {elapsed:?}"
+    );
+}
+
+/// `wait_seconds` above the cap is clamped to it, never rejected: the answer
+/// is still a normal record and the call cannot outlast `MAX_WAIT_SECONDS`.
+#[test]
+fn status_of_wait_seconds_above_the_cap_is_clamped() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let open = super::start(&backend, day(2026, 11, 2), RefreshMode::Full, &[], INSTANCE).unwrap();
+
+    // The clamp itself, without a 50 s test: the budget function is the same
+    // one `get_task_progress` uses.
+    assert_eq!(
+        super::wait_budget(0),
+        None,
+        "0 means no wait (the immediate behavior)"
+    );
+    assert_eq!(
+        super::wait_budget(1),
+        Some(std::time::Duration::from_secs(1))
+    );
+    assert_eq!(
+        super::wait_budget(super::MAX_WAIT_SECONDS),
+        Some(std::time::Duration::from_secs(u64::from(
+            super::MAX_WAIT_SECONDS
+        )))
+    );
+    assert_eq!(
+        super::wait_budget(u32::MAX),
+        Some(std::time::Duration::from_secs(u64::from(
+            super::MAX_WAIT_SECONDS
+        ))),
+        "an out-of-range wait is clamped, not rejected"
+    );
+    // And the call with an absurd value is still a plain successful read.
+    let report = super::status_of_waiting(&backend, &open.run_id, Some(0)).unwrap();
+    assert_eq!(report.status, RefreshStatus::Running);
+    assert_eq!(super::MAX_WAIT_SECONDS, 50);
+}
+
+/// The waiter never holds a read transaction across its sleep: the background
+/// refresh thread writes the run record while a wait is in flight, and the
+/// waiter observes the settled row. A deadlock here would time out the test.
+#[test]
+fn a_waiting_reader_does_not_block_the_refresh_thread() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+
+    fixture.pause();
+    let started_run = super::start_in_background(
+        scenario.store(),
+        backend.clone(),
+        client(&fixture),
+        day(2026, 11, 2),
+        request(RefreshMode::Tail, &["szse_delisting"]),
+        INSTANCE,
+    )
+    .unwrap();
+    let run_id = started_run.run_id.clone().unwrap();
+
+    let real = fixture.clone();
+    let writer = std::thread::spawn(move || {
+        // Long enough for the waiter to be inside its sleep loop.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        real.release();
+    });
+    // A second waiter on another thread: two long polls must not serialize the
+    // refresh thread's write either.
+    let second_backend = backend.clone();
+    let second_run = run_id.clone();
+    let second = std::thread::spawn(move || {
+        super::status_of_waiting(&second_backend, &second_run, Some(20)).unwrap()
+    });
+    let first = super::status_of_waiting(&backend, &run_id, Some(20)).unwrap();
+    let second = second.join().unwrap();
+    writer.join().unwrap();
+
+    for report in [first, second] {
+        assert_eq!(report.status, RefreshStatus::Succeeded);
+        assert_eq!(report.run_id.as_deref(), Some(run_id.as_str()));
+    }
+    let row = backend.read_source_refresh_run(&run_id).unwrap().unwrap();
+    assert_eq!(row.status, "succeeded");
+}
+
+// ---------- #625: `latest:"full"` ----------
+
+#[test]
+fn latest_full_is_null_without_any_run() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    // No run at all, and then only an open one: neither is a succeeded full.
+    assert!(super::latest_full(&backend).unwrap().is_none());
+    let _open = super::start(&backend, day(2026, 11, 2), RefreshMode::Full, &[], INSTANCE).unwrap();
+    assert!(
+        super::latest_full(&backend).unwrap().is_none(),
+        "a running full has confirmed nothing yet"
+    );
+}
+
+#[test]
+fn latest_full_is_null_when_only_a_tail_succeeded() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let report = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client(&fixture),
+        RefreshMode::Tail,
+        &["szse_delisting"],
+    );
+    assert_eq!(report.status, RefreshStatus::Succeeded);
+    assert!(
+        super::latest_full(&backend).unwrap().is_none(),
+        "a tail reads two windows, not the whole fingerprint set: it is not a full"
+    );
+}
+
+#[test]
+fn latest_full_skips_a_failed_full_and_returns_the_newest_succeeded_one() {
+    let fixture = RefreshFixture::new();
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let client = client(&fixture);
+
+    let first = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client,
+        RefreshMode::Full,
+        &["szse_delisting"],
+    );
+    assert_eq!(first.status, RefreshStatus::Succeeded);
+
+    // A failing full after it: newer, but it confirmed nothing.
+    fixture.set_delisting_pages(2);
+    fixture.fail_page_two();
+    let failed = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client,
+        RefreshMode::Full,
+        &["szse_delisting"],
+    );
+    assert_eq!(failed.status, RefreshStatus::Failed);
+
+    let latest = super::latest_full(&backend).unwrap().unwrap();
+    assert_eq!(latest.run_id, first.run_id.clone().unwrap());
+    assert_eq!(latest.started_at, first.started_at);
+    assert_eq!(latest.finished_at, first.finished_at);
+    assert_eq!(latest.requests, first.requests);
+    assert_eq!(latest.failed_windows, 0);
+    assert_eq!(latest.unobserved_windows, 0);
+
+    // A newer successful full replaces it.
+    fixture.fail_page_two();
+    fixture.state.lock().unwrap().fail_page_two = false;
+    let second = run_refresh(
+        &fixture,
+        &scenario,
+        &backend,
+        &client,
+        RefreshMode::Full,
+        &["szse_delisting"],
+    );
+    assert_eq!(second.status, RefreshStatus::Succeeded);
+    let latest = super::latest_full(&backend).unwrap().unwrap();
+    assert_eq!(latest.run_id, second.run_id.clone().unwrap());
+    assert_ne!(latest.run_id, first.run_id.unwrap());
+}
+
+// ---------- #625: input validation for `latest` / `wait_seconds` ----------
+
+#[test]
+fn latest_accepts_only_full() {
+    let scenario = Scenario::new();
+    let backend = scenario.open();
+    let mut command = RefreshRequest {
+        mode: None,
+        sources: Vec::new(),
+        dry_run: false,
+        status_of: None,
+        latest: Some("tail".to_string()),
+        wait_seconds: None,
+    };
+    // `latest` is the selector, not a mode: any other value is a bad argument.
+    assert_ne!(command.latest.as_deref(), Some(super::wire::LATEST_FULL));
+    command.latest = Some(super::wire::LATEST_FULL.to_string());
+    assert!(super::latest_full(&backend).unwrap().is_none());
 }

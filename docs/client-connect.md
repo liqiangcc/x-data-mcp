@@ -137,7 +137,7 @@ ssh -o BatchMode=yes vm2-126 \
 ```
 
 ETF 省略 `adjustment` 会返回 `adjustment_required_for_etf`；`qfq` 在部署面（`generic-data-v11`）
-上对 ETF 一律 fail-closed（`adjustment_unavailable`），代码面（`generic-data-v12`，未部署）改成按实体的
+上对 ETF 一律 fail-closed（`adjustment_unavailable`），代码面（`generic-data-v13`，未部署；v12 起的 ETF 前复权读面）改成按实体的
 核对门槛放行或带 `details.reason` 阻断。这是数据契约，不是连接问题，见
 [generic-data-v11](contracts/generic-data-v11.md) 与 [generic-data-v12](contracts/generic-data-v12.md)。
 

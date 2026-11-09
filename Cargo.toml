@@ -16,6 +16,14 @@ name = "export_research"
 path = "src/bin/export_research.rs"
 required-features = ["export"]
 
+# #625: the streaming half of `scripts/tdx_fetch.py`. The helper delegates to
+# this binary when the service names it on the fetch call, and re-verifies the
+# staged bytes before printing the result, so the byte-verified pipeline is
+# unchanged. Always built: a default build keeps the acquire progress reporting.
+[[bin]]
+name = "tdx-fetch-progress"
+path = "src/bin/tdx_fetch_progress.rs"
+
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 rust_decimal = { version = "1", features = ["serde"] }
@@ -43,6 +51,8 @@ serde_json_canonicalizer = "=0.3.2"
 # `src/research/parquet.rs`.
 parquet = { version = "59.3.2", optional = true, default-features = false, features = ["snap"] }
 unicode-normalization = "0.1"
+rustls = "0.23.46"
+webpki-roots = "1.0.11"
 
 [dev-dependencies]
 # Validate generated wire schemas against real stdio results; no HTTP schema resolution.

@@ -47,7 +47,7 @@ readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capab
 | update_data | 刷新已有数据 | 同上 | WriteAcceptance |
 | plan_market_update | 解析全市场更新计划（v7 起已实现，preview.36 起部署；见 [generic-data-v8](contracts/generic-data-v8.md)） | dataset（market.daily/market.yearly）、contract_version、可选 end_date（缺省为 active generation 内最新交易日，不晚于当日）、end_date? | PlanView（plan_id + 分类计数） |
 | run_market_update | 按 plan 受理单一大任务（v7 起已实现并部署；重算比对 digest，失配 fail-closed；部署版本见 [STATUS](STATUS.md)） | dataset、contract_version、request_id、target_day、plan_id | PlanRunAcceptance |
-| refresh_exchange_sources | 刷新交易所来源库（v9 起已实现并部署；`tail`/`full`，不发布数据集；见 [v9](contracts/generic-data-v9.md)；`tail` 自 #582 起异步，见 [v11](contracts/generic-data-v11.md) §8） | mode（`status_of` 时可省）、可选 sources、可选 dry_run、可选 status_of | `tail`/`full`：立即返回 `{run_id,status:"running"}`（带计划，计数为 0），用 `{status_of}` 轮询 run 记录（计数、`verified_through`、失败列表；不含 per-source 行与 `revision`） |
+| refresh_exchange_sources | 刷新交易所来源库（v9 起已实现并部署；`tail`/`full`，不发布数据集；见 [v9](contracts/generic-data-v9.md)；`tail` 自 #582 起异步，见 [v11](contracts/generic-data-v11.md) §8；长轮询与 `latest` 见 [v13](contracts/generic-data-v13.md)） | mode（`status_of`/`latest` 时可省）、可选 sources、可选 dry_run、可选 status_of、可选 latest（仅 `"full"`）、可选 wait_seconds（随 status_of，上限 50s） | `tail`/`full`：立即返回 `{run_id,status:"running"}`（带计划，计数为 0），用 `{status_of}` 轮询 run 记录（计数、`verified_through`、失败列表；不含 per-source 行与 `revision`）；`{latest:"full"}` 只读返回最近一次成功的 `full` 记录（没有则 `null`） |
 | backfill_data | 补指定历史范围 | 同上，加类型化 range | WriteAcceptance |
 | republish_data | 授权重发固定基线（#247 纯 enrichment：仅填未晋升字段或新增日期，已知值改/丢 fail-closed；仅显式 items，无 default selection） | 同 update_data | WriteAcceptance |
 | query_data | 读取已发布数据 | dataset、contract_version、selection、filter、version_id?、page_size?、cursor? | DataPage |
@@ -56,6 +56,7 @@ readiness 来源。当前机器契约必须通过 `tools/list` / `get_data_capab
 | list_tasks | 发现已有任务 | 类型/状态/时间过滤、分页 | TaskListSnapshot |
 | get_request | 核对持久请求结果 | request_id | RequestResult |
 | get_task / get_task_progress | 查询任务/固定进度快照 | task_id；进度支持分页；进度可选 wait_seconds（服务端等待，上限 50s）、since_revision | TaskResult / TaskSnapshot |
+| get_acquisition_task | 查询获取任务（acquire 入口） | contract_version、task_id；可选 wait_seconds（`state`/`stage`/`bytes_done` 变化或终态即返回，上限 50s，见 [v13](contracts/generic-data-v13.md) §4） | AcquisitionTaskView（下载中 `bytes_done` 按块推进） |
 | cancel_task | 申请取消 | task_id | CancellationResult |
 | retry_task | 对原任务未完成项显式重试 | original_task_id、new_request_id、item_ids | WriteAcceptance |
 

@@ -35,6 +35,7 @@ pub mod plan;
 pub mod wire;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 
@@ -50,9 +51,29 @@ use crate::sqlite_market::refresh_runs::{RunFinish, RunMemberRow, RunSourceRow, 
 
 use self::plan::{PlanClass, SourcePlan};
 use self::wire::{
-    RefreshFailure, RefreshMode, RefreshReport, RefreshRequest, RefreshStatus, Revision,
-    SourceReport,
+    LatestFullRun, RefreshFailure, RefreshMode, RefreshReport, RefreshRequest, RefreshStatus,
+    Revision, SourceReport,
 };
+
+/// Upper bound on one `refresh_exchange_sources` server-side wait, in seconds.
+///
+/// Same cap as `get_task_progress` (`data_supply::observe::MAX_WAIT_SECONDS`,
+/// 50): both are one MCP connection thread held in a sleep loop, so both
+/// bound it the same way. Larger `wait_seconds` values are clamped to this,
+/// never rejected.
+pub const MAX_WAIT_SECONDS: u32 = 50;
+/// Long-poll re-read cadence, the same 300–500ms window the task progress
+/// wait uses.
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(400);
+
+/// Server wait budget for a caller-supplied `wait_seconds`: `None` when no
+/// wait was requested (absent or 0 — the immediate-return behavior),
+/// otherwise `min(seconds, MAX_WAIT_SECONDS)`.
+fn wait_budget(seconds: u32) -> Option<Duration> {
+    (seconds > 0).then_some(Duration::from_secs(u64::from(
+        seconds.min(MAX_WAIT_SECONDS),
+    )))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RefreshError {
@@ -360,6 +381,62 @@ pub fn status_of(backend: &MarketBackend, run_id: &str) -> Result<RefreshReport,
         revisions: Vec::new(),
         failures,
     })
+}
+
+/// Read one record with an optional server-side wait (#625).
+///
+/// `wait_seconds` absent or 0 is exactly [`status_of`]: one read, no wait. A
+/// positive value (clamped to [`MAX_WAIT_SECONDS`]) re-reads the run row every
+/// 300–500 ms until the run reaches a terminal status or the budget expires,
+/// and then returns whatever the record says at that moment — a timeout is
+/// not an error, it is the same fact one call later would read. The wait is
+/// the same semantic as `get_task_progress`'s long poll: each iteration is its
+/// own short-lived read that releases before the sleep, so no read transaction
+/// is held across the sleep and the background refresh thread's writes are
+/// never blocked.
+///
+/// A missing (or unreadable) run fails immediately through the same read and
+/// is never waited on.
+pub fn status_of_waiting(
+    backend: &MarketBackend,
+    run_id: &str,
+    wait_seconds: Option<u32>,
+) -> Result<RefreshReport, RefreshError> {
+    let Some(budget) = wait_budget(wait_seconds.unwrap_or(0)) else {
+        return status_of(backend, run_id);
+    };
+    let deadline = Instant::now() + budget;
+    loop {
+        let report = status_of(backend, run_id)?;
+        if report.status != RefreshStatus::Running {
+            return Ok(report);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Ok(report);
+        }
+        std::thread::sleep(WAIT_POLL_INTERVAL.min(deadline - now));
+    }
+}
+
+/// The newest `status=succeeded` `full` run record, or `None` when no `full`
+/// has ever succeeded (#625).
+///
+/// Read-only: it starts nothing and touches no other row. A `tail` is not a
+/// `full` (it reads two windows and two probe pages, not the whole fingerprint
+/// set), and a `failed` `full` confirmed nothing, so neither can answer it.
+pub fn latest_full(backend: &MarketBackend) -> Result<Option<LatestFullRun>, RefreshError> {
+    let Some(row) = backend.read_latest_succeeded_source_refresh_run("full")? else {
+        return Ok(None);
+    };
+    Ok(Some(LatestFullRun {
+        run_id: row.run_id,
+        started_at: row.started_at,
+        finished_at: row.finished_at,
+        requests: row.requests,
+        failed_windows: count(row.failed_windows)?,
+        unobserved_windows: count(row.unobserved_windows)?,
+    }))
 }
 
 /// Startup reclaim (§5.6 R2b): close refresh runs a previous process instance

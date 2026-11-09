@@ -1618,3 +1618,343 @@ fn a_lost_lifecycle_state_does_not_make_an_activated_generation_retirable() {
         "a recorded activation keeps the strict rule"
     );
 }
+
+// ---------- #625: long poll on `get_acquisition_task` ----------
+
+/// Absent or 0 `wait_seconds` is the pre-#625 read: one row, no sleep.
+#[test]
+fn get_acquisition_task_without_wait_seconds_returns_at_once() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    let accepted = service.acquire_generation("req-nowait").unwrap();
+
+    for wait in [None, Some(0)] {
+        let started = std::time::Instant::now();
+        let task = service
+            .task_waiting(&accepted.task_id, wait)
+            .expect("the task record");
+        assert_eq!(task.task_id, accepted.task_id);
+        assert_eq!(task.state, "accepted");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "an absent or zero wait_seconds must not sleep ({:?})",
+            started.elapsed()
+        );
+    }
+}
+
+/// A worker that advances the task ends the wait early: the call returns the
+/// terminal record long before its 20 s budget.
+#[test]
+fn get_acquisition_task_wait_returns_early_when_the_task_moves() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = Arc::new(open(root.path(), mirror.path()));
+    let accepted = service.acquire_generation("req-early").unwrap();
+
+    let driver = service.clone();
+    let worker = std::thread::spawn(move || {
+        // Give the waiter time to enter its sleep loop, then drive the task to
+        // a terminal state.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        drive(&driver);
+    });
+    let started = std::time::Instant::now();
+    let task = service
+        .task_waiting(&accepted.task_id, Some(20))
+        .expect("the task record");
+    let elapsed = started.elapsed();
+    worker.join().unwrap();
+
+    assert_eq!(task.state, "succeeded");
+    assert!(task.generation_id.is_some());
+    assert!(
+        elapsed < std::time::Duration::from_secs(15),
+        "a task that finishes must end the wait early, took {elapsed:?}"
+    );
+}
+
+/// A task that does not move returns the state it is in at the deadline.
+#[test]
+fn get_acquisition_task_wait_returns_the_state_on_timeout() {
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    let accepted = service.acquire_generation("req-timeout").unwrap();
+
+    let started = std::time::Instant::now();
+    let task = service
+        .task_waiting(&accepted.task_id, Some(1))
+        .expect("the task record");
+    let elapsed = started.elapsed();
+    assert_eq!(task.state, "accepted");
+    assert_eq!(task.bytes_done, 0);
+    assert!(
+        elapsed >= std::time::Duration::from_secs(1),
+        "a 1 s wait must actually wait, took {elapsed:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "a 1 s wait must not overrun its budget, took {elapsed:?}"
+    );
+}
+
+/// An out-of-range `wait_seconds` is clamped to the cap, never rejected, and
+/// the cap matches the one `get_task_progress` uses.
+#[test]
+fn get_acquisition_task_wait_seconds_above_the_cap_is_clamped() {
+    assert_eq!(
+        x_data_mcp::acquire::service::MAX_WAIT_SECONDS,
+        x_data_mcp::data_supply::observe::MAX_WAIT_SECONDS,
+        "both long polls share one server cap"
+    );
+    let mirror = tempfile::tempdir().unwrap();
+    write_mirror(mirror.path(), today_u32());
+    let root = tempfile::tempdir().unwrap();
+    let service = open(root.path(), mirror.path());
+    let accepted = service.acquire_generation("req-clamp").unwrap();
+    // Zero is the clamp's "no wait" case; a u32::MAX would sleep 50 s, so the
+    // clamp itself is asserted through the shared constant above.
+    let task = service
+        .task_waiting(&accepted.task_id, Some(0))
+        .expect("the task record");
+    assert_eq!(task.task_id, accepted.task_id);
+}
+
+// ---------- #625: within-download `bytes_done` ----------
+
+/// A fetcher that reports progress in chunks, so the test can assert the
+/// durable `bytes_done` grows during a download and that the writes are
+/// throttled instead of one per chunk.
+///
+/// It answers every role with the same bytes: the acquisition downloads three
+/// files per task (base, gbbq, day), and the properties under test — monotone
+/// progress, a rate-limited write, a moving wait — do not depend on which role
+/// is in flight.
+struct StreamingFetcher {
+    payload: Vec<u8>,
+    chunks: u32,
+    /// Wall clock to spend between chunk reports, so the 1 s throttle is
+    /// observable instead of everything landing inside one interval.
+    chunk_delay: std::time::Duration,
+    reports: Mutex<u32>,
+    /// Set when the test wants the first role's download to stall forever
+    /// (the task must stay `running` while the test inspects it).
+    hold: Mutex<bool>,
+    released: (Mutex<bool>, std::sync::Condvar),
+}
+
+impl StreamingFetcher {
+    fn new(payload: Vec<u8>, chunks: u32, chunk_delay: std::time::Duration) -> Arc<Self> {
+        Arc::new(Self {
+            payload,
+            chunks,
+            chunk_delay,
+            reports: Mutex::new(0),
+            hold: Mutex::new(false),
+            released: (Mutex::new(false), std::sync::Condvar::new()),
+        })
+    }
+
+    fn hold(&self) {
+        *self.hold.lock().unwrap() = true;
+    }
+
+    fn release(&self) {
+        *self.released.0.lock().unwrap() = true;
+        self.released.1.notify_all();
+    }
+
+    fn wait_if_held(&self) {
+        if !*self.hold.lock().unwrap() {
+            return;
+        }
+        let mut released = self.released.0.lock().unwrap();
+        while !*released {
+            released = self.released.1.wait(released).unwrap();
+        }
+    }
+}
+
+impl Fetcher for StreamingFetcher {
+    fn head(&self, _url: &str) -> Result<fetch::Head, fetch::Error> {
+        Ok(fetch::Head {
+            status: 200,
+            etag: Some("\"streaming\"".into()),
+            last_modified: None,
+            content_length: Some(self.payload.len() as u64),
+        })
+    }
+    fn fetch(&self, _url: &str, _dest: &Path) -> Result<fetch::FetchResult, fetch::Error> {
+        unreachable!("the streaming fixture is always fetched through fetch_with_progress")
+    }
+    fn fetch_with_progress(
+        &self,
+        _url: &str,
+        dest: &Path,
+        progress: &x_data_mcp::acquire::ProgressFn<'_>,
+    ) -> Result<fetch::FetchResult, fetch::Error> {
+        let total = self.payload.len();
+        let chunks = self.chunks.max(1) as usize;
+        let step = total.div_ceil(chunks);
+        let mut file = std::fs::File::create(dest).unwrap();
+        let mut written = 0usize;
+        while written < total {
+            let end = (written + step).min(total);
+            std::io::Write::write_all(&mut file, &self.payload[written..end]).unwrap();
+            written = end;
+            *self.reports.lock().unwrap() += 1;
+            // Report *before* sleeping: the chunk is on disk at this point.
+            progress(written as u64);
+            std::thread::sleep(self.chunk_delay);
+        }
+        self.wait_if_held();
+        std::io::Write::flush(&mut file).unwrap();
+        Ok(fetch::FetchResult {
+            head: self.head("").unwrap(),
+            bytes: total as u64,
+            sha256: x_data_mcp::hash::sha256(&self.payload),
+        })
+    }
+}
+
+/// `bytes_done` moves while a download runs, monotonically, and the durable
+/// writes are throttled to about one per second — not one per chunk.
+#[test]
+fn a_streaming_download_advances_bytes_done_with_throttled_writes() {
+    // One role of 4 MiB in 16 chunks, 150 ms apart: ~2.4 s of download with 16
+    // reports, so the 1 s throttle allows at most a handful of writes.
+    let payload: Vec<u8> = (0..4 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+    let chunk_delay = std::time::Duration::from_millis(150);
+    let fetcher = StreamingFetcher::new(payload.clone(), 16, chunk_delay);
+    let streamed: Arc<dyn Fetcher> = fetcher.clone();
+    let root = tempfile::tempdir().unwrap();
+    let service = Arc::new(AcquireService::open(root.path(), Source::Fetcher(streamed)).unwrap());
+    let accepted = service.acquire_generation("req-stream").unwrap();
+    // Hold the *second* role so the first role's in-flight reporting is what
+    // the sampler observes; the hold is released once sampling is done.
+    fetcher.hold();
+
+    // Sample the durable row while the worker downloads on its own thread.
+    let reader = service.clone();
+    let task_id = accepted.task_id.clone();
+    let sampling = std::thread::spawn(move || {
+        let mut seen: Vec<u64> = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let task = reader.task(&task_id).unwrap();
+            seen.push(task.bytes_done);
+            if matches!(task.state.as_str(), "succeeded" | "failed")
+                || std::time::Instant::now() > deadline
+            {
+                return (seen, task.state);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    });
+
+    // Two worker turns: the first downloads role one (reporting as it goes),
+    // the second enters the held role and blocks there.
+    let driver = service.clone();
+    let worker = std::thread::spawn(move || {
+        driver.worker_once().unwrap();
+        driver.worker_once().unwrap();
+    });
+
+    // Let the first role's download finish and the second one start.
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    let mid = service.task(&accepted.task_id).unwrap();
+    assert_ne!(mid.state, "failed", "the streaming download must not fail");
+    assert!(
+        mid.bytes_done > 0,
+        "the download reported no in-flight bytes: {mid:?}"
+    );
+    assert!(
+        mid.bytes_done < payload.len() as u64 * 3,
+        "the task must still be inside its downloads: {mid:?}"
+    );
+    // Throttled: 16 chunk reports within ~2.4 s cannot become 16 writes.
+    assert!(
+        *fetcher.reports.lock().unwrap() >= 16,
+        "the fixture must report every chunk"
+    );
+    assert!(
+        mid.bytes_done <= payload.len() as u64 * 2,
+        "within ~2.4 s only a throttled subset of the writes may land: {mid:?}"
+    );
+
+    fetcher.release();
+    worker.join().unwrap();
+    let (seen, state) = sampling.join().unwrap();
+    assert!(
+        !matches!(state.as_str(), "failed"),
+        "the streaming download must not fail: {seen:?}"
+    );
+    // Monotonic: the progress writer never moves the value backwards.
+    for pair in seen.windows(2) {
+        assert!(
+            pair[1] >= pair[0],
+            "bytes_done went backwards: {} -> {} in {seen:?}",
+            pair[0],
+            pair[1]
+        );
+    }
+    let distinct = seen
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        distinct.len() <= 40,
+        "progress writes are not throttled: {distinct:?}"
+    );
+
+    drive(&service);
+    let task = service.task(&accepted.task_id).unwrap();
+    assert_eq!(task.state, "succeeded");
+    assert!(task.bytes_done > 0);
+}
+
+/// A long poll on a downloading task returns as soon as `bytes_done` moves,
+/// not at the end of the download and not at the end of the budget.
+#[test]
+fn get_acquisition_task_wait_returns_when_only_bytes_done_moves() {
+    let payload: Vec<u8> = (0..4 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+    // Twelve chunks, 200 ms apart: ~2.4 s per role. The waiter enters while
+    // the first role is downloading, so its baseline sees `bytes_done: 0`
+    // and a progress write is what ends the wait.
+    let fetcher = StreamingFetcher::new(payload, 12, std::time::Duration::from_millis(200));
+    let streamed: Arc<dyn Fetcher> = fetcher.clone();
+    let root = tempfile::tempdir().unwrap();
+    let service = Arc::new(AcquireService::open(root.path(), Source::Fetcher(streamed)).unwrap());
+    let accepted = service.acquire_generation("req-wait-bytes").unwrap();
+    fetcher.hold();
+
+    let driver = service.clone();
+    let worker = std::thread::spawn(move || {
+        driver.worker_once().unwrap();
+        driver.worker_once().unwrap();
+    });
+    // Enter the wait while the first role is mid-download.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let started = std::time::Instant::now();
+    let task = service
+        .task_waiting(&accepted.task_id, Some(20))
+        .expect("the task record");
+    let elapsed = started.elapsed();
+    assert!(
+        task.bytes_done > 0,
+        "the wait ended without observing progress: {task:?}"
+    );
+    assert_ne!(task.state, "failed");
+    assert!(
+        elapsed < std::time::Duration::from_secs(12),
+        "a moving task must end the wait early, took {elapsed:?}"
+    );
+
+    fetcher.release();
+    worker.join().unwrap();
+}

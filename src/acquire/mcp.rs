@@ -32,7 +32,7 @@ const ENTRIES: &[Entry] = &[
     },
     Entry {
         name: "get_acquisition_task",
-        description: "Read one acquisition task's durable state, stage and terminal error.",
+        description: "Read one acquisition task's durable state, stage, bytes_done and terminal error. Optional wait_seconds (max 50) holds until state, stage or bytes_done changes.",
         input: schema::<GetAcquisitionTask>,
     },
     Entry {
@@ -185,7 +185,11 @@ impl ToolHandler for AcquireApi {
             }
             "get_acquisition_task" => {
                 let a: GetAcquisitionTask = decode(input)?;
-                encode(self.service.task(&a.task_id).map_err(mapped)?)
+                encode(
+                    self.service
+                        .task_waiting(&a.task_id, a.wait_seconds)
+                        .map_err(mapped)?,
+                )
             }
             "get_acquisition_request" => {
                 let a: GetAcquisitionRequest = decode(input)?;

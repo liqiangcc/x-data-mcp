@@ -37,11 +37,40 @@ pub enum Error {
 pub trait Fetcher: Send + Sync {
     fn head(&self, url: &str) -> Result<Head, Error>;
     fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error>;
+    /// `fetch` with in-flight byte reporting (#625).
+    ///
+    /// `progress` receives the staged byte count as the file grows, so
+    /// `bytes_done` moves during a download instead of only at the stage end.
+    /// The default reports nothing and calls [`Fetcher::fetch`], which is the
+    /// exact pre-#625 behavior: a fetcher that cannot see partial bytes (an
+    /// injected test fixture) stays valid without changes.
+    fn fetch_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        _progress: &crate::acquire::ProgressFn<'_>,
+    ) -> Result<FetchResult, Error> {
+        self.fetch(url, dest)
+    }
 }
 
 /// Environment variable naming the helper script. Production units set it;
 /// when set it wins outright and its value is used as-is.
 pub const TDX_FETCH_ENV: &str = "X_DATA_MCP_TDX_FETCH";
+/// #625: set (from the legacy-helper bridge) only on the fetch call, to point
+/// the helper at the Rust `tdx-fetch-progress` implementation. Absent means
+/// the helper runs as before.
+const PROGRESS_ENV: &str = "X_DATA_MCP_TDX_FETCH_NATIVE";
+
+/// The `tdx-fetch-progress` binary next to this executable, when it is there
+/// (#625). The packaged release layout puts both in `<package>/bin/`, so the
+/// lookup is the executable's own directory and nothing else; a miss simply
+/// leaves the helper on its pre-#625 path.
+fn native() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe.parent()?.join("tdx-fetch-progress");
+    candidate.is_file().then_some(candidate)
+}
 /// Release-package layout (`scripts/build_release.sh`): binaries land in
 /// `<package>/bin/`, the helper in `<package>/scripts/tdx_fetch.py`.
 const PACKAGED_HELPER: &str = "../scripts/tdx_fetch.py";
@@ -143,6 +172,70 @@ impl Fetcher for Helper {
             sha256: f.sha256,
         })
     }
+    /// #625: the helper prints one JSON line per landed chunk on stdout and
+    /// the final result line last, so the service can publish progress while
+    /// the download is still running — the day archive takes minutes at the
+    /// feed's pace and used to show `bytes_done: 0` for all of it.
+    fn fetch_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        progress: &crate::acquire::ProgressFn<'_>,
+    ) -> Result<FetchResult, Error> {
+        let mut command = Command::new("python3");
+        command
+            .arg(&self.script)
+            .args(["fetch", url, &dest.to_string_lossy()]);
+        if let Some(native) = native() {
+            command.env(PROGRESS_ENV, native.as_os_str());
+        }
+        let output = command.output().map_err(|e| Error::Failed(e.to_string()))?;
+        if !output.status.success() {
+            return Err(Error::Failed(
+                String::from_utf8_lossy(&output.stderr).trim().to_string(),
+            ));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut final_line: Option<&str> = None;
+        for line in stdout
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            match serde_json::from_str::<ProgressJson>(line) {
+                Ok(reported) => progress(reported.bytes),
+                Err(_) => final_line = Some(line),
+            }
+        }
+        let text = final_line.ok_or_else(|| {
+            Error::Output(format!(
+                "the fetch helper printed no result line: {}",
+                stdout.trim()
+            ))
+        })?;
+        decode_fetch(text)
+    }
+}
+
+/// One progress line from the helper: `{"bytes": N}` while a download runs.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgressJson {
+    bytes: u64,
+}
+
+fn decode_fetch(text: &str) -> Result<FetchResult, Error> {
+    let f: FetchJson = serde_json::from_str(text).map_err(|e| Error::Output(e.to_string()))?;
+    Ok(FetchResult {
+        head: Head {
+            status: f.status,
+            etag: f.etag,
+            last_modified: f.last_modified,
+            content_length: f.content_length,
+        },
+        bytes: f.bytes,
+        sha256: f.sha256,
+    })
 }
 
 /// Local mirror fetcher: maps a declared role URL to a file under one

@@ -485,7 +485,7 @@ impl DataApi {
             ])
         });
         encode(Capabilities {
-            capability_revision: "generic-data-v12".into(),
+            capability_revision: "generic-data-v13".into(),
             items,
             series,
             algorithm_versions,
@@ -1213,9 +1213,37 @@ impl DataApi {
                 }
                 let command: crate::source_refresh::wire::RefreshRequest = decode(input)?;
                 let today = crate::calendar::shanghai_today();
-                // `status_of` is the read side of an asynchronous run: it
-                // takes nothing else, so a poll can never accidentally start a
-                // second run or drop the mode it is polling.
+                // `status_of` and `latest` are the read side of an
+                // asynchronous run: neither takes anything else, so a poll
+                // can never accidentally start a second run or drop the mode
+                // it is polling.
+                if command.status_of.is_some() && command.latest.is_some() {
+                    return Err(ApiError::new(
+                        "invalid_arguments",
+                        "status_of cannot be combined with latest",
+                    ));
+                }
+                if let Some(requested) = command.latest.as_deref() {
+                    if command.mode.is_some() || !command.sources.is_empty() || command.dry_run {
+                        return Err(ApiError::new(
+                            "invalid_arguments",
+                            "latest cannot be combined with mode, sources or dry_run",
+                        ));
+                    }
+                    if requested != crate::source_refresh::wire::LATEST_FULL {
+                        return Err(ApiError::new(
+                            "invalid_arguments",
+                            format!(
+                                "latest accepts only {:?}, got {requested:?}",
+                                crate::source_refresh::wire::LATEST_FULL
+                            ),
+                        ));
+                    }
+                    let latest =
+                        crate::source_refresh::latest_full(&self.queries.repository.market)
+                            .map_err(refresh_error)?;
+                    return encode(latest);
+                }
                 if let Some(run_id) = command.status_of.as_deref() {
                     if command.mode.is_some() || !command.sources.is_empty() || command.dry_run {
                         return Err(ApiError::new(
@@ -1223,15 +1251,24 @@ impl DataApi {
                             "status_of cannot be combined with mode, sources or dry_run",
                         ));
                     }
-                    let report =
-                        crate::source_refresh::status_of(&self.queries.repository.market, run_id)
-                            .map_err(refresh_error)?;
+                    let report = crate::source_refresh::status_of_waiting(
+                        &self.queries.repository.market,
+                        run_id,
+                        command.wait_seconds,
+                    )
+                    .map_err(refresh_error)?;
                     return encode(report);
+                }
+                if command.wait_seconds.is_some() {
+                    return Err(ApiError::new(
+                        "invalid_arguments",
+                        "wait_seconds is only meaningful with status_of",
+                    ));
                 }
                 command.mode.ok_or_else(|| {
                     ApiError::new(
                         "invalid_arguments",
-                        "mode is required unless status_of is set",
+                        "mode is required unless status_of or latest is set",
                     )
                 })?;
                 if command.dry_run {
