@@ -2991,14 +2991,23 @@ fn task_facts_series(
                 .map_err(|_| Error::Integrity("event digest malformed".into()))?,
         ))
     };
-    // Items that wrote a forward event: for those the raw event is only the
-    // paired audit. A raw-only item (an ETF has no forward series; M3-2
-    // PR-C2) has no other event, so its raw event is the item's result.
-    let forward_items: std::collections::BTreeSet<String> = events
-        .iter()
-        .filter(|row| row.1 == 1 && row.2 == crate::market_data::Adjustment::Forward.code())
-        .map(|row| row.5.clone())
-        .collect();
+    // Items whose *published* 口径 is forward: for those the raw event is
+    // only the paired audit. Which 口径 a security publishes is what
+    // `series::resolve_read_shape` decides — stocks publish forward, ETFs
+    // publish raw (their forward series is stored by #607 PR-C but the read
+    // surface admits it only in PR-D). So a stored ETF forward event must not
+    // hijack the projection: the item is still projected through its raw
+    // event, exactly as before the derived series existed.
+    let mut basis = crate::sqlite_market::series::PublishBasis::new(c);
+    let mut forward_items: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for row in &events {
+        if row.1 == 1
+            && row.2 == crate::market_data::Adjustment::Forward.code()
+            && basis.publishes_forward(&row.0)?
+        {
+            forward_items.insert(row.5.clone());
+        }
+    }
     let mut publications = Vec::new();
     let mut range_results = Vec::new();
     let mut yearly_results = Vec::new();
@@ -3023,6 +3032,16 @@ fn task_facts_series(
         if period == 1
             && adjustment != crate::market_data::Adjustment::Forward.code()
             && forward_items.contains(&item_id)
+        {
+            continue;
+        }
+        // The mirror case: an item whose published 口径 is raw (an ETF until
+        // PR-D admits its forward series) projects only that raw event. The
+        // stored forward event is the derived series' audit, not part of the
+        // item's task surface, and the read face refuses it by design.
+        if period == 1
+            && adjustment == crate::market_data::Adjustment::Forward.code()
+            && !forward_items.contains(&item_id)
         {
             continue;
         }

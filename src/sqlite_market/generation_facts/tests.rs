@@ -360,3 +360,98 @@ fn commit_refreshes_every_generation_and_orphaned_facts_survive_the_gate() {
     assert_eq!(before, after);
     assert_replay_match(&store, &db);
 }
+
+/// #607 PR-C review r2 item 2: the derived ETF 前复权 series inherits the
+/// 不复权 row's `source_binding_digest`, so `daily_series_digest` would pick it
+/// up and change a digest that was already registered for a generation whose
+/// `hsjday.zip` bytes did not change. That would make `replay --verify-only`
+/// report `drift` on the first run after deploy. The digest the daily-series
+/// fact describes is the 不复权 series only, so the derived row must not move
+/// it.
+#[test]
+fn the_daily_series_digest_ignores_the_derived_etf_forward_series() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("market.sqlite");
+    SqliteTasks::new(&db).initialize_compact().unwrap();
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let store = SourceStore::new(dir.path().join("source-store"));
+    let gen1 = hex(&GEN1);
+
+    // One 不复权 stock series and one 不复权 ETF series on GEN1.
+    with_repo(&db, |repo| {
+        repo.tx(|c| {
+            let first = binding(c, "gen-1", GEN1)?;
+            let evidence = row_evidence(c)?;
+            insert_series(c, 1, "sh.600006", 0xa1, &first, &evidence)?;
+            insert_etf_series(c, 2, "sz.159919", 0xa2, (0, 3), &first, &evidence)?;
+            Ok(())
+        })
+        .unwrap();
+        repo.refresh_derived_generation_facts().unwrap();
+    });
+    let before = facts_of(&db, &gen1);
+    let baseline = fact(&before, KIND_DAILY_SERIES).expect("daily_series fact");
+
+    // Now the same ETF gains its derived 前复权 series under the same binding.
+    with_repo(&db, |repo| {
+        repo.tx(|c| {
+            let first = binding(c, "gen-1", GEN1)?;
+            let evidence = row_evidence(c)?;
+            insert_etf_series(c, 3, "sz.159919", 0xa3, (1, 6), &first, &evidence)?;
+            Ok(())
+        })
+        .unwrap();
+        repo.refresh_derived_generation_facts().unwrap();
+    });
+    let after = facts_of(&db, &gen1);
+    let derived = fact(&after, KIND_DAILY_SERIES).expect("daily_series fact");
+
+    assert_eq!(
+        baseline.fact_digest, derived.fact_digest,
+        "a derived ETF 前复权 row must not change the generation's daily_series digest"
+    );
+    assert_ne!(
+        derived.fact_digest,
+        content_digest(KIND_DAILY_SERIES, &GEN1, &[]),
+        "the three 不复权 rows must still be referenced"
+    );
+    // The digest, not the replay pipeline, is what this test pins: an empty
+    // source store has nothing to replay, and the other tests already cover
+    // `assert_replay_match` with a populated one.
+    drop(store);
+}
+
+/// Insert one ETF series with an explicit `adjustment` and `price_scale`, so a
+/// test can hold both the 不复权 (`0`) and derived 前复权 (`1`) row.
+fn insert_etf_series(
+    c: &Connection,
+    series_key: i64,
+    entity: &str,
+    digest_byte: u8,
+    (adjustment, price_scale): (i64, i64),
+    binding: &Digest,
+    evidence: &Digest,
+) -> Result<(), Error> {
+    let content = [digest_byte; 32];
+    c.execute(
+        "INSERT INTO market_series(series_key,entity,period,adjustment,\
+         instrument_class,price_scale,version_id,content_digest,digest_format,\
+         record_count,first_day,last_day,coverage_status,source_binding_digest,\
+         evidence_digest,last_event_seq,created_at,updated_at) \
+         VALUES(?1,?2,1,?3,2,?4,?5,?6,'series-fold-v2',1,0,0,1,?7,?8,1,\
+         '2026-11-01T00:00:00Z','2026-11-01T00:00:00Z')",
+        params![
+            series_key,
+            entity,
+            adjustment,
+            price_scale,
+            hex(&content),
+            content.as_slice(),
+            binding.as_slice(),
+            evidence.as_slice(),
+        ],
+    )
+    .map_err(storage)?;
+    Ok(())
+}

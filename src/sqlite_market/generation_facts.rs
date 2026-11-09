@@ -405,22 +405,41 @@ fn content_digest(kind: &str, generation: &[u8], lines: &[String]) -> String {
 fn daily_series_digest(c: &Connection, generation: &[u8]) -> Result<Option<String>, Error> {
     let mut stmt = c
         .prepare(
+            // #607 PR-C: the derived ETF 前复权 series inherits the 不复权
+            // row's `source_binding_digest`, so without this predicate it
+            // would enter the generation's daily-series digest and change a
+            // digest that was already registered for generations whose bytes
+            // did not change. The digest describes the series a generation's
+            // `hsjday.zip` bytes produced — 不复权 daily series — and the
+            // derived 前复权 bars are a function of those bytes plus factor
+            // facts that `adjustment_events`/`capital_events` already cover.
+            // Excluding them keeps every digest byte-identical before and
+            // after PR-C, so `replay --verify-only` (the 日更复核 path used by
+            // #533/#308) sees no drift on the first run after deploy.
             "SELECT m.entity,m.period,m.adjustment,m.version_id FROM market_series m \
              JOIN source_bindings b ON b.source_binding_digest=m.source_binding_digest \
              WHERE b.generation_manifest_sha256=?1 \
+             AND NOT (m.instrument_class=?2 AND m.adjustment<>?3) \
              ORDER BY m.entity,m.period,m.adjustment",
         )
         .map_err(storage)?;
     let lines = stmt
-        .query_map(params![generation], |row| {
-            Ok(format!(
-                "{}|{}|{}|{}",
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
+        .query_map(
+            params![
+                generation,
+                crate::market_data::INSTRUMENT_CLASS_ETF,
+                crate::market_data::Adjustment::Raw.code()
+            ],
+            |row| {
+                Ok(format!(
+                    "{}|{}|{}|{}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
         .map_err(storage)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(storage)?;

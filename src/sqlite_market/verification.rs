@@ -350,15 +350,30 @@ fn read_facts_series(
             },
         );
     }
+    let mut basis = series::PublishBasis::new(c);
     let mut items = Vec::new();
     for item in &task.items {
-        // The item's publication evidence is its MCP-visible forward event;
-        // the raw event is internal audit and never a separate item result.
-        let forward = found.remove(&(
-            item.spec.item_id.clone(),
-            crate::market_data::Adjustment::Forward.code(),
-        ));
-        let evidence = forward
+        // The item's publication evidence is the event of its **published**
+        // 口径 (#607 PR-C review r1 item 1): a stock item publishes its
+        // forward series, an ETF item its raw one — the ETF's derived forward
+        // series is stored but not admitted by the read face until PR-D, so it
+        // must not become the item's result. The predicate is cached per
+        // entity; a 5,200-item task resolves it at most once per security.
+        // Items that are not per-security (server-derived ones) have no
+        // `symbol`; they keep the previous "forward first" preference — before
+        // PR-C only stocks had an `adjustment=1` row, so that preference was
+        // effectively "the forward event if any". Keeping it out of the
+        // per-entity predicate is what makes this arm behave exactly as it did
+        // before the ETF derived series existed (#607 PR-C review r2 item 4).
+        let published_adjustment = match item.spec.target["symbol"].as_str() {
+            Some(entity) if basis.publishes_forward(entity)? => {
+                crate::market_data::Adjustment::Forward.code()
+            }
+            Some(_) => crate::market_data::Adjustment::Raw.code(),
+            None => crate::market_data::Adjustment::Forward.code(),
+        };
+        let primary = found.remove(&(item.spec.item_id.clone(), published_adjustment));
+        let evidence = primary
             .or_else(|| {
                 let key = found
                     .keys()

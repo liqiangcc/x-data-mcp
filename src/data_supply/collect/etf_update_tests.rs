@@ -107,6 +107,21 @@ enum Generation {
     Third,
     /// Third plus an ordinary bar behind the stored hand bar of `sz159338`.
     Fourth,
+    /// Fourth plus a factor change whose 除权除息日 is **after** every stored
+    /// bar (`sz159919`, #607 PR-C), plus one more 不复权 bar for an ETF whose
+    /// factors do not move (`sh510050`). This is the only generation where the
+    /// derived 前复权 series must be rewritten rather than merely extended.
+    Fifth,
+    /// Fifth plus a degenerate `c3 = 0` share conversion for `sz159919`: the
+    /// factor fact itself is storable, so only the **derived** 前复权 build
+    /// fails. The item must roll back as a whole (#607 PR-C requirement 2).
+    Sixth,
+    /// Sixth plus a cash dividend on `sh510050` far larger than its early
+    /// price, so the derived 前复权 close goes negative. #607 PR-C store
+    /// behaviour is what the test pins: a negative 前复权 price is a value the
+    /// store must round-trip, not a reason to fail the item. Whether the
+    /// product should deliver it is an owner decision deferred to PR-D.
+    Eighth,
 }
 
 /// One mirror generation. Second-generation deltas, per ETF:
@@ -123,11 +138,24 @@ enum Generation {
 /// generation: `sz159338` gains an ordinary bar behind the hand bar.
 /// | `sh510300` | 3 bars | first bar rewritten + today | `etf_history_rewrite` |
 /// | `sz159922` | 3 bars | + a hand-marked bar whose amount disagrees | item failure |
+/// Tomorrow as a raw `yyyymmdd` int — an 除权除息日 strictly after every bar
+/// the fixtures store (`day_u32(0)` is today).
+fn tomorrow_raw() -> u32 {
+    (crate::calendar::shanghai_today() + chrono::Days::new(1))
+        .format("%Y%m%d")
+        .to_string()
+        .parse()
+        .unwrap()
+}
+
 fn write_mirror(dir: &Path, generation: Generation) {
     std::fs::create_dir_all(dir).unwrap();
     let second = generation >= Generation::Second;
     let third = generation >= Generation::Third;
     let fourth = generation >= Generation::Fourth;
+    let fifth = generation >= Generation::Fifth;
+    let sixth = generation >= Generation::Sixth;
+    let eighth = generation >= Generation::Eighth;
     write_zip(
         &dir.join("base.zip"),
         &[
@@ -154,6 +182,42 @@ fn write_mirror(dir: &Path, generation: Generation) {
             20260101,
             1,
             [0.1, 0.0, 0.0, 0.0],
+        ));
+    }
+    if eighth {
+        // A far-future 除权除息日, so every stored bar is strictly before it
+        // and therefore adjusted; c1 = 500 角 = 50 元 on a ~41.7 元 ETF drives
+        // the derived close to about −8.3 元.
+        records.push(gbbq_factor_record(
+            1,
+            "510050",
+            tomorrow_raw(),
+            1,
+            [500.0, 0.0, 0.0, 0.0],
+        ));
+    }
+    if sixth && !eighth {
+        // c3 = 0: `etf_event_transform` refuses the division, but the factor
+        // row is a well-formed f32 fact and stores fine. The failure therefore
+        // lands in the 前复权 derivation, after the 不复权 half has written.
+        records.push(gbbq_factor_record(
+            0,
+            "159919",
+            tomorrow_raw(),
+            11,
+            [0.0, 0.0, 0.0, 0.0],
+        ));
+    }
+    if fifth {
+        // A dividend whose 除权除息日 is tomorrow: every stored 不复权 bar is
+        // strictly before it, so the derived 前复权 series must be rewritten,
+        // not extended (#607 PR-C requirement 2).
+        records.push(gbbq_factor_record(
+            0,
+            "159919",
+            tomorrow_raw(),
+            1,
+            [0.661, 0.0, 0.0, 0.0],
         ));
     }
     write_zip(
@@ -206,6 +270,11 @@ fn write_mirror(dir: &Path, generation: Generation) {
         (
             "sh\\lday\\sh510050.day",
             if second {
+                etf_appended.as_slice()
+            } else if eighth {
+                // A new bar so the item is an append rather than `NoChange`:
+                // a no-change item does not re-derive the 前复权 series, and
+                // this test needs the freshly written factor to be applied.
                 etf_appended.as_slice()
             } else {
                 etf_plain.as_slice()
@@ -1253,4 +1322,874 @@ fn etf_capital_events_read_only_capital_categories() {
                 .is_some_and(|l| l.contains("no registered version"))),
         "{factor_only}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #607 PR-C — the derived 前复权 series
+// ---------------------------------------------------------------------------
+
+impl Env {
+    /// Head facts of an entity's daily series at one 口径, if it exists.
+    fn forward_head(&self, entity: &str, adjustment: Adjustment) -> Option<(String, i64, i64)> {
+        self.backend
+            .read(|c| {
+                Ok(
+                    series::read_series_adjusted(c, entity, Period::Day, adjustment)?
+                        .map(|row| (row.version_id, row.record_count, row.last_day)),
+                )
+            })
+            .unwrap()
+    }
+    /// Every stored bar of a series at one 口径, oldest first, as
+    /// `(date, open, high, low, close)` price units.
+    fn bars(&self, entity: &str, adjustment: Adjustment) -> Vec<(i64, i64, i64, i64, i64)> {
+        self.backend
+            .read(|c| {
+                let row = series::read_series_adjusted(c, entity, Period::Day, adjustment)?
+                    .expect("series row");
+                Ok(series::all_bars(c, row.series_key)?
+                    .into_iter()
+                    .map(|bar| {
+                        (
+                            bar.trade_day,
+                            bar.open_units,
+                            bar.high_units,
+                            bar.low_units,
+                            bar.close_units,
+                        )
+                    })
+                    .collect())
+            })
+            .unwrap()
+    }
+    /// Number of `market_events` rows of one entity at one 口径 — used to prove
+    /// an append happened without a rewrite.
+    fn event_kinds(&self, entity: &str, adjustment: Adjustment) -> Vec<(&'static str, i64)> {
+        self.backend
+            .read(|c| {
+                let mut statement = c
+                    .prepare(
+                        "SELECT kind, count(*) FROM market_events \
+                         WHERE entity=?1 AND period=?2 AND adjustment=?3 GROUP BY kind \
+                         ORDER BY kind",
+                    )
+                    .unwrap();
+                let rows = statement
+                    .query_map(rusqlite::params![entity, 1i64, adjustment.code()], |r| {
+                        Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+                    })
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                Ok(rows
+                    .into_iter()
+                    .map(|(kind, count)| (Box::leak(kind.into_boxed_str()) as &'static str, count))
+                    .collect())
+            })
+            .unwrap()
+    }
+}
+
+#[test]
+fn etf_forward_series_is_built_inside_the_first_collection_transaction() {
+    // First backfill: the 不复权 collection also creates the 前复权 series,
+    // with the same bar count and the shape design §4.1 names.
+    let env = setup();
+    let raw = env
+        .forward_head("sz.159919", Adjustment::Raw)
+        .expect("raw series");
+    let adj = env
+        .forward_head("sz.159919", Adjustment::Forward)
+        .expect("forward series");
+    assert_eq!(raw.1, adj.1, "forward row count mirrors raw");
+    assert_eq!(raw.2, adj.2, "forward last_day mirrors raw");
+    let shape = env
+        .backend
+        .read(|c| {
+            let row =
+                series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Forward)?
+                    .expect("forward series");
+            Ok((row.instrument_class, row.adjustment.code(), row.price_scale))
+        })
+        .unwrap();
+    // `instrument_class=2` (ETF), `adjustment=1` (`Adjustment::Forward`'s
+    // stored code — design §4.1 draws it as "2", the code's value is 1),
+    // `price_scale=6` (1e-6 元).
+    assert_eq!(
+        shape,
+        (
+            crate::market_data::INSTRUMENT_CLASS_ETF,
+            Adjustment::Forward.code(),
+            6
+        )
+    );
+}
+
+#[test]
+fn etf_forward_append_only_writes_the_new_tail() {
+    // `sh510050` gains one 不复权 bar and its factors do not move: the derived
+    // 前复权 series must be extended, never rewritten — the stored prefix
+    // keeps its bytes and its version chain records an `append`.
+    let env = setup();
+    let prefix = env.bars("sh.510050", Adjustment::Forward);
+    let prefix_version = env.forward_head("sh.510050", Adjustment::Forward);
+    assert_eq!(prefix.len(), 3);
+    env.advance_generation();
+
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-append", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sh.510050"),
+        "{}",
+        error_of(&task, "sh.510050")
+    );
+
+    let after = env.bars("sh.510050", Adjustment::Forward);
+    assert_eq!(after.len(), 4, "the new 不复权 bar is mirrored");
+    assert_eq!(&after[..3], &prefix[..], "the stored prefix is untouched");
+    // The 前复权 tail is the 不复权 tail with the price fields rescaled only:
+    // no event applies, so 前复权 == 不复权 × 10^3.
+    let raw = env.bars("sh.510050", Adjustment::Raw);
+    assert_eq!(after[3].4, raw[3].4 * 1_000);
+    // An append, not a rewrite: the only event for this 口径 is an append.
+    let kinds = env.event_kinds("sh.510050", Adjustment::Forward);
+    assert!(
+        kinds.iter().any(|(kind, _)| *kind == "append"),
+        "forward events: {kinds:?}"
+    );
+    assert!(
+        kinds.iter().all(|(kind, _)| *kind != "replace"),
+        "forward events: {kinds:?}"
+    );
+    assert_ne!(
+        env.forward_head("sh.510050", Adjustment::Forward),
+        prefix_version
+    );
+}
+
+#[test]
+fn etf_forward_factor_change_rewrites_the_whole_series() {
+    // `sz159919` gains a dividend whose 除权除息日 is after every stored bar:
+    // every bar is adjusted, so the whole derived series is rewritten.
+    let env = setup();
+    let second = env.advance_generation();
+    // Third generation: identical bytes and events, so the series is stable.
+    let third = env.advance_to(Generation::Third, "req-third", &second);
+    let before = env.bars("sz.159919", Adjustment::Forward);
+
+    env.advance_to(Generation::Fifth, "req-fifth", &third);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-factor", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159919"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
+
+    let after = env.bars("sz.159919", Adjustment::Forward);
+    assert_eq!(after.len(), before.len(), "no new bar, same bar count");
+    assert_ne!(after, before, "every earlier bar must move");
+    // 41.780 元 − 0.661/10 = 41.7139 元 → 41,713,900 units; the raw 厘 value
+    // is 41,780, so the adjustment is observable at 6dp.
+    assert_eq!(after[0].4, 41_713_900);
+    let kinds = env.event_kinds("sz.159919", Adjustment::Forward);
+    assert!(
+        kinds.iter().any(|(kind, _)| *kind == "replace"),
+        "forward events: {kinds:?}"
+    );
+}
+
+#[test]
+fn etf_forward_no_change_leaves_the_series_untouched() {
+    // Same `.day` bytes and same factors: the derived series must not move
+    // (`data_versions +0` on a no-change run).
+    let env = setup();
+    let before = env.forward_head("sz.159919", Adjustment::Forward);
+    let second = env.advance_generation();
+    env.advance_to(Generation::Third, "req-third", &second);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-nochange", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159919"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
+    assert_eq!(env.forward_head("sz.159919", Adjustment::Forward), before);
+}
+
+#[test]
+fn etf_forward_build_failure_rolls_the_whole_item_back() {
+    // The degenerate `c3 = 0` factor is storable, so the 不复权 half of the
+    // item succeeds first; the derived 前复权 build then fails. The item must
+    // fail **and** leave no trace: same 不复权 head, same factor facts, no
+    // 前复权 event. A half-committed state (不复权 ahead of 前复权) is exactly
+    // what requirement 2 forbids.
+    let env = setup();
+    let second = env.advance_generation();
+    let third = env.advance_to(Generation::Third, "req-third", &second);
+    let fourth = env.advance_to(Generation::Fourth, "req-fourth", &third);
+    let fifth = env.advance_to(Generation::Fifth, "req-fifth", &fourth);
+    let raw_before = env.forward_head("sz.159919", Adjustment::Raw);
+    let forward_before = env.forward_head("sz.159919", Adjustment::Forward);
+    let events_before = env
+        .backend
+        .read(|c| crate::sqlite_market::derived::read_adjustment_events(c, "sz.159919"))
+        .unwrap();
+
+    env.advance_to(Generation::Sixth, "req-sixth", &fifth);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-etf-rollback", &view, Some("sh_sz_etf_current"));
+    assert!(!succeeded(&task, "sz.159919"), "the item must fail");
+    assert!(
+        error_of(&task, "sz.159919").contains("forward chain failed"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
+
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Raw),
+        raw_before,
+        "不复权 must not commit without its 前复权 half"
+    );
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Forward),
+        forward_before,
+        "前复权 head must not move"
+    );
+    let events_after = env
+        .backend
+        .read(|c| crate::sqlite_market::derived::read_adjustment_events(c, "sz.159919"))
+        .unwrap();
+    assert_eq!(events_after, events_before, "factor facts rolled back too");
+}
+
+#[test]
+fn etf_forward_rerun_of_the_same_input_keeps_every_version() {
+    // `version_id` is the `series-fold-v2` digest of the content, so replaying
+    // one item over identical bars and identical factors must not mint a new
+    // version (#607 PR-C requirement 4).
+    let env = setup();
+    let second = env.advance_generation();
+    env.advance_to(Generation::Third, "req-third", &second);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let first = env.run("run-etf-idem-1", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&first, "sz.159919"),
+        "{}",
+        error_of(&first, "sz.159919")
+    );
+    let after_first = env.forward_head("sz.159919", Adjustment::Forward);
+    let raw_after_first = env.forward_head("sz.159919", Adjustment::Raw);
+
+    // A second plan over the same generation and target day.
+    let again = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let second_run = env.run("run-etf-idem-2", &again, Some("sh_sz_etf_current"));
+    assert!(
+        second_run.items.is_empty() || succeeded(&second_run, "sz.159919"),
+        "{:?}",
+        error_of(&second_run, "sz.159919")
+    );
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Forward),
+        after_first,
+        "the same input must keep the same 前复权 version"
+    );
+    assert_eq!(
+        env.forward_head("sz.159919", Adjustment::Raw),
+        raw_after_first
+    );
+}
+
+#[test]
+fn etf_raw_series_stays_byte_identical_next_to_the_derived_one() {
+    // #607 PR-C requirement 5: adding the 前复权 series must not move one byte
+    // of the 不复权 series — same 3dp shape, same prices, same volume/amount,
+    // and the raw read face still answers exactly what it answered before.
+    let env = setup();
+    let raw = env.bars("sz.159919", Adjustment::Raw);
+    let shape = env
+        .backend
+        .read(|c| {
+            let row = series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Raw)?
+                .expect("raw series");
+            Ok((row.instrument_class, row.price_scale, row.adjustment.code()))
+        })
+        .unwrap();
+    assert_eq!(
+        shape,
+        (
+            crate::market_data::INSTRUMENT_CLASS_ETF,
+            3,
+            Adjustment::Raw.code()
+        )
+    );
+    // 41.780 / 41.86 / 41.953 元 at 厘 precision — untouched by the derivation.
+    assert_eq!(
+        raw.iter().map(|b| b.4).collect::<Vec<_>>(),
+        vec![41_780, 41_860, 41_953]
+    );
+    // The 前复权 row is the derived one and differs only where an event
+    // reaches: no event applies to these bars, so it is the identity chain
+    // rescaled to 1e-6 元.
+    let adj = env.bars("sz.159919", Adjustment::Forward);
+    assert_eq!(
+        adj.iter().map(|b| b.4).collect::<Vec<_>>(),
+        vec![41_780_000, 41_860_000, 41_953_000]
+    );
+    // The read face still serves the 不复权 page unchanged.
+    let rows = env.read_raw("sz", "159919");
+    assert_eq!(rows.len(), 3);
+    assert_eq!(close_of(&rows[0]), "41.78");
+}
+
+// ---------------------------------------------------------------------------
+// #607 PR-C review r1 item 1 — the stored 前复权 series must not be visible to
+// any read or maintenance surface that does not know about it.
+// ---------------------------------------------------------------------------
+
+impl Env {
+    /// Delete every derived 前复权 row, reproducing the pre-PR-C store while
+    /// keeping every other byte of the fixture. The series rows, their bars,
+    /// their events and their evidence all go, because a real pre-PR-C store
+    /// had none of them.
+    fn drop_etf_forward_series(&self) {
+        let MarketBackend::Compact(repo) = &self.backend else {
+            panic!("fixture must open the compact backend");
+        };
+        repo.tx(|c| {
+                let keys: Vec<i64> = c
+                    .prepare(
+                        "SELECT series_key FROM market_series WHERE adjustment=?1 AND instrument_class=?2",
+                    )
+                    .unwrap()
+                    .query_map(
+                        rusqlite::params![
+                            Adjustment::Forward.code(),
+                            crate::market_data::INSTRUMENT_CLASS_ETF
+                        ],
+                        |r| r.get(0),
+                    )
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap();
+                for key in keys {
+                    c.execute("DELETE FROM series_bars WHERE series_key=?1", [key])
+                        .unwrap();
+                    c.execute("DELETE FROM market_series WHERE series_key=?1", [key])
+                        .unwrap();
+                }
+                c.execute(
+                    "DELETE FROM market_events WHERE period=1 AND adjustment=?1 AND entity IN \
+                     (SELECT entity FROM security_master WHERE instrument_class=?2)",
+                    rusqlite::params![
+                        Adjustment::Forward.code(),
+                        crate::market_data::INSTRUMENT_CLASS_ETF
+                    ],
+                )
+                .unwrap();
+                Ok::<(), crate::market_storage::Error>(())
+            })
+            .unwrap();
+    }
+
+    /// A real research export of the ETF-bearing universe, reduced to the
+    /// manifest identity and every file's name/rows/bytes/sha256. The export
+    /// must render identically whether or not the derived 前复权 series
+    /// exists: before #607 PR-C review r2 item 1 the export failed outright,
+    /// and the shape of the fix is that it takes `adjustment=0` ETF rows only.
+    #[cfg(feature = "export")]
+    fn research_export(
+        &self,
+        adjustment: crate::research::AdjustmentSelection,
+    ) -> serde_json::Value {
+        let out = tempfile::tempdir().unwrap();
+        let request = crate::research::ExportRequest {
+            // The daily dataset only: ETF rows live there, and the fixture has
+            // no registered index series to export.
+            dataset: crate::research::DatasetSelection::Daily,
+            adjustment,
+            start: None,
+            end: None,
+            entities: crate::research::EntitySelection::CatalogHead,
+        };
+        let request = request.validate().unwrap();
+        let options = crate::research::export::ExportOptions {
+            out_root: out.path().to_path_buf(),
+            ..Default::default()
+        };
+        let outcome =
+            crate::research::export::export(self.tasks.path(), &request, &options).unwrap();
+        let files: Vec<serde_json::Value> = outcome
+            .files
+            .iter()
+            .map(|file| {
+                json!({
+                    "path": file.path,
+                    "rows": file.rows,
+                    "bytes": file.bytes,
+                    "sha256": file.sha256,
+                })
+            })
+            .collect();
+        json!({
+            "adjustment": adjustment.as_str(),
+            "snapshot_id": outcome.snapshot_id,
+            "files": files,
+        })
+    }
+
+    /// Without the `export` feature there is no export surface to compare;
+    /// the test records that, so a missing feature cannot look like a match.
+    #[cfg(not(feature = "export"))]
+    fn research_export(
+        &self,
+        adjustment: crate::research::AdjustmentSelection,
+    ) -> serde_json::Value {
+        json!({"adjustment": adjustment.as_str(), "skipped": "export feature disabled"})
+    }
+
+    /// The generation's `daily_series` fact digest, as `replay --verify-only`
+    /// compares it: a derived ETF 前复权 row must not enter this digest.
+    fn daily_series_fact(&self) -> serde_json::Value {
+        let facts = self
+            .backend
+            .all_derived_generation_facts()
+            .expect("derived generation facts");
+        let mut rows: Vec<serde_json::Value> = facts
+            .iter()
+            .filter(|fact| fact.fact_kind == crate::generation_gate::KIND_DAILY_SERIES)
+            .map(|fact| {
+                json!({
+                    "generation": fact.generation_manifest_sha256,
+                    "role": fact.role,
+                    "digest": fact.fact_digest,
+                })
+            })
+            .collect();
+        rows.sort_by_key(|row| row["generation"].to_string());
+        json!(rows)
+    }
+
+    /// Every read/maintenance surface that accepts an ETF, rendered to JSON so
+    /// two stores can be compared byte for byte.
+    fn etf_surface_snapshot(&self, task_id: &str) -> Vec<(String, serde_json::Value)> {
+        // `adjustment: None` is the omitted-argument request: the read face
+        // must reject it for an ETF with the same bytes both ways, because the
+        // whole point of PR-C is that a stored 前复权 row does not change what
+        // the surface answers (#607 PR-C review r2 item 3).
+        // A request that fails must fail with the same bytes, so an error is
+        // captured rather than unwrapped: `adjustment_unavailable` is the
+        // answer for an ETF at `qfq` both before and after the derived series
+        // exists, and that is exactly the equality this test is about.
+        let call = |name: &str, input: Value| -> serde_json::Value {
+            match self.api.call(name, input) {
+                Ok(value) => json!({"ok": value}),
+                Err(error) => json!({
+                    "error": {
+                        "code": error.code,
+                        "message": error.message,
+                        "outcome_certainty": error.outcome_certainty,
+                    }
+                }),
+            }
+        };
+        let daily = |code: &str, adjustment: Option<&str>| {
+            let mut input = json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+                "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
+                "version": {"kind": "latest_per_entity"},
+                "page_size": 100
+            });
+            if let Some(adjustment) = adjustment {
+                input["adjustment"] = json!(adjustment);
+            }
+            call("query_data", input)
+        };
+        let versions = |code: &str, adjustment: Option<&str>| {
+            let mut input = json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+            });
+            if let Some(adjustment) = adjustment {
+                input["adjustment"] = json!(adjustment);
+            }
+            call("list_data_versions", input)
+        };
+        let availability = |code: &str, adjustment: Option<&str>| {
+            let mut input = json!({
+                "dataset": "market.daily",
+                "contract_version": "v1",
+                "selection": {"kind": "single", "entity": {"exchange": "sz", "code": code}},
+                "filter": {"kind": "daily", "start_date": "2000-01-01", "end_date": "2100-01-01"},
+            });
+            if let Some(adjustment) = adjustment {
+                input["adjustment"] = json!(adjustment);
+            }
+            call("get_data_availability", input)
+        };
+        let mut surfaces = Vec::new();
+        for (label, adjustment) in [
+            ("raw", Some("raw")),
+            ("qfq", Some("qfq")),
+            ("no-adjustment", None),
+        ] {
+            for code in ["159919", "159922"] {
+                surfaces.push((
+                    format!("market.daily {label} {code}"),
+                    daily(code, adjustment),
+                ));
+                surfaces.push((
+                    format!("versions {label} {code}"),
+                    versions(code, adjustment),
+                ));
+                surfaces.push((
+                    format!("availability {label} {code}"),
+                    availability(code, adjustment),
+                ));
+            }
+        }
+        for (label, adjustment) in [
+            ("raw", crate::research::AdjustmentSelection::Raw),
+            ("both", crate::research::AdjustmentSelection::Both),
+            ("qfq", crate::research::AdjustmentSelection::Qfq),
+        ] {
+            surfaces.push((
+                format!("research export {label}"),
+                self.research_export(adjustment),
+            ));
+        }
+        surfaces.push((
+            "generation facts daily_series digest".to_string(),
+            self.daily_series_fact(),
+        ));
+        let mut surfaces: Vec<(String, serde_json::Value)> = surfaces;
+        surfaces.push((
+            "get_task_progress".into(),
+            self.api
+                .call("get_task_progress", json!({"task_id": task_id}))
+                .unwrap(),
+        ));
+        surfaces.push((
+            "get_task".into(),
+            self.api
+                .call("get_task", json!({"task_id": task_id}))
+                .unwrap(),
+        ));
+        surfaces
+    }
+}
+
+#[test]
+fn a_stored_etf_forward_series_changes_no_read_or_maintenance_surface() {
+    // The fixture runs once with the derived 前复权 series present and once
+    // with it deleted. Every surface an ETF can reach must render identically:
+    // PR-C added storage, not delivery.
+    let with_series = setup();
+    let second = with_series.advance_generation();
+    let third = with_series.advance_to(Generation::Third, "req-third", &second);
+    with_series.advance_to(Generation::Fifth, "req-fifth", &third);
+    let view = with_series.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = with_series.run("run-surface", &view, Some("sh_sz_etf_current"));
+    let present = with_series.etf_surface_snapshot(&task.task.task_id);
+    // The derived rows really are there, otherwise this test proves nothing.
+    for entity in ["sz.159919", "sz.159922"] {
+        assert!(
+            with_series
+                .forward_head(entity, Adjustment::Forward)
+                .is_some(),
+            "{entity} must have a derived 前复权 series in this arm"
+        );
+    }
+
+    // Same store, derived rows removed: the pre-PR-C shape.
+    with_series.drop_etf_forward_series();
+    for entity in ["sz.159919", "sz.159922"] {
+        assert!(
+            with_series
+                .forward_head(entity, Adjustment::Forward)
+                .is_none(),
+            "{entity} 前复权 series must be gone in this arm"
+        );
+    }
+    let absent = with_series.etf_surface_snapshot(&task.task.task_id);
+
+    // Strip the only two fields that legitimately differ between two
+    // invocations of the same store: the wall-clock query time and the
+    // snapshot id built from it.
+    fn volatile_free(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => serde_json::Value::Object(
+                map.iter()
+                    .filter(|(key, _)| {
+                        !matches!(
+                            key.as_str(),
+                            "query_time" | "snapshot_id" | "snapshot_time" | "created_at"
+                        )
+                    })
+                    .map(|(key, value)| (key.clone(), volatile_free(value)))
+                    .collect(),
+            ),
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(volatile_free).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    for ((name, a), (_, b)) in present.iter().zip(absent.iter()) {
+        assert_eq!(
+            volatile_free(a),
+            volatile_free(b),
+            "surface {name} differs once the 前复权 rows exist"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #607 PR-C review r1 item 4 — the store half measured on a real database.
+// ---------------------------------------------------------------------------
+
+/// `#[ignore]`: measurement, not a gate.
+///
+/// Writes 100 ETFs × 2,500 derived 前复权 bars into a real compact SQLite
+/// database through the same `market_series` / `series_bars` shape the commit
+/// path uses, and reports the wall time. Run with
+/// `cargo test --lib --release etf_forward_store_cost -- --ignored --nocapture`.
+///
+/// The fixture's task/item gates (`check_binding`) are not exercised: they are
+/// per-item constant-cost lookups whose cost does not scale with bar count.
+/// The number is therefore a floor for a real item, not a ceiling.
+#[test]
+#[ignore = "measurement, not a gate"]
+fn etf_forward_store_cost() {
+    const ETFS: usize = 100;
+    const BARS: usize = 2_500;
+    let env = setup();
+    let derived = env
+        .backend
+        .read(|c| {
+            let row =
+                series::read_series_adjusted(c, "sz.159919", Period::Day, Adjustment::Forward)?
+                    .expect("forward series");
+            series::all_bars(c, row.series_key)
+        })
+        .unwrap();
+    // Reuse the real bars of the fixture, tiled to `BARS` rows, so the written
+    // values are shaped like stored ones instead of synthetic constants.
+    let bars: Vec<_> = (0..BARS)
+        .map(|index| {
+            let mut bar = derived[index % derived.len()].clone();
+            bar.trade_day = derived[0].trade_day + index as i64;
+            bar
+        })
+        .collect();
+
+    let db_path = env.tasks.path().to_path_buf();
+    let wal_path = db_path.with_extension("db-wal");
+    let size_of = |path: &std::path::Path| -> i64 {
+        std::fs::metadata(path)
+            .map(|m| m.len() as i64)
+            .unwrap_or_default()
+    };
+    let (db_before, wal_before) = (size_of(&db_path), size_of(&wal_path));
+    let rss_kb = |label: &str| -> i64 {
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        let value = status
+            .lines()
+            .find(|line| line.starts_with("VmHWM:"))
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or_default();
+        let _ = label;
+        value
+    };
+    let peak_before = rss_kb("before");
+
+    let start = std::time::Instant::now();
+    let MarketBackend::Compact(repo) = &env.backend else {
+        panic!("fixture must open the compact backend");
+    };
+    repo.tx(|c| {
+        // The real parent rows for the master FK come from an entity the
+        // fixture already seeded.
+        let (binding, evidence): (Vec<u8>, Vec<u8>) = c
+            .query_row(
+                "SELECT source_binding_digest, evidence_digest FROM security_master WHERE code='510300'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        for index in 0..ETFS {
+            let code = format!("{:06}", 900_000 + index);
+            c.execute(
+                "INSERT INTO security_master(exchange,code,effective_from,effective_to,\
+                 instrument_class,issuer_resolution,listing_date,listing_source,\
+                 delisting_date,delisting_source,delisting_reason_class,listing_conflict,\
+                 delisting_conflict,source_binding_digest,evidence_digest) \
+                 VALUES('sz',?1,0,NULL,2,'code_date',0,'exchange_list',NULL,'unknown','other',0,0,?2,?3)",
+                rusqlite::params![code, binding, evidence],
+            )
+            .unwrap();
+            c.execute(
+                "INSERT INTO market_series(entity,period,adjustment,instrument_class,\
+                 price_scale,version_id,content_digest,digest_format,record_count,\
+                 first_day,last_day,coverage_status,source_binding_digest,\
+                 evidence_digest,last_event_seq,created_at,updated_at) \
+                 VALUES(?1,1,1,2,6,?2,?3,'series-fold-v2',?4,?5,?6,1,?7,?8,1,\
+                 '2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')",
+                rusqlite::params![
+                    format!("sz.{code}"),
+                    format!("{:02x}", index as u8).repeat(32),
+                    vec![index as u8; 32],
+                    BARS as i64,
+                    bars[0].trade_day,
+                    bars[BARS - 1].trade_day,
+                    binding,
+                    evidence,
+                ],
+            )
+            .unwrap();
+            let series_key = c.last_insert_rowid();
+            let mut statement = c
+                .prepare(
+                    "INSERT INTO series_bars(series_key,trade_day,open_units,high_units,\
+                     low_units,close_units,volume,amount,r7_raw) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                )
+                .unwrap();
+            for bar in &bars {
+                statement
+                    .execute(rusqlite::params![
+                        series_key,
+                        bar.trade_day,
+                        bar.open_units,
+                        bar.high_units,
+                        bar.low_units,
+                        bar.close_units,
+                        bar.volume,
+                        bar.amount,
+                        bar.r7_raw,
+                    ])
+                    .unwrap();
+            }
+            drop(statement);
+        }
+        Ok::<(), crate::market_storage::Error>(())
+    })
+    .unwrap();
+    let store = start.elapsed();
+    let (db_after, wal_after) = (size_of(&db_path), size_of(&wal_path));
+    let peak_after = rss_kb("after");
+    let total = ETFS * BARS;
+    println!(
+        "ETF forward store: etfs={ETFS} bars_per_etf={BARS} total_bars={total} \
+         elapsed={store:?} per_bar={:?} per_etf={:?} extrapolated_1632_etfs={:?}",
+        store / total as u32,
+        store / ETFS as u32,
+        (store / ETFS as u32) * 1_632,
+    );
+    println!(
+        "ETF forward store growth: db={}->{} bytes (delta {}) wal={}->{} bytes (delta {}) \
+         bytes_per_bar={:.1} peak_rss_kb={peak_before}->{peak_after}",
+        db_before,
+        db_after,
+        db_after - db_before,
+        wal_before,
+        wal_after,
+        wal_after - wal_before,
+        (db_after - db_before) as f64 / total as f64,
+    );
+}
+#[test]
+fn the_store_carries_the_4044900_and_2334400_anchors() {
+    // Review r1 item 5: the derived series must be read back from the store,
+    // not from `derive_forward_bars` in isolation.
+    //
+    // The two unit anchors are pure-layer values: 4,044,900 is one **4.111 元**
+    // bar minus the c1 = 0.661 cat1 (4.111 − 0.0661 = 4.0449 元), and
+    // 2,334,400 is a 6.159 元 bar after c3 = 2.5 then c1 = 1.292
+    // (6.159 / 2.5 − 0.1292 = 2.3344 元). Both need a bar dated strictly before
+    // the event, which the shared fixture does not have: its ETF bars are the
+    // most recent days. Their end-to-end storage anchor is therefore deferred
+    // to PR-D, which needs exactly such a fixture to admit ETF `qfq` — see
+    // review r2 item 5. What this test proves is the store half: the chain
+    // 41.780 元 − 0.0661 元 = 41.7139 元 = 41,713,900 units survives
+    // `commit_etf_forward_tx` and `series::all_bars` without losing a unit or
+    // shifting a value.
+    let env = setup();
+    let fourth = env.advance_to(
+        Generation::Fourth,
+        "req-fourth-anchor",
+        &env.advance_to(
+            Generation::Third,
+            "req-third-anchor",
+            &env.advance_generation(),
+        ),
+    );
+    env.advance_to(Generation::Fifth, "req-fifth-anchor", &fourth);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-anchor", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sz.159919"),
+        "{}",
+        error_of(&task, "sz.159919")
+    );
+
+    // Fifth generation puts a dividend on 除权除息日 = tomorrow, so every
+    // stored 41.780 元 bar is strictly before it and the stored close must be
+    // 41.780 − 0.0661 元 = 41.7139 元 = 41,713,900 units at price_scale 6. This
+    // is the same 6dp chain the 4,044,900 anchor uses, exercised through the
+    // store.
+    let bars = env.bars("sz.159919", Adjustment::Forward);
+    assert_eq!(bars[0].4, 41_713_900, "stored first 前复权 close");
+    let raw = env.bars("sz.159919", Adjustment::Raw);
+    assert_eq!(raw[0].4, 41_780, "stored first 不复权 close in 厘");
+    assert_eq!(bars[0].0, raw[0].0, "same trade day");
+    // One stored row per 不复权 bar: the derived series is not truncated.
+    assert_eq!(bars.len(), raw.len());
+}
+
+#[test]
+fn a_negative_forward_price_commits_and_reads_back() {
+    // 601 bars of `sh.510050`/`sh.510880` come out negative under the
+    // subtraction chain in production. How to deliver that is an owner
+    // decision deferred to PR-D; what PR-C must do is store the value as
+    // computed — the item commits, the bytes survive, and nothing panics or
+    // rolls back (#607 PR-C review r2, deferred item).
+    let env = setup();
+    // `Eighth` is reached straight from `First`: the fixture keeps at most
+    // `MAX_HOT_GENERATIONS` (6) live generations, and this test only needs the
+    // big dividend, not the intermediate bytes.
+    env.advance_to(Generation::Eighth, "req-eighth", &env.gen_first);
+    let view = env.plan("market.daily", Some("sh_sz_etf_current"));
+    let task = env.run("run-negative", &view, Some("sh_sz_etf_current"));
+    assert!(
+        succeeded(&task, "sh.510050"),
+        "{}",
+        error_of(&task, "sh.510050")
+    );
+
+    let forward = env.bars("sh.510050", Adjustment::Forward);
+    let raw = env.bars("sh.510050", Adjustment::Raw);
+    assert_eq!(
+        forward.len(),
+        raw.len(),
+        "a negative price must not drop or add a bar"
+    );
+    let negative: Vec<i64> = forward
+        .iter()
+        .map(|bar| bar.4)
+        .filter(|close| *close < 0)
+        .collect();
+    assert!(
+        !negative.is_empty(),
+        "the fixture must actually produce a negative 前复权 close: {forward:?}"
+    );
+    // Read back through the head row too: the series is published, not merely
+    // written into the bar table.
+    let head = env
+        .forward_head("sh.510050", Adjustment::Forward)
+        .expect("derived head");
+    assert_eq!(head.1 as usize, raw.len(), "published row count");
 }
