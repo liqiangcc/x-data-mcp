@@ -598,3 +598,115 @@ fn the_plan_carries_the_per_entity_verdicts() {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// cost
+// ---------------------------------------------------------------------------
+
+/// The cost of the ETF 前复权 block, measured rather than guessed.
+///
+/// `#607` PR-E adds roughly 1.65M rows to `daily_qfq` in production (the ETFs
+/// that carry a stored `Forward` series, each mirroring its 不复权 bar count).
+/// This fixture replaces the two fixture ETFs' 前复权 series with
+/// `2 × BARS_PER_ETF` rows written through the production writer and exports
+/// them, so the row count, the file size and the wall clock quoted in the PR
+/// are measurements of this code, not extrapolations.
+///
+/// Ignored by default: it is a benchmark, not a contract. Run it with
+/// `cargo nextest run --features export -E 'test(etf_qfq_export_cost)' \
+///   --run-ignored only --no-capture`.
+#[test]
+#[ignore = "cost fixture: exports ~1.65M ETF 前复权 rows"]
+fn etf_qfq_export_cost() {
+    const BARS_PER_ETF: usize = 825_000;
+    let fixture = Fixture::with_etf();
+    {
+        let c = fixture.write();
+        let tx = c.unchecked_transaction().unwrap();
+        for entity in ["sh.510050", "sz.159919"] {
+            let series_key: i64 = tx
+                .query_row(
+                    "SELECT series_key FROM market_series \
+                     WHERE entity=?1 AND period=1 AND adjustment=?2",
+                    params![entity, Adjustment::Forward.code()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            let removed = tx
+                .execute("DELETE FROM series_bars WHERE series_key=?1", params![series_key])
+                .unwrap();
+            assert_eq!(removed, 3, "{entity}: the fixture's 3 stored bars");
+            // 1.65M rows in total: the production-scale block this release adds.
+            let bars: Vec<CompactBar> = (0..BARS_PER_ETF)
+                .map(|offset| CompactBar {
+                    trade_day: 10_000 + offset as i64,
+                    open_units: 1_000_000 + offset as i64,
+                    high_units: 1_010_000 + offset as i64,
+                    low_units: 990_000 + offset as i64,
+                    close_units: 1_005_000 + offset as i64,
+                    volume: Some(100_000),
+                    amount: Some("100500.00".into()),
+                    r7_raw: None,
+                })
+                .collect();
+            crate::sqlite_market::series::insert_bars(&tx, series_key, &bars).unwrap();
+            // The export compares each series' row count with the manifest, and
+            // `record_count` is the series fact it compares against.
+            tx.execute(
+                "UPDATE market_series SET record_count=?2, first_day=?3, last_day=?4 \
+                 WHERE series_key=?1",
+                params![
+                    series_key,
+                    BARS_PER_ETF as i64,
+                    10_000i64,
+                    10_000 + BARS_PER_ETF as i64 - 1,
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
+    let store = tempdir();
+    let gate = gate_with(
+        &store,
+        &[check_record(&fixture, "sh.510050", CheckStatus::VerifiedOfficial)],
+    );
+    let out = tempdir();
+    let started = std::time::Instant::now();
+    let outcome = export_with_gate(
+        fixture.path(),
+        // Only the two ETFs: the file then holds nothing but the block under
+        // measurement, so bytes/row is the ETF 前复权 row's cost and not a mix.
+        &ExportRequest {
+            dataset: DatasetSelection::Daily,
+            adjustment: AdjustmentSelection::Qfq,
+            entities: EntitySelection::Explicit(vec!["sh.510050".into(), "sz.159919".into()]),
+            ..ExportRequest::default()
+        },
+        // The production row-group size, not the 2-row fixture default: the
+        // file layout (and so bytes/row) must match what an export writes.
+        &ExportOptions {
+            out_root: out.path().to_path_buf(),
+            compression: Compression::Snappy,
+            row_group_rows: 65_536,
+        },
+        gate,
+    )
+    .unwrap();
+    let elapsed = started.elapsed();
+    let qfq = outcome
+        .files
+        .iter()
+        .find(|file| file.path == crate::research::DAILY_QFQ_FILE)
+        .unwrap();
+    eprintln!(
+        "etf_qfq_export_cost: {} ETF qfq rows, {} bytes ({:.1} bytes/row), {:?} total ({:.0} rows/s)",
+        qfq.rows,
+        qfq.bytes,
+        qfq.bytes as f64 / qfq.rows as f64,
+        elapsed,
+        qfq.rows as f64 / elapsed.as_secs_f64(),
+    );
+    assert_eq!(qfq.rows as usize, 2 * BARS_PER_ETF);
+}

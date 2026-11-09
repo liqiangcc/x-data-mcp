@@ -1092,11 +1092,11 @@ pub fn plan_with_gate(
     // snapshot depend on the check set — through `factors.parquet`, and
     // through the identity, which records the digest below.
     let mut factor_basis = BTreeMap::new();
-    if request.dataset.includes_factors() {
-        if let Some(set) = gate.check_set() {
-            factor_basis = read::check_status_index(&set);
-            etf_forward.checks_digest = Some(set.digest());
-        }
+    if request.dataset.includes_factors()
+        && let Some(set) = gate.check_set()
+    {
+        factor_basis = read::check_status_index(&set);
+        etf_forward.checks_digest = Some(set.digest());
     }
     let lineage = read::resolve_lineage(c, &series, &derived)?;
     let industry = read::industry_binding(c)?;

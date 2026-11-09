@@ -221,6 +221,12 @@ pub struct WholeMarket<'a> {
 /// database that differs only in industry rows cannot reuse a `snapshot_id`)
 /// and the `coverage` block (`delisted_series`, `industry_coverage_start`). Both
 /// are functions of the bound inputs, so the manifest stays byte-reproducible.
+///
+/// PR-E added the eighth argument, the ETF 前复权 admission. It stays a flat
+/// list on purpose: every argument is one top-level block of the identity
+/// document, and bundling two of them into a wrapper would move the arity, not
+/// remove it. The function is a pure document builder with one caller.
+#[allow(clippy::too_many_arguments)]
 pub fn identity(
     request: &ExportRequest,
     catalog: &CatalogBinding,
