@@ -236,6 +236,7 @@ fn series_entry(raw: RawSeries) -> Result<SeriesEntry, Error> {
         source_binding_digest: digest_hex(raw.10)?,
         index: None,
         etf: None,
+        etf_checks_digest: None,
     })
 }
 
@@ -466,6 +467,12 @@ fn etf_series(
             entry.etf = Some(etf_binding(c, &entry)?);
             entries.push(entry);
         }
+        if !request.adjustment.includes(Adjustment::Forward) {
+            // A `--adjustment raw` export never asks the gate, so there is no
+            // admission and no block to record — the ETF is simply not in the
+            // 前复权 block (§7.1 requirement 1: raw behavior is unchanged).
+            continue;
+        }
         match (checks_digest, blocked) {
             (Some(digest), None) => {
                 let mut entry = forward
@@ -476,6 +483,7 @@ fn etf_series(
                     })?
                     .clone();
                 entry.etf = Some(etf_binding(c, &entry)?);
+                entry.etf_checks_digest = Some(digest.clone());
                 entries.push(entry);
                 report.admitted.insert(entity, digest.clone());
                 report.checks_digest.get_or_insert(digest);
@@ -637,6 +645,11 @@ fn derived_entry(dataset: DerivedDataset, raw: RawDerived) -> Result<DerivedEntr
 
 /// The factor sets of the selection (§3.6/§3.7). An entity whose verified event
 /// set is empty has no registration row, so it simply does not appear.
+///
+/// ETFs are not catalog members (D-70 Q5), so they follow the same rule the ETF
+/// daily series does: a catalog selection takes every published ETF factor set,
+/// and an explicit list takes the ETFs it names (`#607` PR-E — an ETF factor set
+/// must reach `factors.parquet` or `basis_status` would have no ETF subject).
 pub(crate) fn factor_sets(
     c: &Connection,
     request: &ExportRequest,
@@ -664,12 +677,21 @@ pub(crate) fn factor_sets(
             ))
         })
         .map_err(db)?;
+    let etf_factor_entities = instrument_classes(c)?
+        .into_iter()
+        .filter(|(_, class)| *class == INSTRUMENT_CLASS_ETF)
+        .map(|(entity, _)| entity)
+        .collect::<BTreeSet<String>>();
     let mut entries = Vec::new();
     for row in rows {
         let entry = derived_entry(DerivedDataset::AdjustmentEvents, row.map_err(db)?)?;
         let selected = match (explicit, members) {
             (Some(list), _) => list.binary_search(&entry.key).is_ok(),
-            (None, Some(members)) => members.contains(&entry.key),
+            // A catalog selection names A-share members only; an ETF factor set
+            // is still part of the snapshot (D-70 Q5/Q7).
+            (None, Some(members)) => {
+                members.contains(&entry.key) || etf_factor_entities.contains(&entry.key)
+            }
             (None, None) => true,
         };
         if selected {

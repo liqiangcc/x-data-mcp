@@ -392,6 +392,32 @@ impl Fixture {
             derived::replace_adjustment_events(c, &set, binding, "task-factor", "item-factor")
                 .unwrap();
         }
+        if etf {
+            // One ETF owner event: `basis_status` in the factor file is only
+            // observable on an ETF row, and PR-E must not fall back to the
+            // A-share constant for it.
+            let set = AdjustmentEventSet {
+                entity: "sh.510050".into(),
+                events: vec![AdjustmentEvent {
+                    ordinal: 0,
+                    effective_day: day(2026, 10, 21),
+                    category: 11,
+                    c_bits: [
+                        f32::to_bits(0.0),
+                        f32::to_bits(0.0),
+                        f32::to_bits(2.5),
+                        f32::to_bits(0.0),
+                    ],
+                    factors: [Decimal::ZERO, Decimal::ZERO, Decimal::new(25, 1), Decimal::ZERO],
+                    known_at: None,
+                    basis_status: crate::market_data::FactorBasisStatus::Verified,
+                }],
+                excluded: 0,
+                precision: crate::market_data::FactorPrecision::EtfF32Shortest,
+            };
+            derived::replace_adjustment_events(c, &set, binding, "task-etf-factor", "item-1")
+                .unwrap();
+        }
 
         // The derived calendar, committed through its own gate.
         let batch = CalendarBatch {
@@ -2412,5 +2438,7 @@ mod with_export {
 mod delisted;
 #[cfg(feature = "export")]
 mod etf;
+#[cfg(feature = "export")]
+mod etf_qfq;
 #[cfg(feature = "export")]
 mod producer;

@@ -390,6 +390,11 @@ pub struct SeriesEntry {
     pub index: Option<IndexBinding>,
     /// D-72 facts of an ETF series (`None` for every other class).
     pub etf: Option<EtfBinding>,
+    /// `etf_checks_digest` the 前复权 block was admitted under (`#607` PR-E,
+    /// design §7.1). Set on the ETF 前复权 entry only: it records *which check
+    /// set* the gate judged, so a consumer can tell two exports apart that
+    /// differ only in the source store's records.
+    pub etf_checks_digest: Option<String>,
 }
 
 /// The two series-level D-72 dates an ETF series carries (M3-2 PR-D).
@@ -498,6 +503,18 @@ pub struct FilePlan {
     pub dataset: &'static str,
     /// Whether `as_of`/`known_at` would bound this dataset (§12.2/§12.3).
     pub temporal: TemporalDecl,
+}
+
+/// The schema version of one exported file, when that file is versioned on its
+/// own (§7.2/§7.3).
+///
+/// The snapshot's `manifest.schema` string names the **snapshot** layout; the
+/// daily files and the factors file are versioned independently, because a
+/// column added to one must not force a consumer of the other to move. `None`
+/// means "no independent version": the file's `columns` and the snapshot schema
+/// describe it fully.
+pub fn file_schema_version(path: &str) -> Option<u32> {
+    (path == FACTORS_FILE).then_some(FACTORS_SCHEMA_VERSION)
 }
 
 /// One dataset's temporal declaration (§12.2). It answers "would a temporal
@@ -1068,10 +1085,19 @@ pub fn plan_with_gate(
 
     // The `basis_status` column of `factors.parquet` (§7.3): the same check
     // records the admission above used, so the column and the gate agree.
-    // A `--adjustment raw` request still exports `factors`, and its A-share
-    // events are a fixed value either way, so the map is only read when an ETF
-    // factor set is exported.
-    let factor_basis = etf_check_statuses(gate);
+    //
+    // This is asked whenever `factors` is exported, whatever `--adjustment`
+    // says: an ETF event's verdict is a property of the event, not of which
+    // daily files are written. It therefore also makes a `--adjustment raw`
+    // snapshot depend on the check set — through `factors.parquet`, and
+    // through the identity, which records the digest below.
+    let mut factor_basis = BTreeMap::new();
+    if request.dataset.includes_factors() {
+        if let Some(set) = gate.check_set() {
+            factor_basis = read::check_status_index(&set);
+            etf_forward.checks_digest = Some(set.digest());
+        }
+    }
     let lineage = read::resolve_lineage(c, &series, &derived)?;
     let industry = read::industry_binding(c)?;
     let coverage = Coverage {
@@ -1122,25 +1148,6 @@ pub fn plan_with_gate(
 /// on vm2 and must set the variable; see `docs/data-catalog.md` §5.3.
 pub fn etf_source_gate() -> std::sync::Arc<dyn crate::sqlite_market::series::EtfForwardGate> {
     std::sync::Arc::new(crate::source_store::etf_factor_read_gate::ForwardGate::from_env())
-}
-
-/// The check verdicts the `basis_status` column reports, read through the same
-/// store resolution as the gate (§7.3).
-///
-/// Keyed by `(entity, ordinal, evidence_digest)` — the newest record wins, the
-/// same rule the blocking decision applies. A store that is unconfigured or
-/// unreadable yields an empty map, so every ETF event exports `unverified`:
-/// "we could not show it was verified" is the honest answer, and it matches the
-/// gate's verdict for that export.
-fn etf_check_statuses(
-    gate: &dyn crate::sqlite_market::series::EtfForwardGate,
-) -> BTreeMap<(String, i64, String), crate::source_store::etf_factor_checks::CheckStatus> {
-    // The gate owns the store resolution and its reload probe; ask it for the
-    // set it is judging with rather than opening the store a second time.
-    match gate.check_set() {
-        Some(set) => read::check_status_index(&set),
-        None => BTreeMap::new(),
-    }
 }
 
 /// Re-plan on a fresh read-only connection and require the same identity.

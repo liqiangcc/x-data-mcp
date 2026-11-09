@@ -120,8 +120,10 @@ fn etf_rows_do_not_change_the_a_share_plan() {
     };
     assert_eq!(non_etf_values(&plain), non_etf_values(&with));
 
-    // The factor sets (stock only) and the calendar are untouched; the
-    // coverage count of delisted stock series does not count ETFs.
+    // The A-share factor sets and the calendar are untouched; the coverage
+    // count of delisted stock series does not count ETFs. Since `#607` PR-E an
+    // ETF factor set is part of the snapshot too, so the comparison keeps the
+    // A-share entries and asserts the ETF entry is the only addition.
     let stable = |snapshot: &SnapshotPlan| -> Vec<crate::research::DerivedEntry> {
         snapshot
             .derived
@@ -131,12 +133,21 @@ fn etf_rows_do_not_change_the_a_share_plan() {
                     entry.dataset,
                     crate::research::DerivedDataset::AdjustmentEvents
                         | crate::research::DerivedDataset::TradingCalendar
-                )
+                ) && !entry.key.starts_with("sh.51")
+                    && !entry.key.starts_with("sz.159")
             })
             .cloned()
             .collect()
     };
     assert_eq!(stable(&plain), stable(&with));
+    let added: Vec<&str> = with
+        .derived
+        .iter()
+        .filter(|entry| entry.dataset == crate::research::DerivedDataset::AdjustmentEvents)
+        .map(|entry| entry.key.as_str())
+        .filter(|key| key.starts_with("sh.51") || key.starts_with("sz.159"))
+        .collect();
+    assert_eq!(added, ["sh.510050"], "the ETF factor set is exported");
     assert_eq!(plain.coverage, with.coverage);
     assert_eq!(plain.catalog, with.catalog);
 }
@@ -492,9 +503,10 @@ mod export_files {
         let with = exported(&Fixture::with_etf(), etf_out.path());
 
         // Files an ETF does not belong in are byte-identical (sha256 equal).
+        // `factors.parquet` is deliberately not in this list since `#607`
+        // PR-E: it carries the ETF factor event (and its `basis_status`). The
+        // A-share rows of that file are compared below instead.
         for name in [
-            crate::research::DAILY_QFQ_FILE,
-            crate::research::FACTORS_FILE,
             crate::research::CALENDAR_FILE,
             crate::research::INDEX_FILE,
             crate::research::SECURITY_NAMES_FILE,
@@ -529,6 +541,26 @@ mod export_files {
             }
             assert_eq!(before, after, "the new columns are equal on stock rows too");
         }
+        // `factors.parquet`: every A-share row is unchanged, in all eleven v1
+        // columns; `basis_status` (the new column) says `gbbq-verified` for
+        // them, which is the same value an export without ETFs writes.
+        let plain_factors = rows_of(&plain.directory, crate::research::FACTORS_FILE);
+        let with_factors = rows_of(&with.directory, crate::research::FACTORS_FILE);
+        let stock_factors: Vec<&Row> = with_factors
+            .iter()
+            .filter(|row| !text(row, "entity").starts_with("sh.51"))
+            .filter(|row| !text(row, "entity").starts_with("sz.159"))
+            .collect();
+        assert_eq!(plain_factors.len(), 2);
+        assert_eq!(stock_factors.len(), 2);
+        for (before, after) in plain_factors.iter().zip(&stock_factors) {
+            assert_eq!(*before, **after, "the A-share factor rows changed");
+            assert_eq!(
+                text(after, "basis_status"),
+                crate::research::read::FactorBasisStatus::STOCK
+            );
+        }
+
         let plain_universe = rows_of(&plain.directory, crate::research::UNIVERSE_INTERVALS_FILE);
         let with_universe = rows_of(&with.directory, crate::research::UNIVERSE_INTERVALS_FILE);
         assert_eq!(plain_universe.len(), 2);

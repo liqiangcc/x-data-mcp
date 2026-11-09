@@ -174,6 +174,12 @@ fn series_value(entry: &SeriesEntry, lineage: &LineageIndex) -> Result<Value, Er
         value["last_trade_date"] = json!(etf.last_trade_date.map(|day| day.to_string()));
         value["delisting_date"] = json!(etf.delisting_date.map(|day| day.to_string()));
     }
+    // `#607` PR-E (design §7.1): an ETF 前复权 block names the check set it was
+    // admitted under. Present on that entry only, so every other series entry
+    // keeps exactly the keys it had.
+    if let Some(digest) = &entry.etf_checks_digest {
+        value["etf_checks_digest"] = json!(digest);
+    }
     Ok(value)
 }
 
@@ -279,7 +285,9 @@ pub fn identity(
 /// The `etf_forward` identity block: the check set every admission was judged
 /// with, and the entities it refused with the read face's reason code.
 fn etf_forward_value(report: &super::read::EtfForwardReport) -> Value {
-    if !report.is_judged() {
+    // `null` only when neither an admission was asked nor a check set was
+    // read: then nothing in the snapshot depends on the source store.
+    if !report.is_judged() && report.checks_digest.is_none() {
         return Value::Null;
     }
     Value::Object(
@@ -344,6 +352,10 @@ pub fn files_value(plans: &[FilePlan], stats: Option<&[FileStat]>, compression: 
                     "sha256": stat.map(|s| s.sha256.clone()),
                     "compression": compression,
                     "columns": plan.columns,
+                    // `#607` PR-E (§7.2/§7.3): a file versioned on its own says
+                    // so here. `null` = the snapshot schema and the columns
+                    // describe it fully.
+                    "schema_version": super::file_schema_version(plan.path),
                 })
             })
             .collect(),
