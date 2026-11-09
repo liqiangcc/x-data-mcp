@@ -47,7 +47,8 @@ allowed-tools:
 单次 `start_collection`/`update_data` 超过 100 个证券或 item 会整体拒绝，服务端不会自动分页。
 v7 起全市场日更由 `plan_market_update`/`run_market_update` 在服务器侧解析与执行，编排方
 不再自行把全市场切成 ≤100 item 调用；v9 起四个同源派生 item 的输入改由 §3.0 的
-`refresh_exchange_sources` 提供（日更前 `tail`、每周 `full`）；v10 起 `market.daily` 的
+`refresh_exchange_sources` 提供（日更前 `tail`；每周 `full` 由 operator 执行，#625 过渡口径）；
+v10 起 `market.daily` 的
 plan/run 增加可选 `scope`，本 Skill 用它把 ETF 作为 A 股之后的独立批次（§3.3a），A 股批次
 不传 `scope`（请求字节与 v9 相同）；只有**补漏**（§3.3/§3.6）与首采（§3.7）仍按
 ≤100 item 的显式契约提交，每个 chunk 使用独立唯一 `request_id`、**串行提交**（服务端单 worker）。
@@ -169,14 +170,24 @@ operator 若只用显式 `update_data` 把全部 head 发布到位、没有 `run
 `ACQUISITION_ALREADY_INFLIGHT` 并停止。
 
 1. `mcp__x-data-acquire__acquire_generation`，`request_id` 取本次唯一值（如 `daily-<YYYYMMDD>-<短随机>`）。返回 `task_id` / `generation_id`。
-2. 有界轮询 `get_acquisition_task(task_id)`：约 60s 一轮，总预算约 45 分钟（官方快照约 570MB，
-   实测下载 20-40 分钟）。预算耗尽仍未到终态 → 停止，返回 `request_id`/`task_id`/`generation_id`
-   并说明仍在进行，不无限等待。
+2. 有界轮询 `get_acquisition_task(task_id)`：预算按**墙钟时间**算，从 task 的 `created_at`
+   起约 45 分钟（官方快照约 570MB，实测下载 20-40 分钟）。预算耗尽仍未到终态 → 停止，返回
+   `request_id`/`task_id`/`generation_id` 并说明仍在进行，不无限等待。
    - **拿到 `task_id` 后不得再调用 `acquire_generation`**，脚本超时或被中断也一样：task 在服务端继续运行，
      只能用同一个 `task_id` 恢复轮询。换新 `request_id` 重新获取会多下载一份 generation。
-   - codemode 的脚本默认约 60 秒就结束。要么每段脚本只查一轮、下一轮另起脚本，要么在脚本第一行写
-     `// @options: {"timeout_ms": 600000}` 再循环。脚本结束不等于 task 失败，只有 `get_acquisition_task`
-     的 `failed` 才算失败。
+   - **一轮一查，不在脚本里循环**（#625 过渡口径，长轮询上线后改）：codemode 里**没有 `setTimeout`，
+     也没有其他等待手段**（`await new Promise(res => setTimeout(res, 45000))` 报
+     `setTimeout is not defined`），所以在脚本里写循环只会变成忙轮询。**每段脚本只查一轮，
+     下一轮另起一段脚本**；脚本结束不等于 task 失败，只有 `get_acquisition_task` 的 `failed`
+     才算失败。
+   - **每轮输出带上当前时间和已等待秒数**（#625 过渡口径，长轮询上线后改）：在脚本结果里写
+     `new Date().toISOString()` 和「自 `created_at` 起已过 N 秒」。这样相邻两轮的结果不会完全相同，
+     不会被客户端的死循环检测（同一调用连续 8 次、结果相同即停）误拦。
+   - **预算按墙钟算，不按调用次数算**（#625 过渡口径，长轮询上线后改）：早停与否只看
+     「`created_at` 到现在」是否超过 45 分钟，与已经查了多少轮无关。
+   - **下载期间 `bytes_done=0` 不代表停滞**（#625 过渡口径，长轮询上线后改）：该字段只在阶段
+     结束时才写入，首个文件下载期间恒为 0（11-09 实测：0 持续约 65 s，任务最终 `succeeded`，
+     575,006,339 B）。只有 `get_acquisition_task` 返回 `failed` 才算失败。
 3. task `failed` → 停止，转述 `error`/`detail` 与 refs。
 4. `verify_generation(request_id=<新值>, generation_id)`：结果必须是 `consistency_verified`；`not_verified` / `conflict` / 其他 → 停止并报告。
 5. 先 `sync_status` 取当前 `active_generation_ref`；`activate_generation(request_id=<新值>, generation_id, expected_previous=<当前 active 或省略>`) 。拒绝/conflict → 停止，旧 active 不变。
@@ -218,25 +229,63 @@ v9 起同源的四个派生 item（`derived:security_master`、`derived:security
 `derived:risk_warnings`、`derived:suspensions`）不再自己发请求：它们只读
 `X_DATA_MCP_SOURCE_STORE` 里由 `refresh_exchange_sources` 冻结的快照，并要求最近一次完整
 刷新距今不超过 `H=14` 天。顺序属于 Skill：**先刷新来源，再 plan/run 日更**；一次完整日更的
-顺序是 **`tail` → `plan`/`run_market_update` →（每周）`full`**。
+顺序是 **`tail` → `plan`/`run_market_update`**；每周 `full` 不在日更内，由 operator 在周末单独执行
+（#625 过渡口径，长轮询上线后改），Skill 只在两种兜底情况才发起 `full`：`tail` 报
+`source_refresh_overdue`，或四个同源 item 返回 `source_refresh_overdue` /
+`source_snapshot_not_found` / `snapshot_incomplete`。
 
 - 每次日更前（**必做，不可跳过**，plan 之前先完成）：`refresh_exchange_sources({"mode":"tail"})`（开窗 + 上一自然季度；整表类重读
   整表，深市上市/简称先探页 1）。`tail` **异步**（#582）：调用只校验并写 run 记录，立刻返回
   `{"status":"running","run_id":…}`（带计划，计数为 0），抓取在本进程后台线程；用
   `refresh_exchange_sources({"status_of":<run_id>})` 轮询到 `succeeded` 或 `failed` 再继续。
+  **`status_of` 也是一轮一查、不在脚本里循环**（#625 过渡口径，长轮询上线后改）：
+  codemode 没有 `setTimeout`，写循环只会变成忙轮询——11-09 实测因此每分钟发出约
+  5,000 次 `status_of`，被死循环检测拦停。每段脚本只查一轮、下轮另起；每轮输出带
+  `new Date().toISOString()` 与「自 `started_at` 起已过 N 秒」，避免相邻两轮结果相同。
+  预算是**墙钟时间，不是 SLO 门槛**（#625 过渡口径，长轮询上线后改）：`tail` 轮询从
+  `started_at` 起可以等 **20 分钟**（探针触发整表时最多 549 个请求，1 req/s 下约 13 分钟；
+  11-06 实测 642 s）。SLO 的 `<300s` 是**性能读数（G2）**，**不是轮询的停止条件**：
+  超过 300 s 只在报告里记成 G2 读数，继续等；超过 20 分钟仍未到终态，才按「轮询预算耗尽」停止。
   同步跑会在客户端 60 s 预算后超时（探针触发整表时最多 549 个请求、1 req/s 下约 13 分钟），
   所以**不要**把它当成一次能拿回报告的调用，也不要重复发 `tail` 等它。终态后按 run 记录的
-  `status`、`requests`、`failed_windows`、`unobserved_windows`、`verified_through` 复核；
+  `status`、`requests`、`reused`、`failed_windows`、`unobserved_windows`、`verified_through` 复核；
   `status_of` 不回 per-source 行与 `revisions`（与 `full` 相同）。
   `dry_run:true` 只列计划、不发请求。
-- 每周一次：`refresh_exchange_sources({"mode":"full"})`（低峰，周末候选），放在当天
-  `run_market_update` **终态之后**（或单独在低峰跑），不要插在 `tail` 与 plan/run 之间。
-  `full` **异步**：调用立刻返回 `{"status":"running","run_id":…}`，抓取在本进程后台线程；
-  用 `refresh_exchange_sources({"status_of":<run_id>})` 轮询到 `succeeded` 或 `failed` 再继续。
+- **`tail` 复用已关闭窗口（D-87，自 preview.47（D-87）起）**：窗口类来源
+  （`szse_etf_notice_ann`、`sse_bulletin`、`sse_suspension`、`sse_fund_delist_ann`）的**已关闭
+  窗口**（上一自然季度）不再发请求，直接读穿来源库（sha256 校验后重新解析，任一项不符即
+  fail-closed）。所以同一天的 `tail` 里 `requests` 比以前少、某来源的 `reused` 大于 0 都是
+  **正常读数，不是漏抓**：`requests` 只计真正发出的请求，复用页数在 `reused` 里。**开窗照常
+  抓取**（当前季度窗口一律重新请求，同一天两次 `tail` 也是两次抓取），`full` 任何窗口都不复用。
+  代价是已关闭季度里的修订只有 `full` 能发现，见下面两条。
+- **每周 `full` 是 operator 的硬性步骤（D-87）；日更 Skill 不主动发起（#625 过渡口径，长轮询上线后改）**：
+  `tail` 复用的已关闭窗口里只有 `full` 能发现修订（公告改标题、停牌更正），所以每周一次 `full`
+  从「建议」变为**硬性步骤**，但它是 **operator 的步骤**：由 operator 在周末单独执行（D-87），
+  **不是日更 Skill 的步骤**。Skill 仅凭「到周末了 / 本代 run 已终态」**不得**自作主张起 `full`：
+  11-09 日更就因此多跑了一轮完整交易所请求（约 3,900 个，约 71 分钟），而本周 `full` 实际
+  已于 11-08 由 operator 跑完。本次日更没有跑 `full` 时，报告里写一句「每周 full 由 operator 执行」即可。
+  下面「`tail` 报 `source_refresh_overdue` 时先 `full`」与「四个同源 item 返回
+  `source_refresh_overdue` / `source_snapshot_not_found` / `snapshot_incomplete` 时跑 `full`」
+  是**兜底条件，不是每周例跑**：Skill 仅在这两种情况下才发起 `full`。
+  **兜底只限这三个错误码**：这四个同源 item 实在的失败原因就是冻结集缺失、不完整或过期。
+  `source_store_unconfigured` 这类**配置错误不在兜底范围**——重跑 `full` 也解决不了，
+  按配置问题报告，不要起 `full`。
+- **兜底跑 `full` 时的停止条件（#625 过渡口径，长轮询上线后改）**：按上面的「一轮一查」轮询，
+  从 run 的 `started_at` 起 **30 分钟**还没到终态就停下，不再等。报告里写出 `run_id`，
+  结论写 `stopped`（等待 `full`），说明后面的 `tail` 重跑与 plan/run 尚未完成；
+  由 operator 在 `full` 终态后用**同一会话**恢复，再补做剩下的步骤。
+- `full` 的轮询与计数（#625 过渡口径，长轮询上线后改）：`full` **异步**：调用立刻返回
+  `{"status":"running","run_id":…}`，抓取在本进程后台线程；用
+  `refresh_exchange_sources({"status_of":<run_id>})` 一轮一查轮询到 `succeeded` 或 `failed`。
   `running` 期间的计数是 0，不是进度（进度看 `status` 而不是计数）。`tail` 只覆盖开窗与
   上一自然季度，不能单独让 `H` 闸门长期通过。`full` 终态后把 `run_id` 与起止时间写进报告：
   `finished_at − started_at` 就是 G2 的 <60min 读数；per-table 的 `elapsed_ms` 不在
   `status_of` 回包，由 operator 按 runbook 查 run 表。
+- **`tail` 报 `source_refresh_overdue` 时先 `full`（D-87，自 preview.47（D-87）起）**：说明
+  该来源最近一次 `complete=1` 的 `succeeded` run 的 `verified_through` 已超过 `H=14` 天，
+  已关闭窗口的抓取项 fail-closed 记失败、run 为 `failed`。处理顺序固定：先
+  `refresh_exchange_sources({"mode":"full"})` 并轮询到 `succeeded`，再重跑当天的 `tail`；
+  **不要绕过**（不重抓已关闭窗口、不改 `H`、不跳步直接 plan/run）。
 - 返回 `refresh_already_running`（已有运行中的刷新，含别的日更或 operator 起的）：读
   `details.run_id`，轮询**那个** run 到终态，不要再起新 run；`tail`/`full` 互斥，也不要在
   `full` 未结束时插 `tail`。
@@ -249,9 +298,9 @@ v9 起同源的四个派生 item（`derived:security_master`、`derived:security
   再重新 plan/run；`full` 重跑后仍失败才按缺陷报 owner。不要对这四个 item 单独
   `retry_task`，也不要把它们当成实体补漏项。
 - v8 运行时的 `ops` 入口没有该工具（item 内联获取）：本步跳过，其余步骤不变。v9 运行时
-  该工具缺失即 `SKILL_CONTRACT_MISMATCH`。刷新任务不发布数据集，1 req/s 不变；预算为
-  `tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设门禁）、
-  `full` <60min。
+  该工具缺失即 `SKILL_CONTRACT_MISMATCH`。刷新任务不发布数据集，1 req/s 不变；SLO 的性能
+  门槛为 `tail` <300s（仅未触发整表时）、每张被触发的整表各自 <600s（D-67，run 总量不设门禁）、
+  `full` <60min——这些是**性能读数（G2），不是轮询的停止条件**（#625 过渡口径，长轮询上线后改）。
 
 ### 3.1 日线 plan
 
@@ -654,7 +703,9 @@ start_collection{dataset:"market.daily", contract_version:"v2",
 `unknown` 观测、`day` 未明确 pending（不得 acquire；只有 §1.1 判定需要补发布时才继续，且不经 §2）、缺少同次 day-pending 证据的 inflight acquisition、
 `not_verified`/`conflict`/`corrupt` generation、revision 不匹配、任务级失败/受理拒绝
 （`update_data` 显式批次先按 §3.8 归因，per-item 类别走分裂重试，其余才停）、
-大面积同类 per-item 失败、轮询预算耗尽、工具不可用。任务终态 `partially_failed` 与 per-item
+大面积同类 per-item 失败、轮询预算耗尽（获取从 `created_at` 起 45 分钟、`tail` 从 `started_at`
+起 20 分钟、兜底 `full` 从 `started_at` 起 30 分钟未到终态，#625 过渡口径）、工具不可用。
+注意：SLO 的 `tail` <300s 是性能读数（G2），**不是**停止条件。任务终态 `partially_failed` 与 per-item
 `needs_verification` 不属全局停止（见 §3.2/§3.3/§3.7：`REVISION_UNVERIFIED` 走显式补漏，
 其余聚合上报为 fail-closed 集合）。**ETF 批次（§3.3a）是例外**：ETF 任务级失败只停止 ETF
 这部分（报告后继续 §3.4 年线），不回滚 A 股、不重试、不用 `update_data` 补 ETF。停止时旧
