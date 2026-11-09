@@ -196,20 +196,15 @@ impl Fetcher for Helper {
             content_length: h.content_length,
         })
     }
+    /// Same download as [`Fetcher::fetch_with_progress`], with the progress
+    /// dropped.
+    ///
+    /// It has to go through the streaming path rather than parse stdout as one
+    /// object: the helper prints a `{"bytes": N}` line per landed chunk before
+    /// the result object, so a whole-stdout parse would fail with
+    /// `Error::Output` on every real download (#625 review r2).
     fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error> {
-        let f: FetchJson =
-            serde_json::from_value(self.run(&["fetch", url, &dest.to_string_lossy()])?)
-                .map_err(|e| Error::Output(e.to_string()))?;
-        Ok(FetchResult {
-            head: Head {
-                status: f.status,
-                etag: f.etag,
-                last_modified: f.last_modified,
-                content_length: f.content_length,
-            },
-            bytes: f.bytes,
-            sha256: f.sha256,
-        })
+        self.fetch_with_progress(url, dest, &|_| {})
     }
     /// #625: the helper prints one `{"bytes": N}` line per landed chunk on
     /// stdout and the result object last, so the service can publish progress
@@ -388,6 +383,69 @@ mod tests {
         assert_eq!(fetched.sha256, crate::hash::sha256(&bytes));
         assert_eq!(fetched.head.content_length, Some(bytes.len() as u64));
         assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    }
+
+    /// #625 review r2: `Helper::fetch` must accept the helper's real stdout.
+    ///
+    /// The helper prints one `{"bytes": N}` line per landed chunk before the
+    /// result object, so parsing the whole stdout as a single object returned
+    /// `Error::Output` on every real download. Both entry points now go through
+    /// the streaming path; this drives `fetch` (the no-progress one) with a
+    /// fixture that prints two progress lines and then the result.
+    #[cfg(unix)]
+    #[test]
+    fn fetch_decodes_a_helper_that_prints_progress_lines_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("progress_helper.py");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import hashlib, json, sys
+payload = b"0123456789"
+if sys.argv[1] == "head":
+    print(json.dumps({"status": 200, "etag": "\"e\"", "last_modified": None,
+                      "content_length": len(payload)}), flush=True)
+    sys.exit(0)
+dest = sys.argv[3]
+with open(dest, "wb") as out:
+    for start in range(0, len(payload), 5):
+        chunk = payload[start:start + 5]
+        out.write(chunk)
+        out.flush()
+        print(json.dumps({"bytes": min(start + 5, len(payload))}), flush=True)
+print(json.dumps({"status": 200, "etag": "\"e\"", "last_modified": None,
+                  "content_length": len(payload), "bytes": len(payload),
+                  "sha256": hashlib.sha256(payload).hexdigest()}), flush=True)
+"#,
+        )
+        .unwrap();
+        let dest = dir.path().join("base.zip");
+        let helper = Helper::at(script);
+        let fetched = helper
+            .fetch(
+                "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+                &dest,
+            )
+            .expect("progress lines must not break the result parse");
+        assert_eq!(fetched.bytes, 10);
+        assert_eq!(fetched.sha256, crate::hash::sha256(b"0123456789"));
+        assert_eq!(fetched.head.status, 200);
+        assert_eq!(fetched.head.content_length, Some(10));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"0123456789");
+
+        // The same fixture through the progress entry point reaches the same
+        // result and reports the chunk boundaries on the way.
+        let dest = dir.path().join("base-progress.zip");
+        let reported = std::sync::Mutex::new(Vec::new());
+        let fetched = helper
+            .fetch_with_progress(
+                "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+                &dest,
+                &|bytes| reported.lock().unwrap().push(bytes),
+            )
+            .unwrap();
+        assert_eq!(fetched.sha256, crate::hash::sha256(b"0123456789"));
+        assert_eq!(*reported.lock().unwrap(), vec![5, 10]);
     }
 
     /// The helper owns the head/fetch wire shape: numeric `status`,
