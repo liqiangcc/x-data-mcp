@@ -274,7 +274,7 @@ worker 还会追加 **17** 个服务器内部派生 item（9 个指数基准 + �
   四个失败是同一个配置问题，按错误码聚合，不要当成四个独立故障。
   配置正确的 store 里若没有**完整且未过期**的冻结集，item 以
   `source_snapshot_not_found` / `snapshot_incomplete` / `source_refresh_overdue` 失败：
-  先跑 `refresh_exchange_sources`（每次日更 `tail`、每周 `full`，见下文「来源刷新」），
+  先跑 `refresh_exchange_sources`（每次日更 `tail`；每周 `full` 由 operator 执行，见下文「来源刷新」），
   不要用补漏或重试实体 item 处理。
 - 启动可见性（3a）：ops + compact 启动时检查同一变量；缺失且未开 dev 豁免 →
   journal 一条以 `source_store_unconfigured` 开头的告警，**仍继续 bind socket 并服务**
@@ -362,9 +362,9 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
 → 拿到 {run_id,status:"running"}（带计划，计数为 0），用 {"status_of":run_id} 轮询到终态
 → 读终态 run 记录：requests/reused/changed/failed_windows/unobserved_windows/verified_through/失败列表
 → plan_market_update → run_market_update（四个同源 item 读本次冻结集）
-→（每周一次，放在当天 run 终态之后）refresh_exchange_sources {"mode":"full"}
-→ 用 {"status_of":<run_id>} 轮询到 succeeded/failed
 ```
+
+每周 `full` **不在日更内**：由 operator 在周末单独执行（#625 过渡口径，长轮询上线后改）。
 
 - `tail` **异步**（#582）：调用只校验并写 run 记录，立即返回 `{run_id,status:"running"}`，
   抓取在本进程后台线程（客户端断开不影响）；用 `{"status_of":run_id}` 轮询到
@@ -372,9 +372,15 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
   （1 req/s 下约 13 分钟），而客户端预算是 60 s、一个连接只有一个线程；同步跑会把该连接上
   后面的调用全部堵住，超时后又没有 `run_id` 可取回结果。`running` 期间的计数是 0，不是进度；
   `status_of` 不返回 per-source 行与 `revision`（只有 run 行与失败列表是持久记录）。
-- **每周一次 `{"mode":"full"}`**：窗口类来源补齐全部季度、整表类来源重读整表，并推进
-  `verified_through`。**调用位置**：当天日更 `run_market_update` 终态之后（或单独在低峰跑），
-  不要插在 `tail` 与 plan/run 之间；`full` 只写来源库/索引与 run 记录，不发布数据集，
+- **`status_of` 一轮一查、不在脚本里循环**（#625 过渡口径，长轮询上线后改）：codemode 没有
+  `setTimeout`，也没有其他等待手段，写循环只会变成忙轮询（11-09 实测每分钟约 5,000 次 `status_of`，
+  被客户端的死循环检测拦停）。每段脚本只查一轮、下轮另起；每轮输出带 `new Date().toISOString()`
+  与「自 `started_at` 起已过 N 秒」，避免相邻两轮结果相同。预算按**墙钟时间**算，不按调用次数算。
+- **每周一次 `{"mode":"full"}`（operator 步骤）**：窗口类来源补齐全部季度、整表类来源重读整表，并推进
+  `verified_through`。**由 operator 在周末单独跑**（D-87），不是日更 Skill 的步骤：
+  （#625 过渡口径，长轮询上线后改）日更 Skill **不得**仅凭「到周末了 / 本代 run 已终态」自行起 `full`；
+  它只在 `tail` 报 `source_refresh_overdue` 或四个同源 item 失败时兜底跑一次。
+  `full` 只写来源库/索引与 run 记录，不发布数据集，
   下一次日更才读新快照。`full` **异步**：调用立刻返回 `{"status":"running","run_id":…}`，抓取
   在本进程后台线程（客户端断开不影响）；用 `refresh_exchange_sources({"status_of":run_id})`
   轮询到 `succeeded`/`failed` 再继续。`running` 期间的计数是 0，不是进度。`tail` 只覆盖开窗
@@ -384,7 +390,7 @@ v9 起四个同源 item（`derived:security_master`、`derived:security_names`�
   窗口**（上一自然季度）——这些窗口的字节已经冻结过、请求指纹不变，`tail` 直接读穿来源库，
   不再发请求（按 1 s/请求算，`szse_etf_notice_ann` 从约 181 个请求降到约 50 个，见 #603/#604）。
   代价是**这些窗口里的修订只有 `full` 能发现**，所以每周一次 `full` 从「建议」变为
-  **日更 operator 的硬性步骤**：跳过它，已关闭季度的修订（公告改标题、停牌更正）不会被发现。
+  **operator 的硬性步骤**：跳过它，已关闭季度的修订（公告改标题、停牌更正）不会被发现。
   **开窗照常抓取**：`tail` 对当前季度窗口一律重新请求，同一天跑两次 `tail` 也是两次抓取。
 - **超过 `H = 14` 天没跑 `full`，`tail` 会 fail-closed**：复用的年龄闸门是「该来源最近一次
   `complete=1` 的 `succeeded` run 的 `verified_through`」，超过 14 天时已关闭窗口的抓取项以
