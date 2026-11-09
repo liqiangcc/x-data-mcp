@@ -33,7 +33,7 @@ M2 已上线：6 个解析事实数据集在 `query_data` v2 上可读，其中
 涨跌停规则原文未接入时仍按 `pending_source` 记录、`trading_rules` 写 0 行。因此日更成功后，M2 数据集的新鲜度与日线同步，
 不需要单独跑任务（详见 [STATUS](STATUS.md)「数据」段的 M2 数据集行）。
 
-已部署实例为 fresh compact schema 27（2026-11-07 preview.46 on vm2-126，D-74；aws-node
+已部署实例为 fresh compact schema 27（2026-11-09 preview.47 on vm2-126，D-74；aws-node
 fallback 为 schema 26；M1 的 schema 22 +
 M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的 027），三个入口合计
 去重后注册 37 项 data 工具（`research` 17 / `ops` 16 / `maint` 9）；
