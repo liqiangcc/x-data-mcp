@@ -18,6 +18,19 @@ vm2 是试用机（约 2027-01-04 到期，到期前要定去向）。
 更早的 2026-11-08 VM2 只读查询、2026-11-07 preview.46 只读验收（XDM-198）、2026-11-05 部署与第一次生产跨代日更读数
 保留在「数据」段。
 
+**preview.48 待部署（2026-11-10）**：本 PR 只做版本号与文档，未打 tag、未发 release、未部署；
+owner 2026-11-10 已批准发布和部署。相对 preview.47（`de1f84a`）合进 main 的代码改动均为
+#607 ETF 前复权：#615 PR-B（核对记录、导入、门槛与装载器）、#614 PR-F（Python 参考实现与
+连续性检查）、#616 convert（公告取证转 `etf-factor-checks-v1`）、#617 verify（Q10 每周核对）、
+#618 PR-A（纯计算层）、#620 PR-C（存储与日更构建，写入侧）、#623 PR-D（读面放行、核对门槛与
+`generic-data-v12`）、#624 PR-E（研究导出交付 ETF 前复权）；文档为 #609–#612、#613、#619、
+#622、#626、#627。**不含** #628（#625 的长轮询升 v13，留到 preview.49）。schema 仍为 27，
+capability revision 由 `generic-data-v11` 升为 `generic-data-v12`（PR-D 已改），工具数不变
+（ops 16 / research 17 / maint 9 / acquire 10），只换二进制。
+部署顺序：先部署二进制，所有 ETF 前复权先返回 `adjustment_unavailable`（`etf_factor_unverified`）；
+导入 1,233 条核对记录后放行，不需要重启；第一次日更会写入约 165 万根 ETF 前复权 bar，
+之后不能直接回滚到 preview.47。「部署版本」行仍是 preview.47，部署后的 PR 再把 Skill 钉到 v12。
+
 **preview.47 已部署（2026-11-09T10:45Z）**：vm2-126 已切到 `v0.2.0-preview.47` /
 `de1f84a503e44005183f0998b01f3b8ac7989566`（switch 报告
 `/opt/x-data-mcp-preview/reports/preview47-switch-20261109T104521Z.json`：`status=PASS`、
