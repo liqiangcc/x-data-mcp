@@ -17,8 +17,12 @@ M2 PR-1 的 023 + M2 PR-2 的 024 + M3 PR-1 的 025 + R2 的 026 + M3-2 PR-B 的
 2 位小数实例（历史数值可能与旧 2dp 在"恰好落在半分位"的 bar 上差 1 分——这不是回归，
 是旧 2dp 本身依赖中间精度、不可跨实现复现，[issue-383 设计](tasks/issue-383-m1-research-data.md)
 §4.3）。
-**代码面（main）的 capability revision 已是 `generic-data-v12`（未部署，#607 PR-D 的 ETF 前复权读面；
-部署面仍是 `generic-data-v11`）**：本修订不改 schema（仍 27）、不改工具签名与工具数，只改
+**代码面（main）的 capability revision 已是 `generic-data-v13`（未部署，2026-11-09；部署面仍是
+`generic-data-v11`）**：v13 给 `refresh_exchange_sources` 加 `wait_seconds` 与只读的
+`{"latest":"full"}`，给 `get_acquisition_task` 加 `wait_seconds`，并让获取任务的 `bytes_done`
+在下载中按块推进；schema 仍 27，工具数与签名不变，响应形状不变（见
+[generic-data-v13](contracts/generic-data-v13.md)）。v12（#607 PR-D 的 ETF 前复权读面）在这一
+revison 之前、同样未部署：不改 schema（仍 27）、不改工具签名与工具数，只改
 `market.daily` + ETF + `adjustment=qfq` 的结果与 `adjustment_unavailable` 的 `details`，
 详见 [generic-data-v12](contracts/generic-data-v12.md) 与下面的「ETF 前复权」条。部署版本、
 generation、catalog 与行情数据量等机器事实只在

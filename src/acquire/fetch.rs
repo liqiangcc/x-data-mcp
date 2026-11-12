@@ -37,6 +37,21 @@ pub enum Error {
 pub trait Fetcher: Send + Sync {
     fn head(&self, url: &str) -> Result<Head, Error>;
     fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error>;
+    /// `fetch` with in-flight byte reporting (#625).
+    ///
+    /// `progress` receives the staged byte count as the file grows, so
+    /// `bytes_done` moves during a download instead of only at the stage end.
+    /// The default reports nothing and calls [`Fetcher::fetch`], which is the
+    /// exact pre-#625 behavior: a fetcher that cannot see partial bytes (an
+    /// injected test fixture) stays valid without changes.
+    fn fetch_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        _progress: &crate::acquire::ProgressFn<'_>,
+    ) -> Result<FetchResult, Error> {
+        self.fetch(url, dest)
+    }
 }
 
 /// Environment variable naming the helper script. Production units set it;
@@ -56,6 +71,13 @@ impl Helper {
         let exe = std::env::current_exe().ok();
         let script = Self::resolve(std::env::var_os(TDX_FETCH_ENV), exe.as_deref())?;
         Ok(Self { script })
+    }
+    /// The helper at an explicit path, for tests that drive the real
+    /// spawn-and-stream code with a fixture script.
+    pub fn at(script: impl Into<PathBuf>) -> Self {
+        Self {
+            script: script.into(),
+        }
     }
     /// Resolve the helper path without touching the environment, so the
     /// rules are directly testable. There is deliberately no compile-time
@@ -98,6 +120,52 @@ impl Helper {
         }
         serde_json::from_slice(&output.stdout).map_err(|e| Error::Output(e.to_string()))
     }
+    /// #625: run the helper with its stdout streamed line by line, so the
+    /// caller sees each `{"bytes": N}` while the download is still running.
+    ///
+    /// `Command::output()` collects everything and only returns once the child
+    /// has exited, which would leave `bytes_done` at zero for the whole
+    /// download — the thing this is for. So: spawn with a piped stdout, read it
+    /// as it arrives, and collect stderr on its own thread (a helper that
+    /// writes more than a pipe buffer to stderr would otherwise deadlock the
+    /// pair).
+    fn stream(&self, args: &[&str], on_line: &mut dyn FnMut(&str)) -> Result<(), Error> {
+        use std::io::{BufRead, BufReader, Read};
+        let mut child = Command::new("python3")
+            .arg(&self.script)
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| Error::Failed(e.to_string()))?;
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
+        let collector = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut reader = BufReader::new(stderr);
+            let _ = reader.read_to_end(&mut buf);
+            buf
+        });
+        for line in BufReader::new(stdout).lines() {
+            let line = match line {
+                Ok(line) => line,
+                // A read error ends the stream; `wait` still decides the
+                // outcome, so this is not an error on its own.
+                Err(_) => break,
+            };
+            if !line.trim().is_empty() {
+                on_line(line.trim());
+            }
+        }
+        let status = child.wait().map_err(|e| Error::Failed(e.to_string()))?;
+        let stderr = collector.join().unwrap_or_default();
+        if !status.success() {
+            return Err(Error::Failed(
+                String::from_utf8_lossy(&stderr).trim().to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,21 +196,59 @@ impl Fetcher for Helper {
             content_length: h.content_length,
         })
     }
+    /// Same download as [`Fetcher::fetch_with_progress`], with the progress
+    /// dropped.
+    ///
+    /// It has to go through the streaming path rather than parse stdout as one
+    /// object: the helper prints a `{"bytes": N}` line per landed chunk before
+    /// the result object, so a whole-stdout parse would fail with
+    /// `Error::Output` on every real download (#625 review r2).
     fn fetch(&self, url: &str, dest: &Path) -> Result<FetchResult, Error> {
-        let f: FetchJson =
-            serde_json::from_value(self.run(&["fetch", url, &dest.to_string_lossy()])?)
-                .map_err(|e| Error::Output(e.to_string()))?;
-        Ok(FetchResult {
-            head: Head {
-                status: f.status,
-                etag: f.etag,
-                last_modified: f.last_modified,
-                content_length: f.content_length,
-            },
-            bytes: f.bytes,
-            sha256: f.sha256,
-        })
+        self.fetch_with_progress(url, dest, &|_| {})
     }
+    /// #625: the helper prints one `{"bytes": N}` line per landed chunk on
+    /// stdout and the result object last, so the service can publish progress
+    /// while the download is still running — the day archive takes minutes at
+    /// the feed's pace and used to show `bytes_done: 0` for all of it.
+    fn fetch_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        progress: &crate::acquire::ProgressFn<'_>,
+    ) -> Result<FetchResult, Error> {
+        let mut final_line: Option<String> = None;
+        self.stream(&["fetch", url, &dest.to_string_lossy()], &mut |line| {
+            match serde_json::from_str::<ProgressJson>(line) {
+                Ok(reported) => progress(reported.bytes),
+                // Anything else is the result object, which arrives last.
+                Err(_) => final_line = Some(line.to_string()),
+            }
+        })?;
+        let text = final_line
+            .ok_or_else(|| Error::Output("the fetch helper printed no result line".to_string()))?;
+        decode_fetch(&text)
+    }
+}
+
+/// One progress line from the helper: `{"bytes": N}` while a download runs.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProgressJson {
+    bytes: u64,
+}
+
+fn decode_fetch(text: &str) -> Result<FetchResult, Error> {
+    let f: FetchJson = serde_json::from_str(text).map_err(|e| Error::Output(e.to_string()))?;
+    Ok(FetchResult {
+        head: Head {
+            status: f.status,
+            etag: f.etag,
+            last_modified: f.last_modified,
+            content_length: f.content_length,
+        },
+        bytes: f.bytes,
+        sha256: f.sha256,
+    })
 }
 
 /// Local mirror fetcher: maps a declared role URL to a file under one
@@ -277,6 +383,69 @@ mod tests {
         assert_eq!(fetched.sha256, crate::hash::sha256(&bytes));
         assert_eq!(fetched.head.content_length, Some(bytes.len() as u64));
         assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    }
+
+    /// #625 review r2: `Helper::fetch` must accept the helper's real stdout.
+    ///
+    /// The helper prints one `{"bytes": N}` line per landed chunk before the
+    /// result object, so parsing the whole stdout as a single object returned
+    /// `Error::Output` on every real download. Both entry points now go through
+    /// the streaming path; this drives `fetch` (the no-progress one) with a
+    /// fixture that prints two progress lines and then the result.
+    #[cfg(unix)]
+    #[test]
+    fn fetch_decodes_a_helper_that_prints_progress_lines_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("progress_helper.py");
+        std::fs::write(
+            &script,
+            r#"#!/usr/bin/env python3
+import hashlib, json, sys
+payload = b"0123456789"
+if sys.argv[1] == "head":
+    print(json.dumps({"status": 200, "etag": "\"e\"", "last_modified": None,
+                      "content_length": len(payload)}), flush=True)
+    sys.exit(0)
+dest = sys.argv[3]
+with open(dest, "wb") as out:
+    for start in range(0, len(payload), 5):
+        chunk = payload[start:start + 5]
+        out.write(chunk)
+        out.flush()
+        print(json.dumps({"bytes": min(start + 5, len(payload))}), flush=True)
+print(json.dumps({"status": 200, "etag": "\"e\"", "last_modified": None,
+                  "content_length": len(payload), "bytes": len(payload),
+                  "sha256": hashlib.sha256(payload).hexdigest()}), flush=True)
+"#,
+        )
+        .unwrap();
+        let dest = dir.path().join("base.zip");
+        let helper = Helper::at(script);
+        let fetched = helper
+            .fetch(
+                "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+                &dest,
+            )
+            .expect("progress lines must not break the result parse");
+        assert_eq!(fetched.bytes, 10);
+        assert_eq!(fetched.sha256, crate::hash::sha256(b"0123456789"));
+        assert_eq!(fetched.head.status, 200);
+        assert_eq!(fetched.head.content_length, Some(10));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"0123456789");
+
+        // The same fixture through the progress entry point reaches the same
+        // result and reports the chunk boundaries on the way.
+        let dest = dir.path().join("base-progress.zip");
+        let reported = std::sync::Mutex::new(Vec::new());
+        let fetched = helper
+            .fetch_with_progress(
+                "https://www.tdx.com.cn/products/data/data/dbf/base.zip",
+                &dest,
+                &|bytes| reported.lock().unwrap().push(bytes),
+            )
+            .unwrap();
+        assert_eq!(fetched.sha256, crate::hash::sha256(b"0123456789"));
+        assert_eq!(*reported.lock().unwrap(), vec![5, 10]);
     }
 
     /// The helper owns the head/fetch wire shape: numeric `status`,

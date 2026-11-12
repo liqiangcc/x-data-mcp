@@ -53,6 +53,32 @@ const MAX_MISSING_SCOPED_DAY: usize = 64;
 /// before the acquisition date is treated as a stale-generation mix.
 const STALE_DAY_TOLERANCE_DAYS: i64 = 14;
 
+/// Upper bound on one `get_acquisition_task` server-side wait, in seconds.
+///
+/// Same cap as `get_task_progress` and `refresh_exchange_sources`
+/// (`data_supply::observe::MAX_WAIT_SECONDS`): all three hold one MCP
+/// connection thread in a sleep loop, so all three bound it the same way.
+/// Larger `wait_seconds` values are clamped to this, never rejected.
+pub const MAX_WAIT_SECONDS: u32 = 50;
+/// Long-poll re-read cadence (the 300–500ms window the other waits use).
+const WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
+/// How often a streaming download refreshes `bytes_done` (#625).
+///
+/// The stage-end write is unchanged and stays the authoritative one; this is
+/// the *within-stage* progress a caller needs to tell "downloading" from
+/// "stuck", throttled so a 550 MB archive costs one row update per second
+/// instead of one per 1 MiB chunk.
+const PROGRESS_WRITE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Server wait budget for a caller-supplied `wait_seconds`: `None` when no
+/// wait was requested (absent or 0 — the immediate-return behavior),
+/// otherwise `min(seconds, MAX_WAIT_SECONDS)`.
+fn wait_budget(seconds: u32) -> Option<std::time::Duration> {
+    (seconds > 0).then_some(std::time::Duration::from_secs(u64::from(
+        seconds.min(MAX_WAIT_SECONDS),
+    )))
+}
+
 const KIND_ACQUIRE: &str = "acquire_generation";
 const KIND_VERIFY: &str = "verify_generation";
 const KIND_ACTIVATE: &str = "activate_generation";
@@ -148,6 +174,14 @@ impl std::fmt::Debug for Source {
         }
     }
 }
+
+/// The download-progress sink a [`fetch::Fetcher`] reports into (#625).
+///
+/// `bytes` is the staged byte count of the file being fetched. The service
+/// throttles the durable write and suppresses no-op updates, so a fetcher may
+/// call this as often as it likes; the live `bytes_done` is the sum of the
+/// files already completed in this task plus the current file's progress.
+pub type ProgressFn<'a> = dyn Fn(u64) + Send + Sync + 'a;
 
 #[derive(Clone)]
 pub struct AcquireService {
@@ -574,7 +608,29 @@ impl AcquireService {
                 .iter()
                 .find(|r| r.key == key)
                 .ok_or(Error::Refused("unknown_stage"))?;
-            self.fetch_role(task, role, &mut detail)?;
+            // #625: bytes are reported while the download runs, not only when
+            // the stage ends. `done_before` is what earlier roles already
+            // contributed, so `bytes_done` is monotonic across the whole task;
+            // the writer is throttled to one row update per second and skips
+            // no-op transitions, so a 550 MB archive never turns every 1 MiB
+            // chunk into a write.
+            let done_before = detail_bytes(&detail);
+            let progress = std::sync::Mutex::new(Progress::new(
+                self,
+                task,
+                role.key,
+                done_before,
+                task.bytes_done,
+            ));
+            let report = |bytes: u64| {
+                if let Ok(mut guard) = progress.lock() {
+                    guard.report(bytes);
+                }
+            };
+            self.fetch_role(task, role, &mut detail, &report)?;
+            if let Ok(mut guard) = progress.lock() {
+                guard.flush(detail_bytes(&detail));
+            }
             let next = if role.key == "day" {
                 "manifest".to_string()
             } else {
@@ -646,7 +702,18 @@ impl AcquireService {
     /// Fetch one role artifact into the staging area. A file whose staged
     /// bytes still match its recorded pin is kept (resume); anything else
     /// is fetched fresh through the helper's temp+rename+fsync path.
-    fn fetch_role(&self, task: &store::Task, role: &Role, detail: &mut Value) -> Result<(), Error> {
+    ///
+    /// `progress` receives the in-flight byte count of this file (#625): the
+    /// stage-end write stays where it was, and a role whose staged bytes are
+    /// already complete reports its final size once so `bytes_done` jumps
+    /// over the resume.
+    fn fetch_role(
+        &self,
+        task: &store::Task,
+        role: &Role,
+        detail: &mut Value,
+        progress: &ProgressFn<'_>,
+    ) -> Result<(), Error> {
         let stage = self.store.stage_dir(&task.request_id);
         let dest = stage.join(role.file);
         let recorded = detail["files"][role.key].clone();
@@ -657,10 +724,13 @@ impl AcquireService {
             // resume check must not be the peak of the switch (XDM-81).
             && crate::hash::digest_file(&dest)?.1 == sha
         {
+            progress(bytes);
             return Ok(());
         }
         let started = Utc::now();
-        let fetched = self.fetcher.fetch(role.url, &dest)?;
+        let fetched = self
+            .fetcher
+            .fetch_with_progress(role.url, &dest, progress)?;
         let completed = Utc::now();
         detail["files"][role.key] = serde_json::to_value(FileInput {
             role: role.role,
@@ -707,6 +777,50 @@ impl AcquireService {
             .task(task_id)?
             .ok_or(Error::Refused("task_not_found"))?;
         Ok(task_view(&task))
+    }
+    /// `get_acquisition_task` with an optional server-side wait (#625).
+    ///
+    /// Absent or 0 is exactly [`task`](Self::task). A positive value (clamped
+    /// to `MAX_WAIT_SECONDS`) re-reads the task row every 300–500 ms until
+    /// `state`, `stage` or `bytes_done` moves, until the task is terminal, or
+    /// until the budget expires; it then returns the record as it stands. Each
+    /// iteration opens its own short-lived read, so no transaction is held
+    /// across the sleep and the worker's writes are never blocked. A missing
+    /// task fails at once through the same read and is never waited on.
+    pub fn task_waiting(
+        &self,
+        task_id: &str,
+        wait_seconds: Option<u32>,
+    ) -> Result<wire::AcquisitionTaskView, Error> {
+        let Some(budget) = wait_budget(wait_seconds.unwrap_or(0)) else {
+            return self.task(task_id);
+        };
+        let deadline = std::time::Instant::now() + budget;
+        let mut baseline: Option<(String, Option<String>, u64)> = None;
+        loop {
+            let task = self
+                .db
+                .task(task_id)?
+                .ok_or(Error::Refused("task_not_found"))?;
+            let fingerprint = (task.state.clone(), task.stage.clone(), task.bytes_done);
+            let terminal = matches!(task.state.as_str(), ST_SUCCEEDED | ST_FAILED);
+            match baseline {
+                // A download that is only moving bytes forward is progress:
+                // the caller asked for a change in any of the three, so it
+                // returns here rather than sleeping out the budget.
+                Some(previous) if previous != fingerprint => return Ok(task_view(&task)),
+                Some(_) => {}
+                None => baseline = Some(fingerprint),
+            }
+            if terminal {
+                return Ok(task_view(&task));
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return Ok(task_view(&task));
+            }
+            std::thread::sleep(WAIT_POLL_INTERVAL.min(deadline - now));
+        }
     }
     pub fn request(&self, request_id: &str) -> Result<wire::AcquisitionRequestView, Error> {
         let request = self.db.request(request_id)?;
@@ -1353,6 +1467,97 @@ fn detail_bytes(detail: &Value) -> u64 {
         .map(|f| f.values().filter_map(|v| v["bytes"].as_u64()).sum())
         .unwrap_or(0)
 }
+
+/// Throttled writer for a streaming download's `bytes_done` (#625).
+///
+/// The fetcher calls this for every chunk it lands; only the first report and
+/// then at most one per [`PROGRESS_WRITE_INTERVAL`] reach SQLite, and only when
+/// the value actually grew (`bytes_done` is monotonic: a resume that reports a
+/// smaller count can never move it backwards).
+///
+/// Writes go through the store's own short-lived write connection, not a
+/// transaction held across the download, so a concurrently waiting
+/// `get_acquisition_task` reads between two writes and the stage-end write in
+/// [`AcquireService::advance`] remains the authoritative one. A failed
+/// progress write is dropped with a log line: the download must not fail
+/// because a progress meter could not be updated.
+struct Progress<'a> {
+    service: &'a AcquireService,
+    task: &'a store::Task,
+    /// The role whose file is being fetched; progress writes only touch the
+    /// `stage`/`detail`/`error` columns for this role, so a concurrent
+    /// `advance` that already moved to the next role is never overwritten
+    /// with a stale stage name.
+    stage: String,
+    /// Bytes contributed by the roles already completed in this task.
+    done_before: u64,
+    last_written: u64,
+    last_write: std::time::Instant,
+}
+
+impl<'a> Progress<'a> {
+    fn new(
+        service: &'a AcquireService,
+        task: &'a store::Task,
+        role_key: &str,
+        done_before: u64,
+        stage_entry_bytes: u64,
+    ) -> Self {
+        Self {
+            service,
+            task,
+            stage: format!("fetch:{role_key}"),
+            done_before,
+            last_written: stage_entry_bytes,
+            // The stage-entry value was written by the caller, so the first
+            // report is held back by one interval like every later one.
+            last_write: std::time::Instant::now(),
+        }
+    }
+
+    /// Record the current file's staged size. `bytes` is the file's own byte
+    /// count, not the task total.
+    fn report(&mut self, bytes: u64) {
+        let total = self.done_before.saturating_add(bytes);
+        if total <= self.last_written {
+            return;
+        }
+        if self.last_write.elapsed() < PROGRESS_WRITE_INTERVAL {
+            return;
+        }
+        self.write(total);
+    }
+
+    /// Write the final task total, bypassing the throttle: the stage-end value
+    /// is what a listing records, and the download just ended.
+    fn flush(&mut self, total: u64) {
+        if total > self.last_written {
+            self.write(total);
+        }
+    }
+
+    fn write(&mut self, total: u64) {
+        let updated = store::Task {
+            state: ST_RUNNING.into(),
+            generation_id: None,
+            stage: Some(self.stage.clone()),
+            bytes_done: total,
+            error: None,
+            detail: self.task.detail.clone(),
+            updated_at: Utc::now(),
+            ..self.task.clone()
+        };
+        if let Err(error) = self.service.db.update_task(&updated) {
+            eprintln!(
+                "acquire task {}: progress write failed: {error}",
+                self.task.task_id
+            );
+            return;
+        }
+        self.last_written = total;
+        self.last_write = std::time::Instant::now();
+    }
+}
 fn task_view(task: &store::Task) -> wire::AcquisitionTaskView {
     wire::AcquisitionTaskView {
         task_id: task.task_id.clone(),
@@ -1727,7 +1932,9 @@ mod tests {
         let mut detail = json!({"files": {"day": {
             "sha256": crate::hash::sha256(&pinned), "bytes": pinned.len() as u64,
         }}});
-        service.fetch_role(&task, role, &mut detail).unwrap();
+        service
+            .fetch_role(&task, role, &mut detail, &|_| {})
+            .unwrap();
         assert_eq!(std::fs::read(stage.join("hsjday.zip")).unwrap(), pinned);
         assert_eq!(
             detail["files"]["day"]["sha256"],
@@ -1740,7 +1947,9 @@ mod tests {
         let middle = tampered.len() / 2;
         tampered[middle] ^= 1;
         std::fs::write(stage.join("hsjday.zip"), &tampered).unwrap();
-        service.fetch_role(&task, role, &mut detail).unwrap();
+        service
+            .fetch_role(&task, role, &mut detail, &|_| {})
+            .unwrap();
         assert_eq!(std::fs::read(stage.join("hsjday.zip")).unwrap(), pinned);
         assert_eq!(
             detail["files"]["day"]["sha256"],

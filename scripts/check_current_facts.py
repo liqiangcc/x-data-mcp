@@ -48,7 +48,7 @@ ENTRY_ALLOWLIST_CONST = {
     "ops": "OPS_TOOLS",
     "maint": "MAINT_TOOLS",
 }
-EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v12"
+EXPECTED_DATA_CAPABILITY_REVISION = "generic-data-v13"
 # The revision the deployed docs/contracts/Skills describe. Since preview.46
 # (2026-11-07 on vm2-126) the deployed contract is v11 (D-75 read tools and
 # D-82 tradability tools). The code is ahead at v12 (#607 PR-D, ETF 前复权 read

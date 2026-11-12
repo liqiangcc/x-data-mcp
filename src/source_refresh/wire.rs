@@ -3,9 +3,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const DESCRIPTION: &str = "Refresh exchange sources from HTTP. `tail` and `full` return \
-    {run_id,status:running} at once and continue in the background; poll `status_of`. One run at \
-    a time; `dry_run` lists the plan.";
+pub const DESCRIPTION: &str = "Refresh exchange sources from HTTP. `tail`/`full` return \
+    {run_id,status:running} at once; poll `status_of` with `wait_seconds` (max 50). One run at \
+    a time; `dry_run` lists the plan; `latest:\"full\"` reads the newest succeeded full run.";
 
 /// `tail` refreshes the open + previous natural quarter of window sources, the
 /// cheap whole tables, and probes the two large tables; `full` observes every
@@ -42,16 +42,38 @@ pub struct RefreshRequest {
     #[serde(default)]
     pub dry_run: bool,
     /// Read one durable run record instead of starting a run; not combined
-    /// with `mode`, `sources` or `dry_run`.
+    /// with `mode`, `sources`, `dry_run` or `latest`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status_of: Option<String>,
+    /// Read-only query for the newest `status=succeeded` `full` run record;
+    /// not combined with `mode`, `sources`, `dry_run` or `status_of`. The
+    /// only accepted value is `"full"` (#625): a weekly `full` is skipped
+    /// when the recorded one is recent enough, and `status_of` cannot answer
+    /// that without a run id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<String>,
+    /// Server-side wait with `status_of`: 0/absent returns at once (the
+    /// original behavior); a value above the server cap is clamped, never
+    /// rejected. The call returns as soon as the run reaches a terminal
+    /// status, or when the wait budget expires — whichever comes first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_seconds: Option<u32>,
 }
+
+/// The only accepted `latest` selector. Other values are `invalid_arguments`:
+/// a default answer for a typo would be a wrong fact, not a lenient one.
+pub const LATEST_FULL: &str = "full";
 
 impl RefreshRequest {
     /// The mode of a request that starts a run.
     pub fn require_mode(&self) -> Result<RefreshMode, String> {
         self.mode
-            .ok_or_else(|| "mode is required unless status_of is set".to_string())
+            .ok_or_else(|| "mode is required unless status_of or latest is set".to_string())
+    }
+
+    /// Whether the call reads a durable record instead of starting a run.
+    pub fn is_read_only_query(&self) -> bool {
+        self.status_of.is_some() || self.latest.is_some()
     }
 }
 
@@ -173,4 +195,25 @@ impl RefreshReport {
     pub fn is_success(&self) -> bool {
         matches!(self.status, RefreshStatus::Succeeded)
     }
+}
+
+/// The newest `status=succeeded` `full` run, reduced to the facts a caller
+/// needs to decide whether another weekly `full` is due (#625).
+///
+/// `None` from [`latest_full`](super::latest_full) means no `full` run has ever
+/// succeeded: a `tail` is not a `full`, and a failed `full` observed the whole
+/// fingerprint set but did not confirm it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct LatestFullRun {
+    pub run_id: String,
+    pub started_at: String,
+    /// Absent only if the durable row was closed without a timestamp, which
+    /// the settle path never does; it stays optional so a record that old
+    /// still reads instead of failing the query.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    pub requests: u64,
+    pub failed_windows: usize,
+    pub unobserved_windows: usize,
 }

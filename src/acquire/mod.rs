@@ -13,4 +13,4 @@ pub mod store;
 pub mod wire;
 
 pub use mcp::AcquireApi;
-pub use service::{AcquireService, Source};
+pub use service::{AcquireService, ProgressFn, Source};

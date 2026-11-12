@@ -607,6 +607,14 @@ impl MarketBackend {
         self.read(|c| super::refresh_runs::read_run(c, run_id))
     }
 
+    /// The newest succeeded run of one mode, for `latest:"full"` (#625).
+    pub(crate) fn read_latest_succeeded_source_refresh_run(
+        &self,
+        mode: &str,
+    ) -> Result<Option<super::refresh_runs::RunRow>, Error> {
+        self.read(|c| super::refresh_runs::read_latest_succeeded(c, mode))
+    }
+
     #[allow(dead_code)]
     pub(crate) fn read_source_refresh_run_sources(
         &self,

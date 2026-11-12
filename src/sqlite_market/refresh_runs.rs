@@ -373,6 +373,27 @@ pub(crate) fn read_run(c: &Connection, run_id: &str) -> Result<Option<RunRow>, E
     .transpose()
 }
 
+/// The newest `status=succeeded` run of one mode (#625: the read that lets a
+/// caller skip a weekly `full` that is still fresh). A `running` or `failed`
+/// run is not an answer: only a succeeded run confirmed the fingerprint set.
+/// Ordering is by the recorded `finished_at` (falling back to `started_at` for
+/// a row without one) so the newest *completion* wins, not the newest start.
+pub(crate) fn read_latest_succeeded(c: &Connection, mode: &str) -> Result<Option<RunRow>, Error> {
+    c.query_row(
+        &format!(
+            "SELECT {RUN_COLUMNS} FROM source_refresh_runs \
+             WHERE mode=?1 AND status='succeeded' \
+             ORDER BY COALESCE(finished_at, started_at) DESC, run_id DESC LIMIT 1"
+        ),
+        params![mode],
+        raw_run,
+    )
+    .optional()
+    .map_err(storage)?
+    .map(run_row)
+    .transpose()
+}
+
 pub(crate) fn read_sources(c: &Connection, run_id: &str) -> Result<Vec<RunSourceRow>, Error> {
     let mut statement = c
         .prepare(

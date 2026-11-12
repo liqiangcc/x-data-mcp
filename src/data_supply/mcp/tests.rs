@@ -3990,15 +3990,15 @@ fn capabilities_express_the_etf_raw_shape_and_units() {
     );
     assert_eq!(
         caps["capability_revision"],
-        json!("generic-data-v12"),
-        "the ETF 前复权 read surface is a wire-visible change (D-70 Q10)"
+        json!("generic-data-v13"),
+        "the long poll / latest-full / progress change is wire-visible (D-70 Q10)"
     );
     // The compact catalog keeps its bytes: neither block appears without a
     // dataset/operation request.
     let compact = f.api.call("get_data_capabilities", json!({})).unwrap();
     assert!(compact.get("series").is_none());
     assert!(compact.get("algorithm_versions").is_none());
-    assert_eq!(compact["capability_revision"], json!("generic-data-v12"));
+    assert_eq!(compact["capability_revision"], json!("generic-data-v13"));
 }
 
 #[test]
@@ -7833,4 +7833,68 @@ fn probe_derived_tools_peak_heap_and_latency() {
         crate::data_supply::derived_tools::READ_RESERVE,
         mib(crate::data_supply::derived_tools::READ_RESERVE)
     );
+}
+
+/// #625: `{"latest":"full"}` is a read-only query with its own exclusivity
+/// rules; every misuse is `invalid_arguments` before anything is read.
+#[test]
+fn refresh_latest_is_read_only_and_rejects_combined_arguments() {
+    let f = fixture();
+    // Nothing succeeded yet: the query answers a literal `null`, not an error
+    // and not an empty object.
+    let reply = f
+        .api
+        .call("refresh_exchange_sources", json!({"latest": "full"}))
+        .unwrap();
+    assert_eq!(reply, serde_json::Value::Null);
+    assert!(f.backend.read_source_refresh_runs().unwrap().is_empty());
+
+    for combined in [
+        json!({"latest": "full", "mode": "tail"}),
+        json!({"latest": "full", "sources": ["sse_listing"]}),
+        json!({"latest": "full", "dry_run": true}),
+        json!({"latest": "full", "status_of": "refresh-full-1"}),
+    ] {
+        let error = f
+            .api
+            .call("refresh_exchange_sources", combined.clone())
+            .unwrap_err();
+        assert_eq!(
+            error.code, "invalid_arguments",
+            "{combined} must be refused"
+        );
+    }
+
+    // `latest` is a selector with exactly one value.
+    for other in ["tail", "FULL", ""] {
+        let error = f
+            .api
+            .call("refresh_exchange_sources", json!({"latest": other}))
+            .unwrap_err();
+        assert_eq!(error.code, "invalid_arguments", "latest {other:?}");
+        assert!(
+            error.message.contains("latest accepts only"),
+            "{}",
+            error.message
+        );
+    }
+
+    // `wait_seconds` belongs to `status_of`: alone it is a bad argument, never
+    // a silent no-op on a run start.
+    let error = f
+        .api
+        .call(
+            "refresh_exchange_sources",
+            json!({"mode": "full", "wait_seconds": 5}),
+        )
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_arguments");
+    assert!(
+        error
+            .message
+            .contains("wait_seconds is only meaningful with status_of"),
+        "{}",
+        error.message
+    );
+    assert!(f.backend.read_source_refresh_runs().unwrap().is_empty());
 }

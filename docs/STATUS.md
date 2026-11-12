@@ -43,6 +43,13 @@ S4+S5+S6 停服窗口约 **0.6 s**）。相对 preview.46（`c35b425`）含三�
 
 **历史：preview.47 待部署（2026-11-08）**：当时的 PR 只做版本号与文档，未打 tag、未发 release、未部署。
 
+**代码面已到 `generic-data-v13`（未部署，2026-11-09）**：#625 给
+`refresh_exchange_sources` 加 `wait_seconds`（长轮询，上限 50s）与只读的 `{"latest":"full"}`
+（最近一次成功的 `full` 记录），给 `get_acquisition_task` 加 `wait_seconds`，并让获取任务的
+`bytes_done` 在下载过程中按块推进（节流到每秒一次）。schema 仍为 27，工具数与工具签名不变，
+只加可选入参；契约见 [generic-data-v13](contracts/generic-data-v13.md)。**部署面仍是
+`generic-data-v11`**。
+
 **代码面已到 `generic-data-v12`（未部署，2026-11-08）**：#607 PR-D 把
 `market.daily` + ETF + `adjustment=qfq` 从「必然 `adjustment_unavailable`」改成按实体核对门槛
 放行或带 `details.reason` 阻断（D-89/D-92），`get_data_capabilities` 新增 ETF `qfq` 的

@@ -26,6 +26,13 @@ pub struct AcquireGeneration {
 pub struct GetAcquisitionTask {
     pub contract_version: ContractVersion,
     pub task_id: String,
+    /// Server-side wait: 0 or absent returns the task record at once (the
+    /// original behavior); a positive value holds the call until the task's
+    /// `state`, `stage` or `bytes_done` changes, the task reaches a terminal
+    /// state, or the budget expires — whichever comes first. Values above
+    /// the server cap are clamped, never rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_seconds: Option<u32>,
 }
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

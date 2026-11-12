@@ -8,6 +8,12 @@ bytes. Commands print one JSON object to stdout:
   fetch <url> <dest> -> head fields + {"bytes", "sha256"} after a complete,
                         fsynced write to <dest> (temp file + rename)
 
+While `fetch` runs, each landed chunk is reported on its own line as
+{"bytes": N}, flushed as it goes, so the service's `bytes_done` moves during a
+download instead of only when the file is complete (#625). Those lines are
+strictly for progress: the result object is always printed last, and a reader
+that only wants the result uses the final line.
+
 Errors exit non-zero with the message on stderr; the service maps that to a
 task failure, never to a retry of its own.
 """
@@ -51,6 +57,9 @@ def _fetch(url, dest):
                 out.write(chunk)
                 digest.update(chunk)
                 size += len(chunk)
+                # Progress, not part of the result contract: the service
+                # throttles these to one durable write per second.
+                print(json.dumps({"bytes": size}), flush=True)
             out.flush()
             os.fsync(out.fileno())
         if head.get("content_length") is not None and int(
